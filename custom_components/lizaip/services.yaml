@@ -1,0 +1,54 @@
+# Service *schemas* only. The user-facing `name:` and `description:` for each
+# service and field live in `strings.json` / `translations/<lang>.json`, per
+# Home Assistant's custom integration localization. They used to be duplicated
+# here in English, which is what HA rendered for every user whatever their
+# language — the translations existed and were never reached.
+#
+# Keep this file to what cannot be translated: which fields exist, whether they
+# are required, and how HA should render their input.
+
+firmware_update:
+  fields:
+    url:
+      required: true
+      example: "https://example.com/lizaip-firmware-1.2.3.bin"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: lizaip
+
+refresh_dynamic_sources:
+  fields:
+    entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: lizaip
+
+goto_page:
+  # All three keys are needed, and dropping any one fails silently: without
+  # `device` the action is not offered on the lizaIP device, without `entity`
+  # core's matcher accepts every entity, and without `primary_entities_only`
+  # it skips the remote's entities (all of them have an entity category).
+  target:
+    entity:
+      integration: lizaip
+    device:
+      integration: lizaip
+    primary_entities_only: false
+  fields:
+    page:
+      required: true
+      example: Living Room
+      selector:
+        text:
+    page_id:
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 1
+          mode: box

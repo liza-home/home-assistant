@@ -1,0 +1,134 @@
+name: Samsung TV
+icon: mdi:television
+description: Control your Samsung TV (SmartThings / Samsung TV integration)
+
+# Device selector — the picker offers devices of this integration that
+# expose a 'remote' entity, which is what this layout's actions run on.
+target_selector:
+  device:
+    integration: samsungtv
+    primary_domain: remote
+
+# Button mappings (Liza button_key → HA action), written the way a stored
+# page writes a button. Leave one out for a slot that should do nothing.
+buttons:
+  button_power:
+    label: Power
+    image: mdi:power
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_POWER
+
+  button_1:
+    label: Home
+    image: mdi:home
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_HOME
+
+  button_2:
+    label: Up
+    image: mdi:arrow-up
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_UP
+
+  button_3:
+    label: Back
+    image: mdi:keyboard-return
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_RETURN
+
+  button_4:
+    label: Menu
+    image: mdi:menu
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_MENU
+
+  button_5:
+    label: Left
+    image: mdi:arrow-left
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_LEFT
+
+  button_6:
+    label: Select
+    image: mdi:checkbox-marked-circle
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_ENTER
+
+  button_7:
+    label: Right
+    image: mdi:arrow-right
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_RIGHT
+
+  button_8:
+    label: Tools / More
+    image: mdi:dots-vertical
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_TOOLS
+
+  button_9:
+    label: Previous
+    image: mdi:skip-previous
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_REWIND
+
+  button_10:
+    label: Down
+    image: mdi:arrow-down
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_DOWN
+
+  button_11:
+    label: Next
+    image: mdi:skip-next
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_FF
+
+  button_12:
+    label: Play / Pause
+    image: mdi:play-pause
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_PLAY
+
+  # --- back & voice ---
+  button_back:
+    label: Back
+    image: mdi:arrow-left-circle
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_RETURN
+
+  button_voice:
+    label: Source
+    image: mdi:import
+    config:
+      - action: remote.send_command
+        data:
+          command: KEY_SOURCE

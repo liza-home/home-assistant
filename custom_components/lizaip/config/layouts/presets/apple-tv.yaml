@@ -1,0 +1,138 @@
+name: Apple TV
+icon: mdi:apple
+description: Control your Apple TV
+
+# Device selector — the picker offers devices of this integration that
+# expose a 'remote' entity, which is what this layout's actions run on.
+target_selector:
+  device:
+    integration: apple_tv
+    primary_domain: remote
+
+# Button mappings (Liza button_key → HA action), written the way a stored
+# page writes a button. Leave one out for a slot that should do nothing.
+buttons:
+  button_power:
+    label: Power
+    image: mdi:power
+    config:
+      - action: remote.send_command
+        data:
+          command: wakeup
+
+  # --- button grid, row 1 ---
+  button_1:
+    label: Home
+    image: mdi:home
+    config:
+      - action: remote.send_command
+        data:
+          command: home
+
+  button_2:
+    label: Up
+    image: mdi:arrow-up
+    config:
+      - action: remote.send_command
+        data:
+          command: up
+
+  button_3:
+    label: Menu
+    image: mdi:menu
+    config:
+      - action: remote.send_command
+        data:
+          command: menu
+
+  button_4:
+    label: Top Menu
+    image: mdi:dots-grid
+    config:
+      - action: remote.send_command
+        data:
+          command: top_menu
+
+  # --- button grid, row 2 ---
+  button_5:
+    label: Left
+    image: mdi:arrow-left
+    config:
+      - action: remote.send_command
+        data:
+          command: left
+
+  button_6:
+    label: Select
+    image: mdi:checkbox-marked-circle
+    config:
+      - action: remote.send_command
+        data:
+          command: select
+
+  button_7:
+    label: Right
+    image: mdi:arrow-right
+    config:
+      - action: remote.send_command
+        data:
+          command: right
+
+  button_8:
+    label: Volume Up
+    image: mdi:volume-plus
+    config:
+      - action: remote.send_command
+        data:
+          command: volume_up
+
+  # --- button grid, row 3 ---
+  button_9:
+    label: Previous
+    image: mdi:skip-previous
+    config:
+      - action: remote.send_command
+        data:
+          command: skip_backward
+
+  button_10:
+    label: Down
+    image: mdi:arrow-down
+    config:
+      - action: remote.send_command
+        data:
+          command: down
+
+  button_11:
+    label: Next
+    image: mdi:skip-next
+    config:
+      - action: remote.send_command
+        data:
+          command: skip_forward
+
+  button_12:
+    label: Play / Pause
+    image: mdi:play-pause
+    config:
+      - action: remote.send_command
+        data:
+          command: play_pause
+
+  # --- back & voice ---
+  button_back:
+    label: Back / Menu
+    image: mdi:arrow-left-circle
+    config:
+      - action: remote.send_command
+        data:
+          command: menu
+
+  button_voice:
+    label: Siri
+    image: mdi:microphone
+    config:
+      - action: remote.send_command
+        data:
+          command: siri
+

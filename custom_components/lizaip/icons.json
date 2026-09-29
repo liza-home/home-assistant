@@ -1,0 +1,24 @@
+{
+  "entity": {
+    "sensor": {
+      "battery": {
+        "default": "mdi:battery"
+      }
+    },
+    "number": {
+      "brightness": {
+        "default": "mdi:brightness-6"
+      }
+    },
+    "event": {
+      "button": {
+        "default": "mdi:gesture-tap-button"
+      }
+    }
+  },
+  "services": {
+    "reload": "mdi:refresh",
+    "goto_page": "mdi:page-next"
+  }
+}
+

@@ -1,0 +1,268 @@
+{
+  "action_labels": {
+    "back": "Retour",
+    "back_menu": "Retour / Menu",
+    "close": "Fermer",
+    "down": "Bas",
+    "forward": "Avance",
+    "home": "Accueil",
+    "input": "Entrée",
+    "instant_replay": "Replay",
+    "left": "Gauche",
+    "lock": "Verrouiller",
+    "menu": "Menu",
+    "mute": "Muet",
+    "next": "Suivant",
+    "off": "Arrêt",
+    "ok": "OK",
+    "on": "Marche",
+    "open": "Ouvrir",
+    "options": "Options",
+    "oscillate_off": "Oscillation désactivée",
+    "oscillate_on": "Oscillation activée",
+    "pause": "Pause",
+    "play": "Lecture",
+    "play_pause": "Lecture / Pause",
+    "power": "Marche/Arrêt",
+    "previous": "Précédent",
+    "repeat_all": "Répéter tout",
+    "repeat_off": "Répétition désactivée",
+    "repeat_one": "Répéter un",
+    "reverse": "Arrière",
+    "right": "Droite",
+    "search": "Rechercher",
+    "select": "Sélectionner",
+    "shuffle_off": "Aléatoire désactivé",
+    "shuffle_on": "Aléatoire activé",
+    "source": "Source",
+    "stop": "Stop",
+    "toggle": "Basculer",
+    "tools_more": "Outils / Plus",
+    "top_menu": "Menu principal",
+    "unlock": "Déverrouiller",
+    "unmute": "Son activé",
+    "up": "Haut",
+    "voice_assistant": "Assistant vocal",
+    "volume": "Volume",
+    "volume_down": "Baisser le volume",
+    "volume_up": "Monter le volume"
+  },
+  "config": {
+    "step": {
+      "confirm": {
+        "title": "lizaIP",
+        "description": "Do you want to add {name}?"
+      },
+      "reconfigure": {
+        "title": "Reconfigure lizaIP",
+        "data": {
+          "name": "Device name"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "no_device_id": "Device connected without an ID.",
+      "discovery_only": "Manual setup is not supported. The device must be discovered automatically via mDNS.",
+      "reconfigure_successful": "Configuration updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options lizaIP",
+        "data": {
+          "optimistic_updates": "Mises a jour optimistes",
+          "language": "Langue de l'appareil"
+        },
+        "data_description": {
+          "optimistic_updates": "Mettre a jour les icones des boutons immediatement a l'appui, avant confirmation de l'etat reel. En cas d'echec, l'icone revient peu apres a l'etat reel.",
+          "language": "Langue des libelles de boutons affiches sur cette telecommande. \"Automatique\" suit la langue de Home Assistant."
+        },
+        "selector": {
+          "language": {
+            "options": {
+              "auto": "Automatique",
+              "en": "English",
+              "de": "Deutsch",
+              "fr": "Français",
+              "it": "Italiano",
+              "es": "Español"
+            }
+          }
+        },
+        "sections": {
+          "demo": {
+            "name": "Mode démo",
+            "description": "L'enregistrement envoie Device.Control.DemoMode à l'appareil. Les durées sont facultatives — laissez-les vides pour conserver celles de l'appareil.",
+            "data": {
+              "demo_mode": "Mode demo",
+              "demo_mode_dwell_time": "temps d'attente",
+              "demo_mode_swipe_time": "temps de balayage"
+            },
+            "data_description": {
+              "demo_mode": "Active ou desactive le mode demo de l'appareil. L'enregistrement envoie Device.Control.DemoMode a l'appareil.",
+              "demo_mode_dwell_time": "Valeur DemoMode DwellTime optionnelle envoyee a Device.Control.",
+              "demo_mode_swipe_time": "Valeur DemoMode SwipeTime optionnelle envoyee a Device.Control."
+            }
+          },
+          "sliders": {
+            "name": "Options des curseurs",
+            "description": "Un curseur émet en continu tant qu'il est touché, et l'appareil ne peut pas être invité à en envoyer moins. Ces limites allègent ce flux. L'appui et le relâchement sont toujours traités immédiatement, le début et la position finale ne sont donc jamais retardés. Mettez les deux à 0 pour tout traiter.",
+            "data": {
+              "slider_min_interval_ms": "Intervalle de mise à jour du curseur"
+            },
+            "data_description": {
+              "slider_min_interval_ms": "Écart minimal entre deux mises à jour pendant le glissement. L'appui et le relâchement sont toujours envoyés immédiatement, le début et la position finale ne sont donc jamais retardés. 0 désactive la limite."
+            }
+          }
+        }
+      }
+    },
+    "abort": {
+      "options_saved": "Options enregistrées."
+    }
+  },
+  "entity": {
+    "event": {
+      "button": {
+        "name": "Button {button_id}"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brightness"
+      },
+      "slider": {
+        "name": "Slider {slider_id}"
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    },
+    "binary_sensor": {
+      "in_hand": {
+        "name": "En main",
+        "state": {
+          "on": "true",
+          "off": "false"
+        }
+      },
+      "charging": {
+        "name": "En charge"
+      }
+    },
+    "switch": {
+      "brightness_automatic": {
+        "name": "Luminosité automatique"
+      }
+    }
+  },
+  "services": {
+    "firmware_update": {
+      "name": "Firmware Update",
+      "description": "Déclenche une mise à jour du micrologiciel OTA sur un ou plusieurs appareils lizaIP. L'appareil télécharge et vérifie le micrologiciel, puis redémarre ; la connexion est interrompue et rétablie automatiquement.",
+      "fields": {
+        "url": {
+          "name": "Firmware URL",
+          "description": "URL HTTPS du fichier du micrologiciel (.bin). Lors de l'installation via l'entité de mise à jour, elle est résolue automatiquement à partir de la dernière version GitHub."
+        },
+        "config_entry_id": {
+          "name": "Device",
+          "description": "Config entry of the device to update. If omitted, all connected devices are updated."
+        }
+      }
+    },
+    "refresh_dynamic_sources": {
+      "name": "Refresh dynamic sources",
+      "description": "Réévalue les liaisons de disposition dynamiques et envoie les modifications aux télécommandes concernées. Les pages dont le contenu n'a pas changé ne génèrent aucun trafic vers l'appareil.",
+      "fields": {
+        "entry_id": {
+          "name": "Device",
+          "description": "Device to refresh. If omitted, all lizaIP devices are refreshed."
+        }
+      }
+    },
+    "goto_page": {
+      "name": "Go to page",
+      "description": "Show a page on the remote. On a button this becomes a device-local action the remote executes itself.",
+      "fields": {
+        "page": {
+          "name": "Page name",
+          "description": "The page to show, by its name in the lizaIP panel."
+        },
+        "page_id": {
+          "name": "Page",
+          "description": "The page to show."
+        }
+      }
+    }
+  },
+  "issues": {
+    "protocol_version_mismatch": {
+      "title": "lizaIP protocol version mismatch",
+      "description": "Device \"{device}\" reports protocol version {device_version}, but this integration expects version {ha_version}. Update the device firmware or the integration to resolve."
+    },
+    "repeated_connection_failure": {
+      "title": "lizaIP device repeatedly disconnecting",
+      "description": "Device \"{device}\" has disconnected {count} times without a successful handshake. Check the device power and network connection."
+    }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "The lizaIP device is not connected."
+    },
+    "no_firmware_url": {
+      "message": "No firmware download URL available. Check that the latest GitHub release has a .bin asset."
+    },
+    "no_devices": {
+      "message": "No lizaIP devices are configured."
+    },
+    "firmware_update_failed": {
+      "message": "Firmware update request failed: {error}"
+    },
+    "device_ip_unknown": {
+      "message": "L'adresse IP de l'appareil est inconnue. Vérifiez que l'appareil est connecté."
+    },
+    "device_port_unknown": {
+      "message": "Le port HTTP de l'appareil est inconnu. L'appareil n'a pas encore terminé sa négociation."
+    },
+    "ota_unreachable": {
+      "message": "Impossible de joindre le point de terminaison de mise à jour de l'appareil à {url} : {error}"
+    },
+    "ota_rejected": {
+      "message": "L'appareil a refusé la demande de mise à jour (HTTP {status}) : {error}"
+    },
+    "control_unreachable": {
+      "message": "Impossible d'atteindre l'endpoint de controle de l'appareil a {url} : {error}"
+    },
+    "control_rejected": {
+      "message": "L'appareil a refusé la demande de controle (HTTP {status}) : {error}"
+    },
+    "invalid_page_id": {
+      "message": "Invalid page ID \"{page_id}\". It must be an integer between 1 and 4294967295."
+    },
+    "no_pages": {
+      "message": "The lizaIP device has no page configuration yet."
+    },
+    "no_page_target": {
+      "message": "No page given. Set Page, or give a name in Page name."
+    },
+    "unknown_page_name": {
+      "message": "There is no page called \"{page}\" on this device."
+    },
+    "ambiguous_page_name": {
+      "message": "{count} pages are called \"{page}\" on this device. Set Page to say which one."
+    },
+    "conflicting_page_target": {
+      "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
+    }
+  }
+}

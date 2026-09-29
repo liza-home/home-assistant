@@ -1,0 +1,57 @@
+# Philips Hue Layout — one page per bridge, one button per lamp
+#
+# Binds to a bridge, not to a lamp: picking a lamp would mean twelve trips
+# through the dialog to fill one page. Twelve slots, filled in friendly-name
+# order — stable because bindings are positional, and an order that shifted
+# would reshuffle the remote on every refresh. Extra lamps are left off, and
+# can go on a second page by hand.
+#
+# The page is bound, not frozen: renaming a lamp, or adding one to the bridge,
+# refreshes the buttons.
+#
+# The vertical slider is not configured here. It follows whichever button is
+# selected, touch-relative, over that lamp's own brightness range.
+#
+# Reference: https://www.home-assistant.io/integrations/hue
+
+name: Philips Hue
+icon: logo:hue
+description: Control your Hue lights — every lamp on a bridge, one per button
+
+# The picker offers this integration's config entries — the bridges the user
+# has set up. `@target_entry` resolves to the one the page is created for.
+target_selector:
+  config_entry:
+    integration: hue
+
+# What a lamp becomes on a button. `spec` narrows the source: `config_entry`
+# limits the entity registry to one bridge, so another bridge's lamps never
+# leak onto this page. `@target` is the lamp this button ends up bound to, so
+# the slider it retargets follows the button rather than the page.
+placeholders:
+  lamp:
+    source: entities
+    spec:
+      domain: light
+      config_entry: "@target_entry"
+    config:
+      - action: light.toggle
+    overrides:
+      slider_vertical:
+        entity_id: "@target"
+        control: light-brightness
+      button_power: light.turn_off
+
+buttons:
+  button_1: "@lamp[1]"
+  button_2: "@lamp[2]"
+  button_3: "@lamp[3]"
+  button_4: "@lamp[4]"
+  button_5: "@lamp[5]"
+  button_6: "@lamp[6]"
+  button_7: "@lamp[7]"
+  button_8: "@lamp[8]"
+  button_9: "@lamp[9]"
+  button_10: "@lamp[10]"
+  button_11: "@lamp[11]"
+  button_12: "@lamp[12]"

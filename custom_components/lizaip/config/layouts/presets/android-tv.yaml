@@ -1,0 +1,158 @@
+# Android TV Layout — pre-configured remote control
+#
+# Maps Liza physical buttons to Android TV Remote commands.
+# Used with `remote.send_command` targeting an Android TV device.
+#
+# Reference: https://www.home-assistant.io/integrations/androidtv_remote
+
+name: Android TV
+icon: mdi:android
+description: Control your Android TV
+
+# Device selector — this layout spans two entity domains of the same device:
+#   remote.*       → key codes (DPAD, POWER, CHANNEL)
+#   media_player.* → app launch
+# Each button is bound to the entity matching its own action's domain, falling
+# back to the primary when the device has no better match.
+target_selector:
+  device:
+    integration: androidtv_remote
+    primary_domain: remote
+
+# Button mappings (Liza button_key → HA action), written the way a stored
+# page writes a button. Leave one out for a slot that should do nothing.
+buttons:
+  button_power:
+    label: Power
+    image: mdi:power
+    config:
+      - action: remote.send_command
+        data:
+          command: POWER
+
+  button_1:
+    label: ORF ON
+    image: media:https://play-lh.googleusercontent.com/eZkMp2Ogz8wN3deIwGFmLRqxBjR6iMkqszaWBTezpwFKnDsTmgaqMvuZ08uS5yzyigdGTjqm2LFmn9NNIM7nGQ=w240-h480
+    config:
+      - action: media_player.play_media
+        # A cold TV silently drops the launch: androidtv_remote writes to the
+        # socket without waking or checking state, and reports `on` about a
+        # second before it can service an intent. The executor infers the wake
+        # and the settle from the action itself, so nothing declares them here
+        # — which also covers the same button built by hand in the panel.
+        #
+        # Deep link, not application ID: a package name is sent as
+        # `market://launch?id=…` and the Play Store stopped honouring that in
+        # mid-August 2026. `on.orf.at` is delegated to the ORF app in ORF's
+        # assetlinks.json, so App Links opens the app rather than a browser.
+        data:
+          media:
+            media_content_id: https://on.orf.at/
+            media_content_type: url
+
+  button_2:
+    label: Up
+    image: mdi:arrow-up-bold
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_UP
+
+  button_4:
+    label: CH+
+    image: mdi:chevron-up
+    config:
+      - action: remote.send_command
+        data:
+          command: CHANNEL_UP
+
+  button_5:
+    label: Left
+    image: mdi:arrow-left-bold
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_LEFT
+
+  button_6:
+    label: OK
+    image: mdi:circle
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_CENTER
+
+  button_7:
+    label: Right
+    image: mdi:arrow-right-bold
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_RIGHT
+
+  button_9:
+    label: Input
+    image: mdi:import
+    config:
+      - action: remote.send_command
+        data:
+          command: TV_INPUT
+
+  button_10:
+    label: Down
+    image: mdi:arrow-down-bold
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_DOWN
+
+  button_11:
+    label: Home
+    image: mdi:home-outline
+    config:
+      - action: remote.send_command
+        data:
+          command: HOME
+
+  button_12:
+    label: CH-
+    image: mdi:chevron-down
+    config:
+      - action: remote.send_command
+        data:
+          command: CHANNEL_DOWN
+
+  button_back:
+    label: Back
+    image: mdi:keyboard-return
+    config:
+      - action: remote.send_command
+        data:
+          command: BACK
+
+  button_voice:
+    label: Voice Assistant
+    image: mdi:microphone
+    config:
+      - action: remote.send_command
+        data:
+          command: ASSIST
+
+  # Volume lives on the dedicated +/- buttons: a `remote.` entity exposes no
+  # volume attribute to read and no *_set service to write, so the vertical
+  # slider has nothing to drive proportionally and is left unassigned.
+  button_volume_up:
+    label: Volume Up
+    image: mdi:volume-plus
+    config:
+      - action: remote.send_command
+        data:
+          command: VOLUME_UP
+
+  button_volume_down:
+    label: Volume Down
+    image: mdi:volume-minus
+    config:
+      - action: remote.send_command
+        data:
+          command: VOLUME_DOWN

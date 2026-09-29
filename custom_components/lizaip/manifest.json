@@ -1,0 +1,25 @@
+{
+  "domain": "lizaip",
+  "name": "lizaIP",
+  "documentation": "https://github.com/liza-home/home-assistant",
+  "issue_tracker": "https://github.com/liza-home/home-assistant/issues",
+  "codeowners": [
+    "@ruwidoaustria"
+  ],
+  "config_flow": true,
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "dependencies": [
+    "http",
+    "zeroconf",
+    "frontend",
+    "panel_custom"
+  ],
+  "requirements": [],
+  "version": "2026.09.1",
+  "zeroconf": [
+    {
+      "type": "_lizaip._tcp.local."
+    }
+  ]
+}

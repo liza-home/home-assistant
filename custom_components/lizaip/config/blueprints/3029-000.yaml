@@ -1,0 +1,87 @@
+# lizaIP blueprint — ruwido Liza IP, product SKU 3029-000
+#
+# Named by SKU, not by product name: the file *is* the face of one hardware
+# variant — the button geometry the config panel draws and hit-tests. A variant
+# with a different key set ships as its own 3029-XXX.yaml, and `_blueprint_id`
+# picks between them from the model the device reports.
+#
+# Only `name`, `viewBox` and `buttons` are read (see `_parse_blueprint`). This
+# file once also carried `service`, `event_type` and `identifier_key`, from a
+# generic-blueprint format the integration never adopted; nothing ever parsed
+# them and they are gone.
+#
+# Button geometry from liza_buttons.svg (viewBox 172x500).
+# Each button has a single "click" action.
+
+name: Liza
+viewBox: "0 0 172 500"
+
+buttons:
+  # --- power (top right) ---
+  - d: M110,58 A13,13 0 1 0 136,58 A13,13 0 1 0 110,58 Z
+    key: button_power
+
+  # --- horizontal slider / touch bar ---
+  - d: M47.00,115.00 C39.83,115.00 34.00,109.17 34.00,102.00 C34.00,94.83 39.83,89.00 47.00,89.00 L125.00,89.00 C132.17,89.00 138.00,94.83 138.00,102.00 C138.00,109.17 132.17,115.00 125.00,115.00 L47.00,115.00 Z
+    key: slider_horizontal
+
+  # --- button grid, row 1 ---
+  - d: M34,143 A13,13 0 1 0 60,143 A13,13 0 1 0 34,143 Z
+    key: button_1
+  - d: M60,143 A13,13 0 1 0 86,143 A13,13 0 1 0 60,143 Z
+    key: button_2
+  - d: M86,143 A13,13 0 1 0 112,143 A13,13 0 1 0 86,143 Z
+    key: button_3
+  - d: M112,143 A13,13 0 1 0 138,143 A13,13 0 1 0 112,143 Z
+    key: button_4
+
+  # --- button grid, row 2 ---
+  - d: M34,169 A13,13 0 1 0 60,169 A13,13 0 1 0 34,169 Z
+    key: button_5
+  - d: M60,169 A13,13 0 1 0 86,169 A13,13 0 1 0 60,169 Z
+    key: button_6
+  - d: M86,169 A13,13 0 1 0 112,169 A13,13 0 1 0 86,169 Z
+    key: button_7
+  - d: M112,169 A13,13 0 1 0 138,169 A13,13 0 1 0 112,169 Z
+    key: button_8
+
+  # --- button grid, row 3 ---
+  - d: M34,195 A13,13 0 1 0 60,195 A13,13 0 1 0 34,195 Z
+    key: button_9
+  - d: M60,195 A13,13 0 1 0 86,195 A13,13 0 1 0 60,195 Z
+    key: button_10
+  - d: M86,195 A13,13 0 1 0 112,195 A13,13 0 1 0 86,195 Z
+    key: button_11
+  - d: M112,195 A13,13 0 1 0 138,195 A13,13 0 1 0 112,195 Z
+    key: button_12
+
+  # --- +/- rocker: slider pill (bottom layer) + buttons on top ---
+  # The caps keep their protocol names (button_volume_up/_down) but are
+  # freely assignable like any other button — the + / - glyph is fixed in
+  # firmware, the action behind it is not.
+  # Slider path IS the full pill shape → gets normal .button styling.
+  # button_volume_up/button_volume_down circles render AFTER (higher SVG z-order).
+  # Dashed arc separators drawn by renderer at cy=238 and cy=309.
+  # center-x=48, r=13; plus cy=238, minus cy=309
+
+  # Slider = full pill shape (FIRST = lowest z-order, middle clicks hit this)
+  # sweep=1 on both caps → they bulge outward (up/down). sweep=0 would curve
+  # inward and carve the shape into a concave rectangle.
+  - d: M35,238 A13,13 0 0 1 61,238 L61,309 A13,13 0 0 1 35,309 Z
+    key: slider_vertical
+
+  # Plus = circle ON TOP (catches top-area clicks)
+  - d: M35,238 A13,13 0 1 0 61,238 A13,13 0 1 0 35,238 Z
+    key: button_volume_up
+
+  # Minus = circle ON TOP (catches bottom-area clicks)
+  - d: M35,309 A13,13 0 1 0 61,309 A13,13 0 1 0 35,309 Z
+    key: button_volume_down
+
+  # --- back (enter/return) ---
+  - d: M73,238 A13,13 0 1 0 99,238 A13,13 0 1 0 73,238 Z
+    key: button_back
+
+  # --- microphone ---
+  - d: M110,238 A13,13 0 1 0 136,238 A13,13 0 1 0 110,238 Z
+    key: button_voice

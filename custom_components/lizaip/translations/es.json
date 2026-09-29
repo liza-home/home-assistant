@@ -1,0 +1,268 @@
+{
+  "config": {
+    "step": {
+      "confirm": {
+        "title": "lizaIP",
+        "description": "¿Quieres añadir {name}?"
+      },
+      "reconfigure": {
+        "title": "Reconfigurar lizaIP",
+        "data": {
+          "name": "Nombre del dispositivo"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "El dispositivo ya está configurado.",
+      "no_device_id": "El dispositivo se conectó sin identificador.",
+      "discovery_only": "La configuración manual no es compatible. El dispositivo debe detectarse automáticamente mediante mDNS.",
+      "reconfigure_successful": "Configuración actualizada."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones de lizaIP",
+        "data": {
+          "optimistic_updates": "Actualizaciones optimistas",
+          "language": "Idioma del dispositivo"
+        },
+        "data_description": {
+          "optimistic_updates": "Actualiza los iconos de los botones inmediatamente al pulsar, antes de confirmar el estado real. Si la acción falla, el icono vuelve poco después al estado real.",
+          "language": "Idioma de las etiquetas de botones que muestra este mando. «Automático» sigue el idioma de Home Assistant."
+        },
+        "selector": {
+          "language": {
+            "options": {
+              "auto": "Automático",
+              "en": "English",
+              "de": "Deutsch",
+              "fr": "Français",
+              "it": "Italiano",
+              "es": "Español"
+            }
+          }
+        },
+        "sections": {
+          "demo": {
+            "name": "Modo demo",
+            "description": "Al guardar se envía Device.Control.DemoMode al dispositivo. Los tiempos son opcionales — déjelos vacíos para conservar los del dispositivo.",
+            "data": {
+              "demo_mode": "Modo demo",
+              "demo_mode_dwell_time": "tiempo de permanencia",
+              "demo_mode_swipe_time": "tiempo de deslizamiento"
+            },
+            "data_description": {
+              "demo_mode": "Activa o desactiva el modo demo del dispositivo. Al guardar se envia Device.Control.DemoMode al dispositivo.",
+              "demo_mode_dwell_time": "Valor opcional de DemoMode DwellTime enviado a Device.Control.",
+              "demo_mode_swipe_time": "Valor opcional de DemoMode SwipeTime enviado a Device.Control."
+            }
+          },
+          "sliders": {
+            "name": "Opciones de los deslizadores",
+            "description": "Un deslizador informa continuamente mientras se toca y no se puede pedir al dispositivo que envíe menos. Estos límites reducen ese flujo. El toque y la soltura se procesan siempre de inmediato, de modo que el inicio y la posición final nunca se retrasan. Ponga ambos a 0 para procesar cada cambio.",
+            "data": {
+              "slider_min_interval_ms": "Intervalo de actualización del deslizador"
+            },
+            "data_description": {
+              "slider_min_interval_ms": "Intervalo mínimo entre dos actualizaciones mientras se arrastra. El toque y la soltura se envían siempre de inmediato, de modo que el inicio y la posición final nunca se retrasan. 0 desactiva el límite."
+            }
+          }
+        }
+      }
+    },
+    "abort": {
+      "options_saved": "Opciones guardadas."
+    }
+  },
+  "entity": {
+    "event": {
+      "button": {
+        "name": "Botón {button_id}"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brillo"
+      },
+      "slider": {
+        "name": "Deslizador {slider_id}"
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Batería"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    },
+    "binary_sensor": {
+      "in_hand": {
+        "name": "En mano",
+        "state": {
+          "on": "true",
+          "off": "false"
+        }
+      },
+      "charging": {
+        "name": "Cargando"
+      }
+    },
+    "switch": {
+      "brightness_automatic": {
+        "name": "Brillo automático"
+      }
+    }
+  },
+  "services": {
+    "firmware_update": {
+      "name": "Actualización de firmware",
+      "description": "Inicia una actualización de firmware OTA en uno o varios dispositivos lizaIP. El dispositivo descarga y verifica el firmware y luego se reinicia; la conexión se corta y se restablece automáticamente.",
+      "fields": {
+        "url": {
+          "name": "URL del firmware",
+          "description": "URL HTTPS del archivo de firmware (.bin). Al usar el botón Instalar de la entidad de actualización se resuelve automáticamente a partir de la última versión de GitHub."
+        },
+        "config_entry_id": {
+          "name": "Dispositivo",
+          "description": "Entrada de configuración del dispositivo que se va a actualizar. Si se omite, se actualizan todos los dispositivos conectados."
+        }
+      }
+    },
+    "refresh_dynamic_sources": {
+      "name": "Actualizar fuentes dinámicas",
+      "description": "Vuelve a resolver los enlaces de diseño dinámico y envía los cambios a los mandos afectados. Las páginas cuyo contenido no ha cambiado no generan tráfico hacia el dispositivo.",
+      "fields": {
+        "entry_id": {
+          "name": "Dispositivo",
+          "description": "Dispositivo que se va a actualizar. Si se omite, se actualizan todos los dispositivos lizaIP."
+        }
+      }
+    },
+    "goto_page": {
+      "name": "Go to page",
+      "description": "Show a page on the remote. On a button this becomes a device-local action the remote executes itself.",
+      "fields": {
+        "page": {
+          "name": "Page name",
+          "description": "The page to show, by its name in the lizaIP panel."
+        },
+        "page_id": {
+          "name": "Page",
+          "description": "The page to show."
+        }
+      }
+    }
+  },
+  "issues": {
+    "protocol_version_mismatch": {
+      "title": "Versión de protocolo de lizaIP incompatible",
+      "description": "El dispositivo «{device}» informa de la versión de protocolo {device_version}, pero esta integración espera la versión {ha_version}. Actualiza el firmware del dispositivo o la integración."
+    },
+    "repeated_connection_failure": {
+      "title": "El dispositivo lizaIP se desconecta repetidamente",
+      "description": "El dispositivo «{device}» se ha desconectado {count} veces sin un protocolo de enlace correcto. Comprueba la alimentación y la conexión de red del dispositivo."
+    }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "El dispositivo lizaIP no está conectado."
+    },
+    "no_firmware_url": {
+      "message": "No hay ninguna URL de descarga de firmware disponible. Comprueba que la última versión de GitHub incluya un archivo .bin."
+    },
+    "no_devices": {
+      "message": "No hay dispositivos lizaIP configurados."
+    },
+    "firmware_update_failed": {
+      "message": "Error en la solicitud de actualización de firmware: {error}"
+    },
+    "device_ip_unknown": {
+      "message": "Se desconoce la dirección IP del dispositivo. Asegúrate de que el dispositivo esté conectado."
+    },
+    "device_port_unknown": {
+      "message": "Se desconoce el puerto HTTP del dispositivo. El dispositivo aún no ha completado su protocolo de enlace."
+    },
+    "ota_unreachable": {
+      "message": "No se ha podido acceder al endpoint de actualización del dispositivo en {url}: {error}"
+    },
+    "ota_rejected": {
+      "message": "El dispositivo ha rechazado la solicitud de actualización (HTTP {status}): {error}"
+    },
+    "control_unreachable": {
+      "message": "No se pudo acceder al endpoint de control del dispositivo en {url}: {error}"
+    },
+    "control_rejected": {
+      "message": "El dispositivo rechazo la solicitud de control (HTTP {status}): {error}"
+    },
+    "invalid_page_id": {
+      "message": "Invalid page ID \"{page_id}\". It must be an integer between 1 and 4294967295."
+    },
+    "no_pages": {
+      "message": "The lizaIP device has no page configuration yet."
+    },
+    "no_page_target": {
+      "message": "No page given. Set Page, or give a name in Page name."
+    },
+    "unknown_page_name": {
+      "message": "There is no page called \"{page}\" on this device."
+    },
+    "ambiguous_page_name": {
+      "message": "{count} pages are called \"{page}\" on this device. Set Page to say which one."
+    },
+    "conflicting_page_target": {
+      "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
+    }
+  },
+  "action_labels": {
+    "back": "Atrás",
+    "back_menu": "Atrás / Menú",
+    "close": "Cerrar",
+    "down": "Abajo",
+    "forward": "Adelante",
+    "home": "Inicio",
+    "input": "Entrada",
+    "instant_replay": "Repetición",
+    "left": "Izquierda",
+    "lock": "Bloquear",
+    "menu": "Menú",
+    "mute": "Silenciar",
+    "next": "Siguiente",
+    "off": "Apagado",
+    "ok": "OK",
+    "on": "Encendido",
+    "open": "Abrir",
+    "options": "Opciones",
+    "oscillate_off": "Oscilación desactivada",
+    "oscillate_on": "Oscilación activada",
+    "pause": "Pausa",
+    "play": "Reproducir",
+    "play_pause": "Reproducir / Pausa",
+    "power": "Encendido",
+    "previous": "Anterior",
+    "repeat_all": "Repetir todo",
+    "repeat_off": "Repetir desactivado",
+    "repeat_one": "Repetir una",
+    "reverse": "Atrás",
+    "right": "Derecha",
+    "search": "Buscar",
+    "select": "Seleccionar",
+    "shuffle_off": "Aleatorio desactivado",
+    "shuffle_on": "Aleatorio activado",
+    "source": "Fuente",
+    "stop": "Stop",
+    "toggle": "Alternar",
+    "tools_more": "Herramientas / Más",
+    "top_menu": "Menú principal",
+    "unlock": "Desbloquear",
+    "unmute": "Activar sonido",
+    "up": "Arriba",
+    "voice_assistant": "Asistente de voz",
+    "volume": "Volumen",
+    "volume_down": "Bajar volumen",
+    "volume_up": "Subir volumen"
+  }
+}

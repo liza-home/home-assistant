@@ -1,0 +1,165 @@
+# lizaIP — Default icon mappings
+#
+# Edit this file to change which icons appear on buttons by default.
+# Restart Home Assistant after changes.
+#
+# Icon format: mdi:<icon-name>  (Material Design Icons)
+# Browse icons at https://pictogrammers.com/library/mdi/
+
+# ---------------------------------------------------------------------------
+# Domain fallback icons (used when no state-specific icon matches)
+# ---------------------------------------------------------------------------
+domain_icons:
+  light: mdi:lightbulb
+  switch: mdi:toggle-switch
+  climate: mdi:thermostat
+  media_player: mdi:play-circle
+  cover: mdi:window-shutter
+  fan: mdi:fan
+  lock: mdi:lock
+  camera: mdi:cctv
+  vacuum: mdi:robot-vacuum
+  scene: mdi:palette
+  script: mdi:script-text
+  automation: mdi:robot
+  remote: mdi:remote
+  input_boolean: mdi:toggle-switch-outline
+  button: mdi:gesture-tap-button
+  humidifier: mdi:air-humidifier
+
+# ---------------------------------------------------------------------------
+# Per-domain state icons (show the NEXT state — what happens when pressed)
+# ---------------------------------------------------------------------------
+domain_state_icons:
+  light:
+    "on": mdi:lightbulb-off
+    "off": mdi:lightbulb
+  switch:
+    "on": mdi:toggle-switch-off
+    "off": mdi:toggle-switch
+  cover:
+    open: mdi:window-shutter
+    closed: mdi:window-shutter-open
+    opening: mdi:arrow-down
+    closing: mdi:arrow-up
+  lock:
+    locked: mdi:lock-open
+    unlocked: mdi:lock
+  fan:
+    "on": mdi:fan-off
+    "off": mdi:fan
+  media_player:
+    playing: mdi:pause
+    paused: mdi:play
+    idle: mdi:play
+    "on": mdi:power-off
+    "off": mdi:power
+  climate:
+    heat: mdi:fire
+    cool: mdi:snowflake
+    auto: mdi:thermostat-auto
+    "off": mdi:power
+  binary_sensor:
+    "on": mdi:checkbox-blank-circle-outline
+    "off": mdi:checkbox-marked-circle
+
+# ---------------------------------------------------------------------------
+# Attribute-specific icons (show the NEXT value — what happens when pressed)
+# ---------------------------------------------------------------------------
+attribute_icons:
+  is_volume_muted:
+    "true": mdi:volume-high
+    "false": mdi:volume-off
+  repeat:
+    "off": mdi:repeat-once
+    one: mdi:repeat
+    all: mdi:repeat-off
+  shuffle:
+    "true": mdi:shuffle-disabled
+    "false": mdi:shuffle
+  oscillating:
+    "true": mdi:sync-off
+    "false": mdi:rotate-orbit
+  direction:
+    forward: mdi:rotate-left
+    reverse: mdi:rotate-right
+  fan_mode:
+    auto: mdi:fan-auto
+    low: mdi:fan-speed-1
+    medium: mdi:fan-speed-2
+    high: mdi:fan-speed-3
+  swing_mode:
+    "on": mdi:arrow-collapse-all
+    "off": mdi:arrow-all
+  preset_mode:
+    eco: mdi:leaf
+    boost: mdi:rocket-launch
+    comfort: mdi:sofa
+    home: mdi:home
+    sleep: mdi:weather-night
+    away: mdi:home-export-outline
+  # Numeric/continuous attributes — single icon (no per-value states)
+  volume:
+    _: mdi:volume-high
+  brightness:
+    _: mdi:brightness-6
+  color_temp:
+    _: mdi:temperature-kelvin
+  temperature:
+    _: mdi:thermometer
+  humidity:
+    _: mdi:water-percent
+  position:
+    _: mdi:arrow-up-down
+  tilt_position:
+    _: mdi:angle-acute
+  speed:
+    _: mdi:speedometer
+  # Discrete attributes with many possible values — representative icon
+  hvac_mode:
+    heat: mdi:fire
+    cool: mdi:snowflake
+    heat_cool: mdi:sun-snowflake-variant
+    auto: mdi:thermostat-auto
+    dry: mdi:water-off
+    fan_only: mdi:fan
+    "off": mdi:power
+  sound_mode:
+    _: mdi:surround-sound
+  effect:
+    _: mdi:palette
+
+# ---------------------------------------------------------------------------
+# Per-domain service icons — the most specific override there is
+# ---------------------------------------------------------------------------
+# Only needed where one service wants a different icon per domain, which the
+# flat `service_icons` map below cannot express. Home Assistant is the default
+# for every fixed-icon service, so list one here only to disagree with it.
+domain_service_icons:
+  media_player:
+    # HA ships the same mdi:power for turn_on and turn_off, which leaves an
+    # On/Off pair looking identical. `light.turn_off` is deliberately absent:
+    # HA's own mdi:lightbulb-off is better than any generic power glyph.
+    turn_off: mdi:power-off
+
+# ---------------------------------------------------------------------------
+# Service icons — override Home Assistant's own icon for a service.
+# Applies to any service whose icon does not depend on state.
+# ---------------------------------------------------------------------------
+service_icons:
+  # Deliberately almost empty. Every entry here overrules Home Assistant, so one
+  # belongs here only where HA is actually wrong for us -- and it usually isn't.
+  #
+  # Ten entries used to live here, from before we deferred to HA. Eight of them
+  # (media_stop, stop_cover, media_next_track, media_previous_track, volume_up,
+  # volume_down, media_seek, clear_playlist) restated HA's own icon character
+  # for character -- verified against core 2026.7.1's shipped icons.json -- so
+  # they did nothing but rot. The ninth, `play_media: mdi:play-box`, silently
+  # disagreed: HA says mdi:play, and mdi:play-box is what put a boxed play glyph
+  # on the device while the panel showed a plain one. `learn_command` is gone
+  # too -- HA's mdi:school says "learn" better than our mdi:remote did.
+  #
+  # What is left is the one genuine disagreement: the `remote` domain gives
+  # send_command, turn_on and toggle all the same mdi:remote, so a remote page
+  # would be a wall of identical buttons.
+  send_command: mdi:console

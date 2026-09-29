@@ -1,0 +1,268 @@
+{
+  "config": {
+    "step": {
+      "confirm": {
+        "title": "lizaIP",
+        "description": "Do you want to add {name}?"
+      },
+      "reconfigure": {
+        "title": "Reconfigure lizaIP",
+        "data": {
+          "name": "Device name"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "no_device_id": "Device connected without an ID.",
+      "discovery_only": "Manual setup is not supported. The device must be discovered automatically via mDNS.",
+      "reconfigure_successful": "Configuration updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "lizaIP Options",
+        "data": {
+          "optimistic_updates": "Optimistic updates",
+          "language": "Device language"
+        },
+        "data_description": {
+          "optimistic_updates": "Update button icons immediately on press, before confirming the actual state. If the action fails, the icon reverts to the real state shortly after.",
+          "language": "Language for the button labels this remote displays. \"Automatic\" follows Home Assistant's language."
+        },
+        "selector": {
+          "language": {
+            "options": {
+              "auto": "Automatic",
+              "en": "English",
+              "de": "Deutsch",
+              "fr": "Français",
+              "it": "Italiano",
+              "es": "Español"
+            }
+          }
+        },
+        "sections": {
+          "demo": {
+            "name": "Demo Mode",
+            "description": "Saving sends Device.Control.DemoMode to the device. The timings are optional — leave them empty to keep the device's own.",
+            "data": {
+              "demo_mode": "Demo mode",
+              "demo_mode_dwell_time": "dwell-time",
+              "demo_mode_swipe_time": "swipe-time"
+            },
+            "data_description": {
+              "demo_mode": "Toggle the device's demo mode. Saving options sends Device.Control.DemoMode to the device.",
+              "demo_mode_dwell_time": "Optional DemoMode DwellTime value sent to Device.Control.",
+              "demo_mode_swipe_time": "Optional DemoMode SwipeTime value sent to Device.Control."
+            }
+          },
+          "sliders": {
+            "name": "Slider Options",
+            "description": "A slider reports continuously while it is being touched, and the device cannot be asked to send less. This limit thins that stream. Touch and release are always acted on immediately, so the start of a drag and the final position are never delayed. Set it to 0 to act on every change.",
+            "data": {
+              "slider_min_interval_ms": "Slider update interval"
+            },
+            "data_description": {
+              "slider_min_interval_ms": "Shortest gap between two updates while a slider is being dragged. Touch and release are always sent immediately, so the start and the final position are never delayed. 0 disables the limit."
+            }
+          }
+        }
+      }
+    },
+    "abort": {
+      "options_saved": "Options saved."
+    }
+  },
+  "entity": {
+    "event": {
+      "button": {
+        "name": "Button {button_id}"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brightness"
+      },
+      "slider": {
+        "name": "Slider {slider_id}"
+      }
+    },
+    "switch": {
+      "brightness_automatic": {
+        "name": "Brightness automatic"
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    },
+    "binary_sensor": {
+      "in_hand": {
+        "name": "In hand",
+        "state": {
+          "on": "true",
+          "off": "false"
+        }
+      },
+      "charging": {
+        "name": "Charging"
+      }
+    }
+  },
+  "services": {
+    "firmware_update": {
+      "name": "Firmware Update",
+      "description": "Trigger an OTA firmware update on one or more lizaIP devices. The device downloads and verifies the firmware, then reboots; the connection drops and reconnects automatically.",
+      "fields": {
+        "url": {
+          "name": "Firmware URL",
+          "description": "HTTPS URL of the firmware binary (.bin file). When using the Update entity's Install button this is resolved automatically from the latest GitHub release."
+        },
+        "config_entry_id": {
+          "name": "Device",
+          "description": "Config entry of the device to update. If omitted, all connected devices are updated."
+        }
+      }
+    },
+    "refresh_dynamic_sources": {
+      "name": "Refresh dynamic sources",
+      "description": "Re-resolve dynamic layout bindings and push any changes to the affected remotes. Pages whose content did not change produce no device traffic.",
+      "fields": {
+        "entry_id": {
+          "name": "Device",
+          "description": "Device to refresh. If omitted, all lizaIP devices are refreshed."
+        }
+      }
+    },
+    "goto_page": {
+      "name": "Go to page",
+      "description": "Show a page on the remote. On a button this becomes a device-local action the remote executes itself.",
+      "fields": {
+        "page": {
+          "name": "Page name",
+          "description": "The page to show, by its name in the lizaIP panel."
+        },
+        "page_id": {
+          "name": "Page",
+          "description": "The page to show."
+        }
+      }
+    }
+  },
+  "issues": {
+    "protocol_version_mismatch": {
+      "title": "lizaIP protocol version mismatch",
+      "description": "Device \"{device}\" reports protocol version {device_version}, but this integration expects version {ha_version}. Update the device firmware or the integration to resolve."
+    },
+    "repeated_connection_failure": {
+      "title": "lizaIP device repeatedly disconnecting",
+      "description": "Device \"{device}\" has disconnected {count} times without a successful handshake. Check the device power and network connection."
+    }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "lizaIP is not connected."
+    },
+    "no_firmware_url": {
+      "message": "No firmware download URL available. Check that the latest GitHub release has a .bin asset."
+    },
+    "no_devices": {
+      "message": "No lizaIP devices are configured."
+    },
+    "firmware_update_failed": {
+      "message": "Firmware update request failed: {error}"
+    },
+    "device_ip_unknown": {
+      "message": "The device IP address is not known. Make sure the device is connected."
+    },
+    "device_port_unknown": {
+      "message": "The device HTTP port is not known. The device has not completed its handshake yet."
+    },
+    "ota_unreachable": {
+      "message": "Could not reach the device update endpoint at {url}: {error}"
+    },
+    "ota_rejected": {
+      "message": "The device rejected the update request (HTTP {status}): {error}"
+    },
+    "control_unreachable": {
+      "message": "Could not reach the device control endpoint at {url}: {error}"
+    },
+    "control_rejected": {
+      "message": "The device rejected the control request (HTTP {status}): {error}"
+    },
+    "invalid_page_id": {
+      "message": "Invalid page ID \"{page_id}\". It must be an integer between 1 and 4294967295."
+    },
+    "no_pages": {
+      "message": "The lizaIP device has no page configuration yet."
+    },
+    "no_page_target": {
+      "message": "No page given. Set Page, or give a name in Page name."
+    },
+    "unknown_page_name": {
+      "message": "There is no page called \"{page}\" on this device."
+    },
+    "ambiguous_page_name": {
+      "message": "{count} pages are called \"{page}\" on this device. Set Page to say which one."
+    },
+    "conflicting_page_target": {
+      "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
+    }
+  },
+  "action_labels": {
+    "back": "Back",
+    "back_menu": "Back / Menu",
+    "close": "Close",
+    "down": "Down",
+    "forward": "Forward",
+    "home": "Home",
+    "input": "Input",
+    "instant_replay": "Instant Replay",
+    "left": "Left",
+    "lock": "Lock",
+    "menu": "Menu",
+    "mute": "Mute",
+    "next": "Next",
+    "off": "Off",
+    "ok": "OK",
+    "on": "On",
+    "open": "Open",
+    "options": "Options",
+    "oscillate_off": "Oscillate off",
+    "oscillate_on": "Oscillate on",
+    "pause": "Pause",
+    "play": "Play",
+    "play_pause": "Play / Pause",
+    "power": "Power",
+    "previous": "Previous",
+    "repeat_all": "Repeat all",
+    "repeat_off": "Repeat off",
+    "repeat_one": "Repeat one",
+    "reverse": "Reverse",
+    "right": "Right",
+    "search": "Search",
+    "select": "Select",
+    "shuffle_off": "Shuffle off",
+    "shuffle_on": "Shuffle on",
+    "source": "Source",
+    "stop": "Stop",
+    "toggle": "Toggle",
+    "tools_more": "Tools / More",
+    "top_menu": "Top Menu",
+    "unlock": "Unlock",
+    "unmute": "Unmute",
+    "up": "Up",
+    "voice_assistant": "Voice Assistant",
+    "volume": "Volume",
+    "volume_down": "Volume Down",
+    "volume_up": "Volume Up"
+  }
+}

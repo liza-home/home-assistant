@@ -1,0 +1,89 @@
+# Sonos / Media Player Layout — pre-configured remote control
+#
+# Maps Liza physical buttons to media_player services. Works with Sonos,
+# Spotify Connect, Chromecast, and other media_player entities.
+#
+# Buttons 1–8 are bound to favorites through the `playlist` placeholder —
+# title, album art and play_media all come from the favorite, and the binding
+# is live, so renaming or reordering one refreshes the button. 9–12 are
+# transport: previous, play/pause, next, mute.
+#
+# Reference: https://www.home-assistant.io/integrations/sonos
+
+name: Sonos
+icon: logo:sonos
+description: Control your Sonos speaker — favorites and volume
+
+target_selector:
+  device:
+    integration: sonos
+    primary_domain: media_player
+
+placeholders:
+  playlist:
+    source: favorites
+
+buttons:
+  button_1: "@playlist[1]"
+  button_2: "@playlist[2]"
+  button_3: "@playlist[3]"
+  button_4: "@playlist[4]"
+  button_5: "@playlist[5]"
+  button_6: "@playlist[6]"
+  button_7: "@playlist[7]"
+  button_8: "@playlist[8]"
+
+  button_9:
+    label: Previous
+    image: mdi:skip-previous
+    config:
+      - action: media_player.media_previous_track
+
+  button_10:
+    label: Play/Pause
+    image: mdi:play-pause
+    config:
+      - action: media_player.media_play_pause
+
+  button_11:
+    label: Next
+    image: mdi:skip-next
+    config:
+      - action: media_player.media_next_track
+
+  button_12:
+    label: Mute
+    image: mdi:volume-mute
+    config:
+      - action: media_player.volume_mute
+        data:
+          # volume_mute is a setter, not a toggle: reading the target's current
+          # state and inverting it is what makes this button behave like one.
+          # `@target` is the bound entity, substituted when the page is created.
+          is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
+
+  button_volume_up:
+    label: Volume Up
+    image: mdi:volume-plus
+    config:
+      - action: media_player.volume_up
+
+  button_volume_down:
+    label: Volume Down
+    image: mdi:volume-minus
+    config:
+      - action: media_player.volume_down
+
+  # The mechanics live in `slider_actions`, as a page stores them; the subject
+  # is left out because the page's own target supplies it.
+  slider_vertical:
+    label: Volume
+    image: mdi:volume-high
+    slider_actions:
+      mode: proportional
+      attribute: volume_level
+      service: media_player.volume_set
+      data_key: volume_level
+      factor: 1.0
+      min: 0.0
+      max: 1.0

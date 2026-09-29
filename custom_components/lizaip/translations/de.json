@@ -1,0 +1,268 @@
+{
+  "config": {
+    "step": {
+      "confirm": {
+        "title": "lizaIP",
+        "description": "Möchten Sie {name} hinzufügen?"
+      },
+      "reconfigure": {
+        "title": "lizaIP neu konfigurieren",
+        "data": {
+          "name": "Gerätename"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert.",
+      "no_device_id": "Gerät hat sich ohne ID verbunden.",
+      "discovery_only": "Manuelle Einrichtung wird nicht unterstützt. Das Gerät muss automatisch über mDNS erkannt werden.",
+      "reconfigure_successful": "Konfiguration aktualisiert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "lizaIP-Optionen",
+        "data": {
+          "optimistic_updates": "Optimistische Aktualisierungen",
+          "language": "Gerätesprache"
+        },
+        "data_description": {
+          "optimistic_updates": "Button-Icons sofort bei Tastendruck aktualisieren, bevor der tatsächliche Zustand bestätigt wird. Bei Fehler wird das Icon kurz darauf auf den echten Zustand zurückgesetzt.",
+          "language": "Sprache der Tastenbeschriftungen auf dieser Fernbedienung. \"Automatisch\" folgt der Sprache von Home Assistant."
+        },
+        "selector": {
+          "language": {
+            "options": {
+              "auto": "Automatisch",
+              "en": "English",
+              "de": "Deutsch",
+              "fr": "Français",
+              "it": "Italiano",
+              "es": "Español"
+            }
+          }
+        },
+        "sections": {
+          "demo": {
+            "name": "Demo-Modus",
+            "description": "Beim Speichern wird Device.Control.DemoMode an das Gerät gesendet. Die Zeiten sind optional — leer lassen, um die des Geräts zu behalten.",
+            "data": {
+              "demo_mode": "Demo-Modus",
+              "demo_mode_dwell_time": "Verweilzeit",
+              "demo_mode_swipe_time": "Wischzeit"
+            },
+            "data_description": {
+              "demo_mode": "Schaltet den Demo-Modus des Geräts um. Beim Speichern der Optionen wird Device.Control.DemoMode an das Gerät gesendet.",
+              "demo_mode_dwell_time": "Optionaler DemoMode-DwellTime-Wert, der an Device.Control gesendet wird.",
+              "demo_mode_swipe_time": "Optionaler DemoMode-SwipeTime-Wert, der an Device.Control gesendet wird."
+            }
+          },
+          "sliders": {
+            "name": "Schieberegler-Optionen",
+            "description": "Ein Schieberegler meldet während der Berührung fortlaufend, und das Gerät lässt sich nicht zu weniger überreden. Diese Grenze dünnt den Strom aus. Berühren und Loslassen werden immer sofort verarbeitet, Beginn und Endposition verzögern sich also nie. Auf 0 setzen, um jede Änderung zu verarbeiten.",
+            "data": {
+              "slider_min_interval_ms": "Aktualisierungsintervall des Schiebereglers"
+            },
+            "data_description": {
+              "slider_min_interval_ms": "Kürzester Abstand zwischen zwei Aktualisierungen während des Ziehens. Berühren und Loslassen werden immer sofort gesendet, Beginn und Endposition verzögern sich also nie. 0 schaltet die Begrenzung ab."
+            }
+          }
+        }
+      }
+    },
+    "abort": {
+      "options_saved": "Optionen gespeichert."
+    }
+  },
+  "entity": {
+    "event": {
+      "button": {
+        "name": "Taste {button_id}"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Helligkeit"
+      },
+      "slider": {
+        "name": "Schieberegler {slider_id}"
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Batterie"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    },
+    "binary_sensor": {
+      "in_hand": {
+        "name": "In der Hand",
+        "state": {
+          "on": "true",
+          "off": "false"
+        }
+      },
+      "charging": {
+        "name": "Wird geladen"
+      }
+    },
+    "switch": {
+      "brightness_automatic": {
+        "name": "Helligkeit automatisch"
+      }
+    }
+  },
+  "services": {
+    "firmware_update": {
+      "name": "Firmware-Update",
+      "description": "Startet ein OTA-Firmware-Update auf einem oder mehreren lizaIP-Geräten. Das Gerät lädt die Firmware herunter, prüft sie und startet neu; die Verbindung bricht ab und wird automatisch wiederhergestellt.",
+      "fields": {
+        "url": {
+          "name": "Firmware-URL",
+          "description": "HTTPS-URL der Firmware-Datei (.bin). Beim Installieren über die Update-Entität wird sie automatisch aus dem neuesten GitHub-Release ermittelt."
+        },
+        "config_entry_id": {
+          "name": "Gerät",
+          "description": "Konfigurationseintrag des zu aktualisierenden Geräts. Ohne Angabe werden alle verbundenen Geräte aktualisiert."
+        }
+      }
+    },
+    "refresh_dynamic_sources": {
+      "name": "Dynamische Quellen aktualisieren",
+      "description": "Löst dynamische Layout-Bindungen neu auf und überträgt Änderungen an die betroffenen Fernbedienungen. Seiten ohne inhaltliche Änderung erzeugen keinen Gerätedatenverkehr.",
+      "fields": {
+        "entry_id": {
+          "name": "Gerät",
+          "description": "Zu aktualisierendes Gerät. Ohne Angabe werden alle lizaIP-Geräte aktualisiert."
+        }
+      }
+    },
+    "goto_page": {
+      "name": "Seite anzeigen",
+      "description": "Zeigt eine Seite auf der Fernbedienung. Auf einer Taste wird daraus eine geräteinterne Aktion, die die Fernbedienung selbst ausführt.",
+      "fields": {
+        "page": {
+          "name": "Seitenname",
+          "description": "Die anzuzeigende Seite, über ihren Namen im lizaIP-Panel."
+        },
+        "page_id": {
+          "name": "Seite",
+          "description": "Die anzuzeigende Seite."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "lizaIP ist nicht verbunden."
+    },
+    "no_firmware_url": {
+      "message": "Keine Firmware-Download-URL verfügbar. Prüfe, ob das neueste Release ein .bin-Asset enthält."
+    },
+    "no_devices": {
+      "message": "Es sind keine lizaIP-Geräte konfiguriert."
+    },
+    "firmware_update_failed": {
+      "message": "Firmware-Update fehlgeschlagen: {error}"
+    },
+    "device_ip_unknown": {
+      "message": "Die IP-Adresse des Geräts ist nicht bekannt. Stelle sicher, dass das Gerät verbunden ist."
+    },
+    "device_port_unknown": {
+      "message": "Der HTTP-Port des Geräts ist nicht bekannt. Das Gerät hat seinen Handshake noch nicht abgeschlossen."
+    },
+    "ota_unreachable": {
+      "message": "Der Update-Endpunkt des Geräts unter {url} war nicht erreichbar: {error}"
+    },
+    "ota_rejected": {
+      "message": "Das Gerät hat die Update-Anfrage abgelehnt (HTTP {status}): {error}"
+    },
+    "control_unreachable": {
+      "message": "Der Gerätesteuerungs-Endpunkt unter {url} konnte nicht erreicht werden: {error}"
+    },
+    "control_rejected": {
+      "message": "Das Gerät hat die Steuerungsanfrage abgelehnt (HTTP {status}): {error}"
+    },
+    "invalid_page_id": {
+      "message": "Ungültige Seiten-ID \"{page_id}\". Sie muss eine ganze Zahl zwischen 1 und 4294967295 sein."
+    },
+    "no_pages": {
+      "message": "Das lizaIP-Gerät hat noch keine Seitenkonfiguration."
+    },
+    "no_page_target": {
+      "message": "Keine Seite angegeben. Wählen Sie Seite, oder geben Sie einen Namen unter Seitenname an."
+    },
+    "unknown_page_name": {
+      "message": "Auf diesem Gerät gibt es keine Seite namens \"{page}\"."
+    },
+    "ambiguous_page_name": {
+      "message": "Auf diesem Gerät heißen {count} Seiten \"{page}\". Wählen Sie Seite, um eine auszuwählen."
+    },
+    "conflicting_page_target": {
+      "message": "Der Name \"{page}\" gehört zu Seite {resolved}, nicht zu Seite {page_id}. Geben Sie eines von beiden an, nicht beides."
+    }
+  },
+  "issues": {
+    "protocol_version_mismatch": {
+      "title": "lizaIP Protokollversion stimmt nicht überein",
+      "description": "Gerät \"{device}\" meldet Protokollversion {device_version}, diese Integration erwartet jedoch Version {ha_version}. Aktualisiere die Geräte-Firmware oder die Integration."
+    },
+    "repeated_connection_failure": {
+      "title": "lizaIP-Gerät trennt wiederholt die Verbindung",
+      "description": "Gerät \"{device}\" hat sich {count}-mal ohne erfolgreichen Handshake getrennt. Prüfe die Stromversorgung und die Netzwerkverbindung des Geräts."
+    }
+  },
+  "action_labels": {
+    "back": "Zurück",
+    "back_menu": "Zurück / Menü",
+    "close": "Zu",
+    "down": "Ab",
+    "forward": "Vorwärts",
+    "home": "Startseite",
+    "input": "Eingang",
+    "instant_replay": "Wiederholung",
+    "left": "Links",
+    "lock": "Sperren",
+    "menu": "Menü",
+    "mute": "Stumm",
+    "next": "Nächster",
+    "off": "Aus",
+    "ok": "OK",
+    "on": "Ein",
+    "open": "Auf",
+    "options": "Optionen",
+    "oscillate_off": "Schwenken aus",
+    "oscillate_on": "Schwenken ein",
+    "pause": "Pause",
+    "play": "Wiedergabe",
+    "play_pause": "Wiedergabe / Pause",
+    "power": "Ein/Aus",
+    "previous": "Vorheriger",
+    "repeat_all": "Alle wiederholen",
+    "repeat_off": "Wiederholen aus",
+    "repeat_one": "Eines wiederholen",
+    "reverse": "Rückwärts",
+    "right": "Rechts",
+    "search": "Suche",
+    "select": "Auswählen",
+    "shuffle_off": "Zufall aus",
+    "shuffle_on": "Zufall ein",
+    "source": "Quelle",
+    "stop": "Stop",
+    "toggle": "Umschalten",
+    "tools_more": "Extras / Mehr",
+    "top_menu": "Hauptmenü",
+    "unlock": "Entsperren",
+    "unmute": "Ton ein",
+    "up": "Auf",
+    "voice_assistant": "Sprachassistent",
+    "volume": "Lautstärke",
+    "volume_down": "Leiser",
+    "volume_up": "Lauter"
+  }
+}

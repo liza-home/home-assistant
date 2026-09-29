@@ -1,0 +1,137 @@
+name: Amazon Fire TV
+icon: mdi:amazon
+description: Control your Amazon Fire TV / Fire TV Stick
+
+# Device selector — the picker offers devices of this integration that
+# expose a 'remote' entity, which is what this layout's actions run on.
+target_selector:
+  device:
+    integration: androidtv
+    primary_domain: remote
+
+# Button mappings (Liza button_key → HA action), written the way a stored
+# page writes a button. Leave one out for a slot that should do nothing.
+buttons:
+  button_power:
+    label: Power
+    image: mdi:power
+    config:
+      - action: remote.send_command
+        data:
+          command: POWER
+
+  # --- button grid, row 1 ---
+  button_1:
+    label: Home
+    image: mdi:home
+    config:
+      - action: remote.send_command
+        data:
+          command: HOME
+
+  button_2:
+    label: Up
+    image: mdi:arrow-up
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_UP
+
+  button_3:
+    label: Back
+    image: mdi:keyboard-return
+    config:
+      - action: remote.send_command
+        data:
+          command: BACK
+
+  button_4:
+    label: Menu
+    image: mdi:menu
+    config:
+      - action: remote.send_command
+        data:
+          command: MENU
+
+  # --- button grid, row 2 ---
+  button_5:
+    label: Left
+    image: mdi:arrow-left
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_LEFT
+
+  button_6:
+    label: Select
+    image: mdi:checkbox-marked-circle
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_CENTER
+
+  button_7:
+    label: Right
+    image: mdi:arrow-right
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_RIGHT
+
+  button_8:
+    label: Mute
+    image: mdi:volume-off
+    config:
+      - action: remote.send_command
+        data:
+          command: MUTE
+
+  # --- button grid, row 3 ---
+  button_9:
+    label: Previous
+    image: mdi:skip-previous
+    config:
+      - action: remote.send_command
+        data:
+          command: MEDIA_REWIND
+
+  button_10:
+    label: Down
+    image: mdi:arrow-down
+    config:
+      - action: remote.send_command
+        data:
+          command: DPAD_DOWN
+
+  button_11:
+    label: Next
+    image: mdi:skip-next
+    config:
+      - action: remote.send_command
+        data:
+          command: MEDIA_FAST_FORWARD
+
+  button_12:
+    label: Play / Pause
+    image: mdi:play-pause
+    config:
+      - action: remote.send_command
+        data:
+          command: MEDIA_PLAY_PAUSE
+
+  # --- back & voice ---
+  button_back:
+    label: Back
+    image: mdi:arrow-left-circle
+    config:
+      - action: remote.send_command
+        data:
+          command: BACK
+
+  button_voice:
+    label: Alexa
+    image: mdi:microphone
+    config:
+      - action: remote.send_command
+        data:
+          command: SEARCH
