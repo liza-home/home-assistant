@@ -72,10 +72,10 @@ def _entry_ids_from_devices(hass: HomeAssistant, device_ids) -> set[str]:
     if not device_ids:
         return set()
 
-    devices = dr.async_get(hass).devices
+    dev_reg = dr.async_get(hass)
     entry_ids: set[str] = set()
     for device_id in device_ids:
-        device = devices.get(device_id)
+        device = dev_reg.async_get(device_id)
         if device is not None:
             entry_ids |= set(device.config_entries or ())
     return entry_ids

@@ -6,6 +6,31 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.09.2] - 2026-09-29
+
+A housekeeping release. Nothing about the remote or the panel changes; what changes is
+what the integration does to Home Assistant around it.
+
+### Fixed
+
+- **No more warnings from lizaIP in your Home Assistant log.** Two of them, both asking
+  you to open a bug report against us. One said the integration made a blocking call
+  inside the event loop, the other that it used the device registry in a way Home
+  Assistant has deprecated. Neither broke anything you would have noticed, but they made
+  a healthy installation look unhealthy — and a log full of warnings you are told to
+  report is worth fixing on its own.
+
+- **Starting up no longer holds Home Assistant still.** Registering the panel and reading
+  the remote's button labels both went to disk while everything else was waiting on them.
+  The labels are now read once, in the background, as the integration starts; the panel
+  works out its version off to the side. On a slow disk or a busy Pi this is the
+  difference between a start that hesitates and one that does not.
+
+- **Ready for Home Assistant 2027.9.** The deprecated device lookups the log complained
+  about are the kind that stop working rather than merely warning. They have been moved
+  to the supported helpers, so the integration will keep finding your remotes when that
+  release lands.
+
 ## [2026.09.1] - 2026-09-29
 
 First public release. The remote is set up, configured and kept in step with your home

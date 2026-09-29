@@ -18,7 +18,12 @@ from ..action_controller import (
     setup as setup_action_dispatch,
     setup_state_listener,
 )
-from ..const import DOMAIN, ICON_UPDATE_EVENT, resolve_tooltip_url
+from ..const import (
+    DOMAIN,
+    ICON_UPDATE_EVENT,
+    async_preload_action_labels,
+    resolve_tooltip_url,
+)
 from .const import CONFIG_CHANGED_EVENT
 from . import device_sync as _device_sync_mod
 from .layouts import refresh as _layout_refresh
@@ -38,6 +43,8 @@ def _panel_version() -> str:
     Uses the newest mtime across the panel directory so the version only moves
     when a file actually changes, and always moves when one does — otherwise the
     browser keeps serving the previous bundle from cache.
+
+    Touches the disk, so callers inside the event loop hand it to an executor.
     """
     try:
         newest = max(
@@ -94,6 +101,11 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
 
     hass.data.setdefault(DOMAIN, {})
 
+    # Before anything can ask for a label: the ladder that builds tooltips is
+    # synchronous and cannot await, so its translations are read here, once,
+    # off the loop.
+    await async_preload_action_labels(hass)
+
     hass.http.register_view(LizaIPPanelView)
 
     await async_register_frontend_panel(hass)
@@ -110,7 +122,7 @@ async def async_register_frontend_panel(hass: HomeAssistant) -> None:
     registration is redone — the view and static paths keep their single, stable
     routes.
     """
-    version = _panel_version()
+    version = await hass.async_add_executor_job(_panel_version)
     async_remove_panel(hass, FRONTEND_URL_PATH, warn_if_unknown=False)
     await async_register_panel(
         hass,
@@ -137,11 +149,10 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
     # Resolve device_id once via the device registry for all closures
     dev_reg = dr.async_get(hass)
     device_id: str | None = None
-    for dev in dev_reg.devices.values():
-        if entry.entry_id in dev.config_entries:
-            if any(ident[0] == DOMAIN for ident in dev.identifiers):
-                device_id = dev.id
-                break
+    for dev in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+        if any(ident[0] == DOMAIN for ident in dev.identifiers):
+            device_id = dev.id
+            break
 
     # State listener → icon updates
     entry_data["state_unsub"] = await setup_state_listener(hass, entry)

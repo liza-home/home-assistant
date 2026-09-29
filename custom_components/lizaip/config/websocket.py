@@ -40,6 +40,7 @@ from ..action_controller import (
 from ..const import (
     DOMAIN,
     ICON_DEFAULTS,
+    async_preload_action_labels,
     get_ui_language,
     load_action_labels,
 )
@@ -585,7 +586,7 @@ async def ws_list_devices(hass: HomeAssistant, connection, msg: dict) -> None:
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.state is not ConfigEntryState.LOADED:
             continue
-        entry_devices = list(dev_reg.devices.get_devices_for_config_entry_id(entry.entry_id))
+        entry_devices = dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
         if not entry_devices:
             continue
         available = hasattr(entry, "runtime_data") and entry.runtime_data and entry.runtime_data.connected
@@ -966,6 +967,10 @@ async def ws_get_action_labels(
     )
     # Precedence lives in `get_ui_language`, so it cannot drift per call site.
     lang = get_ui_language(hass, entry, fallback=msg.get("language"))
+    # A no-op once setup has run, which is always the case by the time a panel
+    # can send this — kept so the command does not depend on that ordering to
+    # stay off the disk.
+    await async_preload_action_labels(hass)
     labels = {**load_action_labels("en"), **load_action_labels(lang)}
     connection.send_result(msg["id"], {"language": lang, "labels": labels})
 
@@ -1041,7 +1046,7 @@ async def ws_list_layout_devices(hass: HomeAssistant, connection, msg: dict) -> 
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
     devices = []
-    for device in dev_reg.devices.values():
+    for device in dev_reg.devices:
         if device.disabled_by is not None:
             continue
         if entry_ids is not None and not (device.config_entries & entry_ids):

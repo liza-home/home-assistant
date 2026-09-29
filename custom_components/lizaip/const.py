@@ -24,10 +24,15 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote, unquote
 
 import yaml
+
+if TYPE_CHECKING:
+    # Type-only: this module stays importable without Home Assistant, which is
+    # what keeps it a leaf the rest of the integration can depend on freely.
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -603,6 +608,13 @@ _FALLBACK_LANG: Final = "en"
 # would be a disk hit per tooltip.
 _ACTION_LABEL_CACHE: dict[str, dict[str, str]] = {}
 
+#: Set once every shipped file has been read in an executor. From then on the
+#: synchronous loader answers a language it has not seen with ``{}`` instead of
+#: going to disk: the only files that exist are the ones already cached, so a
+#: miss can only be a language we do not ship — and the lookup happens inside
+#: the event loop, where opening a file is what Home Assistant flags.
+_ACTION_LABELS_PRELOADED = False
+
 
 def normalize_language(lang: str | None) -> str:
     """Fold a language tag onto the spelling the translation files use.
@@ -614,31 +626,71 @@ def normalize_language(lang: str | None) -> str:
     return base if base.isalpha() else ""
 
 
+def _read_action_labels(candidate: str) -> dict[str, str]:
+    """Read one language's ``action_labels`` off disk. Blocking; never in the loop."""
+    if not candidate:
+        return {}
+    path = _TRANSLATIONS_DIR / f"{candidate}.json"
+    try:
+        with path.open(encoding="utf-8") as handle:
+            return json.load(handle).get("action_labels") or {}
+    except (OSError, ValueError):
+        # A missing or malformed translation file must not take a tooltip
+        # down: the caller degrades to English, then to the key itself.
+        return {}
+
+
 def load_action_labels(lang: str) -> dict[str, str]:
     """The ``action_labels`` section of ``translations/<lang>.json``.
 
     An unknown or unshipped language yields ``{}`` rather than raising, and
     ``get_action_label`` then falls back to English — the same behaviour the
     hand-written dict had for e.g. Spanish.
+
+    Answers from the cache once :func:`async_preload_action_labels` has run,
+    which is what keeps the synchronous label ladder off the disk while it is
+    running inside the event loop.
     """
     # Normalise before the cache, so "de" and "de-DE" share one entry.
     candidate = normalize_language(lang)
     if candidate in _ACTION_LABEL_CACHE:
         return _ACTION_LABEL_CACHE[candidate]
 
-    labels: dict[str, str] = {}
-    if candidate:
-        path = _TRANSLATIONS_DIR / f"{candidate}.json"
-        try:
-            with path.open(encoding="utf-8") as handle:
-                labels = json.load(handle).get("action_labels") or {}
-        except (OSError, ValueError):
-            # A missing or malformed translation file must not take a tooltip
-            # down: the caller degrades to English, then to the key itself.
-            labels = {}
-
+    labels = {} if _ACTION_LABELS_PRELOADED else _read_action_labels(candidate)
     _ACTION_LABEL_CACHE[candidate] = labels
     return labels
+
+
+def _preload_action_labels() -> None:
+    """Read every shipped translation into the cache. Blocking; runs in an executor."""
+    global _ACTION_LABELS_PRELOADED
+
+    try:
+        shipped = sorted(_TRANSLATIONS_DIR.glob("*.json"))
+    except OSError:
+        shipped = []
+
+    for path in shipped:
+        candidate = normalize_language(path.stem)
+        if candidate and candidate not in _ACTION_LABEL_CACHE:
+            _ACTION_LABEL_CACHE[candidate] = _read_action_labels(candidate)
+
+    # Only now, so a language read before this point is not answered from an
+    # empty cache that the glob was about to fill.
+    _ACTION_LABELS_PRELOADED = True
+
+
+async def async_preload_action_labels(hass: HomeAssistant) -> None:
+    """Fill the action-label cache off the event loop.
+
+    Called once during setup. The labels are needed from synchronous code —
+    the label ladder building a tooltip, `label_wording_key` matching a preset —
+    which cannot await, so the files are read ahead of time rather than on
+    first use. Five small JSON files, read once per Home Assistant start.
+    """
+    if _ACTION_LABELS_PRELOADED:
+        return
+    await hass.async_add_executor_job(_preload_action_labels)
 
 
 def get_action_label(action_key: str, lang: str) -> str:
