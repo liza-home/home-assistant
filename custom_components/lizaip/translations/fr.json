@@ -126,7 +126,22 @@
   "entity": {
     "event": {
       "button": {
-        "name": "Button {button_id}"
+        "name": "Bouton {button_id}"
+      },
+      "button_back": {
+        "name": "Bouton Retour"
+      },
+      "button_power": {
+        "name": "Bouton Marche/Arrêt"
+      },
+      "button_voice": {
+        "name": "Bouton Assistant vocal"
+      },
+      "button_volume_down": {
+        "name": "Bouton Baisser le volume"
+      },
+      "button_volume_up": {
+        "name": "Bouton Monter le volume"
       }
     },
     "number": {

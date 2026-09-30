@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, Platform
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.network import get_url
@@ -200,9 +200,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
             )
 
     entry.async_on_unload(entry.add_update_listener(_options_updated))
+    _watch_server_language(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _watch_server_language(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when the server language changes.
+
+    Entity names are resolved on the server, and ``EntityPlatform.async_setup``
+    copies the wordings in once, when the platform is set up. Changing the
+    language refills Home Assistant's own translation cache, but nothing
+    re-reads it into a platform that is already running, so the buttons keep
+    the language they were set up in until something reloads them. The
+    frontend's own text switches over immediately, which makes the stale names
+    look like a fault in the remote rather than a cache.
+
+    Reloading is the supported way to pick the new wordings up: the entry is
+    torn down and set up again, and the platform reads the translations
+    afresh. The device reconnects as part of that, which is why this reacts to
+    the language and nothing else -- the same event carries unrelated core
+    settings such as the location, the currency and the unit system, and a
+    remote that drops its connection whenever the elevation is corrected would
+    be a poor trade.
+    """
+    setup_language = hass.config.language
+
+    @callback
+    def _language_changed(_event: Event) -> None:
+        nonlocal setup_language
+        if hass.config.language == setup_language:
+            return
+        _LOGGER.debug(
+            "Server language changed from %s to %s; reloading %s so entity "
+            "names follow", setup_language, hass.config.language, entry.entry_id,
+        )
+        # Updated before the reload is scheduled, so a second event for the
+        # same change cannot queue a second reload.
+        setup_language = hass.config.language
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+
+    # Tied to the entry: a reload sets this up again, and without this the
+    # listeners would stack up, one per reload, each scheduling its own.
+    entry.async_on_unload(
+        hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, _language_changed)
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bool:

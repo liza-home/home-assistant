@@ -79,6 +79,21 @@
     "event": {
       "button": {
         "name": "Button {button_id}"
+      },
+      "button_back": {
+        "name": "Button Back"
+      },
+      "button_power": {
+        "name": "Button Power"
+      },
+      "button_voice": {
+        "name": "Button Voice Assistant"
+      },
+      "button_volume_down": {
+        "name": "Button Volume Down"
+      },
+      "button_volume_up": {
+        "name": "Button Volume Up"
       }
     },
     "number": {

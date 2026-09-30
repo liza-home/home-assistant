@@ -16,7 +16,7 @@
     "panel_custom"
   ],
   "requirements": [],
-  "version": "2026.09.3b1",
+  "version": "2026.09.3b2",
   "zeroconf": [
     {
       "type": "_lizaip._tcp.local."

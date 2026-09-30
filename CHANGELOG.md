@@ -6,6 +6,31 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.09.3b2] - 2026-09-30
+
+### Fixed
+
+- **Your remote's buttons had the word "button" in their name twice.** In
+  German they read "Taste Button 1" instead of "Taste 1", and the named keys
+  were worse: "Taste Button Volume Down" where you would expect "Taste Leiser".
+
+  They are now named the way you would say them — Taste 1 to Taste 12, and
+  Taste Zurück, Taste Ein/Aus, Taste Sprachassistent, Taste Leiser and Taste
+  Lauter — in each of the five languages, using the same words the remote
+  itself already uses for those functions.
+
+  Nothing you have built breaks: the underlying entity ids do not change, so
+  existing automations, scripts and dashboards keep working. Only the name you
+  read changes. If you had renamed a button yourself, your own name stays.
+
+- **Changing Home Assistant's language left the button names behind.** Every
+  other text switched over at once, but the remote's buttons kept the wording
+  they had been given when the integration last started — you had to restart
+  Home Assistant to see them follow.
+
+  They now follow the change by themselves, within a moment of you saving the
+  new language.
+
 ## [2026.09.3b1] - 2026-09-30
 
 The release that makes the panel tell you the truth about your remote, and makes a

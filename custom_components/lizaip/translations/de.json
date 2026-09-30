@@ -79,6 +79,21 @@
     "event": {
       "button": {
         "name": "Taste {button_id}"
+      },
+      "button_back": {
+        "name": "Taste Zurück"
+      },
+      "button_power": {
+        "name": "Taste Ein/Aus"
+      },
+      "button_voice": {
+        "name": "Taste Sprachassistent"
+      },
+      "button_volume_down": {
+        "name": "Taste Leiser"
+      },
+      "button_volume_up": {
+        "name": "Taste Lauter"
       }
     },
     "number": {

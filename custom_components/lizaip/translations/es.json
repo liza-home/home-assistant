@@ -79,6 +79,21 @@
     "event": {
       "button": {
         "name": "Botón {button_id}"
+      },
+      "button_back": {
+        "name": "Botón Atrás"
+      },
+      "button_power": {
+        "name": "Botón Encendido"
+      },
+      "button_voice": {
+        "name": "Botón Asistente de voz"
+      },
+      "button_volume_down": {
+        "name": "Botón Bajar volumen"
+      },
+      "button_volume_up": {
+        "name": "Botón Subir volumen"
       }
     },
     "number": {

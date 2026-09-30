@@ -126,7 +126,22 @@
   "entity": {
     "event": {
       "button": {
-        "name": "Button {button_id}"
+        "name": "Pulsante {button_id}"
+      },
+      "button_back": {
+        "name": "Pulsante Indietro"
+      },
+      "button_power": {
+        "name": "Pulsante Accensione"
+      },
+      "button_voice": {
+        "name": "Pulsante Assistente vocale"
+      },
+      "button_volume_down": {
+        "name": "Pulsante Abbassa volume"
+      },
+      "button_volume_up": {
+        "name": "Pulsante Alza volume"
       }
     },
     "number": {
