@@ -58,7 +58,26 @@ _PROVISION_TIMEOUT = aiohttp.ClientTimeout(total=5)
 # Last-resort name when HA's own hostname cannot be determined. Not unique —
 # only correct on a single-HA network — so it is used strictly as a fallback.
 _FALLBACK_HA_HOSTNAME = "homeassistant.local"
-_FALLBACK_HA_PORT = 8123
+
+# Last-resort port, used only when the running server cannot be read either.
+# It is a guess, and on a Supervisor install a wrong one -- see
+# `_server_port()`.
+_LAST_RESORT_HA_PORT = 8123
+
+# The port a URL means when it does not say one. Home Assistant normalizes its
+# configured URLs through `homeassistant.util.network.normalize_url`, which
+# *strips* a port that is the scheme's default -- so "http://ha.example.com"
+# is not a URL with an unknown port, it is one that provably means 80.
+#
+# Reading 8123 into it would be the integration's own default speaking, not the
+# deployment's: it is where Home Assistant listens when nobody put anything in
+# front of it, and a URL naming that port keeps it here because 8123 is not a
+# default that normalization removes. A portless http URL is the reverse-proxy
+# case, and 8123 is exactly where the proxy is not.
+#
+# Where there is no URL at all to read a scheme from, the answer comes from the
+# running server instead -- see `_server_port()`.
+_SCHEME_PORTS = {"http": 80, "https": 443}
 
 # HAOS/Supervisor advertises the host over mDNS as "<hostname>.local".
 _MDNS_DOMAIN = ".local"
@@ -209,15 +228,11 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             )
                         break
             if self.discovered_ips:
-                provisioned = await self._async_is_provisioned(self.discovered_ips)
-                if provisioned is False:
-                    _LOGGER.info(
-                        "Known device %s has no Home Assistant address "
-                        "(factory reset?) — re-provisioning",
-                        unique_id,
-                    )
-                    self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
-                elif provisioned is None:
+                cfg = await self._async_read_ha_config(self.discovered_ips)
+                stored_host = (
+                    str(cfg.get("ha_hostname") or "").strip() if cfg else ""
+                )
+                if cfg is None:
                     # Not rounded down to "fine". A device we could not ask is
                     # exactly the one that may be sitting there unprovisioned,
                     # and saying nothing is how it stays that way.
@@ -227,6 +242,15 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "re-provisioning a device that may not need it",
                         unique_id, self.discovered_ips,
                     )
+                elif not stored_host:
+                    _LOGGER.info(
+                        "Known device %s has no Home Assistant address "
+                        "(factory reset?) — re-provisioning",
+                        unique_id,
+                    )
+                    self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
+                elif await self._async_address_is_stale(cfg, unique_id):
+                    self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
                 else:
                     _LOGGER.debug(
                         "Re-discovery of known device %s, already provisioned "
@@ -270,11 +294,17 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return dict(self._FALLBACK_DEVICE_INFO)
 
-    async def _async_is_provisioned(self, device_ips: list[str]) -> bool | None:
-        """Whether the device already knows which Home Assistant to reach.
+    async def _async_read_ha_config(self, device_ips: list[str]) -> dict | None:
+        """The Home Assistant the device is set to reach, as it has it stored.
 
-        Decided by reading the value that decides it -- ``ha_hostname`` from
-        ``GET /api/config/ha`` -- rather than by a ``status`` field.
+        Returns the parsed ``GET /api/config/ha`` body, or ``None`` when no IP
+        could answer. Callers read ``ha_hostname`` to learn whether the device
+        is provisioned at all, and ``ha_port`` to learn whether it is aimed at
+        a port we would still send -- both answers come from the same one
+        request, and asking twice would invite the two to disagree.
+
+        Decided by reading the values that decide it rather than by a
+        ``status`` field.
 
         This used to ask ``GET /api/info`` for ``status == "unconfigured"``.
         ``Document/PROTOCOL.md`` described such a field, but its own example
@@ -285,10 +315,9 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         configuration was never repaired. The simulator implemented the
         sentence rather than the example, which is why it went unnoticed.
 
-        Returns ``True`` when an address is stored, ``False`` when the field is
-        there but empty, and ``None`` when no IP could answer -- three
-        outcomes, because "we could not ask" is not the same answer as "it is
-        fine", and treating it as one is what left this broken.
+        ``None`` is its own answer and must stay one: "we could not ask" is not
+        the same as "it is fine", and treating it as one is what left a
+        factory-reset remote unrepaired for so long.
         """
         session = async_get_clientsession(self.hass, verify_ssl=False)
         for device_ip in device_ips:
@@ -309,9 +338,11 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not isinstance(cfg, dict):
                 _LOGGER.debug("GET %s did not return an object", url)
                 continue
-            hostname = str(cfg.get("ha_hostname") or "").strip()
-            _LOGGER.debug("Device %s reports ha_hostname=%r", device_ip, hostname)
-            return bool(hostname)
+            _LOGGER.debug(
+                "Device %s reports ha_hostname=%r ha_port=%r",
+                device_ip, cfg.get("ha_hostname"), cfg.get("ha_port"),
+            )
+            return cfg
         return None
 
     # ------------------------------------------------------------------
@@ -332,6 +363,23 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return None
         return hostname if hostname.endswith(_MDNS_DOMAIN) else f"{hostname}{_MDNS_DOMAIN}"
 
+    def _server_port(self) -> int:
+        """The port Home Assistant is actually listening on.
+
+        Only ever a fallback: it is where HA binds *locally*, so with a reverse
+        proxy, Nabu Casa, or a Docker port mapping in front of it, this is not
+        the port the device must use -- the configured URL is, and it wins.
+
+        But when no URL yields a port, a constant is the worst available answer.
+        Under Supervisor the default is 80, not 8123
+        (``http/config.py:default_server_port``), and ``SETUP_PORT`` or the UI's
+        "Server port" can move it anywhere. This reads it instead of guessing.
+        """
+        port = getattr(getattr(self.hass, "http", None), "server_port", None)
+        if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+            return port
+        return _LAST_RESORT_HA_PORT
+
     def _url_address(self, **kwargs: Any) -> tuple[str | None, int | None]:
         """``(hostname, port)`` from one of HA's configured URLs.
 
@@ -347,8 +395,9 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         hostname = parsed.hostname
         if not hostname or hostname.lower().endswith(_CLOUD_DOMAIN):
             return None, None
-        port = parsed.port or (443 if parsed.scheme == "https" else _FALLBACK_HA_PORT)
-        return hostname.rstrip("."), port
+        return hostname.rstrip("."), parsed.port or _SCHEME_PORTS.get(
+            parsed.scheme, self._server_port()
+        )
 
     def _external_address(self) -> tuple[str | None, int | None]:
         """``(hostname, port)`` from HA's external URL, or ``(None, None)``.
@@ -378,10 +427,10 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
         ext_host, ext_port = self._external_address()
         if ext_host:
-            return ext_host, ext_port or _FALLBACK_HA_PORT
+            return ext_host, ext_port or self._server_port()
 
         _, internal_port = self._url_address(allow_external=False)
-        port = internal_port or _FALLBACK_HA_PORT
+        port = internal_port or self._server_port()
 
         if hostname := self._supervisor_hostname():
             return hostname, port
@@ -417,6 +466,71 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             hostname, ", ".join(sorted(resolved)) or "nothing", own_ip,
         )
         return own_ip, port
+
+    async def _async_address_is_stale(self, cfg: dict, unique_id: str) -> bool:
+        """Whether the device is aimed somewhere we would no longer send it.
+
+        A stored address that no longer matches is not by itself a reason to
+        act. The device builds its connection as
+        ``wss://<ha_hostname>:<ha_port>/api/lizaip/ws``, so a device that *is*
+        connected has proved the values it holds -- whatever we would compute
+        now, those work, and re-provisioning would take away a working
+        connection to try a theory. A changed external URL is the everyday way
+        that happens.
+
+        The case worth repairing is the opposite one: the values are wrong, the
+        device cannot get through, and nothing notices because ``ha_hostname``
+        is merely non-empty. That device is not connected, and that is the
+        signal this reads.
+
+        A connection state that cannot be read counts as connected. Discovery
+        can run before the entry has loaded, and re-provisioning a device on
+        the strength of not having looked yet is the failure this guard exists
+        to avoid.
+        """
+        stored_host = str(cfg.get("ha_hostname") or "").strip()
+        wanted_host, wanted_port = await self._async_ha_address()
+
+        # DNS names are case-insensitive, and a trailing dot is the same name.
+        same_host = (
+            stored_host.rstrip(".").casefold() == wanted_host.rstrip(".").casefold()
+        )
+
+        # A port that is absent or unreadable cannot establish a mismatch: the
+        # firmware simply may not report one, and inventing a disagreement out
+        # of a missing value would re-provision on every discovery.
+        try:
+            stored_port: int | None = int(cfg["ha_port"])
+        except (KeyError, TypeError, ValueError):
+            stored_port = None
+        same_port = stored_port is None or stored_port == wanted_port
+
+        if same_host and same_port:
+            return False
+
+        connection = None
+        for entry in self._async_current_entries():
+            if entry.unique_id == unique_id:
+                connection = getattr(entry, "runtime_data", None)
+                break
+
+        stored = f"{stored_host}:{stored_port if stored_port is not None else '?'}"
+        wanted = f"{wanted_host}:{wanted_port}"
+
+        if getattr(connection, "connected", True):
+            _LOGGER.debug(
+                "Device %s is aimed at %s and we would send %s, but it is "
+                "connected — leaving the working address alone",
+                unique_id, stored, wanted,
+            )
+            return False
+
+        _LOGGER.info(
+            "Device %s is aimed at %s, which is not where this Home Assistant "
+            "is (%s), and it is not connected — re-provisioning",
+            unique_id, stored, wanted,
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Provisioning — POST /api/config/ha on the device

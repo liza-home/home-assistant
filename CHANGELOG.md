@@ -6,6 +6,26 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.09.3b3] - 2026-09-30
+
+### Fixed
+
+- **Remotes could be handed the wrong port for Home Assistant.** If your Home
+  Assistant URL used the standard port for its scheme — `http://…` on port 80,
+  for instance — remotes were still told to connect on 8123 and could not get
+  through. They are now told the port the URL actually means.
+
+- **Remotes are told the port Home Assistant really listens on.** When no
+  Home Assistant URL is configured to read a port from, remotes used to be sent
+  8123 regardless. On a Home Assistant OS install the port is 80 by default, and
+  the "Server port" setting can change it — that actual port is now used.
+
+- **A remote pointed at the wrong address now repairs itself.** Previously a
+  remote only got a new address if it had none at all, so one left holding a
+  stale host or port stayed stuck there. Now, when a remote turns up that is not
+  connected and holds an address different from the current one, it is given the
+  right one. A remote that *is* connected keeps working undisturbed.
+
 ## [2026.09.3b2] - 2026-09-30
 
 ### Fixed
