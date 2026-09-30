@@ -8,7 +8,6 @@ from homeassistant.core import Event, HomeAssistant
 from ..const import DOMAIN
 from ..device.const import LIZAIP_EVENT
 from ._state import (
-    _SCRIPT_CACHE,
     _SELECTING_INTERACTIONS,
     _note_page,
     _page_changed,
@@ -33,9 +32,6 @@ def setup(hass: HomeAssistant) -> None:
 
     Safe to call repeatedly: any previous subscription is dropped first.
     """
-    # Cached Scripts are bound to the previous module state.
-    _SCRIPT_CACHE.clear()
-
     async def _on_device_event(event: Event) -> None:
         data = event.data
         event_type = data.get("type")

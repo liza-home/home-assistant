@@ -73,9 +73,24 @@ export const DataMixin = {
     return JSON.stringify(this._blueprint || null) !== before;
   },
 
+  /**
+   * The device list as the backend currently sees it, or `null` if it could not
+   * be asked.
+   *
+   * The distinction is the whole point: `_listDevices` cannot tell "no remotes"
+   * from "the call failed", and for the initial load that is fine — an empty
+   * picker is the honest answer either way. A *refresh* has an older list in
+   * hand and must not throw it away over one failed round-trip, which is
+   * exactly what happens when the panel refetches the moment the connection
+   * comes back and the first call races the reconnect.
+   */
+  async _fetchDevices() {
+    try { return (await this._hass.callWS({ type: "lizaip_config/list_devices", language: this._uiLanguage() })) || []; }
+    catch (e) { return null; }
+  },
+
   async _listDevices() {
-    try { this._devices = (await this._hass.callWS({ type: "lizaip_config/list_devices", language: this._uiLanguage() })) || []; }
-    catch (e) { this._devices = []; }
+    this._devices = (await this._fetchDevices()) || [];
   },
 
   async _loadIconDefaults() {

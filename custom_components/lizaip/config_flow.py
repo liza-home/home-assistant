@@ -209,18 +209,29 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             )
                         break
             if self.discovered_ips:
-                info = await self._fetch_device_info(self.discovered_ips)
-                device_status = info.get("status") if info else None
-                if device_status == "unconfigured":
+                provisioned = await self._async_is_provisioned(self.discovered_ips)
+                if provisioned is False:
                     _LOGGER.info(
-                        "Known device %s is unconfigured (factory reset?) — re-provisioning",
+                        "Known device %s has no Home Assistant address "
+                        "(factory reset?) — re-provisioning",
                         unique_id,
                     )
                     self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
+                elif provisioned is None:
+                    # Not rounded down to "fine". A device we could not ask is
+                    # exactly the one that may be sitting there unprovisioned,
+                    # and saying nothing is how it stays that way.
+                    _LOGGER.warning(
+                        "Could not read the Home Assistant address from known "
+                        "device %s at %s — leaving it alone rather than "
+                        "re-provisioning a device that may not need it",
+                        unique_id, self.discovered_ips,
+                    )
                 else:
                     _LOGGER.debug(
-                        "Re-discovery of known device %s (status=%s) — skipping re-provision",
-                        unique_id, device_status,
+                        "Re-discovery of known device %s, already provisioned "
+                        "— skipping re-provision",
+                        unique_id,
                     )
             return self.async_abort(reason="already_configured")
 
@@ -258,6 +269,50 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             device_ips, self._DEVICE_HTTP_PORT,
         )
         return dict(self._FALLBACK_DEVICE_INFO)
+
+    async def _async_is_provisioned(self, device_ips: list[str]) -> bool | None:
+        """Whether the device already knows which Home Assistant to reach.
+
+        Decided by reading the value that decides it -- ``ha_hostname`` from
+        ``GET /api/config/ha`` -- rather than by a ``status`` field.
+
+        This used to ask ``GET /api/info`` for ``status == "unconfigured"``.
+        ``Document/PROTOCOL.md`` described such a field, but its own example
+        response did not contain one, and firmware 11.2.7 does not send one
+        either (measured: ``device_id``, ``device_name``, ``version``,
+        ``protocol_version``, ``capabilities``). So the check read ``None``
+        every time, never matched, and a remote that had lost its
+        configuration was never repaired. The simulator implemented the
+        sentence rather than the example, which is why it went unnoticed.
+
+        Returns ``True`` when an address is stored, ``False`` when the field is
+        there but empty, and ``None`` when no IP could answer -- three
+        outcomes, because "we could not ask" is not the same answer as "it is
+        fine", and treating it as one is what left this broken.
+        """
+        session = async_get_clientsession(self.hass, verify_ssl=False)
+        for device_ip in device_ips:
+            url = f"http://{device_ip}:{self._DEVICE_HTTP_PORT}/api/config/ha"
+            try:
+                async with session.get(url, timeout=_PROVISION_TIMEOUT) as resp:
+                    if resp.status != 200:
+                        _LOGGER.debug("GET %s returned %s", url, resp.status)
+                        continue
+                    # `content_type=None` because the parse is the check: this
+                    # firmware answers an unknown path with its Wi-Fi setup
+                    # page under HTTP 200, so a body that is not JSON means the
+                    # endpoint is absent, not that the device is unprovisioned.
+                    cfg = await resp.json(content_type=None)
+            except Exception as err:
+                _LOGGER.debug("GET %s failed: %s", url, err)
+                continue
+            if not isinstance(cfg, dict):
+                _LOGGER.debug("GET %s did not return an object", url)
+                continue
+            hostname = str(cfg.get("ha_hostname") or "").strip()
+            _LOGGER.debug("Device %s reports ha_hostname=%r", device_ip, hostname)
+            return bool(hostname)
+        return None
 
     # ------------------------------------------------------------------
     # HA address resolution — what we send to the device
@@ -468,7 +523,11 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         if user_input is not None:
             new_title = (user_input.get("name") or "").strip() or (entry.title or "").strip() or "lizaIP"
-            return self.async_update_reload_and_abort(
+            # Deliberately the non-reloading variant: this step only renames the
+            # entry, and `_options_updated` already pushes changes to the device.
+            # Reloading here would be a second, redundant reload source, which
+            # HA rejects outright from 2026.12 when an update listener exists.
+            return self.async_update_and_abort(
                 entry,
                 title=new_title,
             )
@@ -531,7 +590,7 @@ class LizaIPOptionsFlowHandler(config_entries.OptionsFlow):
             return self.async_abort(reason="options_saved")
 
         options = self.config_entry.options
-        current = options.get(CONF_OPTIMISTIC_UPDATES, False)
+        current = options.get(CONF_OPTIMISTIC_UPDATES, True)
         # `auto` and not the user's own language: this is the language the
         # *remote* prints, and the default has to be what every device did
         # before the option existed — follow Home Assistant.

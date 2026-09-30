@@ -99,6 +99,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
 
     # Add a "Visit" link on the device page pointing to the config panel.
     # Must be an absolute URL — HA rejects relative paths.
+    #
+    # It lands on the panel's default tab, Buttons: HA gives an integration
+    # only this one hook on the device page, so the destination has to be the
+    # one that suits arriving without a stated intent, and that is the remote's
+    # configuration rather than a troubleshooting tool.
     try:
         ha_base = get_url(hass, prefer_external=False)
         config_url = f"{ha_base}/liza-remote?entry_id={entry.entry_id}"
@@ -205,6 +210,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> b
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
         await async_unload_config_entry(hass, entry)
+        # Before `disconnect()`: the cache lives on `runtime_data`, and Scripts
+        # register themselves in `hass.data` with a strong reference, so nothing
+        # reclaims them once the entry stops being reachable.
+        await action_controller.async_unload_scripts(hass, entry.entry_id)
         await entry.runtime_data.disconnect()
     return ok
 
@@ -222,6 +231,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     """
     connection = getattr(entry, "runtime_data", None)
     if connection is not None:
+        # Defensive: normally already done by `async_unload_entry`, but a failed
+        # or skipped unload would otherwise strand the compiled Scripts.
+        await action_controller.async_unload_scripts(hass, entry.entry_id)
         await connection.disconnect()
 
     dev_reg = dr.async_get(hass)
@@ -232,8 +244,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     if store and device_id:
         await store.async_remove_device(device_id)
 
-    # Compiled action scripts and in-flight slider gestures are otherwise never
-    # evicted for a device that no longer exists.
-    if device_id:
-        action_controller.clear_script_cache_for_device(device_id)
+    # In-flight slider gestures are otherwise never evicted for a device that no
+    # longer exists. Compiled scripts went with the entry's connection above.
     action_controller.clear_slider_state(entry.entry_id)

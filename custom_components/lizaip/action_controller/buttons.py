@@ -31,7 +31,6 @@ from ..const import (
 )
 from ._state import (
     _DEFAULT_PAGE_ID,
-    _SCRIPT_CACHE,
     get_selected_button,
 )
 from .helpers import (
@@ -49,16 +48,40 @@ _LOGGER = logging.getLogger(__name__)
 # Execute a button action
 # ---------------------------------------------------------------------------
 
-def _get_script(
+def _script_cache(
+    hass: HomeAssistant, entry_id: str,
+) -> dict[tuple[int, str], tuple[list, Script]] | None:
+    """Return the compiled-Script cache living on the entry's connection.
+
+    ``None`` means the entry is gone or unloaded. Callers must not fall back to
+    an uncached Script: every ``Script`` registers itself in ``hass.data`` with a
+    strong reference, so one that nobody can reach later is one that leaks until
+    Home Assistant restarts.
+    """
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None:
+        return None
+    return getattr(getattr(entry, "runtime_data", None), "script_cache", None)
+
+
+async def _get_script(
     hass: HomeAssistant,
-    device_id: str,
+    entry_id: str,
     page_id: int,
     button_key: str,
     actions: list,
-) -> Script:
+) -> Script | None:
     """Return the cached Script, rebuilding when the source config changed."""
-    cache_key = (device_id, page_id, button_key)
-    cached = _SCRIPT_CACHE.get(cache_key)
+    cache = _script_cache(hass, entry_id)
+    if cache is None:
+        _LOGGER.warning(
+            "No script cache for entry %s — the entry is unloaded; "
+            "skipping %s/%s", entry_id, page_id, button_key,
+        )
+        return None
+
+    cache_key = (page_id, button_key)
+    cached = cache.get(cache_key)
     if cached is not None and cached[0] == actions:
         return cached[1]
 
@@ -82,9 +105,37 @@ def _get_script(
         DOMAIN,
         script_mode=SCRIPT_MODE_PARALLEL,
     )
+    if cached is not None:
+        # Build first, then retire the old one: the superseded Script holds
+        # condition listeners and sub-scripts that only `async_unload` releases.
+        await cached[1].async_unload()
     # Snapshot to detect later edits even if the caller mutates the list.
-    _SCRIPT_CACHE[cache_key] = (deepcopy(actions), script)
+    cache[cache_key] = (deepcopy(actions), script)
     return script
+
+
+async def async_unload_scripts(hass: HomeAssistant, entry_id: str) -> None:
+    """Release every compiled Script held for a config entry.
+
+    Called from `async_unload_entry` while `runtime_data` is still reachable.
+    Without this each reload would strand a full set of Scripts — and their
+    condition caches and sub-script trees — in `hass.data` for the rest of the
+    Home Assistant run.
+    """
+    cache = _script_cache(hass, entry_id)
+    if not cache:
+        return
+    for key in list(cache):
+        _, script = cache.pop(key)
+        try:
+            await script.async_unload()
+        except Exception:  # noqa: BLE001
+            # Teardown must not fail the unload; a stuck Script is better than
+            # an entry that cannot be removed.
+            _LOGGER.debug(
+                "Unloading script %s for %s failed", key, entry_id, exc_info=True,
+            )
+    _LOGGER.debug("Released compiled scripts for entry %s", entry_id)
 
 
 #: Payload services whose commands are silently lost when the target sleeps.
@@ -234,7 +285,7 @@ def _is_optimistic(hass: HomeAssistant, entry_id: str) -> bool:
     if entry is None:
         _LOGGER.debug("Optimistic: entry %s not found", entry_id)
         return False
-    enabled = entry.options.get(CONF_OPTIMISTIC_UPDATES, False)
+    enabled = entry.options.get(CONF_OPTIMISTIC_UPDATES, True)
     _LOGGER.debug(
         "Optimistic: entry %s options=%s → enabled=%s",
         entry_id, dict(entry.options), enabled,
@@ -455,7 +506,9 @@ async def execute_action(
     if isinstance(after, list) and after:
         actions = actions + after
 
-    script = _get_script(hass, device_id, page_id, button_key, actions)
+    script = await _get_script(hass, entry_id, page_id, button_key, actions)
+    if script is None:
+        return
     _LOGGER.info(
         "Executing %s (%d steps) for page=%s button=%s",
         script.name, len(script.sequence), page_id, button_key,

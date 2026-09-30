@@ -6,6 +6,7 @@ responses preserve the JSON shapes those views consume.
 from __future__ import annotations
 
 
+import importlib.util
 import logging
 import math
 import os
@@ -79,6 +80,30 @@ from .layouts import (
 from .layouts import refresh as layout_refresh
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def debug_available() -> bool:
+    """Whether the optional debug tools are part of this build.
+
+    They are stripped from a stable release by `scripts/public_repo.sh`, so a
+    missing module is the expected state there rather than a broken install.
+    Checked by import rather than by version so that a build we deploy
+    ourselves -- which rsyncs the working tree, suffix or not -- always has the
+    tools it shipped.
+    """
+    return importlib.util.find_spec(f"{__package__}.debug_websocket") is not None
+
+
+@websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_features"})
+@websocket_api.async_response
+async def ws_get_features(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Report which optional features this build carries.
+
+    The panel cannot infer this: its own files are served from disk regardless,
+    so it has to be told whether the backing commands exist before it offers a
+    tab that would only produce "unknown command".
+    """
+    connection.send_result(msg["id"], {"debug_tools": debug_available()})
 
 
 def _schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
@@ -426,8 +451,18 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_preview_dynamic_source,
         ws_refresh_dynamic,
         ws_set_dynamic_binding,
+        ws_get_features,
     ):
         websocket_api.async_register_command(hass, handler)
+
+    # The debug tools are not part of a stable release -- the build strips
+    # their files out -- so their absence is normal and must not be an error.
+    # Presence of the module is the switch; `ws_get_features` tells the panel
+    # the same thing so it can leave the tab out.
+    if debug_available():
+        from .debug_websocket import register_debug_commands
+
+        register_debug_commands(hass)
 
 
 def _requires_device(handler):
@@ -1049,6 +1084,11 @@ async def ws_list_layout_devices(hass: HomeAssistant, connection, msg: dict) -> 
     for device in dev_reg.devices:
         if device.disabled_by is not None:
             continue
+        # `config_entries`, not `config_entry_id`: these are other integrations'
+        # devices. A device restored from before HA 2026.8 can still report
+        # several entries, and HA deliberately exempts those from the
+        # deprecation. Narrowing to one id would hide such a device from the
+        # picker.
         if entry_ids is not None and not (device.config_entries & entry_ids):
             continue
         domain_entities = _resolve_device_domain_entities(hass, device.id, integration, ent_reg)
@@ -1183,6 +1223,8 @@ async def ws_add_layout_page(hass: HomeAssistant, connection, msg: dict, device_
             entry_ids = {
                 e.entry_id for e in hass.config_entries.async_entries(integration)
             }
+            # Deliberately the `config_entries` set — see the device picker
+            # above. This must accept the same devices the picker offered.
             if not device or not (device.config_entries & entry_ids):
                 connection.send_error(
                     msg["id"],

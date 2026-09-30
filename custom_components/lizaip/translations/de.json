@@ -92,6 +92,9 @@
     "sensor": {
       "battery": {
         "name": "Batterie"
+      },
+      "ip_address": {
+        "name": "IP-Adresse"
       }
     },
     "update": {
@@ -205,6 +208,24 @@
     },
     "conflicting_page_target": {
       "message": "Der Name \"{page}\" gehört zu Seite {resolved}, nicht zu Seite {page_id}. Geben Sie eines von beiden an, nicht beides."
+    },
+    "log_level_unknown": {
+      "message": "{level} ist keine Protokollstufe, die dieses Gerät annimmt."
+    },
+    "log_module_unknown": {
+      "message": "{module} ist kein Modulname, den dieses Gerät kennt."
+    },
+    "log_level_unreachable": {
+      "message": "Das Gerät hat auf die Änderung der Protokollstufe nicht geantwortet: {error}"
+    },
+    "log_level_http": {
+      "message": "Das Gerät hat die Änderung der Protokollstufe abgelehnt (HTTP {status})."
+    },
+    "log_level_refused": {
+      "message": "Das Gerät hat die Änderung der Protokollstufe abgelehnt: {reason}"
+    },
+    "log_reset_no_modules": {
+      "message": "Das Gerät hat keine Module gemeldet, die zurückgesetzt werden könnten."
     }
   },
   "issues": {

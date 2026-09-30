@@ -3,6 +3,9 @@
     "sensor": {
       "battery": {
         "default": "mdi:battery"
+      },
+      "ip_address": {
+        "default": "mdi:ip-network"
       }
     },
     "number": {
@@ -21,4 +24,3 @@
     "goto_page": "mdi:page-next"
   }
 }
-

@@ -6,6 +6,104 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.09.3b1] - 2026-09-30
+
+The release that makes the panel tell you the truth about your remote, and makes a
+bug report worth attaching.
+
+### Added
+
+- **You can now see your remote's IP address.** It appears in the Diagnostic
+  section of the remote's device page, alongside the battery level. It follows
+  the remote: if your router hands it a different address, the page shows the
+  new one without you doing anything.
+
+- **The panel's empty page now takes you where you need to go.** With no remote
+  set up yet it used to state the fact and leave you to find the rest. It now
+  links straight to lizaIP's own page in Settings → Integrations, which is where
+  the button for adding one actually lives.
+
+- **The online badge now follows your remote.** It used to be worked out once, when
+  the panel opened, and then left alone — so a remote that came online a moment
+  later stayed grey until you reloaded the page, and one that had gone away stayed
+  green. It now updates by itself, the moment the remote connects or drops.
+
+  The awkward cases are covered too. A panel left open in a background tab catches
+  up as soon as you return to it, and one that was open across a dropped connection
+  catches up when the connection returns. A brief network hiccup no longer wipes
+  the device list, which is what made remotes seem to vanish.
+
+- **Optimistic updates are on by default.** Press a button and the panel shows the
+  new state straight away instead of waiting for the remote to confirm it. This was
+  already available as an option; it is simply the starting point now. If you had
+  deliberately turned it off, it stays off.
+
+- **Diagnostics is worth downloading.** The file you attach to a support request
+  used to say what the remote reported about itself and not much more. It now
+  answers the questions that actually get asked.
+
+  It includes the remote's address on your network — which appears nowhere else,
+  because the remote dials Home Assistant rather than the other way round. It
+  includes your settings, so "the slider lags" or "the labels are in the wrong
+  language" can be explained without a round of questions. It notes how the
+  integration was set up and how far it got, and whether the remote's stored model
+  matches the one it currently reports — a mismatch is what makes the panel draw
+  the wrong remote.
+
+  Your configuration is described by shape only: how many pages, how many buttons
+  carry something, how much of the action library goes unused. What a button
+  actually points at is deliberately left out — those are the private part, and
+  they stay private.
+
+### Fixed
+
+- **A remote that had forgotten where Home Assistant lives now finds its way
+  back on its own.** If a remote loses the address it was given — after a
+  factory reset, or a firmware update that cleared it — it announces itself on
+  the network again, and Home Assistant is supposed to hand the address straight
+  back. That never happened, so the remote sat there announcing itself while the
+  panel showed it as offline, and the only way out was to remove it and set it
+  up again.
+
+  It is now repaired automatically: the remote is asked what address it has, and
+  is given a new one only if it genuinely has none. A remote that is working is
+  left untouched, and so is one that cannot be reached at that moment — the
+  integration will not push your address onto a remote it was unable to ask,
+  in case that remote belongs to a different Home Assistant.
+
+  There is nothing to press and nothing to configure. Expect it to take a few
+  minutes rather than to be instant: the repair happens the next time the remote
+  announces itself, which on a real factory reset took just under nine minutes,
+  with the remote back online a few seconds after that.
+
+- **Buttons and icons in the panel could turn invisible.** Depending on your
+  theme, the coloured circle behind each remote's icon in the device list — and
+  the panel's filled buttons — could lose their colour entirely, leaving white
+  on white. The control was still there and still worked; you just could not
+  read it. The panel now falls back to its own colour when the theme does not
+  supply one, and the filled buttons use a darker shade so their labels stay
+  legible.
+
+- **The diagnostics download now tells a straight story about your remote.** The
+  firmware, hardware and model fields were listed twice with slightly different
+  answers, and the model could read as "none" even while the device page showed
+  it. Each now appears once, matching what the device page displays.
+
+- **Home Assistant no longer grows over time from using the remote.** Every button
+  action was compiled into a script that Home Assistant then held on to
+  permanently, including each replacement made when a button was edited. On a busy
+  setup this accumulated quietly in the background. Scripts are now released when
+  they are replaced and when the integration shuts down.
+
+- **Renaming the integration no longer restarts it more than once.**
+
+### Changed
+
+- **Home Assistant 2026.8 or newer is now required.** Previously 2026.7.1. The
+  device lookup the integration relies on does not exist in the older release, so
+  this is a hard requirement rather than a recommendation. Home Assistant will not
+  offer you the update until you are on 2026.8.
+
 ## [2026.09.2] - 2026-09-29
 
 A housekeeping release. Nothing about the remote or the panel changes; what changes is

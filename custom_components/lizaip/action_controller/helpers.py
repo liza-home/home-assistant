@@ -28,17 +28,19 @@ def _resolve_entry_id(hass: HomeAssistant, data: dict) -> str | None:
 
     Prefers the device registry, falls back to an explicit ``entry_id`` in the
     payload, and finally to the sole config entry when only one exists.
+
+    Reads ``config_entry_id`` rather than the deprecated ``config_entries`` set:
+    since HA 2026.8 a device belongs to exactly one config entry. The domain
+    check stays — the id may well name another integration's entry.
     """
     device_id = data.get("device_id")
     entry_id: str | None = None
     if device_id:
         device = dr.async_get(hass).async_get(device_id)
         if device:
-            for eid in device.config_entries:
-                e = hass.config_entries.async_get_entry(eid)
-                if e and e.domain == DOMAIN:
-                    entry_id = eid
-                    break
+            entry = hass.config_entries.async_get_entry(device.config_entry_id)
+            if entry and entry.domain == DOMAIN:
+                entry_id = entry.entry_id
     if not entry_id:
         entry_id = data.get("entry_id")
     if not entry_id:

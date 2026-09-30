@@ -92,6 +92,9 @@
     "sensor": {
       "battery": {
         "name": "Batería"
+      },
+      "ip_address": {
+        "name": "Dirección IP"
       }
     },
     "update": {
@@ -215,6 +218,24 @@
     },
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
+    },
+    "log_level_unknown": {
+      "message": "{level} no es un nivel de registro que acepte este dispositivo."
+    },
+    "log_module_unknown": {
+      "message": "{module} no es un nombre de módulo que conozca este dispositivo."
+    },
+    "log_level_unreachable": {
+      "message": "El dispositivo no respondió al cambio de nivel: {error}"
+    },
+    "log_level_http": {
+      "message": "El dispositivo rechazó el cambio de nivel (HTTP {status})."
+    },
+    "log_level_refused": {
+      "message": "El dispositivo rechazó el cambio de nivel: {reason}"
+    },
+    "log_reset_no_modules": {
+      "message": "El dispositivo no informó de ningún módulo que restablecer."
     }
   },
   "action_labels": {

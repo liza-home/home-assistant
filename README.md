@@ -1,7 +1,7 @@
 # lizaIP for Home Assistant
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.7.1%2B-41BDF5.svg)](https://www.home-assistant.io/)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.8.0%2B-41BDF5.svg)](https://www.home-assistant.io/)
 [![GitHub release](https://img.shields.io/github/v/release/liza-home/home-assistant?include_prereleases)](https://github.com/liza-home/home-assistant/releases)
 [![Integration type](https://img.shields.io/badge/integration-device-blue.svg)](https://developers.home-assistant.io/docs/creating_integration_manifest#integration-type)
 [![IoT class](https://img.shields.io/badge/IoT%20class-local%20push-brightgreen.svg)](https://developers.home-assistant.io/docs/creating_integration_manifest#iot-class)
@@ -9,11 +9,11 @@
 lizaIP is a smart control for home devices. This integration provides support for Home Assistant:
 you decide what every button depicts and what it controls, all from a panel inside Home Assistant.
 
-** This integration requires a physical lizaIP device. **
+**This integration requires a physical lizaIP device.**
 
 ## Installation
 
-**Requires Home Assistant 2026.7.1 or newer, with [HACS](https://hacs.xyz) installed.**
+**Requires Home Assistant 2026.8.0 or newer, with [HACS](https://hacs.xyz) installed.**
 
 Click the button — it opens HACS with this repository pre-filled:
 

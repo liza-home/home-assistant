@@ -97,6 +97,9 @@
     "sensor": {
       "battery": {
         "name": "Battery"
+      },
+      "ip_address": {
+        "name": "IP address"
       }
     },
     "update": {
@@ -215,6 +218,24 @@
     },
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
+    },
+    "log_level_unknown": {
+      "message": "{level} is not a log level this device accepts."
+    },
+    "log_module_unknown": {
+      "message": "{module} is not a module name this device accepts."
+    },
+    "log_level_unreachable": {
+      "message": "The device did not answer the log level change: {error}"
+    },
+    "log_level_http": {
+      "message": "The device refused the log level change (HTTP {status})."
+    },
+    "log_level_refused": {
+      "message": "The device refused the log level change: {reason}"
+    },
+    "log_reset_no_modules": {
+      "message": "The device did not report any modules to reset."
     }
   },
   "action_labels": {

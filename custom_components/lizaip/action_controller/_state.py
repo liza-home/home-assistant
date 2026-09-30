@@ -7,10 +7,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from homeassistant.helpers.script import Script
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,11 +16,6 @@ _DEFAULT_PAGE_ID = 1
 
 #: Coalesce bursty state/attribute changes into one icon update.
 _STATE_DEBOUNCE_SECONDS = 0.5
-
-#: Compiled Script objects, keyed on (device_id, page_id, button_key).
-#: Entries store the source config and rebuild on content mismatch; bounded by
-#: buttons × pages, so no eviction policy.
-_SCRIPT_CACHE: dict[tuple[str, int, str], tuple[list, Script]] = {}
 
 #: Fixed-button context per config entry: entry_id → grid button key.
 #: Grid keys only; fixed buttons never become their own context. The slider
@@ -159,9 +150,3 @@ def clear_slider_state(entry_id: str) -> None:
     # Re-learn the page from the device after navigation/unload.
     _current_page.pop(entry_id, None)
 
-
-def clear_script_cache_for_device(device_id: str) -> None:
-    """Drop compiled Scripts for a permanently removed device."""
-    for key in [k for k in _SCRIPT_CACHE if k[0] == device_id]:
-        _SCRIPT_CACHE.pop(key, None)
-    _LOGGER.debug("Cleared script cache for device %s", device_id)

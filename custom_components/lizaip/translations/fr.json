@@ -140,6 +140,9 @@
     "sensor": {
       "battery": {
         "name": "Battery"
+      },
+      "ip_address": {
+        "name": "Adresse IP"
       }
     },
     "update": {
@@ -263,6 +266,24 @@
     },
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
+    },
+    "log_level_unknown": {
+      "message": "{level} n'est pas un niveau de journalisation accepté par cet appareil."
+    },
+    "log_module_unknown": {
+      "message": "{module} n'est pas un nom de module connu de cet appareil."
+    },
+    "log_level_unreachable": {
+      "message": "L'appareil n'a pas répondu au changement de niveau : {error}"
+    },
+    "log_level_http": {
+      "message": "L'appareil a refusé le changement de niveau (HTTP {status})."
+    },
+    "log_level_refused": {
+      "message": "L'appareil a refusé le changement de niveau : {reason}"
+    },
+    "log_reset_no_modules": {
+      "message": "L'appareil n'a signalé aucun module à réinitialiser."
     }
   }
 }

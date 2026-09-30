@@ -47,7 +47,6 @@ from ._state import (
     _live_touch,
     _note_page,
     _page_changed,
-    _SCRIPT_CACHE,
     _selected_button,
     _selected_control,
     _selected_entity,
@@ -57,7 +56,6 @@ from ._state import (
     _slider_touch_state,
     _STATE_DEBOUNCE_SECONDS,
     _DEFAULT_PAGE_ID,
-    clear_script_cache_for_device,
     clear_slider_state,
     get_current_page,
     get_selected_button,
@@ -128,6 +126,7 @@ from .icons import (
 from .buttons import (
     _fire_optimistic_update,
     _get_script,
+    async_unload_scripts,
     _inferred_prelude,
     _inferred_verification,
     _is_optimistic,
@@ -146,6 +145,7 @@ from .dispatch import setup
 
 __all__ = [
     "LIVE_OVERRIDE_ACTION_ID",
+    "async_unload_scripts",
     "OVERRIDABLE_FIXED_BUTTONS",
     "OVERRIDABLE_FIXED_KEYS",
     "SLIDER_CONTROLS",
@@ -158,7 +158,6 @@ __all__ = [
     "SLIDER_TARGET_LAST_TOUCHED",
     "SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY",
     "SliderControl",
-    "clear_script_cache_for_device",
     "clear_slider_state",
     "control_range",
     "controls_for_entity",

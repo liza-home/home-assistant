@@ -94,11 +94,57 @@ class LizaRemotePanel extends HTMLElement {
     // only meaningful against the one it came from.
     this._moveSourceKey = null;
 
-    this._activeTab = "buttons"; // "actions" | "buttons"
+    this._activeTab = "buttons"; // "actions" | "buttons" | "debug"
+    // Whether this build carries the debug tools at all. They are stripped
+    // from a stable release, so the panel has to ask rather than assume:
+    // its own files are served from disk either way.
+    this._debugTools = false;
+    this._debugProbe = null;
+    this._debugReport = null;
+    // Loaded by the debug tab itself when it is opened, rather than on demand:
+    // null means "not read yet", which is what triggers that first read.
+    this._debugLogging = null;
+    this._debugLoggingBusy = false;
+    this._debugLoggingError = null;
+    // "off" is where the switch starts, not what the device is: the port is
+    // read from `/Device/Control` when the tab opens. `_known` says whether
+    // that read has happened, `_following` whether we are reading the port --
+    // an open port outlives a restart of Home Assistant, the task reading it
+    // does not.
+    // Which report sections the reader has indented, by endpoint.
+    this._debugPretty = {};
+    // Which report sections are expanded, and which are being read right now.
+    // Kept here rather than left to the `<details>` elements: every render
+    // rebuilds them, so an expansion that lived only in the DOM would close
+    // itself the moment the section it asked for arrived.
+    this._debugOpen = {};
+    this._debugSectionBusy = {};
+    this._debugPortOn = false;
+    this._debugPortKnown = false;
+    this._debugPortFollowing = null;
+    // One flag and one error slot per action, not one shared pair: the three
+    // calls are independent, so a shared flag greyed out the other two
+    // controls for the length of a call that had nothing to do with them, and
+    // a shared error slot showed a failed report inside the reachability card.
+    this._debugProbeBusy = false;
+    this._debugReportBusy = false;
+    this._debugPortBusy = false;
+    this._debugProbeError = null;
+    this._debugReportError = null;
+    this._debugPortError = null;
     this._globalUsageDetails = {};
     this._actionFilter = "";
     this._initialized = false;
     this._loading = false;
+    // Set once the first load has finished. `_initialized` is no substitute:
+    // it is raised *before* `_init` runs, so it cannot tell "loading" from
+    // "loaded" — and an availability edge arriving mid-init would be applied to
+    // a device list that has not been fetched yet.
+    this._initDone = false;
+    // An availability edge that arrived while the panel was busy, to be applied
+    // once it is not. Without it the edge is simply dropped, and since the
+    // backend fires only on real transitions there is no second chance.
+    this._availabilityStale = false;
     // True while a page add/delete/reorder is in flight, so the config_changed
     // the backend fires mid-operation is ignored rather than raced against.
     this._pageOpInFlight = false;
@@ -140,6 +186,17 @@ class LizaRemotePanel extends HTMLElement {
     if (this._helloUnsub) {
       Promise.resolve(this._helloUnsub).then(u => u && u()).catch(() => {});
       this._helloUnsub = null;
+    }
+    if (this._availabilityUnsub) {
+      Promise.resolve(this._availabilityUnsub).then(u => u && u()).catch(() => {});
+      this._availabilityUnsub = null;
+    }
+    // These two hang off `document` and the shared connection rather than off
+    // the element, so nothing detaches them on their own — a removed panel
+    // would keep refetching the device list for the life of the page.
+    if (this._missedEdgeUnwatch) {
+      this._missedEdgeUnwatch();
+      this._missedEdgeUnwatch = null;
     }
   }
 
@@ -193,6 +250,125 @@ class LizaRemotePanel extends HTMLElement {
     // mid-edit, unlike `_reloadFromBackend` — nothing the user has typed lives
     // in the blueprint, so there is no unflushed state to discard.
     if (await this._refreshBlueprint()) this._render();
+  }
+
+  /**
+   * Follow the device's connection, so the online badge is not a snapshot.
+   *
+   * `_listDevices` runs once, during `_init`, and `available` is read from the
+   * backend at that moment. A panel opened while Home Assistant was restarting,
+   * or while the remote was reconnecting, went on showing *Offline* for a device
+   * that had been back for hours — nothing refetched the list.
+   *
+   * Both edges matter, so this listens for the availability event rather than
+   * the hello, which only fires on the way up.
+   *
+   * Subscribed *before* the list is fetched, not after. The other way round
+   * leaves a window the width of the whole initial load in which a device can
+   * connect unobserved: the snapshot says offline, and the event that would
+   * have corrected it had no listener yet.
+   */
+  async _subscribeAvailability() {
+    if (this._availabilityUnsub || !this._hass?.connection) return;
+    try {
+      this._availabilityUnsub = await this._hass.connection.subscribeEvents(
+        (ev) => this._onAvailabilityChanged(ev),
+        "lizaip_device_availability",
+      );
+    } catch (e) {
+      console.debug("[LIZA] availability subscription failed:", e);
+    }
+  }
+
+  async _onAvailabilityChanged(ev) {
+    // Not filtered by `_currentEntry` the way the other two handlers are: every
+    // remote is on the list, not just the selected one. A bare event with no
+    // entry_id says nothing about any of them.
+    //
+    // Nor is it filtered against the list before refetching. Comparing first
+    // looks cheaper, but it silently drops the two cases that matter most — an
+    // event for a device the list has not learned about yet, and one that
+    // arrives while the list is stale for some other reason. The refresh below
+    // is the one that decides whether anything actually changed, and it does so
+    // against the backend rather than against a snapshot.
+    if (!ev?.data?.entry_id) return;
+    await this._refreshAvailability();
+  }
+
+  /**
+   * Re-read the device list and repaint only if a badge would actually move.
+   *
+   * Every path that suspects it has missed an edge comes through here, so the
+   * decision to repaint lives in one place. Repainting unconditionally would
+   * be wrong on the busy paths: the tab-visibility and reconnect hooks below
+   * fire on ordinary use, and a re-render mid-edit for no reason is a worse
+   * bug than the stale badge this is fixing.
+   */
+  async _refreshAvailability() {
+    // Mid-load the list is about to be replaced anyway, and `_loadAll` does not
+    // fetch it — so the edge is remembered rather than dropped, and flushed
+    // once the load that displaced it is done.
+    if (this._loading || !this._initDone) {
+      this._availabilityStale = true;
+      return;
+    }
+    const devices = await this._fetchDevices();
+    // A failed refetch is not evidence that every remote went away.
+    if (!devices) return;
+
+    const before = this._availabilityKey(this._devices);
+    this._devices = devices;
+    if (this._availabilityKey(devices) !== before) this._render();
+  }
+
+  _availabilityKey(devices) {
+    return (devices || []).map(d => `${d?.entry_id}:${d?.available ? 1 : 0}`).join(",");
+  }
+
+  /** Apply an edge that arrived while the panel was busy. */
+  _flushAvailability() {
+    if (!this._availabilityStale) return;
+    this._availabilityStale = false;
+    this._refreshAvailability();
+  }
+
+  /**
+   * Catch up on edges that were never delivered at all.
+   *
+   * The event is the only thing correcting the badge, so anything that stops it
+   * reaching us freezes the badge permanently — there is no second delivery and
+   * no periodic poll. Two ordinary situations do exactly that:
+   *
+   * * Home Assistant's frontend connection drops and re-establishes. It
+   *   resubscribes on its own, but whatever the device did in between is gone.
+   * * The tab is backgrounded — a phone left overnight — and the browser stops
+   *   servicing it. It comes back showing yesterday's badge.
+   *
+   * Both end with a moment where the panel is live again and its list is not,
+   * which is precisely when to ask once. Cheap, and silent unless a badge moved.
+   */
+  _watchForMissedEdges() {
+    if (this._missedEdgeUnwatch) return;
+    const catchUp = () => {
+      if (document.visibilityState !== "hidden") this._refreshAvailability();
+    };
+    document.addEventListener("visibilitychange", catchUp);
+
+    let dropReady = () => {};
+    try {
+      const conn = this._hass?.connection;
+      if (conn?.addEventListener) {
+        conn.addEventListener("ready", catchUp);
+        dropReady = () => { try { conn.removeEventListener("ready", catchUp); } catch (e) {} };
+      }
+    } catch (e) {
+      console.debug("[LIZA] connection-ready hook unavailable:", e);
+    }
+
+    this._missedEdgeUnwatch = () => {
+      document.removeEventListener("visibilitychange", catchUp);
+      dropReady();
+    };
   }
 
   async _onConfigChanged(ev) {
@@ -331,9 +507,38 @@ class LizaRemotePanel extends HTMLElement {
   set narrow(n) { this._narrow = n; }
   set panel(p) { this._panel = p; }
 
+  /**
+   * Load the debug view, if this build carries it.
+   *
+   * The debug tooling is stripped from a stable release, so both halves can be
+   * missing: the backing WebSocket commands and this module. The backend is
+   * asked first -- a module that loaded without commands behind it would offer
+   * a tab that only produces "unknown command" -- and the import is dynamic
+   * because a static one would take the whole panel down with a file that is
+   * not there.
+   */
+  async _loadDebugTools() {
+    try {
+      const features = await this._hass.callWS({ type: "lizaip_config/get_features" });
+      if (!features?.debug_tools) return;
+      const mod = await import("./liza-remote-debug-view.js");
+      Object.assign(LizaRemotePanel.prototype, mod.DebugViewMixin);
+      this._debugTools = true;
+    } catch (e) {
+      console.debug("[LIZA] debug tools unavailable:", e);
+    }
+  }
+
   async _init() {
     try {
       console.log("[LIZA] _init starting...");
+      this._initDone = false;
+      // Before anything is fetched, so no edge falls into the gap between the
+      // list being read and the listener existing. The handler defers whatever
+      // arrives before `_initDone`, and the flush at the end applies it.
+      await this._loadDebugTools();
+      await this._subscribeAvailability();
+      this._watchForMissedEdges();
       this._loadHaComponents();
       this._fetchServiceIcons();
       this._loadIconDefaults();
@@ -380,10 +585,28 @@ class LizaRemotePanel extends HTMLElement {
         this._currentEntry = this._devices[0].entry_id;
         await this._loadAll();
       }
+
+      // A tab from the URL, for a deep link written by hand or bookmarked --
+      // the device page's own link deliberately lands on the default tab.
+      // Only with a device selected -- the tabs do not exist on the device
+      // list -- and "debug" only where the build has it, which a stable
+      // release does not: an unknown tab would otherwise render an empty panel
+      // with no tab highlighted. Read after _loadDebugTools, which _init
+      // awaits before any of this.
+      const requestedTab = urlParams.get("tab");
+      if (this._currentEntry && (requestedTab === "actions"
+          || (requestedTab === "debug" && this._debugTools))) {
+        this._activeTab = requestedTab;
+        // Opening straight onto the debug tab from a link is an entry too, and
+        // `_switchTab` never runs for it.
+        if (requestedTab === "debug") this._enterDebugTab?.();
+      }
       console.log("[LIZA] _init done, currentEntry:", this._currentEntry, "pages:", this._pages?.length);
       this._render();
       this._subscribeConfigChanged();
       this._subscribeDeviceHello();
+      this._initDone = true;
+      this._flushAvailability();
     } catch (e) {
       console.error("[LIZA] _init failed:", e);
       // This replaces the whole shadow tree, so no --liza-* token resolves
@@ -547,6 +770,26 @@ class LizaRemotePanel extends HTMLElement {
     this._editorEl = null;
     this._pageCache = {};
     this._globalUsageDetails = {};
+    // Every debug reading belongs to the device being left. A probe result or
+    // a log-port state carried across would describe the wrong remote — and
+    // the port toggle would offer to switch off a stream on a device it was
+    // never started for.
+    this._debugProbe = null;
+    this._debugReport = null;
+    // Cleared to null rather than kept: these are one device's log levels, and
+    // showing them under another would invite a change aimed at the wrong
+    // remote. Null also makes the tab read them again for the device now shown.
+    this._debugLogging = null;
+    this._debugLoggingError = null;
+    this._debugPretty = {};
+    this._debugOpen = {};
+    this._debugSectionBusy = {};
+    this._debugPortOn = false;
+    this._debugPortKnown = false;
+    this._debugPortFollowing = null;
+    this._debugProbeError = null;
+    this._debugReportError = null;
+    this._debugPortError = null;
     // Both belong to the device being left: the window marks a save *we* made
     // on it, and the deferral a change to it. Neither says anything about the
     // device being selected, and keeping them would suppress or misapply its
@@ -561,7 +804,13 @@ class LizaRemotePanel extends HTMLElement {
     this._assignments = {};
     this._currentPageIdx = 0;
     this._loading = true;
-    this._loadAll().then(() => { this._loading = false; this._render(); });
+    this._loadAll().then(() => {
+      this._loading = false;
+      this._render();
+      // `_loadAll` fetches the selected remote's config, not the device list,
+      // so an edge that arrived during the switch is still unapplied here.
+      this._flushAvailability();
+    });
   }
 
   _goBack() {
@@ -580,8 +829,10 @@ class LizaRemotePanel extends HTMLElement {
     this._activeTab = tab;
     if (tab === "buttons") {
       this._editingActionIdx = -1;
-    } else {
+    } else if (tab === "actions") {
       this._loadGlobalUsage().then(() => this._render());
+    } else if (tab === "debug") {
+      this._enterDebugTab?.();
     }
     this._editorEl = null;
     this._render();
@@ -2017,7 +2268,12 @@ class LizaRemotePanel extends HTMLElement {
       <div class="toolbar"><ha-menu-button></ha-menu-button><h1 class="main-title">lizaIP</h1></div>
       <div class="view"><ha-card outlined><div class="card-content">
         ${this._devices.length === 0
-          ? `<p style="padding:16px;color:var(--liza-muted-text)">${this._t("no_devices")}</p>`
+          // Straight to this integration's own page, not the integration list:
+          // that is where the "Add entry" button for a new hub actually is, and
+          // the panel only exists once lizaIP is loaded, so the page resolves.
+          ? `<p class="empty-state">${this._t("no_devices", {
+              link: `<a href="/config/integrations/integration/lizaip">${this._t("no_devices_link")}</a>`,
+            })}</p>`
           : `<div class="device-list">${this._devices.map(d => {
               // Same reasoning as the config toolbar: the id is spelled out by
               // a screen reader and read by nobody, so the meta line carries
@@ -2106,12 +2362,19 @@ class LizaRemotePanel extends HTMLElement {
                   id="liza-tab-actions" role="tab" aria-controls="liza-tabpanel"
                   aria-selected="${this._activeTab === 'actions' ? 'true' : 'false'}"
                   tabindex="${this._activeTab === 'actions' ? '0' : '-1'}"><span aria-hidden="true">⚡</span> ${this._t("actions")}</button>
+          ${!this._debugTools ? "" : `
+          <button class="toolbar-tab ${this._activeTab === 'debug' ? 'active' : ''}" data-tab="debug"
+                  id="liza-tab-debug" role="tab" aria-controls="liza-tabpanel"
+                  aria-selected="${this._activeTab === 'debug' ? 'true' : 'false'}"
+                  tabindex="${this._activeTab === 'debug' ? '0' : '-1'}"><span aria-hidden="true">🩺</span> ${this._t("tab_debug")}</button>`}
         </div>
       </div>
       <!-- tabindex="-1", not "0": a tabpanel earns a tab stop only when it has
            no focusable content, and this one wraps the entire view. -->
-      <div class="view" id="liza-tabpanel" role="tabpanel" aria-labelledby="liza-tab-${this._activeTab === 'buttons' ? 'buttons' : 'actions'}" tabindex="-1">
-        ${this._activeTab === "buttons" ? this._htmlButtonsView(bp) : this._htmlActionsView()}
+      <div class="view" id="liza-tabpanel" role="tabpanel" aria-labelledby="liza-tab-${this._activeTab}" tabindex="-1">
+        ${this._activeTab === "buttons" ? this._htmlButtonsView(bp)
+          : this._activeTab === "debug" ? (this._htmlDebugView?.() ?? "")
+          : this._htmlActionsView()}
       </div>
       <div class="toast" role="status" aria-live="polite"></div>`;
 
@@ -2125,6 +2388,7 @@ class LizaRemotePanel extends HTMLElement {
       el.addEventListener("click", () => this._switchTab(el.dataset.tab)));
 
     if (this._activeTab === "buttons") this._wireButtonsView(bp);
+    else if (this._activeTab === "debug") this._wireDebugView?.();
     else this._wireActionsView();
   }
 

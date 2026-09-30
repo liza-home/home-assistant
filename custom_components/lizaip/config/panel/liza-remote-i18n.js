@@ -59,13 +59,246 @@ export const STRINGS = {
   entity: { ha: "ui.components.selectors.selector.types.entity", en: "Entity" },
   service: { ha: "ui.dialogs.more_info_control.device_type.service", en: "Service" },
 
-  // Not here on purpose: "URL", "Min" and "Max". They are spelled the same in
-  // all five languages, so they stay plain literals at their call sites —
-  // routing them through `_t` would only add a lookup that can never differ.
+  // Not here on purpose: "URL", "Min", "Max" and the debug tab's "Ping". They
+  // are spelled the same in all five languages, so they stay plain literals at
+  // their call sites — routing them through `_t` would only add a lookup that
+  // can never differ.
 
   // ── tabs and section headings ──────────────────────────────────────
   tab_buttons: {
     en: "Buttons", de: "Tasten", fr: "Touches", it: "Tasti", es: "Botones",
+  },
+
+  // ── debug tab ──────────────────────────────────────────────────────
+  // Only reachable on a build that carries the debug tooling; the strings
+  // stay here regardless, because the i18n table is shipped whole and one
+  // missing key would render as its own name.
+  tab_debug: {
+    en: "Debug", de: "Diagnose", fr: "Diagnostic", it: "Diagnostica", es: "Diagnóstico",
+  },
+  debug_reachability: {
+    en: "Reachability", de: "Erreichbarkeit", fr: "Accessibilité",
+    it: "Raggiungibilità", es: "Accesibilidad",
+  },
+  debug_not_tested: {
+    en: "Not tested yet.", de: "Noch nicht getestet.", fr: "Pas encore testé.",
+    it: "Non ancora testato.", es: "Aún sin probar.",
+  },
+  debug_never_connected: {
+    en: "The remote has never connected, so there is no address to test.",
+    de: "Die Fernbedienung hat sich noch nie verbunden, daher gibt es keine Adresse zum Testen.",
+    fr: "La télécommande ne s'est jamais connectée, il n'y a donc aucune adresse à tester.",
+    it: "Il telecomando non si è mai connesso, quindi non c'è alcun indirizzo da testare.",
+    es: "El mando nunca se ha conectado, por lo que no hay dirección que probar.",
+  },
+  debug_reachable: {
+    en: "Reachable", de: "Erreichbar", fr: "Accessible",
+    it: "Raggiungibile", es: "Accesible",
+  },
+  debug_unreachable: {
+    en: "Not reachable", de: "Nicht erreichbar", fr: "Inaccessible",
+    it: "Non raggiungibile", es: "No accesible",
+  },
+  debug_address: {
+    en: "Address", de: "Adresse", fr: "Adresse", it: "Indirizzo", es: "Dirección",
+  },
+  debug_latency: {
+    en: "Response time", de: "Antwortzeit", fr: "Temps de réponse",
+    it: "Tempo di risposta", es: "Tiempo de respuesta",
+  },
+  debug_error: {
+    en: "Error", de: "Fehler", fr: "Erreur", it: "Errore", es: "Error",
+  },
+  debug_websocket: {
+    en: "WebSocket", de: "WebSocket", fr: "WebSocket", it: "WebSocket", es: "WebSocket",
+  },
+  debug_connected: {
+    en: "Connected", de: "Verbunden", fr: "Connecté", it: "Connesso", es: "Conectado",
+  },
+  debug_disconnected: {
+    en: "Disconnected", de: "Getrennt", fr: "Déconnecté",
+    it: "Disconnesso", es: "Desconectado",
+  },
+  debug_log_port: {
+    en: "Device log stream", de: "Geräteprotokoll-Stream", fr: "Flux de journal de l'appareil",
+    it: "Flusso di log del dispositivo", es: "Flujo de registro del dispositivo",
+  },
+  debug_log_port_hint: {
+    en: "Opens the remote's debug port and writes its output to the Home Assistant log at debug level. Turn it off again when you are done — it is not kept across restarts.",
+    de: "Öffnet den Debug-Port der Fernbedienung und schreibt deren Ausgabe auf Debug-Ebene ins Home-Assistant-Protokoll. Danach wieder ausschalten — die Einstellung übersteht keinen Neustart.",
+    fr: "Ouvre le port de débogage de la télécommande et écrit sa sortie dans le journal Home Assistant au niveau debug. Désactivez-le ensuite : il n'est pas conservé après un redémarrage.",
+    it: "Apre la porta di debug del telecomando e scrive il suo output nel log di Home Assistant a livello debug. Disattivalo quando hai finito: non viene mantenuto dopo un riavvio.",
+    es: "Abre el puerto de depuración del mando y escribe su salida en el registro de Home Assistant en nivel debug. Desactívalo al terminar: no se conserva tras un reinicio.",
+  },
+  // A switch reports a state, where a button named an action. "Disable" on a
+  // control that is already off read as the thing it would do, which is the
+  // opposite of what a switch means.
+  debug_stream_on: {
+    en: "On", de: "Ein", fr: "Activé", it: "Attivo", es: "Activado",
+  },
+  debug_stream_off: {
+    en: "Off", de: "Aus", fr: "Désactivé", it: "Disattivo", es: "Desactivado",
+  },
+  // Shown only while the stream is running. The lines do not appear in the
+  // panel -- they go into Home Assistant's own log -- so without this the
+  // switch would look like it had done nothing.
+  //
+  // The second sentence is not padding. That page opens on the grouped list fed
+  // by the system_log integration, whose handler sits at WARNING, so these
+  // DEBUG lines can never appear there. Only the raw view renders them, and it
+  // is reached by a button: ha-config-logs keeps that choice in internal state,
+  // never in the URL, so the link cannot land on it and the reader has to be
+  // told. The button is named through Home Assistant's own string, so it reads
+  // exactly as this instance labels it rather than as a guess of ours.
+  debug_stream_live: {
+    en: "The device's lines are being written to {link}. That page opens on the "
+      + "grouped warnings and errors, where these lines never appear — use "
+      + "\u201c{button}\u201d to see them.",
+    de: "Die Zeilen des Geräts werden nach {link} geschrieben. Diese Seite "
+      + "öffnet zuerst die gruppierten Warnungen und Fehler, in denen diese "
+      + "Zeilen nie auftauchen — mit \u201e{button}\u201c werden sie sichtbar.",
+    fr: "Les lignes de l'appareil sont écrites dans {link}. Cette page s'ouvre "
+      + "sur les avertissements et erreurs groupés, où ces lignes n'apparaissent "
+      + "jamais — utilisez «\u202f{button}\u202f» pour les voir.",
+    it: "Le righe del dispositivo vengono scritte in {link}. Quella pagina si "
+      + "apre sugli avvisi e sugli errori raggruppati, dove queste righe non "
+      + "compaiono mai: usa \u201c{button}\u201d per vederle.",
+    es: "Las líneas del dispositivo se escriben en {link}. Esa página se abre "
+      + "en las advertencias y los errores agrupados, donde estas líneas nunca "
+      + "aparecen: usa \u201c{button}\u201d para verlas.",
+  },
+  // Home Assistant's own label for the button that switches the log page to the
+  // raw view. Taking it from its string means the hint names what the reader
+  // actually sees, in whatever language the instance runs -- which is also why
+  // only English is carried here: the instance supplies the rest, and a second
+  // set of our own could only contradict it.
+  debug_stream_raw_button: {
+    ha: "ui.panel.config.logs.show_full_logs", en: "Show raw logs",
+  },
+  // Shown when the device's port is open but nothing is reading it -- the
+  // state a restart of Home Assistant leaves behind, since the port survives
+  // it and the task reading the port does not.
+  debug_stream_detached: {
+    en: "The port is open on the device, but these lines are not being "
+      + "collected. Switch it off and on again to start reading it.",
+    de: "Der Port am Gerät ist offen, aber die Zeilen werden nicht "
+      + "eingesammelt. Zum Mitlesen den Schalter aus- und wieder einschalten.",
+    fr: "Le port est ouvert sur l'appareil, mais ces lignes ne sont pas "
+      + "collectées. Éteignez puis rallumez l'interrupteur pour les lire.",
+    it: "La porta è aperta sul dispositivo, ma queste righe non vengono "
+      + "raccolte. Spegni e riaccendi l'interruttore per leggerle.",
+    es: "El puerto está abierto en el dispositivo, pero estas líneas no se "
+      + "recogen. Apaga y vuelve a encender el interruptor para leerlas.",
+  },
+  // The read failed without saying why. The switch keeps showing what it last
+  // knew rather than claiming the port is closed.
+  debug_port_unknown: {
+    en: "Could not read the port's state from the device.",
+    de: "Der Zustand des Ports konnte nicht vom Gerät gelesen werden.",
+    fr: "Impossible de lire l'état du port depuis l'appareil.",
+    it: "Impossibile leggere lo stato della porta dal dispositivo.",
+    es: "No se pudo leer el estado del puerto desde el dispositivo.",
+  },
+  debug_stream_live_link: {
+    en: "the Home Assistant log", de: "das Home-Assistant-Protokoll",
+    fr: "le journal Home Assistant", it: "il registro di Home Assistant",
+    es: "el registro de Home Assistant",
+  },
+  // The per-module log levels. The level names themselves are not translated:
+  // they are the values the device takes, and a translated "off" sent back
+  // would be refused. They are shown as the device spells them.
+  debug_logging: {
+    en: "Log levels", de: "Protokollstufen", fr: "Niveaux de journalisation",
+    it: "Livelli di log", es: "Niveles de registro",
+  },
+  debug_logging_hint: {
+    en: "Which parts of the remote's firmware write to its log, and how much.",
+    de: "Welche Teile der Firmware der Fernbedienung protokollieren und wie ausführlich.",
+    fr: "Quelles parties du micrologiciel de la télécommande écrivent dans son journal, et à quel point.",
+    it: "Quali parti del firmware del telecomando scrivono nel suo log e con quanto dettaglio.",
+    es: "Qué partes del firmware del mando escriben en su registro y con cuánto detalle.",
+  },
+  debug_logging_loading: {
+    en: "Reading…", de: "Wird gelesen…", fr: "Lecture…",
+    it: "Lettura…", es: "Leyendo…",
+  },
+  // The two states of the per-section button: the label says what a click
+  // will do, not what is currently shown.
+  debug_pretty: {
+    en: "Pretty", de: "Formatiert", fr: "Format\u00e9", it: "Formattato",
+    es: "Formateado",
+  },
+  debug_raw: {
+    en: "Raw", de: "Roh", fr: "Brut", it: "Grezzo", es: "Sin formato",
+  },
+  debug_logging_reset: {
+    en: "Reset all to important", de: "Alle auf \u201eimportant\u201c zur\u00fccksetzen",
+    fr: "Tout remettre sur \u00ab\u202fimportant\u202f\u00bb",
+    it: "Reimposta tutto su \u201cimportant\u201d",
+    es: "Restablecer todo a \u201cimportant\u201d",
+  },
+  debug_logging_empty: {
+    en: "The remote did not report any log modules.",
+    de: "Die Fernbedienung hat keine Protokollmodule gemeldet.",
+    fr: "La télécommande n'a signalé aucun module de journalisation.",
+    it: "Il telecomando non ha segnalato alcun modulo di log.",
+    es: "El mando no ha informado de ningún módulo de registro.",
+  },
+  debug_logging_version: {
+    en: "Schema version {version}", de: "Schemaversion {version}",
+    fr: "Version du schéma {version}", it: "Versione dello schema {version}",
+    es: "Versión del esquema {version}",
+  },
+
+  debug_report: {
+    en: "Device report", de: "Gerätebericht", fr: "Rapport de l'appareil",
+    it: "Rapporto del dispositivo", es: "Informe del dispositivo",
+  },
+  debug_report_hint: {
+    en: "Reads the remote's status, metrics and stored logs. Each section is read from the remote when you expand it. Useful to attach to a bug report.",
+    de: "Liest Status, Messwerte und gespeicherte Protokolle der Fernbedienung. Jeder Abschnitt wird beim Aufklappen von der Fernbedienung gelesen. Nützlich als Anhang zu einer Fehlermeldung.",
+    fr: "Lit l'état, les mesures et les journaux enregistrés de la télécommande. Chaque section est lue sur la télécommande au moment où vous la dépliez. Utile à joindre à un rapport de bogue.",
+    it: "Legge stato, metriche e log memorizzati del telecomando. Ogni sezione viene letta dal telecomando quando la espandi. Utile da allegare a una segnalazione di bug.",
+    es: "Lee el estado, las métricas y los registros almacenados del mando. Cada sección se lee del mando al desplegarla. Útil para adjuntar a un informe de error.",
+  },
+  // Shown while the list of readable endpoints is being fetched. The card is
+  // empty until it arrives, and an empty card says nothing about whether
+  // anything is happening. ("Ping" stays hard-coded in the view: the word is
+  // identical in all five languages.)
+  debug_report_fetching: {
+    en: "Collecting report…", de: "Bericht wird abgerufen…",
+    fr: "Collecte du rapport…", it: "Raccolta del rapporto…",
+    es: "Recopilando informe…",
+  },
+  // Shown on a row that is on the list but has not been fetched yet. The rows
+  // appear before any of them is collected, so each needs to say which it is.
+  debug_section_pending: {
+    en: "collecting…", de: "wird abgerufen…", fr: "collecte…",
+    it: "raccolta…", es: "recopilando…",
+  },
+  debug_section_truncated: {
+    en: "Cut off — the device sent {length} characters.",
+    de: "Abgeschnitten — das Gerät sendete {length} Zeichen.",
+    fr: "Tronqué — l'appareil a envoyé {length} caractères.",
+    it: "Troncato — il dispositivo ha inviato {length} caratteri.",
+    es: "Truncado — el dispositivo envió {length} caracteres.",
+  },
+  debug_report_copy: {
+    en: "Copy", de: "Kopieren", fr: "Copier", it: "Copia", es: "Copiar",
+  },
+  debug_report_copied: {
+    en: "Report copied to the clipboard ✓",
+    de: "Bericht in die Zwischenablage kopiert ✓",
+    fr: "Rapport copié dans le presse-papiers ✓",
+    it: "Rapporto copiato negli appunti ✓",
+    es: "Informe copiado al portapapeles ✓",
+  },
+  debug_report_copy_failed: {
+    en: "Could not copy: {error}",
+    de: "Kopieren fehlgeschlagen: {error}",
+    fr: "Copie impossible : {error}",
+    it: "Copia non riuscita: {error}",
+    es: "No se pudo copiar: {error}",
   },
   action_library: {
     en: "Action Library", de: "Aktionsbibliothek", fr: "Bibliothèque d'actions",
@@ -280,12 +513,22 @@ export const STRINGS = {
     en: "Select hub…", de: "Hub wählen…", fr: "Choisir un hub…",
     it: "Seleziona hub…", es: "Seleccionar hub…",
   },
+  // The link is a `{link}` slot rather than markup in the table: the URL then
+  // lives in one place, and each language can put the link where its own
+  // sentence wants it instead of at a position English happens to use.
   no_devices: {
-    en: "No devices found. Add via Settings → Integrations.",
-    de: "Keine Geräte gefunden. Über Einstellungen → Integrationen hinzufügen.",
-    fr: "Aucun appareil trouvé. Ajoutez-en via Paramètres → Intégrations.",
-    it: "Nessun dispositivo trovato. Aggiungilo da Impostazioni → Integrazioni.",
-    es: "No se han encontrado dispositivos. Añádalos en Ajustes → Integraciones.",
+    en: "No devices found. Add one via {link}.",
+    de: "Keine Geräte gefunden. Über {link} hinzufügen.",
+    fr: "Aucun appareil trouvé. Ajoutez-en via {link}.",
+    it: "Nessun dispositivo trovato. Aggiungilo da {link}.",
+    es: "No se han encontrado dispositivos. Añádalos en {link}.",
+  },
+  no_devices_link: {
+    en: "Settings → Integrations",
+    de: "Einstellungen → Integrationen",
+    fr: "Paramètres → Intégrations",
+    it: "Impostazioni → Integrazioni",
+    es: "Ajustes → Integraciones",
   },
 
   // ── buttons ────────────────────────────────────────────────────────

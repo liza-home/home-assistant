@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from aiohttp import ClientTimeout, WSCloseCode, web
@@ -27,7 +27,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, LIZAIP_EVENT, LIZAIP_HELLO_EVENT
+from .const import (
+    DOMAIN,
+    LIZAIP_AVAILABILITY_EVENT,
+    LIZAIP_EVENT,
+    LIZAIP_HELLO_EVENT,
+)
 from .protocol import (
     ERR_INTERNAL,
     PROTOCOL_VERSION,
@@ -38,6 +43,9 @@ from .protocol import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.script import Script
 
 # Consecutive disconnects before a repair issue is raised.
 MAX_FAILURES = 3
@@ -62,6 +70,13 @@ class LizaIPConnection:
         self._device_id = device_id
         self._ws: web.WebSocketResponse | None = None
         self._protocol = LizaIPProtocol()
+
+        # Compiled action Scripts for this entry, keyed on (page_id, button_key).
+        # Scripts register themselves in `hass.data` with a strong reference, so
+        # they outlive garbage collection and must be unloaded explicitly. Tying
+        # the cache to the connection bounds their lifetime to the config entry
+        # instead of the module, so a reload cannot strand the previous set.
+        self.script_cache: dict[tuple[int, str], tuple[list, Script]] = {}
 
         # Entity-platform callbacks
         self._button_callbacks: dict[str, Callable[[str, dict[str, Any]], None]] = {}
@@ -97,6 +112,11 @@ class LizaIPConnection:
         self._consecutive_failures: int = 0
         # Peer IP of the connected device — set in accept(), used for the HTTP management API
         self._peer_ip: str | None = None
+        # Background tasks belonging to this connection, cancelled when it goes
+        # away. Kept generic on purpose: this module should not have to know
+        # what an optional feature started, only that it must not outlive the
+        # connection it was started for.
+        self._aux_tasks: list[asyncio.Task] = []
         # The port the device's HTTP management API listens on. Seeded from
         # the mDNS SRV record stored in entry.data at provisioning time;
         # confirmed/updated by _probe_device() after every hello.
@@ -147,6 +167,32 @@ class LizaIPConnection:
     @property
     def device_mac(self) -> str | None:
         return self._device_mac
+
+    @property
+    def hass(self) -> HomeAssistant:
+        """The Home Assistant instance this connection belongs to.
+
+        Exposed so optional feature modules can schedule work without reaching
+        into this class's private state.
+        """
+        return self._hass
+
+    @property
+    def peer_ip(self) -> str | None:
+        """The address the device last connected from, or ``None``.
+
+        Read off the socket rather than configured: the remote is the client
+        here, so this is the only place its address is ever known. It is not
+        persisted, so it answers ``None`` between a Home Assistant restart and
+        the device's next connection, and it goes stale rather than wrong when
+        DHCP moves the device while it is unplugged.
+        """
+        return self._peer_ip
+
+    @property
+    def device_http_port(self) -> int | None:
+        """The port the device's HTTP API answers on, once one is known."""
+        return self._device_http_port
 
     @property
     def last_discovery(self) -> dict[str, Any] | None:
@@ -272,8 +318,54 @@ class LizaIPConnection:
 
     async def disconnect(self) -> None:
         """Close the connection gracefully."""
+        # Before the socket: an auxiliary reader keyed to this device has
+        # nothing left to say once the connection is going away, and one still
+        # running would keep logging about a device that is gone.
+        await self.async_cancel_aux_tasks()
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
+
+    def register_aux_task(self, task: asyncio.Task) -> None:
+        """Tie a background task's lifetime to this connection."""
+        self._aux_tasks = [t for t in self._aux_tasks if not t.done()]
+        self._aux_tasks.append(task)
+
+    async def async_cancel_aux_tasks(self) -> None:
+        """Cancel every registered auxiliary task and wait for it to finish.
+
+        Awaited rather than fired and forgotten so an entry unload does not race
+        a reader that is midway through a write.
+        """
+        tasks, self._aux_tasks = self._aux_tasks, []
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                # One task that will not die must not block the others, and a
+                # failure here cannot be acted on: the connection is closing.
+                pass
+
+    async def async_device_control(self, payload: dict[str, Any]) -> tuple[int, str]:
+        """Send a ``Device.Control`` payload and check the device accepted it.
+
+        Public because optional feature modules need it and must not reach into
+        this class's private helpers to get it.
+        """
+        status, text = await self._control_request(
+            "POST",
+            json={"Device": {"Control": payload}},
+            timeout=ClientTimeout(total=10),
+        )
+        if status not in (200, 202, 204):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_rejected",
+                translation_placeholders={"status": str(status), "error": text[:200]},
+            )
+        return status, text
 
     # ── Command API (HA → Device) ─────────────────────────────────────────
     #
@@ -570,6 +662,15 @@ class LizaIPConnection:
     def _notify_availability(self, available: bool) -> None:
         for cb in self._availability_callbacks:
             cb(available)
+        # The entities above are pushed by their callbacks; anything that is not
+        # an entity -- the config panel's online badge -- has no such hook and
+        # would otherwise keep showing whatever it read when it opened. Fired on
+        # both edges, and only from here, because this is the one place both
+        # transitions pass through.
+        self._hass.bus.async_fire(
+            LIZAIP_AVAILABILITY_EVENT,
+            {"entry_id": self._entry.entry_id, "connected": available},
+        )
 
     def _notify_brightness(self) -> None:
         for cb in self._brightness_callbacks:
