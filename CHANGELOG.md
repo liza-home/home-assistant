@@ -6,55 +6,10 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
-## [2026.09.3b3] - 2026-09-30
+## [2026.10.1] - 2026-10-01
 
-### Fixed
-
-- **Remotes could be handed the wrong port for Home Assistant.** If your Home
-  Assistant URL used the standard port for its scheme — `http://…` on port 80,
-  for instance — remotes were still told to connect on 8123 and could not get
-  through. They are now told the port the URL actually means.
-
-- **Remotes are told the port Home Assistant really listens on.** When no
-  Home Assistant URL is configured to read a port from, remotes used to be sent
-  8123 regardless. On a Home Assistant OS install the port is 80 by default, and
-  the "Server port" setting can change it — that actual port is now used.
-
-- **A remote pointed at the wrong address now repairs itself.** Previously a
-  remote only got a new address if it had none at all, so one left holding a
-  stale host or port stayed stuck there. Now, when a remote turns up that is not
-  connected and holds an address different from the current one, it is given the
-  right one. A remote that *is* connected keeps working undisturbed.
-
-## [2026.09.3b2] - 2026-09-30
-
-### Fixed
-
-- **Your remote's buttons had the word "button" in their name twice.** In
-  German they read "Taste Button 1" instead of "Taste 1", and the named keys
-  were worse: "Taste Button Volume Down" where you would expect "Taste Leiser".
-
-  They are now named the way you would say them — Taste 1 to Taste 12, and
-  Taste Zurück, Taste Ein/Aus, Taste Sprachassistent, Taste Leiser and Taste
-  Lauter — in each of the five languages, using the same words the remote
-  itself already uses for those functions.
-
-  Nothing you have built breaks: the underlying entity ids do not change, so
-  existing automations, scripts and dashboards keep working. Only the name you
-  read changes. If you had renamed a button yourself, your own name stays.
-
-- **Changing Home Assistant's language left the button names behind.** Every
-  other text switched over at once, but the remote's buttons kept the wording
-  they had been given when the integration last started — you had to restart
-  Home Assistant to see them follow.
-
-  They now follow the change by themselves, within a moment of you saving the
-  new language.
-
-## [2026.09.3b1] - 2026-09-30
-
-The release that makes the panel tell you the truth about your remote, and makes a
-bug report worth attaching.
+The release that gets your remote talking to Home Assistant again by itself, names
+its buttons the way you would say them, and makes the panel tell you the truth.
 
 ### Added
 
@@ -120,6 +75,43 @@ bug report worth attaching.
   minutes rather than to be instant: the repair happens the next time the remote
   announces itself, which on a real factory reset took just under nine minutes,
   with the remote back online a few seconds after that.
+
+- **A remote pointed at the wrong address now repairs itself.** Previously a
+  remote only got a new address if it had none at all, so one left holding a
+  stale host or port stayed stuck there. Now, when a remote turns up that is not
+  connected and holds an address different from the current one, it is given the
+  right one. A remote that *is* connected keeps working undisturbed.
+
+- **Remotes could be handed the wrong port for Home Assistant.** If your Home
+  Assistant URL used the standard port for its scheme — `http://…` on port 80,
+  for instance — remotes were still told to connect on 8123 and could not get
+  through. They are now told the port the URL actually means.
+
+- **Remotes are told the port Home Assistant really listens on.** When no
+  Home Assistant URL is configured to read a port from, remotes used to be sent
+  8123 regardless. On a Home Assistant OS install the port is 80 by default, and
+  the "Server port" setting can change it — that actual port is now used.
+
+- **Your remote's buttons had the word "button" in their name twice.** In
+  German they read "Taste Button 1" instead of "Taste 1", and the named keys
+  were worse: "Taste Button Volume Down" where you would expect "Taste Leiser".
+
+  They are now named the way you would say them — Taste 1 to Taste 12, and
+  Taste Zurück, Taste Ein/Aus, Taste Sprachassistent, Taste Leiser and Taste
+  Lauter — in each of the five languages, using the same words the remote
+  itself already uses for those functions.
+
+  Nothing you have built breaks: the underlying entity ids do not change, so
+  existing automations, scripts and dashboards keep working. Only the name you
+  read changes. If you had renamed a button yourself, your own name stays.
+
+- **Changing Home Assistant's language left the button names behind.** Every
+  other text switched over at once, but the remote's buttons kept the wording
+  they had been given when the integration last started — you had to restart
+  Home Assistant to see them follow.
+
+  They now follow the change by themselves, within a moment of you saving the
+  new language.
 
 - **Buttons and icons in the panel could turn invisible.** Depending on your
   theme, the coloured circle behind each remote's icon in the device list — and
