@@ -15,18 +15,29 @@ would only put distance between a value and its reason.
 from __future__ import annotations
 
 import os
-from typing import Final
+from typing import Final, NamedTuple
 
 from PIL import ImageFont
 
 # Default image settings
 MAX_SIZE: Final = 512
 
-# Symbolic size IDs → (width, height)
+class SizeSpec(NamedTuple):
+    """A symbolic size: the canvas, and the font size text is drawn at on it."""
+
+    width: int
+    height: int
+    font_size: int
+
+
+# Symbolic size IDs. A text render without an explicit `font_size=` takes the
+# font size from here. The page title and tooltip URLs sent to the remote carry
+# it explicitly as well (`resolve_title_url`, `resolve_tooltip_url`): the remote
+# caches images by URL, so a new value here has to change the URL to reach it.
 SIZE_IDS: Final = {
-    "tile": (50, 50),
-    "title": (200, 50),
-    "tooltip": (200, 40),
+    "tile": SizeSpec(50, 50, 50),
+    "title": SizeSpec(200, 50, 48),
+    "tooltip": SizeSpec(200, 40, 24),
 }
 
 # A request that says nothing about size is overwhelmingly a button face, so the
@@ -34,7 +45,7 @@ SIZE_IDS: Final = {
 # a 60×60 square that fit nothing on the device and had to be scaled by whoever
 # received it; making the common case correct by default removes that step.
 DEFAULT_SIZE_ID: Final = "tile"
-DEFAULT_SIZE: Final = SIZE_IDS[DEFAULT_SIZE_ID]
+DEFAULT_SIZE: Final = SIZE_IDS[DEFAULT_SIZE_ID][:2]
 
 # Symbolic color names → (R, G, B, A)
 COLOR_NAMES: Final = {

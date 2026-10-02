@@ -182,6 +182,9 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         # Resolve page IDs — they are 32-bit integers matching protocol page IDs
         # Group updates by page for efficiency (one set_page call per page)
         page_buttons: dict[int, list[dict]] = {}
+        # The same font and size the page sync drew the tooltip in; without
+        # them a live update would redraw it in the defaults.
+        tooltip_style = None
         for upd in event.data.get("updates", []):
             btn_name = upd.get("button_key", "")
             if not btn_name:
@@ -200,7 +203,12 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             tooltip = upd.get("tooltip")
             if tooltip is not None:
                 page_color = upd.get("page_color", "")
-                btn_data["img_tooltip"] = resolve_tooltip_url(tooltip, page_color)
+                if tooltip_style is None:
+                    settings = await hass.data[DOMAIN]["_store"].async_get_settings(device_id)
+                    tooltip_style = settings["tooltip"]
+                btn_data["img_tooltip"] = resolve_tooltip_url(
+                    tooltip, page_color, tooltip_style,
+                )
 
             if len(btn_data) > 1:  # has more than just "name"
                 page_buttons.setdefault(pid_int, []).append(btn_data)

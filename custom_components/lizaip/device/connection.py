@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import aiohttp
 from aiohttp import ClientTimeout, WSCloseCode, web
@@ -27,6 +27,40 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .. import provisioning
+
+
+class OtaReply(NamedTuple):
+    """One answer of ``GET /Device/OTA``."""
+
+    status: str
+    # The reply as received. The device keeps the last update's final status
+    # ("Image commit succesful") until a new one starts; only its "Time"
+    # changes, so the raw text tells a fresh report from a stale one.
+    raw: str
+
+
+def _parse_ota_reply(text: str) -> str:
+    """Status text of a ``GET /Device/OTA`` reply.
+
+    The device answers ``{"Device": {"OTA": {"Status": ..., "Time": ...}}}``;
+    a flat ``{"status": ...}`` and plain text are accepted too. Keys are
+    matched case-insensitively.
+    """
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(payload, dict):
+        return text
+    node: Any = payload
+    for key in ("device", "ota"):
+        inner = next((v for k, v in node.items() if str(k).lower() == key), None)
+        if not isinstance(inner, dict):
+            break
+        node = inner
+    status = next((v for k, v in node.items() if str(k).lower() == "status"), None)
+    return str(status or "").strip() or text
 from .const import (
     DOMAIN,
     LIZAIP_AVAILABILITY_EVENT,
@@ -605,17 +639,13 @@ class LizaIPConnection:
         e.g. ``"Image commit successful"``. Raises :exc:`HomeAssistantError` when
         the device cannot be reached.
         """
-        status, _ = await self.get_ota_progress()
-        return status
+        return (await self.get_ota_reply()).status
 
-    async def get_ota_progress(self) -> tuple[str, float | None]:
-        """Poll ``GET /Device/OTA`` and return ``(status_text, percent)``.
+    async def get_ota_reply(self) -> OtaReply:
+        """Poll ``GET /Device/OTA``: the status text and the raw reply.
 
-        The endpoint is content-negotiated: with ``Accept: application/json`` a
-        device that supports it answers with ``{"status": ..., "progress": 0-100}``.
-        Firmware that predates that (and the physical device today) still replies
-        with plain text, in which case ``percent`` is ``None`` and the caller can
-        fall back to deriving a rough percentage from the status string.
+        See :func:`_parse_ota_reply` for the accepted formats. The device
+        reports stages only, no percentage.
         """
         _, text = await self._ota_request(
             "GET",
@@ -623,23 +653,7 @@ class LizaIPConnection:
             headers={"Accept": "application/json"},
         )
         text = text.strip()
-
-        try:
-            payload = json.loads(text)
-        except ValueError:
-            return text, None  # plain-text firmware
-        if not isinstance(payload, dict):
-            return text, None
-
-        status = str(payload.get("status", "")).strip() or text
-        raw_percent = payload.get("progress")
-        try:
-            percent = None if raw_percent is None else float(raw_percent)
-        except (TypeError, ValueError):
-            percent = None
-        if percent is not None:
-            percent = max(0.0, min(100.0, percent))
-        return status, percent
+        return OtaReply(_parse_ota_reply(text), text)
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -725,8 +739,59 @@ class LizaIPConnection:
             fire_and_forget(self.async_refresh_brightness())
             if self._peer_ip:
                 fire_and_forget(self._probe_device(self._peer_ip))
+                fire_and_forget(self._repair_ha_address(self._peer_ip))
         except ProtocolError as err:
             _LOGGER.error("Hello handshake failed: %s", err)
+
+    async def _repair_ha_address(self, peer_ip: str) -> None:
+        """Write our address to a device that is not holding one.
+
+        Provisioning is an HTTP request from Home Assistant *to* the remote, so
+        it can only happen while the remote is reachable -- and discovery, where
+        it used to happen exclusively, is the worst moment to try. A
+        battery-powered remote is asleep most of the time and answers nothing,
+        and an mDNS record can outlive the address in it, which sends the
+        request to a host that is no longer there. Measured on a live install:
+        three provisioning attempts in ten minutes, all to an address that had
+        stopped answering, while the remote itself was fine.
+
+        Hello is the opposite moment. The remote is demonstrably awake, it chose
+        to talk to us, and the socket tells us the address it is really at --
+        no mDNS in between. ``_probe_device`` already proves HTTP works there.
+
+        Only an *absent* address is repaired. A remote that holds some other
+        value has proved that value works, because it used it to get here; one
+        that holds nothing reached us by mDNS and would be stranded the moment
+        mDNS stopped working across its network. That is the device this is for,
+        and it cannot report the problem itself.
+        """
+        if not self._device_http_port:
+            _LOGGER.debug("No device HTTP port stored — skipping address repair")
+            return
+
+        cfg = await provisioning.async_read_ha_config(
+            self._hass, [peer_ip], self._device_http_port
+        )
+        if cfg is None:
+            # Not rounded down to "fine": a device we could not ask is exactly
+            # the one that may be sitting there unprovisioned.
+            _LOGGER.debug(
+                "Could not read the Home Assistant address from %s at %s",
+                self._entry.title, peer_ip,
+            )
+            return
+
+        if str(cfg.get("ha_hostname") or "").strip():
+            return
+
+        _LOGGER.info(
+            "%s holds no Home Assistant address — writing ours over its own "
+            "connection from %s",
+            self._entry.title, peer_ip,
+        )
+        await provisioning.async_provision(
+            self._hass, [peer_ip], self._device_http_port
+        )
 
     async def _probe_device(self, peer_ip: str) -> None:
         """Query the device's HTTP management API after hello.

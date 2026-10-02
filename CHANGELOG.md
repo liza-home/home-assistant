@@ -6,10 +6,162 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.2b1] - 2026-10-02
+
+### Added
+
+- **See what a firmware update brings before you install it.** The firmware
+  update dialog now shows the release notes -- of every release since the
+  version your remote runs, so nothing is missed when you skipped one.
+
+- **Choose the font and size of titles and tooltips.** A new gear tab in the
+  editor sets, for each remote, the font and size of page titles and of
+  tooltips, with a live preview and a button to restore the defaults. Your own
+  fonts work too: put `.ttf` or `.otf` files into `/config/lizaip/fonts/` and
+  they appear in the list. For colourful emoji in titles and labels, put
+  `NotoColorEmoji.ttf` into the same folder.
+
+- **Sonos Radio and Sonos Playlists pages.** Two new layouts, titled with the
+  Sonos logo: one puts your favourite radio stations on buttons 1-12, the other
+  your favourite playlists -- nothing else from your favourites mixed in.
+  Like the Sonos page, they keep up when you add, rename or reorder favourites
+  in the Sonos app, and the volume keys and slider work as usual.
+
+- **Duplicate a page.** Right-click (or long-press) a page in the editor's
+  page strip and choose "duplicate page" to get a copy with all its buttons, placed
+  right after the original and ready to edit. Copying a subpage gives you
+  another subpage. The two pages are independent from then on: changing one
+  leaves the other as it was.
+
+- **Move a layout page to another device.** A page made from a layout -- a TV
+  remote, say -- can now be pointed at a different device without starting
+  over: choose "change device…" (or "change hub…" for Hue) in the page's menu
+  and pick the new one. Your buttons, their names and their arrangement stay as
+  they are; only what they control moves to the new device. Anything the new
+  device has no counterpart for keeps controlling the old one.
+
+- **Delete a page from its menu.** The page menu now also offers "delete page",
+  asking for confirmation first, as the delete button does.
+
+- **Pages you only reach from a button can be kept out of the way.** Some pages
+  exist only as the destination of a "Go to page" button -- a page of light
+  scenes behind one button, say. Until now the remote still offered them while
+  you paged through, so getting to the page you wanted meant passing the ones
+  you never browse to on purpose. Right-click a page in the editor's page strip
+  (or long-press it on a touchscreen) and choose "make subpage": the remote
+  stops listing it, while buttons pointing at it keep working exactly as
+  before. The page stays in the editor, shaded darker so you can see which ones
+  are subpages, and the same menu turns it back. **Shift+F10** or the **Context
+  Menu** key opens it without a mouse.
+
+### Changed
+
+- **Better-proportioned text on the remote.** The words under a button are now
+  drawn noticeably smaller, so longer names fit, and page titles written as text
+  sit slightly inside their strip instead of touching its edges. After updating,
+  the remote refreshes its pages once to pick up the new look.
+
+### Fixed
+
+- **The firmware update stays visible all the way through.** After you press
+  Install, the update card no longer blanks out for a few seconds before it
+  starts showing the installation; it shows "Installing" until the remote is
+  back on the new version, and its heading names the step the remote reports,
+  such as "Update started".
+
+- **Clicking the page gets you back to its settings.** While editing a page's
+  title, clicking anywhere on that page outside a button now closes the title
+  editor and shows the page's settings, as it already did for a button.
+
+- **Deleting a page always asks for confirmation, and now counts it right.**
+  Before, a page that looked empty could be deleted without a prompt --
+  including pages whose buttons the editor simply had not loaded yet; such a
+  page now reports its true button count before you confirm.
+
+- **Moving a page to a new hub now says "hub", not "device".** The
+  confirmation after "change hub…" previously used the device wording
+  regardless of which kind of target you picked.
+
+- **Moving a layout page to a new device no longer touches your own text.** A
+  button's label is yours; it is left exactly as you wrote it even if it
+  happens to mention the old device by name.
+
+- **A page kept out of the remote's own paging is now also announced as such
+  by screen readers**, not only shown darker in the editor.
+
+- **A remote that cannot find Home Assistant now fixes itself when it
+  connects.** Part of pairing is writing Home Assistant's address into the
+  remote so it can get back to you on its own. That only ever happened while
+  Home Assistant was discovering the remote on the network -- which is the one
+  moment a battery-powered remote is most likely to be asleep and not
+  listening. The result was a remote that worked while the network happened to
+  cooperate, and went quiet when it did not, with nothing in the interface to
+  say why. Home Assistant now also writes the address the moment the remote
+  checks in, using the connection the remote itself just opened. A remote that
+  already has a working address is left alone.
+
+- **Home Assistant no longer warns about lizaIP in its log.** A repair notice
+  about a deprecated device lookup appeared on every start. It was harmless for
+  now, but the same lookup was due to stop working in Home Assistant 2027.8.0,
+  and when it did, removing the remote would have left its saved state behind.
+  Both are fixed, and the notice is gone.
+
 ## [2026.10.1] - 2026-10-01
 
-The release that gets your remote talking to Home Assistant again by itself, names
-its buttons the way you would say them, and makes the panel tell you the truth.
+The first stable release of October. It carries what 2026.09.3b1 through b3
+worked out -- the remote finding its way back to Home Assistant by itself, the
+buttons named the way you would say them, and the panel telling you the truth
+about what is connected. Those sections, just below, say what each one changed.
+
+## [2026.09.3b3] - 2026-09-30
+
+### Fixed
+
+- **Remotes could be handed the wrong port for Home Assistant.** If your Home
+  Assistant URL used the standard port for its scheme — `http://…` on port 80,
+  for instance — remotes were still told to connect on 8123 and could not get
+  through. They are now told the port the URL actually means.
+
+- **Remotes are told the port Home Assistant really listens on.** When no
+  Home Assistant URL is configured to read a port from, remotes used to be sent
+  8123 regardless. On a Home Assistant OS install the port is 80 by default, and
+  the "Server port" setting can change it — that actual port is now used.
+
+- **A remote pointed at the wrong address now repairs itself.** Previously a
+  remote only got a new address if it had none at all, so one left holding a
+  stale host or port stayed stuck there. Now, when a remote turns up that is not
+  connected and holds an address different from the current one, it is given the
+  right one. A remote that *is* connected keeps working undisturbed.
+
+## [2026.09.3b2] - 2026-09-30
+
+### Fixed
+
+- **Your remote's buttons had the word "button" in their name twice.** In
+  German they read "Taste Button 1" instead of "Taste 1", and the named keys
+  were worse: "Taste Button Volume Down" where you would expect "Taste Leiser".
+
+  They are now named the way you would say them — Taste 1 to Taste 12, and
+  Taste Zurück, Taste Ein/Aus, Taste Sprachassistent, Taste Leiser and Taste
+  Lauter — in each of the five languages, using the same words the remote
+  itself already uses for those functions.
+
+  Nothing you have built breaks: the underlying entity ids do not change, so
+  existing automations, scripts and dashboards keep working. Only the name you
+  read changes. If you had renamed a button yourself, your own name stays.
+
+- **Changing Home Assistant's language left the button names behind.** Every
+  other text switched over at once, but the remote's buttons kept the wording
+  they had been given when the integration last started — you had to restart
+  Home Assistant to see them follow.
+
+  They now follow the change by themselves, within a moment of you saving the
+  new language.
+
+## [2026.09.3b1] - 2026-09-30
+
+The release that makes the panel tell you the truth about your remote, and makes a
+bug report worth attaching.
 
 ### Added
 
@@ -75,43 +227,6 @@ its buttons the way you would say them, and makes the panel tell you the truth.
   minutes rather than to be instant: the repair happens the next time the remote
   announces itself, which on a real factory reset took just under nine minutes,
   with the remote back online a few seconds after that.
-
-- **A remote pointed at the wrong address now repairs itself.** Previously a
-  remote only got a new address if it had none at all, so one left holding a
-  stale host or port stayed stuck there. Now, when a remote turns up that is not
-  connected and holds an address different from the current one, it is given the
-  right one. A remote that *is* connected keeps working undisturbed.
-
-- **Remotes could be handed the wrong port for Home Assistant.** If your Home
-  Assistant URL used the standard port for its scheme — `http://…` on port 80,
-  for instance — remotes were still told to connect on 8123 and could not get
-  through. They are now told the port the URL actually means.
-
-- **Remotes are told the port Home Assistant really listens on.** When no
-  Home Assistant URL is configured to read a port from, remotes used to be sent
-  8123 regardless. On a Home Assistant OS install the port is 80 by default, and
-  the "Server port" setting can change it — that actual port is now used.
-
-- **Your remote's buttons had the word "button" in their name twice.** In
-  German they read "Taste Button 1" instead of "Taste 1", and the named keys
-  were worse: "Taste Button Volume Down" where you would expect "Taste Leiser".
-
-  They are now named the way you would say them — Taste 1 to Taste 12, and
-  Taste Zurück, Taste Ein/Aus, Taste Sprachassistent, Taste Leiser and Taste
-  Lauter — in each of the five languages, using the same words the remote
-  itself already uses for those functions.
-
-  Nothing you have built breaks: the underlying entity ids do not change, so
-  existing automations, scripts and dashboards keep working. Only the name you
-  read changes. If you had renamed a button yourself, your own name stays.
-
-- **Changing Home Assistant's language left the button names behind.** Every
-  other text switched over at once, but the remote's buttons kept the wording
-  they had been given when the integration last started — you had to restart
-  Home Assistant to see them follow.
-
-  They now follow the change by themselves, within a moment of you saving the
-  new language.
 
 - **Buttons and icons in the panel could turn invisible.** Depending on your
   theme, the coloured circle behind each remote's icon in the device list — and

@@ -186,6 +186,8 @@ export const DataMixin = {
     // with the selected remote's own.
     await Promise.all([
       this._loadPages(), this._loadActions(), this._loadActionLabels(), this._loadBlueprint(),
+      // The title previews are drawn in the remote's text settings.
+      this._loadTextSettings(),
     ]);
     await this._loadAssignments();
     await this._loadGlobalUsage();
@@ -661,7 +663,12 @@ export const DataMixin = {
       if (!result?.pages) return result;
 
       this._pages = result.pages;
-      this._currentPageIdx = this._pages.length - 1;
+      // A duplicate lands next to its original, not at the end; a path that
+      // names its page is opened on that page. Only the blank path, which
+      // sends the whole list and gets no id back, relies on the append.
+      const newIdx = result.page_id != null
+        ? this._pages.findIndex(p => p.id === result.page_id) : -1;
+      this._currentPageIdx = newIdx >= 0 ? newIdx : this._pages.length - 1;
       this._selectedButtonIdx = -1;
       this._contextKey = null;
       // A new page's card opens on its colour, like every other page's. Left
@@ -692,6 +699,35 @@ export const DataMixin = {
       const activeThumb = this.shadowRoot?.querySelector(".page-thumb.active");
       if (activeThumb) activeThumb.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
     });
+  },
+
+  /**
+   * Point a layout page at another device (or hub), keeping its buttons.
+   *
+   * A pending edit is saved first: the backend rewrites the stored buttons,
+   * and an autosave landing afterwards would put the old device back. The
+   * page's cached buttons are dropped, and re-read if it is the open one,
+   * because what the server now holds is no longer what the panel showed.
+   */
+  async _retargetLayoutPage(page, target, targetKind = "device") {
+    this._pageOpInFlight = true;
+    try {
+      await this._flushAutoSave();
+      const result = await this._hass.callWS({
+        type: "lizaip_config/retarget_layout_page",
+        entry_id: this._currentEntry,
+        page_id: page.id,
+        ...(targetKind === "config_entry"
+          ? { target_config_entry: target }
+          : { target_device: target }),
+      });
+      if (result?.pages) this._pages = result.pages;
+      delete this._pageCache[page.id];
+      if (page.id === this._currentPageId) await this._loadAssignments();
+      return result;
+    } finally {
+      this._pageOpInFlight = false;
+    }
   },
 
   async _addLayoutPage(layoutId, target, targetKind = "device") {

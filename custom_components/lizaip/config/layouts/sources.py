@@ -131,6 +131,15 @@ FAVORITE_TYPES = [
     ("library/favorites", ""),
 ]
 
+#: Favourites narrowed to one kind, by the Sonos favourites folder that holds
+#: it. Sonos files each favourite under its DIDL class and browses one class
+#: at a time as ``("favorites_folder", <class>)``, so the folder *is* the
+#: filter; titles or media classes would have to be guessed at.
+FAVORITE_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "radio": ("object.item.audioItem.audioBroadcast",),
+    "playlists": ("object.container.playlistContainer",),
+}
+
 
 # ── entity lookup ─────────────────────────────────────────────────────
 
@@ -350,6 +359,29 @@ async def try_browse_media(entity, entity_id: str, max_items: int) -> list[dict]
     return items
 
 
+async def browse_favorite_category(
+    entity, entity_id: str, category: str, max_items: int,
+) -> list[dict]:
+    """The favourites of one :data:`FAVORITE_CATEGORIES` kind, in Sonos order.
+
+    A failed browse raises :class:`SourceUnavailable` rather than answering
+    ``[]``: an empty answer blanks bound buttons, and a speaker that could not
+    be asked has not said it has no radio stations.
+    """
+    items: list[dict] = []
+    for class_id in FAVORITE_CATEGORIES[category]:
+        try:
+            result = await _browse(entity, "favorites_folder", class_id, 15)
+        except Exception as exc:
+            raise SourceUnavailable(
+                f"browsing {category} favourites of {entity_id} failed: {exc}"
+            ) from exc
+        items.extend(_extract_playable_items(result, max_items - len(items)))
+        if len(items) >= max_items:
+            break
+    return items
+
+
 async def get_browse_thumbnails(entity, entity_id: str) -> dict[str, str]:
     thumbnails: dict[str, str] = {}
     try:
@@ -456,6 +488,15 @@ _ENTITY_PARAM = {
         "required": True,
         "description": "Media player to read from",
     },
+    "category": {
+        "type": "string",
+        "required": False,
+        "description": (
+            "Only favourites of this kind: "
+            + ", ".join(sorted(FAVORITE_CATEGORIES))
+            + " (Sonos)"
+        ),
+    },
 }
 
 
@@ -511,8 +552,25 @@ async def resolve_favorites(
     entity_id = spec.get("entity") or spec.get("entity_id") or ""
     if not entity_id:
         raise ValueError("favorites source requires an 'entity'")
+    category = str(spec.get("category") or "").strip()
+    if category and category not in FAVORITE_CATEGORIES:
+        raise ValueError(
+            f"unknown favorites category {category!r}; "
+            f"expected one of {', '.join(sorted(FAVORITE_CATEGORIES))}"
+        )
 
     entity = await find_media_entity(hass, entity_id)
+
+    if category:
+        # No fallback: `source_list` and the unfiltered browse mix every kind
+        # of favourite, which is exactly what a category is there to exclude.
+        if entity is None or not hasattr(entity, "async_browse_media"):
+            _ensure_reachable(hass, entity_id)
+            raise SourceUnavailable(f"{entity_id} cannot be browsed")
+        raw = await browse_favorite_category(entity, entity_id, category, max_items)
+        if not raw:
+            _ensure_reachable(hass, entity_id)
+        return _items_from_browse(raw)
 
     if entity is not None and hasattr(entity, "async_browse_media"):
         raw = await try_browse_media(entity, entity_id, max_items)

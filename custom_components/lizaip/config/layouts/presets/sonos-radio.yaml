@@ -1,0 +1,67 @@
+# Sonos Radio Layout — radio stations on buttons 1–12
+#
+# Like `sonos.yaml`, but buttons 1–12 are only the speaker's favourite
+# radio stations: the `station` placeholder narrows the favorites source to the
+# Sonos "Radio" favourites folder, so playlists, albums and tracks never
+# land here. Title, art and play_media come from the favourite, and the binding is live: adding,
+# renaming or reordering one in the Sonos app refreshes the buttons. Slots
+# without a favourite stay empty.
+#
+# The page's title image is the layout icon, the Sonos logo.
+#
+# Reference: https://www.home-assistant.io/integrations/sonos
+
+name: Sonos Radio
+icon: logo:sonos
+description: Your favourite Sonos radio stations, one per button
+
+target_selector:
+  device:
+    integration: sonos
+    primary_domain: media_player
+
+placeholders:
+  station:
+    source: favorites
+    spec:
+      category: radio
+
+buttons:
+  button_1: "@station[1]"
+  button_2: "@station[2]"
+  button_3: "@station[3]"
+  button_4: "@station[4]"
+  button_5: "@station[5]"
+  button_6: "@station[6]"
+  button_7: "@station[7]"
+  button_8: "@station[8]"
+  button_9: "@station[9]"
+  button_10: "@station[10]"
+  button_11: "@station[11]"
+  button_12: "@station[12]"
+
+  button_volume_up:
+    label: Volume Up
+    image: mdi:volume-plus
+    config:
+      - action: media_player.volume_up
+
+  button_volume_down:
+    label: Volume Down
+    image: mdi:volume-minus
+    config:
+      - action: media_player.volume_down
+
+  # The mechanics live in `slider_actions`, as a page stores them; the subject
+  # is left out because the page's own target supplies it.
+  slider_vertical:
+    label: Volume
+    image: mdi:volume-high
+    slider_actions:
+      mode: proportional
+      attribute: volume_level
+      service: media_player.volume_set
+      data_key: volume_level
+      factor: 1.0
+      min: 0.0
+      max: 1.0

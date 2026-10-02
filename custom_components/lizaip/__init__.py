@@ -280,7 +280,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
         await connection.disconnect()
 
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, entry.entry_id), entry.entry_id
+    )
     device_id = device.id if device else None
 
     store: LizaRemoteStore | None = hass.data.get(DOMAIN, {}).get("_store")

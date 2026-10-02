@@ -6,10 +6,12 @@ responses preserve the JSON shapes those views consume.
 from __future__ import annotations
 
 
+import copy
 import importlib.util
 import logging
 import math
 import os
+import re
 from typing import Any, Final
 
 import voluptuous as vol
@@ -46,6 +48,13 @@ from ..const import (
     load_action_labels,
 )
 from ..imgserv.const import build_palette
+from ..imgserv.fonts import list_fonts, user_fonts_dir
+from .text_style import (
+    TEXT_KINDS,
+    default_settings,
+    font_size_limits,
+    validate_settings,
+)
 from .internal_commands import get_internal_command, panel_descriptors, pinned_page_ids
 from .device_sync import step_targets_entry
 from .const import (
@@ -54,7 +63,9 @@ from .const import (
     ASSIGNMENT_LABEL_EDITED_KEY,
     DEFAULT_BLUEPRINT_ID,
     PAGE_ID_SCHEMA,
+    PAGE_SUBPAGE_KEY,
     generate_page_id,
+    is_subpage,
     payload_display,
     step_service,
 )
@@ -127,6 +138,28 @@ def _schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
         create_task(_rescan())
     except Exception as err:  # noqa: BLE001
         _LOGGER.debug("Could not schedule push trigger re-scan: %s", err)
+
+
+def _schedule_page_refresh(hass: HomeAssistant, entry_id: str, page_id: int) -> None:
+    """Re-read one page's dynamic buttons in the background.
+
+    Browsing a media source can take seconds; the editor should not wait for
+    it. Guarded like the re-scan above, for the same reason.
+    """
+    create_task = getattr(hass, "async_create_task", None)
+    if create_task is None:
+        return
+
+    async def _refresh() -> None:
+        try:
+            await layout_refresh.async_refresh_and_sync(hass, entry_id, page_id=page_id)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Dynamic refresh of page %s failed: %s", page_id, err)
+
+    try:
+        create_task(_refresh())
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("Could not schedule page refresh: %s", err)
 
 
 EMPTY_BUTTON = {"action_id": None, "config": [], "label": None, "image": None, "image_pinned": False, "state_icons": {}}
@@ -436,8 +469,11 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_get_pages,
         ws_set_pages,
         ws_update_page,
+        ws_duplicate_page,
         ws_get_icon_defaults,
         ws_get_palette,
+        ws_get_settings,
+        ws_set_settings,
         ws_get_action_labels,
         ws_get_slider_controls,
         ws_get_internal_commands,
@@ -446,6 +482,7 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_list_layout_devices,
         ws_list_layout_config_entries,
         ws_add_layout_page,
+        ws_retarget_layout_page,
         ws_browse_media,
         ws_list_dynamic_sources,
         ws_preview_dynamic_source,
@@ -868,7 +905,7 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
 
     entry = hass.config_entries.async_get_entry(msg["entry_id"])
     if entry and hasattr(entry, "runtime_data") and entry.runtime_data and entry.runtime_data.connected:
-        page_ids = [p["id"] for p in pages]
+        page_ids = [p["id"] for p in pages if not is_subpage(p)]
         try:
             await entry.runtime_data.set_main_pages(page_ids)
             # Keep cache in sync so the next full sync does not see stale order.
@@ -890,6 +927,7 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
     vol.Required("page_id"): PAGE_ID_SCHEMA,
     vol.Optional("image"): str,
     vol.Optional("default_color"): str,
+    vol.Optional(PAGE_SUBPAGE_KEY): bool,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -916,6 +954,10 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
         page["image"] = msg["image"]
     if "default_color" in msg:
         page["default_color"] = msg["default_color"]
+    if PAGE_SUBPAGE_KEY in msg:
+        # Written whether true or false: the store only keeps the key when it is
+        # true, so clearing it is how a page becomes a main page again.
+        page[PAGE_SUBPAGE_KEY] = msg[PAGE_SUBPAGE_KEY]
 
     await store.async_set_pages(device_id, pages)
     await store.async_recompute_page_hash(device_id, page_id)
@@ -924,6 +966,66 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
 
     _LOGGER.debug("Updated page %s: image=%s, default_color=%s", page_id, page.get("image", ""), page.get("default_color", ""))
     connection.send_result(msg["id"], {"success": True, "pages": pages})
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/duplicate_page",
+    "entry_id": str,
+    vol.Required("page_id"): PAGE_ID_SCHEMA,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_requires_device
+async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+    """Copy a page under a new id, directly after the original.
+
+    The copy keeps every stored page field -- including whether it is a
+    subpage -- and gets its own deep copy of the button assignments, so editing
+    one page never changes the other.
+
+    Response:
+      {success: true, page_id, pages}
+    """
+    entry_id = msg["entry_id"]
+    source_id = msg["page_id"]
+
+    store = _get_store(hass)
+    pages = await store.async_get_pages(device_id)
+    source_idx = next(
+        (i for i, p in enumerate(pages) if isinstance(p, dict) and p.get("id") == source_id),
+        None,
+    )
+    if source_idx is None:
+        connection.send_error(msg["id"], "page_not_found", f"Page {source_id} not found")
+        return
+
+    new_page_id = generate_page_id(
+        await _reserved_page_ids(
+            store, device_id, {p["id"] for p in pages if isinstance(p, dict)}
+        )
+    )
+    new_page = copy.deepcopy(pages[source_idx])
+    new_page["id"] = new_page_id
+    new_page["hash"] = 0
+    pages.insert(source_idx + 1, new_page)
+
+    assignments = copy.deepcopy(await store.async_get_assignments(device_id, source_id))
+    await store.async_set_assignments(device_id, new_page_id, assignments)
+    await store.async_set_pages(device_id, pages)
+    await store.async_recompute_page_hash(device_id, new_page_id)
+
+    await _refresh_state_listener(hass, entry_id)
+    await _fire_config_changed(hass, entry_id)
+    # The copy carries the same dynamic bindings, which need push subscriptions.
+    _schedule_push_rescan(hass, entry_id)
+
+    pages = await store.async_get_pages(device_id)
+    _LOGGER.info("Duplicated page %s as %s for device %s", source_id, new_page_id, device_id)
+    connection.send_result(msg["id"], {
+        "success": True,
+        "page_id": new_page_id,
+        "pages": pages,
+    })
 
 
 @websocket_api.websocket_command({
@@ -960,6 +1062,60 @@ async def ws_get_icon_defaults(
 ) -> None:
     """Return icon default mappings loaded from icon_defaults.yaml."""
     connection.send_result(msg["id"], ICON_DEFAULTS)
+
+
+async def _async_list_fonts(hass: HomeAssistant) -> list[dict[str, str]]:
+    return await hass.async_add_executor_job(list_fonts, user_fonts_dir(hass))
+
+
+def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
+    return {
+        "settings": settings,
+        "defaults": default_settings(),
+        "fonts": fonts,
+        "limits": {
+            kind: dict(zip(("min", "max"), font_size_limits(kind))) for kind in TEXT_KINDS
+        },
+    }
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/get_settings",
+    "entry_id": str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_requires_device
+async def ws_get_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+    """The remote's text settings, with what the editor needs to change them.
+
+    ``fonts`` is re-read on every call, so a font dropped into the font folder
+    shows up the next time the settings tab opens.
+    """
+    settings = await _get_store(hass).async_get_settings(device_id)
+    fonts = await _async_list_fonts(hass)
+    connection.send_result(msg["id"], _settings_reply(settings, fonts))
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/set_settings",
+    "entry_id": str,
+    vol.Required("settings"): dict,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_requires_device
+async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+    """Save the text settings and redraw the remote's pages with them."""
+    fonts = await _async_list_fonts(hass)
+    try:
+        settings = validate_settings(msg["settings"], {f["id"] for f in fonts})
+    except ValueError as exc:
+        connection.send_error(msg["id"], "invalid_format", str(exc))
+        return
+    stored = await _get_store(hass).async_set_settings(device_id, settings)
+    await _fire_config_changed(hass, msg["entry_id"])
+    connection.send_result(msg["id"], _settings_reply(stored, fonts))
 
 
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_palette"})
@@ -1141,6 +1297,76 @@ async def ws_list_layout_config_entries(hass: HomeAssistant, connection, msg: di
     connection.send_result(msg["id"], {"entries": entries})
 
 
+def _resolve_layout_target(
+    hass: HomeAssistant,
+    layout_id: str,
+    layout: dict,
+    target_device: str,
+    target_config_entry: str,
+) -> tuple[tuple[str, str] | None, str, dict[str, str]]:
+    """Check a device or config entry against a layout's target selector.
+
+    Shared by adding a layout page and by moving one to another device, so both
+    accept exactly the same targets.
+
+    Returns ``(error, target_entity, domain_entities)``; ``error`` is a
+    ``(code, message)`` pair, or ``None`` when the target fits.
+    """
+    selector = layout.get("target_selector") or {}
+    device_sel = selector.get("device") or {}
+    entry_sel = selector.get("config_entry") or {}
+
+    domain_entities: dict[str, str] = {}
+    target_entity = ""
+
+    if entry_sel:
+        if not target_config_entry:
+            return ("invalid_target", f"Layout '{layout_id}' needs a config entry to bind to"), "", {}
+        integration = entry_sel.get("integration")
+        target_entry = hass.config_entries.async_get_entry(target_config_entry)
+        if target_entry is None or (integration and target_entry.domain != integration):
+            return ("not_found", f"Config entry '{target_config_entry}' does not belong to "
+                f"integration '{integration}' required by layout '{layout_id}'"), "", {}
+        # Disabled entries own no live entities, so dynamic pages would stay empty.
+        # Worded operation-neutral: this check also runs when retargeting an
+        # existing page, where "before adding a page" was simply wrong.
+        if target_entry.disabled_by:
+            return ("invalid_target", f"Config entry '{target_config_entry}' is disabled; "
+                f"enable it before using it for a '{layout_id}' page"), "", {}
+    elif device_sel:
+        if not target_device:
+            return ("invalid_target", f"Layout '{layout_id}' needs a device to bind to"), "", {}
+        # Device layouts need same-device sibling entities by service domain; an
+        # entity selector cannot express androidtv_remote remote.* plus
+        # media_player.* app-launch buttons.
+        integration = device_sel.get("integration")
+        # Match the picker: require the layout's integration, not just a domain.
+        if integration:
+            device = dr.async_get(hass).async_get(target_device)
+            entry_ids = {
+                e.entry_id for e in hass.config_entries.async_entries(integration)
+            }
+            # Deliberately the `config_entries` set — see the device picker
+            # above. This must accept the same devices the picker offered.
+            if not device or not (device.config_entries & entry_ids):
+                return ("not_found", f"Device '{target_device}' does not belong to integration "
+                    f"'{integration}' required by layout '{layout_id}'"), "", {}
+
+        domain_entities = _resolve_device_domain_entities(
+            hass, target_device, integration
+        )
+        if not domain_entities:
+            return ("not_found", f"Device '{target_device}' has no usable entities"), "", {}
+        primary_domain = device_sel.get("primary_domain")
+        target_entity = domain_entities.get(primary_domain) if primary_domain else ""
+        if not target_entity:
+            return ("not_found", f"Device '{target_device}' has no '{primary_domain}' entity required by layout '{layout_id}'"), "", {}
+    else:
+        return ("invalid_layout", f"Layout '{layout_id}' declares no device or config entry selector"), "", {}
+
+    return None, target_entity, domain_entities
+
+
 @websocket_api.websocket_command({
     vol.Required("type"): "lizaip_config/add_layout_page",
     vol.Required("entry_id"): str,
@@ -1171,92 +1397,11 @@ async def ws_add_layout_page(hass: HomeAssistant, connection, msg: dict, device_
         connection.send_error(msg["id"], "layout_error", f"Layout '{layout_id}' not found")
         return
 
-    selector = layout.get("target_selector") or {}
-    device_sel = selector.get("device") or {}
-    entry_sel = selector.get("config_entry") or {}
-
-    domain_entities: dict[str, str] = {}
-    target_entity = ""
-
-    if entry_sel:
-        if not target_config_entry:
-            connection.send_error(
-                msg["id"],
-                "invalid_target",
-                f"Layout '{layout_id}' needs a config entry to bind to",
-            )
-            return
-        integration = entry_sel.get("integration")
-        target_entry = hass.config_entries.async_get_entry(target_config_entry)
-        if target_entry is None or (integration and target_entry.domain != integration):
-            connection.send_error(
-                msg["id"],
-                "not_found",
-                f"Config entry '{target_config_entry}' does not belong to "
-                f"integration '{integration}' required by layout '{layout_id}'",
-            )
-            return
-        # Disabled entries own no live entities, so dynamic pages would stay empty.
-        if target_entry.disabled_by:
-            connection.send_error(
-                msg["id"],
-                "invalid_target",
-                f"Config entry '{target_config_entry}' is disabled; "
-                f"enable it before adding a '{layout_id}' page",
-            )
-            return
-    elif device_sel:
-        if not target_device:
-            connection.send_error(
-                msg["id"],
-                "invalid_target",
-                f"Layout '{layout_id}' needs a device to bind to",
-            )
-            return
-        # Device layouts need same-device sibling entities by service domain; an
-        # entity selector cannot express androidtv_remote remote.* plus
-        # media_player.* app-launch buttons.
-        integration = device_sel.get("integration")
-        # Match the picker: require the layout's integration, not just a domain.
-        if integration:
-            device = dr.async_get(hass).async_get(target_device)
-            entry_ids = {
-                e.entry_id for e in hass.config_entries.async_entries(integration)
-            }
-            # Deliberately the `config_entries` set — see the device picker
-            # above. This must accept the same devices the picker offered.
-            if not device or not (device.config_entries & entry_ids):
-                connection.send_error(
-                    msg["id"],
-                    "not_found",
-                    f"Device '{target_device}' does not belong to integration "
-                    f"'{integration}' required by layout '{layout_id}'",
-                )
-                return
-
-        domain_entities = _resolve_device_domain_entities(
-            hass, target_device, integration
-        )
-        if not domain_entities:
-            connection.send_error(
-                msg["id"], "not_found", f"Device '{target_device}' has no usable entities"
-            )
-            return
-        primary_domain = device_sel.get("primary_domain")
-        target_entity = domain_entities.get(primary_domain) if primary_domain else ""
-        if not target_entity:
-            connection.send_error(
-                msg["id"],
-                "not_found",
-                f"Device '{target_device}' has no '{primary_domain}' entity required by layout '{layout_id}'",
-            )
-            return
-    else:
-        connection.send_error(
-            msg["id"],
-            "invalid_layout",
-            f"Layout '{layout_id}' declares no device or config entry selector",
-        )
+    error, target_entity, domain_entities = _resolve_layout_target(
+        hass, layout_id, layout, target_device, target_config_entry,
+    )
+    if error:
+        connection.send_error(msg["id"], *error)
         return
 
     layout = await resolve_layout_variables(
@@ -1345,6 +1490,226 @@ async def ws_add_layout_page(hass: HomeAssistant, connection, msg: dict, device_
         "success": True,
         "page_id": new_page_id,
         "pages": pages,
+    })
+
+
+#: Keys under which a stored button names the entity it acts on. Only values
+#: found here are candidates for the dead-reference fallback below: a bare
+#: `domain.name` string elsewhere is as likely a service (`light.toggle`).
+_ENTITY_REFERENCE_KEYS: Final = frozenset({"entity_id", "entity", "target_entity"})
+
+
+def _referenced_entities(value: Any, out: set[str]) -> set[str]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in _ENTITY_REFERENCE_KEYS:
+                for eid in item if isinstance(item, list) else [item]:
+                    if isinstance(eid, str) and "." in eid:
+                        out.add(eid)
+            _referenced_entities(item, out)
+    elif isinstance(value, list):
+        for item in value:
+            _referenced_entities(item, out)
+    return out
+
+
+def _rewrite_references(value: Any, pattern: re.Pattern, mapping: dict[str, str]) -> Any:
+    """Return ``value`` with every whole-token reference in ``mapping`` swapped.
+
+    Whole tokens, so `media_player.tv` does not rewrite `media_player.tv_2`
+    and `select.tv` does not rewrite `input_select.tv`; inside strings too, so
+    a template's `states('media_player.tv')` follows. Keys are left alone: a
+    button's dicts are keyed by button, state or field, never by entity.
+    """
+    if isinstance(value, str):
+        return pattern.sub(lambda m: mapping[m.group(0)], value)
+    if isinstance(value, dict):
+        return {k: _rewrite_references(v, pattern, mapping) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_rewrite_references(v, pattern, mapping) for v in value]
+    return value
+
+
+#: Button fields that can actually name an entity to act on. Everything else
+#: on a button -- `label`, `label_edited`, `action_id`, `state_icons`,
+#: `internal_target_name` -- is presentation or identity metadata the user
+#: wrote or that merely echoes it; it is left alone even when it happens to
+#: contain an old entity id as plain text, because retargeting must not
+#: rewrite what the user authored (only what the page itself depends on).
+_ENTITY_BEARING_BUTTON_KEYS: Final = frozenset(
+    {"config", "overrides", "slider_actions", ASSIGNMENT_DYNAMIC_KEY}
+)
+
+
+def _rewrite_assignments(
+    assignments: dict, pattern: re.Pattern, mapping: dict[str, str]
+) -> dict:
+    """Swap entity references inside stored button assignments.
+
+    Walks only the entity-bearing fields of each button (see
+    ``_ENTITY_BEARING_BUTTON_KEYS``); every other field is copied through
+    unchanged.
+    """
+    result = {}
+    for btn_key, btn_val in assignments.items():
+        if not isinstance(btn_val, dict):
+            result[btn_key] = btn_val
+            continue
+        new_btn = dict(btn_val)
+        for field in _ENTITY_BEARING_BUTTON_KEYS:
+            if field in new_btn:
+                new_btn[field] = _rewrite_references(new_btn[field], pattern, mapping)
+        result[btn_key] = new_btn
+    return result
+
+
+def _retarget_mapping(
+    hass: HomeAssistant,
+    old_target: dict,
+    new_target: dict,
+    old_domain_entities: dict[str, str],
+    new_domain_entities: dict[str, str],
+    referenced: set[str],
+) -> dict[str, str]:
+    """Which old references become which new ones.
+
+    The old device's entities map to the new device's entity of the same
+    domain. The old device may be gone -- often the reason it is being
+    replaced -- and its entities with it, so an entity a button names that no
+    longer exists at all also maps by domain. An entity that still exists and
+    is not the old device's is the user's own addition, and is left alone.
+    """
+    mapping: dict[str, str] = {}
+    for domain, old in old_domain_entities.items():
+        new = new_domain_entities.get(domain)
+        if new:
+            mapping[old] = new
+    old_entity = old_target.get("entity_id") or ""
+    new_entity = new_target.get("entity_id") or ""
+    if old_entity and new_entity:
+        mapping[old_entity] = new_entity
+
+    from homeassistant.helpers import entity_registry as er
+
+    ent_reg = er.async_get(hass)
+    for eid in referenced:
+        if eid in mapping:
+            continue
+        if hass.states.get(eid) is not None or ent_reg.async_get(eid) is not None:
+            continue
+        new = new_domain_entities.get(eid.split(".", 1)[0])
+        if new:
+            mapping[eid] = new
+
+    old_entry = old_target.get("config_entry") or ""
+    new_entry = new_target.get("config_entry") or ""
+    if old_entry and new_entry:
+        mapping[old_entry] = new_entry
+    old_device = old_target.get("device") or ""
+    new_device = new_target.get("device") or ""
+    if old_device and new_device:
+        mapping[old_device] = new_device
+    return {old: new for old, new in mapping.items() if old != new}
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/retarget_layout_page",
+    vol.Required("entry_id"): str,
+    vol.Required("page_id"): PAGE_ID_SCHEMA,
+    vol.Optional("target_device"): str,
+    vol.Optional("target_config_entry"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_requires_device
+async def ws_retarget_layout_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+    """Point a layout page at another device (or hub), keeping its buttons.
+
+    The page is not regenerated: buttons the user changed stay changed. Only
+    references to the old target are swapped for the new one's, domain by
+    domain. What the new device lacks keeps pointing where it did.
+
+    Response:
+      {success: true, pages, replaced: {old: new}, buttons_changed: n}
+    """
+    entry_id = msg["entry_id"]
+    page_id = msg["page_id"]
+    target_device = msg.get("target_device") or ""
+    target_config_entry = msg.get("target_config_entry") or ""
+
+    store = _get_store(hass)
+    pages = await store.async_get_pages(device_id)
+    page = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
+    if page is None:
+        connection.send_error(msg["id"], "page_not_found", f"Page {page_id} not found")
+        return
+    page_layout = page.get("layout") if isinstance(page.get("layout"), dict) else {}
+    layout_id = page_layout.get("type") or ""
+    if not layout_id:
+        connection.send_error(msg["id"], "not_a_layout_page", f"Page {page_id} was not made from a layout")
+        return
+
+    layout = await hass.async_add_executor_job(load_layout, layout_id)
+    if not layout:
+        connection.send_error(msg["id"], "layout_error", f"Layout '{layout_id}' not found")
+        return
+
+    error, target_entity, new_domain_entities = _resolve_layout_target(
+        hass, layout_id, layout, target_device, target_config_entry,
+    )
+    if error:
+        connection.send_error(msg["id"], *error)
+        return
+
+    old_target = dict(page_layout.get("target") or {})
+    new_target = {
+        "entity_id": target_entity,
+        **({"device": target_device} if target_device else {}),
+        **({"config_entry": target_config_entry} if target_config_entry else {}),
+    }
+    integration = ((layout.get("target_selector") or {}).get("device") or {}).get("integration")
+    old_device = old_target.get("device") or ""
+    old_domain_entities = (
+        _resolve_device_domain_entities(hass, old_device, integration) if old_device else {}
+    )
+
+    assignments = await store.async_get_assignments(device_id, page_id)
+    buttons_changed = 0
+    mapping = _retarget_mapping(
+        hass, old_target, new_target, old_domain_entities, new_domain_entities,
+        _referenced_entities(assignments, set()),
+    )
+    if mapping:
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_])("
+            + "|".join(re.escape(k) for k in sorted(mapping, key=len, reverse=True))
+            + r")(?![A-Za-z0-9_])"
+        )
+        rewritten = _rewrite_assignments(assignments, pattern, mapping)
+        buttons_changed = sum(1 for key in rewritten if rewritten[key] != assignments.get(key))
+        if buttons_changed:
+            await store.async_set_assignments(device_id, page_id, rewritten)
+
+    page["layout"] = {**page_layout, "target": new_target}
+    await store.async_set_pages(device_id, pages)
+    await store.async_recompute_page_hash(device_id, page_id)
+
+    await _refresh_state_listener(hass, entry_id)
+    await _fire_config_changed(hass, entry_id)
+    _schedule_push_rescan(hass, entry_id)
+    # Dynamic buttons list what the *new* device offers -- its apps, its
+    # inputs -- and only a refresh reads that.
+    _schedule_page_refresh(hass, entry_id, page_id)
+
+    _LOGGER.info(
+        "Moved layout page %s (%s) from %s to %s: %d button(s) changed",
+        page_id, layout_id, old_target, new_target, buttons_changed,
+    )
+    connection.send_result(msg["id"], {
+        "success": True,
+        "pages": await store.async_get_pages(device_id),
+        "replaced": mapping,
+        "buttons_changed": buttons_changed,
     })
 
 

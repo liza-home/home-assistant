@@ -31,6 +31,7 @@ from .const import (
     find_font,
     font_has_all_glyphs,
 )
+from .fonts import resolve_font_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,14 +48,18 @@ _font_has_all_glyphs = font_has_all_glyphs
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _resolve_fonts(font_id: str | None):
+def _resolve_fonts(font_id: str | None, user_fonts_dir: str | None = None):
     """Return ``(primary_path, emoji_path, color_emoji_path)``.
+
+    A font id that names no font draws in the default font, not in the system
+    fallback: a font file removed from the user's font folder should leave its
+    labels looking like every other label, not like a different typeface.
 
     *color_emoji_path* points to NotoColorEmoji (CBDT) when present; it is
     used for rendering emoji in their original colours at the native bitmap
     size and then scaling to the target height.
     """
-    font_path = find_font(font_id or DEFAULT_FONT)
+    font_path = resolve_font_path(font_id, user_fonts_dir) or find_font(DEFAULT_FONT)
     if not font_path:
         for p in FALLBACK_FONT_PATHS:
             if os.path.exists(p):
@@ -71,10 +76,16 @@ def _resolve_fonts(font_id: str | None):
                 emoji_font_path = p
                 break
 
+    # The colour emoji font is too large to ship in a release, so the user may
+    # supply it by dropping it into their font folder; a bundled copy wins.
     color_emoji_path = None
-    color_path = os.path.join(FONTS_DIR, COLOR_EMOJI_FONT)
-    if os.path.exists(color_path):
-        color_emoji_path = color_path
+    for directory in (FONTS_DIR, user_fonts_dir):
+        if not directory:
+            continue
+        color_path = os.path.join(directory, COLOR_EMOJI_FONT)
+        if os.path.exists(color_path):
+            color_emoji_path = color_path
+            break
 
     return font_path, emoji_font_path, color_emoji_path
 
@@ -236,6 +247,7 @@ def render_text(
     fg_color: tuple = DEFAULT_FG_COLOR,
     font_size: int | None = None,
     font_id: str | None = None,
+    user_fonts_dir: str | None = None,
 ) -> Image.Image:
     """Render *text* onto a transparent canvas and return the image.
 
@@ -257,7 +269,7 @@ def render_text(
     if font_size is None:
         font_size = height
 
-    primary_path, emoji_path, color_emoji_path = _resolve_fonts(font_id)
+    primary_path, emoji_path, color_emoji_path = _resolve_fonts(font_id, user_fonts_dir)
     primary_font = _load_font(primary_path, font_size)
     emoji_font = _load_font(emoji_path, font_size) if emoji_path else primary_font
 

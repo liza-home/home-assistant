@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 from urllib.parse import unquote
 
 import voluptuous as vol
@@ -81,6 +82,23 @@ def generate_page_id(existing_ids: set[int] | None = None) -> int:
     if not existing_ids:
         return MIN_PAGE_ID
     return max(max(existing_ids) + 1, MIN_PAGE_ID)
+
+
+# A page the remote keeps but does not show in its swipeable main-page list.
+# Reachable only through a `goto_page` action, so the page still has to exist on
+# the device. It is left out of `main_pages.yaml` and of `set_main_pages`;
+# `page_order.yaml` keeps it, and is what decides its file is not an orphan.
+PAGE_SUBPAGE_KEY = "subpage"
+
+
+def is_subpage(page: Any) -> bool:
+    """True when *page* is marked as a subpage.
+
+    Anything that is not a mapping is not a subpage rather than an error: sync
+    and the panel API both walk page lists that a hand-edited YAML file can put
+    junk into, and a malformed entry already has its own handling there.
+    """
+    return bool(page.get(PAGE_SUBPAGE_KEY)) if isinstance(page, dict) else False
 
 
 def parse_json_option(value) -> dict | list | None:

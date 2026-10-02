@@ -95,7 +95,7 @@ The device name can be changed via **Settings → Devices → (device) → ⋮ �
 | `number` | One per slider (`slider_page`, `slider_volume`) | Device → HA |
 | `sensor` | Battery | Device → HA |
 | `binary_sensor` | Connectivity | Device → HA |
-| `update` | Firmware | HA → Device |
+| `update` | Firmware (with release notes) | HA → Device |
 
 Sliders are `number` entities in `NumberMode.SLIDER`. Protocol v1 has no slider-set command,
 so writes from Home Assistant only update the local value and log a warning — the position
@@ -227,7 +227,7 @@ which only mean something for `text:`.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `size` | `tile` (60×60), `title` (200×60), `WxH` in pixels, or single integer (square) | `60` (square) |
+| `size` | `tile` (50×50), `title` (200×50), `tooltip` (200×40), `WxH` in pixels, or single integer (square) | `tile` |
 | `fg` | Foreground color: hex `RRGGBB` / `RRGGBBAA`, or name (see below) | `white` |
 | `color` | Alias for `fg`. If both are given, `fg` wins | — |
 | `bg` | Background color mounted behind the subject: same format as `fg` | transparent |
@@ -236,7 +236,7 @@ which only mean something for `text:`.
 | `alpha` | Keep the alpha channel (`1`) instead of flattening onto black (`0`). Use `1` for browser previews, `0` for the device | `0` |
 | `percent` | Fill level `0`–`100`: the bottom N % stays fully opaque; the upper remainder is dimmed via alpha (`70%`) | — |
 | `font` | Font ID for `text:` source (see [Available Fonts](#available-fonts)) | `filson-light` |
-| `font_size` | Font size in pixels for `text:` source | image height |
+| `font_size` | Font size in pixels for `text:` source | `title` 48, `tooltip` 24, otherwise the image height |
 
 A `percent` outside `0`–`100` is answered with `400 Bad Request` before any
 rendering work is done.
@@ -313,7 +313,7 @@ font lacks a glyph, the emoji font is used automatically.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `font` | Font ID (see below) | `filson-light` |
-| `font_size` | Size in pixels | the requested image height |
+| `font_size` | Size in pixels | `title` 48, `tooltip` 24, otherwise the requested image height |
 
 The height is never trimmed, and `crop` is ignored here on purpose: otherwise
 `Hi` and `Hg` would come back different sizes and a row of labels would jitter
@@ -335,21 +335,26 @@ imgserv://text:ON?size=tile&mode=light&bg=FFFFFF     # black on white
 |---------|------|
 | `filson` / `filson-light` | FilsonSoft-Light.otf (default) |
 
-Only Filson Soft Light is bundled; the other fonts are not redistributable. Additional
-fonts can be added by dropping font files into the integration's `imgserv/fonts/`
-directory — they are picked up by their filename.
+Only Filson Soft Light is bundled; the other fonts are not redistributable. Your own
+fonts (`.ttf`, `.otf`, `.ttc`) go into `/config/lizaip/fonts/` — a folder in your Home
+Assistant configuration, so an update of the integration leaves them alone. A font's
+ID is its file name without the extension, in lower case: `/config/lizaip/fonts/Inter-Bold.ttf`
+is `inter-bold`. A user font with the same ID as a bundled one is ignored.
 
 **Emoji are optional.** `NotoColorEmoji.ttf` (colour) and `NotoEmoji-Regular.ttf`
 (monochrome, tintable) are *not* in the release archive — they are 12 MB and not ours
 to redistribute. Without them, `render_text` looks for a system NotoEmoji under
 `/usr/share/fonts/`, and failing that draws emoji from the primary font, which
-normally means a missing-glyph box. To get colour emoji back, download the two Noto
-fonts and drop them into `imgserv/fonts/`; they are picked up on the next render, no
-restart needed. A HACS install copies the repository directly and does include them.
+normally means a missing-glyph box. To get colour emoji back, download
+`NotoColorEmoji.ttf` and drop it into `/config/lizaip/fonts/` (survives updates; the
+settings tab says so too) or into `imgserv/fonts/`; the monochrome font is only read
+from `imgserv/fonts/`. Either is picked up on the next render, no restart needed. A
+HACS install copies the repository directly and does include them.
 
-Font lookup is case-insensitive and supports fuzzy matching (hyphens, underscores, spaces
-are interchangeable). If the requested font is not found, DejaVu Sans Bold is used as a
-system fallback.
+Font lookup tries the exact ID first (bundled fonts, then your own), then a
+case-insensitive fuzzy match over the bundled fonts (hyphens, underscores, spaces are
+interchangeable). If the requested font is not found, the default font (Filson Soft
+Light) is used; DejaVu Sans Bold is only the last resort when even that is missing.
 
 #### `file:<filename>` — Static files
 
@@ -434,6 +439,35 @@ The device supports multiple pages of buttons. Pages are managed via the config 
 - A new page is posted without an ID and the backend mints one: `generate_page_id` returns `max(existing) + 1`. IDs are sequential, not gap-filling — a hole in the middle is never backfilled, but deleting the highest page frees its ID for the next add. The protocol's range is `1…4294967295` (0 is reserved, see `PROTOCOL.md` §3); the generator enforces the lower bound but not the upper one, so an overflow is only reachable by hand-editing a page file, and `is_valid_page_id` catches it during sync
 - Pages are synced to the device using hash-based diffing (unchanged pages are skipped)
 
+### Settings (gear tab)
+
+The gear icon at the right end of the panel's tabs opens the settings of the selected
+remote: the **font** and **font size** of page **titles** and of **tooltips**. The font
+list holds the bundled fonts and your own from `/config/lizaip/fonts/`; the size is
+limited to what fits the image (titles 6–50 px, tooltips 6–40 px). A preview shows the
+result, and **Restore defaults** goes back to Filson Soft Light at 48 px (titles) and
+24 px (tooltips).
+
+A change is saved at once to `/config/lizaip/<device_id>/settings.yaml` and pushed to
+the remote:
+
+```yaml
+title:
+  font: filsonsoft-light
+  font_size: 48
+tooltip:
+  font: filsonsoft-light
+  font_size: 24
+```
+
+The remote caches images by URL, so the style is part of the title and tooltip URLs
+(`&font_size=…`, plus `&font=…` when it differs from the default); a change therefore
+re-sends the affected pages once. On default settings the URLs are the same as before
+the setting existed. A title that names its own `font=` or `font_size=` keeps it. A font
+that is later removed stays the setting (shown as *not installed*) and is drawn in the
+default font until it is back. Edits made to `settings.yaml` by hand take effect after a
+restart.
+
 ### Config Panel WebSocket API
 
 The frontend panel communicates with HA via these WebSocket commands (admin-only):
@@ -449,6 +483,8 @@ The frontend panel communicates with HA via these WebSocket commands (admin-only
 | `lizaip_config/get_pages` | Get the pages list |
 | `lizaip_config/set_pages` | Replace the pages list |
 | `lizaip_config/update_page` | Update a page's title image and/or default colour |
+| `lizaip_config/get_settings` | Get a device's title/tooltip text settings, with the defaults, the installed fonts and the size limits |
+| `lizaip_config/set_settings` | Validate and save the text settings and push them to the device |
 | `lizaip_config/get_action_labels` | Translated action wordings for a device's language |
 
 ## Localization

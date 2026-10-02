@@ -766,9 +766,15 @@ export const ButtonsViewMixin = {
       // which page and where it sits, and the fill count becomes a
       // description a reader announces separately and a user can skip.
       const label = this._pageFillLabel(page, i, bp);
+      // A subpage's only sighted cue is a darker tint and a lower position
+      // (.page-thumb.subpage) -- neither reaches a screen reader, which would
+      // otherwise have no way to tell one from a main page at all. Folded
+      // into the name itself, not the fill description, because it answers
+      // "which page is this", not "what is on it".
+      const subpageNote = page.subpage ? `, ${this._t("a11y_subpage")}` : '';
       const spokenName = this._t("page_name_pos", {
         name: displayName, n: i + 1, m: this._pages.length,
-      });
+      }) + subpageNote;
       const fillDesc = this._t("page_fill_desc", {
         filled: filledCount, total: allBtnKeys.length,
       });
@@ -807,7 +813,7 @@ export const ButtonsViewMixin = {
       // invisible yet focusable (2.4.7) and still hit-tested. Placed before
       // the container so the tab order reads page, delete, buttons.
       return `
-        <div class="page-thumb ${isActive ? 'active' : ''} ${emptyClass}" data-page-idx="${i}" data-page-id="${this._esc(String(page.id))}" draggable="true"${groupAttrs}>
+        <div class="page-thumb ${isActive ? 'active' : ''} ${emptyClass} ${page.subpage ? 'subpage' : ''}" data-page-idx="${i}" data-page-id="${this._esc(String(page.id))}" draggable="true"${groupAttrs}>
           ${isActive ? delIcon : ''}<span id="${descId}" class="liza-sr-only">${this._esc(fillDesc)}</span>
           <div class="pg-svg-container" data-page-idx="${i}" data-page-id="${this._esc(String(page.id))}"${pictureAttrs}></div>
         </div>`;
@@ -2400,7 +2406,8 @@ export const ButtonsViewMixin = {
         sliderImageUrl = null;
       } else if (rawTitle.startsWith("text:")) {
         const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
+        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`
+          + this._titleTextStyle(rawTitle);
       } else if (rawTitle.startsWith("mdi:")) {
         sliderImageUrl = `/api/imgserv/${rawTitle}?size=title&mode=${mode}${fgSlider}&alpha=1`;
       } else if (rawTitle.startsWith("phu:")) {
@@ -2419,7 +2426,8 @@ export const ButtonsViewMixin = {
         sliderImageUrl = this._imgservUrl(this._mediaSource(rawTitle), "title", mode);
       } else {
         const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/text:${encodeURIComponent(rawTitle)}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
+        sliderImageUrl = `/api/imgserv/text:${encodeURIComponent(rawTitle)}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`
+          + this._titleTextStyle(rawTitle);
       }
 
       // Draw clickable button shapes only — icon/title images are HTML overlays
@@ -2727,22 +2735,29 @@ export const ButtonsViewMixin = {
     // Page thumbnails
     this.shadowRoot.querySelectorAll(".page-thumb").forEach(el => {
       el.addEventListener("click", (e) => {
+        // A long-press fires the menu and then, on most touch stacks, a click.
+        // Without this the page would change out from under the open menu.
+        if (el._lizaSuppressClick) { el._lizaSuppressClick = false; return; }
         const idx = parseInt(el.dataset.pageIdx);
-        const svgC = el.querySelector(".pg-svg-container");
-        // Inside the face on the current page: the button's own handler owns it.
-        // A click that lands on the face background rather than on a button path
-        // falls through to here and deselects, which is the gesture for "I am
-        // done with this button" — otherwise the only way out is re-clicking the
-        // exact button you started from.
-        if (svgC && svgC.contains(e.target) && idx === this._currentPageIdx) {
-          if (e.target.closest(".button")) return;
-          if (this._selectedButtonIdx === -1 && !this._contextKey) return;
+        // On the current page, a button's own handler owns a click on it.
+        // Anywhere else on that page -- the face background or the frame
+        // around it -- selects the page itself: a selected button or the open
+        // title row is put away and Page Settings shows. Otherwise the only
+        // way out is re-clicking the exact control you started from.
+        if (idx === this._currentPageIdx) {
+          if (e.target?.closest?.(".button")) return;
+          const wasTitle = this._selectedButtonIdx === -1 && !!this._pageTitleSelected;
+          if (this._selectedButtonIdx === -1 && !this._contextKey && !wasTitle) return;
           this._flushAutoSave();
           this._selectedButtonIdx = -1;
           this._contextKey = null;
+          this._pageTitleSelected = false;
           this._editorEl = null;
           this._sequence = [];
           this._render();
+          if (wasTitle) {
+            this._a11yEditorToggled?.(false, this._t("a11y_editing_title"), this._t("a11y_title_closed"));
+          }
           return;
         }
         // Only the face *background* and the frame around it get here from
@@ -2753,6 +2768,52 @@ export const ButtonsViewMixin = {
           this._switchPageTo(idx);
         }
       });
+    });
+
+    // Right-click, and the long-press that stands in for it on touch. Same
+    // gesture and same 500 ms as the button faces, so the strip does not teach
+    // a second way to ask for a menu. Movement cancels it: dragging across the
+    // strip is how it is scrolled, and how pages are reordered.
+    this.shadowRoot.querySelectorAll(".page-thumb").forEach(el => {
+      const idx = parseInt(el.dataset.pageIdx);
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        this._showPageMenu(idx, e);
+      });
+      // Without this the whole thing is pointer-only, and the README's claim
+      // that the panel can be driven from the keyboard stops being true. Same
+      // keys as the button faces. A thumb is a tab stop only while its page is
+      // not the open one, so the page you are on is marked by stepping to
+      // another page first -- every page is still reachable.
+      el.addEventListener("keydown", (e) => {
+        if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        const r = el.getBoundingClientRect?.() || { left: 0, top: 0, width: 0, height: 0 };
+        this._showPageMenu(idx, {
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height / 2,
+        });
+      });
+      let timer = null;
+      const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+      el.addEventListener("touchstart", (e) => {
+        cancel();
+        const touch = e.touches && e.touches[0];
+        const x = touch ? touch.clientX : 0;
+        const y = touch ? touch.clientY : 0;
+        timer = setTimeout(() => {
+          timer = null;
+          // The click handler above switches pages; without this the menu
+          // would open on a page the user is no longer looking at.
+          el._lizaSuppressClick = true;
+          this._showPageMenu(idx, { clientX: x, clientY: y });
+        }, 500);
+      }, { passive: true });
+      for (const type of ["touchend", "touchmove", "touchcancel"]) {
+        el.addEventListener(type, cancel, { passive: true });
+      }
     });
 
     this.shadowRoot.querySelector(".page-add-btn")?.addEventListener("click", () => this._addPage());
@@ -3481,19 +3542,188 @@ export const ButtonsViewMixin = {
     // menu takes focus below. Null when nothing focusable was active -- a
     // pointer user who never focused the tile -- and restoring null is a
     // no-op, which is the right answer for them.
+    // The ellipsis is doing work: this item finishes nothing, it asks for a
+    // second gesture, and an item that looks like it acts on click is how a
+    // user ends up clicking it twice.
+    this._openMenu(ev, [
+      {
+        cls: "face-menu-move",
+        label: `${this._commonLabel("move", "Move")}…`,
+        run: () => this._beginMove(btn.key),
+      },
+      {
+        cls: "face-menu-clear",
+        label: this._commonLabel("clear", "Clear"),
+        run: () => {
+          // `_selectButton` toggles: called on the button that is already open
+          // it *deselects*, and the clear that follows would then find nothing
+          // selected and do nothing at all. That is the common case, because
+          // the tile you long-press is usually the one you just tapped.
+          const idx = this._faceIdxFor(btn.key);
+          if (idx >= 0 && this._selectedButtonIdx !== idx) this._selectButton(idx);
+          this._unassignButton();
+        },
+      },
+    ]);
+  },
+
+  /** The page strip's context menu: turn a page into a subpage, or back.
+   *
+   * A subpage is still a page -- it keeps its buttons, it is still reachable
+   * from a Go to page action -- it just stops being offered in the remote's own
+   * list of pages. That list is what the user pages through on the device, and
+   * a page that only ever makes sense as the destination of a button does not
+   * belong in it.
+   *
+   * It stays in this strip either way, tinted, because this is the editor: a
+   * subpage that vanished from here could never be turned back.
+   */
+  _showPageMenu(idx, ev) {
+    const page = this._pages?.[idx];
+    if (!page) return;
+    const isSub = !!page.subpage;
+    // Most used first, the destructive one last and set apart. An ellipsis
+    // only where the item asks for a choice before acting; a confirmation
+    // does not count.
+    this._openMenu(ev, [{
+      cls: "face-menu-duplicate",
+      label: this._t("duplicate_page"),
+      run: () => this._duplicatePage(page),
+    },
+    // Only a page made from a layout has a device to change; a blank page's
+    // buttons each name their own.
+    ...(page.layout?.type ? [{
+      cls: "face-menu-retarget",
+      label: this._t(page.layout.target?.config_entry ? "change_hub" : "change_device"),
+      run: () => this._changeLayoutTarget(page),
+    }] : []), {
+      cls: "face-menu-subpage",
+      label: isSub ? this._t("make_mainpage") : this._t("make_subpage"),
+      run: () => this._setPageSubpage(page, !isSub),
+    }, { separator: true }, {
+      cls: "face-menu-delete-page",
+      label: this._t("delete_page"),
+      // Looked up when chosen, not when opened: the list can be replaced in
+      // between, and a stale index would delete a neighbour.
+      run: () => {
+        const at = this._pages.findIndex(p => p.id === page.id);
+        if (at >= 0) this._deletePage(at);
+      },
+    }]);
+  },
+
+  /** Ask for the new device of a layout page and move the page to it.
+   *
+   * The same dialog that picked the device when the page was added, so the
+   * same devices are on offer and the same ones are refused.
+   */
+  async _changeLayoutTarget(page) {
+    const layoutId = page.layout.type;
+    const meta = (await this._loadLayouts()).find(l => l.id === layoutId);
+    if (!meta) {
+      this._toast(this._t("layout_gone", { name: layoutId }));
+      return;
+    }
+    const hub = !!meta.target_selector?.config_entry;
+    const confirmLabel = this._t(hub ? "change_hub_confirm" : "change_device_confirm");
+    try {
+      await this._showLayoutEntityPicker(layoutId, meta, {
+        confirmLabel,
+        busyLabel: this._t("changing"),
+        onConfirm: async (target, kind) => {
+          const result = await this._retargetLayoutPage(page, target, kind);
+          return this._t(hub ? "hub_changed" : "device_changed", {
+            name: this._pageLabel(page),
+            n: result?.buttons_changed ?? 0,
+          });
+        },
+      });
+    } catch (e) {
+      console.warn("[LIZA] Change device failed:", e);
+      this._toast(this._t("layout_picker_failed"));
+    }
+  },
+
+  /** Copy a page, buttons and all, and open the copy.
+   *
+   * The backend places it directly after the original and keeps its kind: a
+   * subpage's copy is a subpage, so it does not suddenly join the remote's page
+   * list. Going through `_createPage` flushes a pending edit first -- the copy
+   * is of what the user sees, not of what was last saved.
+   */
+  async _duplicatePage(page) {
+    try {
+      const result = await this._createPage(() => this._hass.callWS({
+        type: "lizaip_config/duplicate_page",
+        entry_id: this._currentEntry,
+        page_id: page.id,
+      }));
+      // The copy looks exactly like the page it came from; without a word the
+      // only sign anything happened is one more thumbnail.
+      if (result?.pages) this._toast(this._t("page_duplicated", { name: this._pageLabel(page) }));
+    } catch (e) {
+      console.error("[LIZA] duplicate page failed:", e);
+      this._toast(this._t("duplicate_page_failed", { error: e?.message || e }));
+    }
+  },
+
+  /** Flip a page between main and subpage, and tell the remote.
+   *
+   * Written through `update_page` like the picture and the colour are, so the
+   * same push to the device carries it -- there is no separate "page kind"
+   * message to keep in step.
+   */
+  async _setPageSubpage(page, makeSub) {
+    const msg = {
+      type: "lizaip_config/update_page", entry_id: this._currentEntry,
+      page_id: page.id, subpage: !!makeSub,
+    };
+    try {
+      const result = await this._hass.callWS(msg);
+      if (result?.pages) this._pages = result.pages;
+      else page.subpage = !!makeSub;
+    } catch (e) {
+      // Same stance as the title and colour writes: keep what the user asked
+      // for on screen rather than silently snapping back, and let the next
+      // load reconcile.
+      page.subpage = !!makeSub;
+    }
+    this._render();
+  },
+
+  /** Build, place and wire a context menu. Shared by the tile and page menus.
+   *
+   * The menu itself is the fiddly part -- it has to put focus back where it
+   * found it, answer the arrow keys its `role="menu"` promises, and get out of
+   * the way on the next click, resize or Escape. None of that differs between
+   * the things a menu can be opened on, and a second copy of it is the kind of
+   * code that drifts until only one of them restores focus.
+   *
+   * @param ev     The event that asked for the menu; supplies the position.
+   * @param items  `{cls, label, run}` -- `cls` also names the hook the tests
+   *               and the stylesheet use, so it is not decoration.
+   */
+  _openMenu(ev, items) {
+    this._closeFaceMenu();
+    const root = this.shadowRoot;
+    if (!root || !items?.length) return;
+    // Where focus came from, so closing can put it back. Captured after the
+    // _closeFaceMenu() above, which clears any stale token, and before the
+    // menu takes focus below. Null when nothing focusable was active -- a
+    // pointer user who never focused the tile -- and restoring null is a
+    // no-op, which is the right answer for them.
     this._faceMenuReturn = this._a11yCaptureFocus?.() || null;
 
     const menu = document.createElement("div");
     menu.className = "face-menu";
     menu.setAttribute("role", "menu");
-    // The ellipsis is doing work: this item finishes nothing, it asks for a
-    // second gesture, and an item that looks like it acts on click is how a
-    // user ends up clicking it twice.
-    menu.innerHTML =
-      `<button type="button" role="menuitem" class="face-menu-item face-menu-move">`
-      + `${this._commonLabel("move", "Move")}…</button>`
-      + `<button type="button" role="menuitem" class="face-menu-item face-menu-clear">`
-      + `${this._commonLabel("clear", "Clear")}</button>`;
+    // Lower-cased here rather than in the strings: "Move" and "Clear" are Home
+    // Assistant's own translations, and the strings are reused outside menus.
+    const lang = this._lang?.() || undefined;
+    menu.innerHTML = items.map(it => it.separator
+      ? `<div role="separator" class="face-menu-sep"></div>`
+      : `<button type="button" role="menuitem" class="face-menu-item ${it.cls}">`
+        + `${String(it.label).toLocaleLowerCase(lang)}</button>`).join("");
     const x = Number(ev?.clientX) || 0;
     const y = Number(ev?.clientY) || 0;
     // `position: fixed`, so viewport coordinates go straight on. Nudged back
@@ -3503,23 +3733,19 @@ export const ButtonsViewMixin = {
     const vw = Number(window?.innerWidth) || 0;
     const vh = Number(window?.innerHeight) || 0;
     menu.style.left = `${vw ? Math.min(x, vw - 180) : x}px`;
-    menu.style.top = `${vh ? Math.min(y, vh - 90) : y}px`;
+    // About 40px an item, 9 a separator, plus the frame; a fixed allowance
+    // only ever fitted the two-item tile menu, and the page menu is longer.
+    const seps = items.filter(it => it.separator).length;
+    const height = (items.length - seps) * 40 + seps * 9 + 10;
+    menu.style.top = `${vh ? Math.min(y, vh - height) : y}px`;
 
     const dismiss = () => this._closeFaceMenu();
-    menu.querySelector(".face-menu-move")?.addEventListener("click", () => {
-      this._closeFaceMenu();
-      this._beginMove(btn.key);
-    });
-    menu.querySelector(".face-menu-clear")?.addEventListener("click", () => {
-      this._closeFaceMenu();
-      // `_selectButton` toggles: called on the button that is already open it
-      // *deselects*, and the clear that follows would then find nothing
-      // selected and do nothing at all. That is the common case, because the
-      // tile you long-press is usually the one you just tapped.
-      const idx = this._faceIdxFor(btn.key);
-      if (idx >= 0 && this._selectedButtonIdx !== idx) this._selectButton(idx);
-      this._unassignButton();
-    });
+    for (const it of items) {
+      menu.querySelector(`.${it.cls}`)?.addEventListener("click", () => {
+        this._closeFaceMenu();
+        it.run();
+      });
+    }
     // Anything else the user does puts it away. `once` on each, because the
     // menu is gone after the first of them and the listeners go with it.
     root.addEventListener("click", dismiss, { once: true });

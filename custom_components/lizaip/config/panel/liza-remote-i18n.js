@@ -69,6 +69,81 @@ export const STRINGS = {
     en: "Buttons", de: "Tasten", fr: "Touches", it: "Tasti", es: "Botones",
   },
 
+  // ── settings tab ───────────────────────────────────────────────────
+  tab_settings: {
+    en: "Settings", de: "Einstellungen", fr: "Paramètres", it: "Impostazioni", es: "Ajustes",
+  },
+  settings_title: {
+    en: "Page title", de: "Seitentitel", fr: "Titre de page", it: "Titolo pagina", es: "Título de página",
+  },
+  settings_tooltip: {
+    en: "Tooltip", de: "Tooltip", fr: "Info-bulle", it: "Descrizione comando", es: "Información sobre herramientas",
+  },
+  settings_font: {
+    en: "Font", de: "Schriftart", fr: "Police", it: "Carattere", es: "Fuente",
+  },
+  settings_font_size: {
+    en: "Font size", de: "Schriftgröße", fr: "Taille de police", it: "Dimensione carattere", es: "Tamaño de fuente",
+  },
+  settings_font_size_hint: {
+    en: "In pixels, from {min} to {max}.",
+    de: "In Pixeln, von {min} bis {max}.",
+    fr: "En pixels, de {min} à {max}.",
+    it: "In pixel, da {min} a {max}.",
+    es: "En píxeles, de {min} a {max}.",
+  },
+  settings_font_user: {
+    en: "{name} (your font)", de: "{name} (eigene Schrift)", fr: "{name} (votre police)",
+    it: "{name} (tuo carattere)", es: "{name} (tu fuente)",
+  },
+  settings_font_missing: {
+    en: "{name} (not installed)", de: "{name} (nicht installiert)", fr: "{name} (non installée)",
+    it: "{name} (non installato)", es: "{name} (no instalada)",
+  },
+  settings_preview: {
+    en: "Preview", de: "Vorschau", fr: "Aperçu", it: "Anteprima", es: "Vista previa",
+  },
+  settings_sample_title: {
+    en: "Living room", de: "Wohnzimmer", fr: "Salon", it: "Soggiorno", es: "Salón",
+  },
+  settings_sample_tooltip: {
+    en: "Lights on", de: "Licht an", fr: "Lumière allumée", it: "Luce accesa", es: "Luz encendida",
+  },
+  settings_loading: {
+    en: "Loading settings…", de: "Einstellungen werden geladen…", fr: "Chargement des paramètres…",
+    it: "Caricamento impostazioni…", es: "Cargando ajustes…",
+  },
+  settings_fonts_hint: {
+    en: "To use a font of your own, put its .ttf or .otf file in {path} and reopen this tab.",
+    de: "Für eine eigene Schrift legen Sie die .ttf- oder .otf-Datei in {path} ab und öffnen diesen Tab erneut.",
+    fr: "Pour utiliser votre propre police, placez son fichier .ttf ou .otf dans {path} et rouvrez cet onglet.",
+    it: "Per usare un carattere tuo, metti il file .ttf o .otf in {path} e riapri questa scheda.",
+    es: "Para usar una fuente propia, coloca su archivo .ttf u .otf en {path} y vuelve a abrir esta pestaña.",
+  },
+  // NotoColorEmoji.ttf is too large to ship, so colour emoji are opt-in.
+  settings_emoji_hint: {
+    en: "For colour emoji in titles and labels, also put NotoColorEmoji.ttf in {path}.",
+    de: "Für farbige Emojis in Titeln und Beschriftungen legen Sie zusätzlich NotoColorEmoji.ttf in {path} ab.",
+    fr: "Pour des emoji en couleur dans les titres et libellés, placez aussi NotoColorEmoji.ttf dans {path}.",
+    it: "Per emoji a colori in titoli ed etichette, metti anche NotoColorEmoji.ttf in {path}.",
+    es: "Para emojis en color en títulos y etiquetas, coloca también NotoColorEmoji.ttf en {path}.",
+  },
+  settings_reset: {
+    en: "Restore defaults", de: "Standard wiederherstellen", fr: "Rétablir les valeurs par défaut",
+    it: "Ripristina predefiniti", es: "Restablecer valores predeterminados",
+  },
+  settings_saved: {
+    en: "Settings saved. The remote redraws its pages.",
+    de: "Einstellungen gespeichert. Die Fernbedienung zeichnet ihre Seiten neu.",
+    fr: "Paramètres enregistrés. La télécommande redessine ses pages.",
+    it: "Impostazioni salvate. Il telecomando ridisegna le sue pagine.",
+    es: "Ajustes guardados. El mando vuelve a dibujar sus páginas.",
+  },
+  settings_save_failed: {
+    en: "Saving failed: {error}", de: "Speichern fehlgeschlagen: {error}", fr: "Échec de l'enregistrement : {error}",
+    it: "Salvataggio non riuscito: {error}", es: "Error al guardar: {error}",
+  },
+
   // ── debug tab ──────────────────────────────────────────────────────
   // Only reachable on a build that carries the debug tooling; the strings
   // stay here regardless, because the i18n table is shipped whole and one
@@ -346,6 +421,78 @@ export const STRINGS = {
   delete_page: {
     en: "Delete page", de: "Seite löschen", fr: "Supprimer la page",
     it: "Elimina pagina", es: "Eliminar página",
+  },
+  // A subpage keeps everything a page has; it is only taken out of the list
+  // the remote itself pages through. The wording says what the page becomes,
+  // not what is done to it, because the same menu item reads as the opposite
+  // instruction on a page that is already a subpage.
+  make_subpage: {
+    en: "Make subpage", de: "Zu Unterseite machen", fr: "Convertir en sous-page",
+    it: "Rendi sottopagina", es: "Convertir en subpágina",
+  },
+  make_mainpage: {
+    en: "Make main page", de: "Zu Hauptseite machen", fr: "Convertir en page principale",
+    it: "Rendi pagina principale", es: "Convertir en página principal",
+  },
+  duplicate_page: {
+    en: "Duplicate page", de: "Seite duplizieren", fr: "Dupliquer la page",
+    it: "Duplica pagina", es: "Duplicar página",
+  },
+  change_device: {
+    en: "Change device…", de: "Gerät ändern…", fr: "Changer d'appareil…",
+    it: "Cambia dispositivo…", es: "Cambiar dispositivo…",
+  },
+  change_hub: {
+    en: "Change hub…", de: "Hub ändern…", fr: "Changer de hub…",
+    it: "Cambia hub…", es: "Cambiar hub…",
+  },
+  change_device_confirm: {
+    en: "Change device", de: "Gerät ändern", fr: "Changer d'appareil",
+    it: "Cambia dispositivo", es: "Cambiar dispositivo",
+  },
+  change_hub_confirm: {
+    en: "Change hub", de: "Hub ändern", fr: "Changer de hub",
+    it: "Cambia hub", es: "Cambiar hub",
+  },
+  changing: {
+    en: "Changing…", de: "Wird geändert…", fr: "Modification…",
+    it: "Modifica in corso…", es: "Cambiando…",
+  },
+  device_changed: {
+    en: "Page \"{name}\" now uses the new device: {n} button(s) updated",
+    de: "Seite „{name}“ nutzt jetzt das neue Gerät: {n} Taste(n) angepasst",
+    fr: "La page « {name} » utilise le nouvel appareil : {n} bouton(s) mis à jour",
+    it: "La pagina \"{name}\" usa ora il nuovo dispositivo: {n} pulsante/i aggiornato/i",
+    es: "La página \"{name}\" usa ahora el nuevo dispositivo: {n} botón(es) actualizado(s)",
+  },
+  // Same shape as device_changed, but a config-entry target is a hub, not a
+  // device -- a page retargeted onto one was reporting "new device" in every
+  // language regardless of which kind of target it actually got.
+  hub_changed: {
+    en: "Page \"{name}\" now uses the new hub: {n} button(s) updated",
+    de: "Seite „{name}“ nutzt jetzt den neuen Hub: {n} Taste(n) angepasst",
+    fr: "La page « {name} » utilise le nouveau hub : {n} bouton(s) mis à jour",
+    it: "La pagina \"{name}\" usa ora il nuovo hub: {n} pulsante/i aggiornato/i",
+    es: "La página \"{name}\" usa ahora el nuevo hub: {n} botón(es) actualizado(s)",
+  },
+  layout_gone: {
+    en: "The layout \"{name}\" this page was made from is no longer available",
+    de: "Das Layout „{name}“, aus dem diese Seite erstellt wurde, ist nicht mehr verfügbar",
+    fr: "La mise en page « {name} » d'origine de cette page n'est plus disponible",
+    it: "Il layout \"{name}\" da cui è stata creata questa pagina non è più disponibile",
+    es: "El diseño \"{name}\" del que se creó esta página ya no está disponible",
+  },
+  page_duplicated: {
+    en: "Page \"{name}\" duplicated", de: "Seite „{name}“ dupliziert",
+    fr: "Page « {name} » dupliquée", it: "Pagina \"{name}\" duplicata",
+    es: "Página \"{name}\" duplicada",
+  },
+  duplicate_page_failed: {
+    en: "Could not duplicate the page: {error}",
+    de: "Seite konnte nicht dupliziert werden: {error}",
+    fr: "Impossible de dupliquer la page : {error}",
+    it: "Impossibile duplicare la pagina: {error}",
+    es: "No se ha podido duplicar la página: {error}",
   },
   move_left: {
     en: "Move left", de: "Nach links verschieben", fr: "Déplacer vers la gauche",
@@ -1249,6 +1396,12 @@ export const STRINGS = {
   a11y_delete_page: {
     en: "Delete {name}", de: "{name} löschen", fr: "Supprimer {name}",
     it: "Elimina {name}", es: "Eliminar {name}",
+  },
+  // Folded into a page's spoken name so a subpage announces itself the same
+  // way it names itself elsewhere ("make_subpage" / "Unterseite").
+  a11y_subpage: {
+    en: "subpage", de: "Unterseite", fr: "sous-page",
+    it: "sottopagina", es: "subpágina",
   },
   // The name of a page with no title of its own. Was a hardcoded English
   // "Page N" inside a lang-scoped tree, so a German reader spoke it as German.

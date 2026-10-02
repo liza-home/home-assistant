@@ -16,7 +16,8 @@
 ``percent``             0–100 fill level via alpha: bottom stays opaque,
                         upper remainder is dimmed to ``PERCENT_TINT_ALPHA``
 ``font``                font ID, ``text:`` only
-``font_size``           size in pixels, ``text:`` only (default image height)
+``font_size``           size in pixels, ``text:`` only (default: the symbolic
+                        ``size``'s font size, else the image height)
 ======================  ==================================================
 
 The query is parsed once into :class:`_Options`, each handler answers only
@@ -53,6 +54,7 @@ from .render_logo import render_logo
 from .render_mdi import render_mdi_icon
 from .render_phu import render_phu_icon
 from .render_static import load_static_image
+from .fonts import user_fonts_dir
 from .render_text import render_text
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,7 +125,7 @@ def _parse_size(size_str: str | None) -> tuple[int, int]:
     size_str = size_str.strip()
     named = SIZE_IDS.get(size_str.lower())
     if named:
-        return named
+        return named[:2]
     try:
         if "x" in size_str:
             w, h = (int(p) for p in size_str.split("x", 1))
@@ -142,6 +144,12 @@ def _parse_font_size(raw: str | None) -> int | None:
         return int(raw)
     except (ValueError, TypeError):
         return None
+
+
+def _default_font_size(size_str: str | None) -> int | None:
+    """The font size a symbolic ``size`` names; ``None`` leaves it to the canvas."""
+    named = SIZE_IDS.get((size_str or "").strip().lower())
+    return named.font_size if named else None
 
 
 def _parse_percent(raw: str | None) -> int | None:
@@ -224,7 +232,10 @@ class _Options:
             keep_alpha=_parse_flag(query.get("alpha"), False),
             percent=percent,
             font_id=query.get("font", "").lower() or None,
-            font_size=_parse_font_size(query.get("font_size")),
+            font_size=(
+                _parse_font_size(query.get("font_size"))
+                or _default_font_size(query.get("size"))
+            ),
             mode=mode,
             explicit_fg=bool(query.get("fg") or query.get("color")),
         )
@@ -371,7 +382,7 @@ async def _handle_text(hass, value, options: _Options):
         raise _ImgservError(400, f"text exceeds {_MAX_TEXT_LENGTH} characters")
     return await hass.async_add_executor_job(
         render_text, value, options.width, options.height, options.fg,
-        options.font_size, options.font_id,
+        options.font_size, options.font_id, user_fonts_dir(hass),
     )
 
 

@@ -26,8 +26,14 @@ from ..action_controller import (
     SLIDER_VERTICAL_KEY,
     sanitize_slider_override,
 )
-from .const import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_LABEL_EDITED_KEY
+from .const import (
+    ASSIGNMENT_DYNAMIC_KEY,
+    ASSIGNMENT_LABEL_EDITED_KEY,
+    PAGE_SUBPAGE_KEY,
+    is_subpage,
+)
 from .layouts import async_load_layout, layout_bindings, load_layout
+from .text_style import normalize_settings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,14 +45,17 @@ class LizaRemoteStore:
 
     Disk layout:
       <ha_config>/lizaip/<device_id>/action_library.yaml
-      <ha_config>/lizaip/<device_id>/main_pages.yaml
+      <ha_config>/lizaip/<device_id>/main_pages.yaml   main pages, in order
+      <ha_config>/lizaip/<device_id>/page_order.yaml   every page, in editor order
       <ha_config>/lizaip/<device_id>/pages/<page_id>.yaml
+      <ha_config>/lizaip/<device_id>/settings.yaml     title/tooltip font and size
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
         self._data: dict[str, dict[str, Any]] = {}
         self._loaded: set[str] = set()
+        self._settings: dict[str, dict[str, Any]] = {}
 
     def _base_dir(self) -> str:
         return self._hass.config.path(YAML_DIR)
@@ -62,6 +71,38 @@ class LizaRemoteStore:
 
     def _main_pages_path(self, device_id: str) -> str:
         return os.path.join(self._device_dir(device_id), "main_pages.yaml")
+
+    def _settings_path(self, device_id: str) -> str:
+        return os.path.join(self._device_dir(device_id), "settings.yaml")
+
+    def _page_order_path(self, device_id: str) -> str:
+        return os.path.join(self._device_dir(device_id), "page_order.yaml")
+
+    async def _async_write_page_lists(self, device_id: str, pages: list) -> None:
+        """Write ``main_pages.yaml`` (main pages only) and ``page_order.yaml``.
+
+        A subpage is not a main page, so it has no place in ``main_pages.yaml``;
+        ``page_order.yaml`` keeps where it sits among the others in the editor,
+        and is what tells a subpage's file from an orphan on the next read.
+        """
+        listed = [p for p in pages if isinstance(p, dict) and "id" in p]
+        await self._hass.async_add_executor_job(
+            self._write_yaml, self._main_pages_path(device_id),
+            [p["id"] for p in listed if not is_subpage(p)],
+        )
+        await self._hass.async_add_executor_job(
+            self._write_yaml, self._page_order_path(device_id),
+            [p["id"] for p in listed],
+        )
+
+    async def _async_read_id_list(self, path: str) -> list[int] | None:
+        """Page ids from *path*, or ``None`` when there is no such file."""
+        if not await self._hass.async_add_executor_job(os.path.isfile, path):
+            return None
+        raw = await self._hass.async_add_executor_job(self._read_yaml, path)
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, int) and item > 0]
 
     def _page_path(self, device_id: str, page_id: int) -> str:
         return os.path.join(self._pages_dir(device_id), f"{page_id}.yaml")
@@ -386,6 +427,8 @@ class LizaRemoteStore:
         page_hash = page_meta.get("hash", 0)
         if page_hash:
             data["hash"] = page_hash
+        if is_subpage(page_meta):
+            data[PAGE_SUBPAGE_KEY] = True
         if clean_buttons:
             data["buttons"] = clean_buttons
         return data
@@ -404,10 +447,13 @@ class LizaRemoteStore:
         if not buttons and any(k.startswith("button_") or k.startswith("slider_") for k in raw):
             buttons = {k: v for k, v in raw.items()
                        if k not in ("image", "hash", "buttons", "layout",
-                                    "default_color", self.SHARED_BINDING_KEY)}
+                                    "default_color", PAGE_SUBPAGE_KEY,
+                                    self.SHARED_BINDING_KEY)}
         meta: dict[str, Any] = {"image": img_title, "hash": page_hash}
         if default_color:
             meta["default_color"] = default_color
+        if is_subpage(raw):
+            meta[PAGE_SUBPAGE_KEY] = True
         if layout and isinstance(layout, dict):
             meta["layout"] = layout
         buttons = buttons if isinstance(buttons, dict) else {}
@@ -533,14 +579,14 @@ class LizaRemoteStore:
         else:
             data["action_library"] = []
 
-        main_path = self._main_pages_path(device_id)
-        page_order: list[int] = []
-        if await self._hass.async_add_executor_job(os.path.isfile, main_path):
-            raw_order = await self._hass.async_add_executor_job(self._read_yaml, main_path)
-            if isinstance(raw_order, list):
-                for item in raw_order:
-                    if isinstance(item, int) and item > 0:
-                        page_order.append(item)
+        # `page_order.yaml` lists every page. Without it -- a store written
+        # before subpages left `main_pages.yaml` -- that file still lists them
+        # all, so it serves as the order.
+        page_order = await self._async_read_id_list(self._page_order_path(device_id))
+        if page_order is None:
+            page_order = await self._async_read_id_list(
+                self._main_pages_path(device_id)
+            ) or []
 
         pages: list[dict] = []
         assignments: dict[int, dict] = {}
@@ -566,14 +612,19 @@ class LizaRemoteStore:
                 if buttons:
                     assignments[page_id] = buttons
 
-        # main_pages.yaml is the source of truth for visible page order; orphan
-        # page files are ignored until a later write removes them.
+        # The page order is the source of truth for which pages exist; orphan
+        # page files are ignored until a later write removes them. A subpage
+        # missing from it is not an orphan, though: its own file says what it
+        # is, and dropping it would lose a page a Go to page button leads to.
         if page_order:
             ordered = []
             page_map = {p["id"]: p for p in pages}
             for pid in page_order:
                 if pid in page_map:
                     ordered.append(page_map.pop(pid))
+            ordered.extend(
+                page_map[pid] for pid in sorted(page_map) if is_subpage(page_map[pid])
+            )
             pages = ordered
 
         data["pages"] = pages
@@ -645,11 +696,8 @@ class LizaRemoteStore:
         lib_path = self._action_library_path(device_id)
         await self._hass.async_add_executor_job(self._write_yaml, lib_path, clean_lib)
 
-        # main_pages.yaml stores the ordered list of 32-bit page IDs.
         pages = data.get("pages", [])
-        page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
-        main_path = self._main_pages_path(device_id)
-        await self._hass.async_add_executor_job(self._write_yaml, main_path, page_ids)
+        await self._async_write_page_lists(device_id, pages)
 
         assignments = data.get("assignments", {})
         pages_dir = self._pages_dir(device_id)
@@ -698,6 +746,7 @@ class LizaRemoteStore:
 
     async def async_remove_device(self, device_id: str) -> None:
         self._data.pop(device_id, None)
+        self._settings.pop(device_id, None)
         self._loaded.discard(device_id)
         device_dir = self._device_dir(device_id)
         if await self._hass.async_add_executor_job(os.path.isdir, device_dir):
@@ -726,8 +775,7 @@ class LizaRemoteStore:
         old_page_ids = {p["id"] for p in entry.get("pages", []) if isinstance(p, dict) and "id" in p}
         entry["pages"] = pages
         page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
-        path = self._main_pages_path(device_id)
-        await self._hass.async_add_executor_job(self._write_yaml, path, page_ids)
+        await self._async_write_page_lists(device_id, pages)
         removed_ids = old_page_ids - set(page_ids)
         assignments = entry.get("assignments", {})
         for rid in removed_ids:
@@ -814,3 +862,26 @@ class LizaRemoteStore:
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
         return data.get("assignments", {})
+
+    async def async_get_settings(self, device_id: str) -> dict[str, dict[str, Any]]:
+        """The remote's title/tooltip text settings, defaults filled in.
+
+        Read once and kept: every page sync and every live tooltip update asks.
+        A copy is returned so a caller cannot change the kept one by accident.
+        """
+        if device_id not in self._settings:
+            path = self._settings_path(device_id)
+            raw = None
+            if await self._hass.async_add_executor_job(os.path.isfile, path):
+                raw = await self._hass.async_add_executor_job(self._read_yaml, path)
+            self._settings[device_id] = normalize_settings(raw)
+        return deepcopy(self._settings[device_id])
+
+    async def async_set_settings(self, device_id: str, settings: dict) -> dict[str, dict[str, Any]]:
+        """Save the text settings; returns them as stored."""
+        clean = normalize_settings(settings)
+        await self._hass.async_add_executor_job(
+            self._write_yaml, self._settings_path(device_id), clean,
+        )
+        self._settings[device_id] = clean
+        return deepcopy(clean)

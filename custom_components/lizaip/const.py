@@ -24,10 +24,14 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote, unquote
 
 import yaml
+
+from .imgserv.const import SIZE_IDS
+from .imgserv.fonts import DEFAULT_FONT_ID
 
 if TYPE_CHECKING:
     # Type-only: this module stays importable without Home Assistant, which is
@@ -284,9 +288,54 @@ def resolve_icon_url(icon: str, size: str = "tile", color: str = "") -> str:
     return resolve_icon_url(f"text:{icon}", size, color)
 
 
-def resolve_tooltip_url(text: str, color: str = "") -> str:
+def _text_style_query(kind: str, style: Mapping[str, Any] | None) -> str:
+    """``&font_size=…[&font=…]`` for a title or tooltip drawn in *style*.
+
+    *style* is that kind's entry of the remote's text settings; ``None`` means
+    the defaults. The font size rides in the URL although imgserv would supply
+    the default one: the remote caches images by URL, so only a changed URL
+    makes it redraw. The default font is left out, so a remote on default
+    settings keeps the URLs it had before the settings existed.
+    """
+    style = style or {}
+    size = style.get("font_size") or SIZE_IDS[kind].font_size
+    query = f"&font_size={size}"
+    font = style.get("font")
+    if font and font != DEFAULT_FONT_ID:
+        query += f"&font={quote(font, safe='')}"
+    return query
+
+
+def resolve_tooltip_url(
+    text: str, color: str = "", style: Mapping[str, Any] | None = None,
+) -> str:
     """The URL for the words printed under a button; ``""`` clears it."""
-    return resolve_icon_url(f"text:{text}", size="tooltip", color=color) if text else ""
+    if not text:
+        return ""
+    url = resolve_icon_url(f"text:{text}", size="tooltip", color=color)
+    return url + _text_style_query("tooltip", style)
+
+
+def resolve_title_url(
+    image: str, color: str = "", style: Mapping[str, Any] | None = None,
+) -> str:
+    """The URL for a page's title strip; ``""`` when the page has none.
+
+    Only a title drawn as text takes the ``title`` font size: an icon, logo
+    or picture has no font. A ready-made ``imgserv://`` URL is passed on as
+    written, and a title that names its own ``font_size=`` or ``font=``
+    keeps all of it: the settings are a default, not an override.
+    """
+    value = image.strip() if image else ""
+    url = resolve_icon_url(value, size="title", color=color)
+    if (
+        not url.startswith("imgserv://text:")
+        or value.lower().startswith("imgserv://")
+        or "font_size=" in value
+        or "font=" in value
+    ):
+        return url
+    return url + _text_style_query("title", style)
 
 
 # ---------------------------------------------------------------------------

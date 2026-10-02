@@ -23,9 +23,11 @@ from homeassistant.core import HomeAssistant
 from ..const import (
     DOMAIN,
     resolve_icon_url,
+    resolve_title_url,
     resolve_tooltip_url,
 )
 from .const import (
+    is_subpage,
     is_valid_page_id,
     step_service,
 )
@@ -110,6 +112,8 @@ async def _build_page_payload(
         return {"page_id": page_id, "img_title": "", "buttons": [], "hash": 0}
 
     library = await store.async_get_action_library(device_id)
+    text_settings = await store.async_get_settings(device_id)
+    tooltip_style = text_settings["tooltip"]
     lib_by_id = {a["id"]: a for a in library if isinstance(a, dict) and "id" in a}
 
     page_store_id = page_config.get("id", 1)
@@ -143,6 +147,7 @@ async def _build_page_payload(
                 "img_tooltip": resolve_tooltip_url(
                     _resolve_button_tooltip({}, assign, hass, entry, internal_context),
                     page_color,
+                    tooltip_style,
                 ),
                 "action": {"type": "ha_event", "params": {}},
             })
@@ -189,7 +194,7 @@ async def _build_page_payload(
         tooltip_text = _resolve_button_tooltip(
             action_def, assign, hass, entry, internal_context
         )
-        img_tooltip = resolve_tooltip_url(tooltip_text, page_color)
+        img_tooltip = resolve_tooltip_url(tooltip_text, page_color, tooltip_style)
 
         # Determine action type. A device-local ("internal") command is executed
         # by the remote itself; everything else travels to HA as a button event.
@@ -236,7 +241,7 @@ async def _build_page_payload(
 
     # Page-level properties — img_title is always a URL to a PNG image
     page_img_title = page_config.get("image", "")
-    img_title = resolve_icon_url(page_img_title, size="title", color=page_color) if page_img_title else ""
+    img_title = resolve_title_url(page_img_title, page_color, text_settings["title"])
 
     page_data = {
         "page_id": page_id,
@@ -302,7 +307,10 @@ async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool
             continue
         page_data = await _build_page_payload(hass, entry, page_id, page_config, pages)
         desired_pages.append(page_data)
-        main_page_ids.append(page_id)
+        # A subpage still gets written to the device — only the main-page list
+        # leaves it out, so `goto_page` can still reach it.
+        if not is_subpage(page_config):
+            main_page_ids.append(page_id)
 
     desired_hash_map = {p["page_id"]: p["hash"] for p in desired_pages}
     desired_page_ids = set(desired_hash_map.keys())

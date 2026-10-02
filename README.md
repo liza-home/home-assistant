@@ -106,7 +106,8 @@ override in this mode, not the page default underneath it.
   image URL.
 
 Some layout pages stay **live**: a Sonos page follows the speaker's favourites, and
-refills itself when you change them. Editing such a button by hand detaches it from the
+refills itself when you change them. **Sonos Radio** and **Sonos Playlists** do the same
+with only your favourite radio stations or only your favourite playlists, twelve to a page. Editing such a button by hand detaches it from the
 source.
 
 To let a button switch pages, give it the built-in **Go to page** action and choose the
@@ -171,6 +172,7 @@ it off.
 | The tab strip at the top | **←** and **→** move between tabs, **Home** and **End** jump to the first and last. The tab you land on opens as you arrive. |
 | An open configuration card | **Escape** closes it and returns focus to the button that opened it. |
 | Page order | The **Move left** and **Move right** arrows beside the page name do what dragging a page thumbnail does. |
+| A page thumbnail | **Shift+F10**, or the **Context Menu** key, opens that page's menu — the same one a right-click or long-press gives — where a page is duplicated, moved to another device (layout pages), deleted, or turned into a subpage, or back. A thumbnail is a tab stop only while its page is not the open one, so to mark the page you are on, step to another page first. |
 | Dialogs | **Tab** stays inside the dialog, **Escape** cancels. |
 
 ### What else is covered
@@ -179,8 +181,8 @@ Colour, contrast and text size follow your Home Assistant theme, so the panel re
 and scales along with everything else. A few indicators, such as the keyboard focus ring,
 keep a fixed colour so they stay visible on any theme. Controls carry names and roles for
 screen readers, and changes with no visible cursor behind them — a page deleted, a layout
-applied — are announced. Deleting a page that has anything on it — buttons, an image or a
-colour — asks for confirmation first; deleting a blank one does not.
+applied — are announced. Deleting a page always asks for confirmation first, and says how
+many configured buttons go with it.
 
 The panel is available in English, German, French, Italian and Spanish, and follows the
 language set on your Home Assistant profile.

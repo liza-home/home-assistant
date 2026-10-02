@@ -32,6 +32,7 @@ import {
   isConfigured,
 } from "./liza-remote-buttons-view.js";
 import { ActionsViewMixin } from "./liza-remote-actions-view.js";
+import { SettingsViewMixin } from "./liza-remote-settings-view.js";
 
 
 class LizaRemotePanel extends HTMLElement {
@@ -594,7 +595,7 @@ class LizaRemotePanel extends HTMLElement {
       // with no tab highlighted. Read after _loadDebugTools, which _init
       // awaits before any of this.
       const requestedTab = urlParams.get("tab");
-      if (this._currentEntry && (requestedTab === "actions"
+      if (this._currentEntry && (requestedTab === "actions" || requestedTab === "settings"
           || (requestedTab === "debug" && this._debugTools))) {
         this._activeTab = requestedTab;
         // Opening straight onto the debug tab from a link is an entry too, and
@@ -833,6 +834,8 @@ class LizaRemotePanel extends HTMLElement {
       this._loadGlobalUsage().then(() => this._render());
     } else if (tab === "debug") {
       this._enterDebugTab?.();
+    } else if (tab === "settings") {
+      this._enterSettingsTab();
     }
     this._editorEl = null;
     this._render();
@@ -1646,7 +1649,22 @@ class LizaRemotePanel extends HTMLElement {
     overlay.querySelector(".add-page-cancel").addEventListener("click", close);
   }
 
-  async _showLayoutEntityPicker(layoutId, layoutMeta) {
+  /**
+   * Ask which device (or hub) a layout should drive.
+   *
+   * Adding a layout page and moving one to another device ask the very same
+   * question under the very same rules, so they share this dialog; only what
+   * the confirm button says and does differs. `onConfirm(target, kind)` does
+   * the work and returns the toast to show once the dialog is closed.
+   */
+  async _showLayoutEntityPicker(layoutId, layoutMeta, {
+    confirmLabel = this._t("add_layout_page"),
+    busyLabel = this._t("adding"),
+    onConfirm = async (target, kind) => {
+      await this._addLayoutPage(layoutId, target, kind);
+      return this._t("layout_added", { name: layoutMeta?.name || layoutId });
+    },
+  } = {}) {
     const deviceSelector = layoutMeta?.target_selector?.device || null;
     const entrySelector = layoutMeta?.target_selector?.config_entry || null;
     const description = layoutMeta?.description || "";
@@ -1668,7 +1686,7 @@ class LizaRemotePanel extends HTMLElement {
         </div>
         <div class="layout-dialog-actions">
           <button class="add-page-cancel">${this._t("cancel")}</button>
-          <button class="layout-confirm-btn" disabled>${this._t("add_layout_page")}</button>
+          <button class="layout-confirm-btn" disabled>${this._esc(confirmLabel)}</button>
         </div>
       </div>
     `, { labelledBy: "liza-dlg-title" });
@@ -1889,16 +1907,16 @@ class LizaRemotePanel extends HTMLElement {
       const target = getTarget();
       if (!target) return;
       confirmBtn.disabled = true;
-      confirmBtn.textContent = this._t("adding");
+      confirmBtn.textContent = busyLabel;
       try {
-        await this._addLayoutPage(layoutId, target, targetKind);
+        const done = await onConfirm(target, targetKind);
         close();
-        this._toast(this._t("layout_added", { name: layoutMeta?.name || layoutId }));
+        if (done) this._toast(done);
         this._render();
       } catch (e) {
         this._toast(this._t("failed", { error: e.message || e }));
         confirmBtn.disabled = false;
-        confirmBtn.textContent = this._t("add_layout_page");
+        confirmBtn.textContent = confirmLabel;
       }
     });
 
@@ -1915,28 +1933,37 @@ class LizaRemotePanel extends HTMLElement {
     const pageId = page.id;
     // WCAG 3.3.4: this destroys the page and every button on it, and a
     // delete the backend accepts cannot be rolled back. Counted from
-    // `_pageCache`, or the live assignments for the open page;
+    // `_pageCache`, or the live assignments for the open page; a page that
+    // is neither fetched on demand, the same WS round trip `_loadGlobalUsage`
+    // uses, because a silent `{}` here used to read a nonempty, never-opened
+    // page as empty and skip the warning its buttons deserved.
     // `slider_horizontal` is the title bar rather than a button.
-    const assigns = (pageId === this._currentPageId ? this._assignments : this._pageCache[pageId]) || {};
+    let assigns;
+    if (pageId === this._currentPageId) {
+      assigns = this._assignments;
+    } else if (this._pageCache[pageId]) {
+      assigns = this._pageCache[pageId];
+    } else {
+      try {
+        const r = await this._hass.callWS({ type: "lizaip_config/get_assignments", entry_id: this._currentEntry, page_id: pageId });
+        assigns = r?.assignments || {};
+      } catch (e) {
+        assigns = {};
+      }
+    }
     const configured = Object.entries(assigns)
       .filter(([key, rec]) => key !== "slider_horizontal" && this._isAssignedRecord(rec)).length;
-    // Nothing to lose, nothing to ask: 3.3.4 guards user data, and a page
-    // with no button, image or colour holds none. The raw `image`, not
-    // `_pageTitle` -- that yields "" for a data URL or an opaque filename,
-    // which are configuration the user set and would have to set again.
-    const hasContent = configured > 0
-      || !!String(page.image || "").trim()
-      || !!page.default_color;
-    if (hasContent) {
-      const confirmed = await this._confirmDestructive({
-        title: this._t("delete_page_title", { name: pageName }),
-        message: configured > 0
-          ? this._t("delete_page_confirm", { n: configured })
-          : this._t("delete_page_confirm_empty"),
-        confirmText: this._t("delete"),
-      });
-      if (!confirmed) return;
-    }
+    // Always asked. Skipping it for pages that looked empty went wrong: a
+    // page that is neither open nor cached counts as having no buttons, and
+    // was deleted with all of them and no warning.
+    const confirmed = await this._confirmDestructive({
+      title: this._t("delete_page_title", { name: pageName }),
+      message: configured > 0
+        ? this._t("delete_page_confirm", { n: configured })
+        : this._t("delete_page_confirm_empty"),
+      confirmText: this._t("delete"),
+    });
+    if (!confirmed) return;
     // A pending save resolves against _currentPageId, and the indices below are
     // about to move under it. Awaited so it writes to the page it was actually
     // edited on.
@@ -2367,6 +2394,15 @@ class LizaRemotePanel extends HTMLElement {
                   id="liza-tab-debug" role="tab" aria-controls="liza-tabpanel"
                   aria-selected="${this._activeTab === 'debug' ? 'true' : 'false'}"
                   tabindex="${this._activeTab === 'debug' ? '0' : '-1'}"><span aria-hidden="true">🩺</span> ${this._t("tab_debug")}</button>`}
+          <!-- Last and icon-only: settings are visited rarely, and a gear at
+               the far end is where they are looked for. The name a reader
+               hears comes from aria-label; title shows it on hover.
+               NB: no backticks in this comment; it sits in a template. -->
+          <button class="toolbar-tab toolbar-tab-icon ${this._activeTab === 'settings' ? 'active' : ''}" data-tab="settings"
+                  id="liza-tab-settings" role="tab" aria-controls="liza-tabpanel"
+                  aria-label="${this._esc(this._t("tab_settings"))}" title="${this._esc(this._t("tab_settings"))}"
+                  aria-selected="${this._activeTab === 'settings' ? 'true' : 'false'}"
+                  tabindex="${this._activeTab === 'settings' ? '0' : '-1'}"><ha-icon icon="mdi:cog" aria-hidden="true"></ha-icon></button>
         </div>
       </div>
       <!-- tabindex="-1", not "0": a tabpanel earns a tab stop only when it has
@@ -2374,6 +2410,7 @@ class LizaRemotePanel extends HTMLElement {
       <div class="view" id="liza-tabpanel" role="tabpanel" aria-labelledby="liza-tab-${this._activeTab}" tabindex="-1">
         ${this._activeTab === "buttons" ? this._htmlButtonsView(bp)
           : this._activeTab === "debug" ? (this._htmlDebugView?.() ?? "")
+          : this._activeTab === "settings" ? this._htmlSettingsView()
           : this._htmlActionsView()}
       </div>
       <div class="toast" role="status" aria-live="polite"></div>`;
@@ -2389,6 +2426,7 @@ class LizaRemotePanel extends HTMLElement {
 
     if (this._activeTab === "buttons") this._wireButtonsView(bp);
     else if (this._activeTab === "debug") this._wireDebugView?.();
+    else if (this._activeTab === "settings") this._wireSettingsView();
     else this._wireActionsView();
   }
 
@@ -2401,6 +2439,7 @@ Object.assign(LizaRemotePanel.prototype, HelpersMixin);
 Object.assign(LizaRemotePanel.prototype, StatesMixin);
 Object.assign(LizaRemotePanel.prototype, ButtonsViewMixin);
 Object.assign(LizaRemotePanel.prototype, ActionsViewMixin);
+Object.assign(LizaRemotePanel.prototype, SettingsViewMixin);
 Object.assign(LizaRemotePanel.prototype, A11yMixin);
 
 if (!customElements.get("liza-remote-panel")) {

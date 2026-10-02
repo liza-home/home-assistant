@@ -4,15 +4,10 @@ Handles Zeroconf discovery and WebSocket-based device onboarding.
 """
 from __future__ import annotations
 
-import ipaddress
-import importlib
 import logging
-import socket
 from collections.abc import Mapping
 from typing import Any, Final
-from urllib.parse import urlparse
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -20,7 +15,6 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult, section
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.network import get_url
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
     NumberSelector,
@@ -46,45 +40,12 @@ from .slider_throttle import (
     DEFAULT_SLIDER_MIN_INTERVAL_MS,
     SLIDER_MIN_INTERVAL_MS_MAX,
 )
+from . import provisioning
 from .device.const import MODEL
-from .device.cert import get_ha_certificate_pem
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "lizaip"
-
-_PROVISION_TIMEOUT = aiohttp.ClientTimeout(total=5)
-
-# Last-resort name when HA's own hostname cannot be determined. Not unique —
-# only correct on a single-HA network — so it is used strictly as a fallback.
-_FALLBACK_HA_HOSTNAME = "homeassistant.local"
-
-# Last-resort port, used only when the running server cannot be read either.
-# It is a guess, and on a Supervisor install a wrong one -- see
-# `_server_port()`.
-_LAST_RESORT_HA_PORT = 8123
-
-# The port a URL means when it does not say one. Home Assistant normalizes its
-# configured URLs through `homeassistant.util.network.normalize_url`, which
-# *strips* a port that is the scheme's default -- so "http://ha.example.com"
-# is not a URL with an unknown port, it is one that provably means 80.
-#
-# Reading 8123 into it would be the integration's own default speaking, not the
-# deployment's: it is where Home Assistant listens when nobody put anything in
-# front of it, and a URL naming that port keeps it here because 8123 is not a
-# default that normalization removes. A portless http URL is the reverse-proxy
-# case, and 8123 is exactly where the proxy is not.
-#
-# Where there is no URL at all to read a scheme from, the answer comes from the
-# running server instead -- see `_server_port()`.
-_SCHEME_PORTS = {"http": 80, "https": 443}
-
-# HAOS/Supervisor advertises the host over mDNS as "<hostname>.local".
-_MDNS_DOMAIN = ".local"
-
-# Nabu Casa remote UI. A public relay requiring cloud auth — never routable for
-# a device on the LAN, so it must never be handed out as ha_hostname.
-_CLOUD_DOMAIN = ".ui.nabu.casa"
 
 
 def _optional_float(value: Any) -> float | None:
@@ -95,58 +56,6 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _is_ip(hostname: str) -> bool:
-    """True when *hostname* is a bare IPv4/IPv6 literal."""
-    try:
-        ipaddress.ip_address(hostname)
-    except ValueError:
-        return False
-    return True
-
-
-def _local_ip() -> str | None:
-    """This HA host's LAN address, as seen from the local network."""
-    for family, probe in ((socket.AF_INET, "10.255.255.255"), (socket.AF_INET6, "fe80::1")):
-        try:
-            with socket.socket(family, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(0)
-                sock.connect((probe, 1))
-                addr = sock.getsockname()[0]
-        except OSError:
-            continue
-        if addr and not ipaddress.ip_address(addr).is_loopback:
-            return addr
-    return None
-
-
-def _resolve_all(hostname: str) -> set[str]:
-    """Every address *hostname* currently resolves to, or an empty set."""
-    try:
-        infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except OSError:
-        return set()
-    return {info[4][0] for info in infos}
-
-
-def _supervisor_api() -> tuple[Any, Any]:
-    """Resolve ``(is_hassio, get_host_info)`` across HA versions."""
-    is_hassio = get_host_info = None
-    for module in ("homeassistant.helpers.hassio", "homeassistant.components.hassio"):
-        try:
-            mod = importlib.import_module(module)
-        except ImportError:
-            continue
-        is_hassio = is_hassio or getattr(mod, "is_hassio", None)
-        get_host_info = get_host_info or getattr(mod, "get_host_info", None)
-
-    if not (is_hassio and get_host_info):
-        _LOGGER.debug(
-            "Supervisor API unavailable (is_hassio=%s, get_host_info=%s)",
-            bool(is_hassio), bool(get_host_info),
-        )
-    return is_hassio, get_host_info
 
 
 class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -219,8 +128,8 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             existing, data={**existing.data, "sw_version": self.sw_version}
                         )
                         dev_reg = dr.async_get(self.hass)
-                        device = dev_reg.async_get_device(
-                            identifiers={(DOMAIN, existing.entry_id)}
+                        device = dev_reg.async_get_device_by_identifier(
+                            (DOMAIN, existing.entry_id), existing.entry_id
                         )
                         if device:
                             dev_reg.async_update_device(
@@ -277,7 +186,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for device_ip in device_ips:
             url = f"http://{device_ip}:{self._DEVICE_HTTP_PORT}/api/info"
             try:
-                async with session.get(url, timeout=_PROVISION_TIMEOUT) as resp:
+                async with session.get(url, timeout=provisioning.PROVISION_TIMEOUT) as resp:
                     if resp.status == 200:
                         info = await resp.json(content_type=None)
                         _LOGGER.info(
@@ -295,177 +204,36 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return dict(self._FALLBACK_DEVICE_INFO)
 
     async def _async_read_ha_config(self, device_ips: list[str]) -> dict | None:
-        """The Home Assistant the device is set to reach, as it has it stored.
+        """What Home Assistant the device is currently set to reach.
 
-        Returns the parsed ``GET /api/config/ha`` body, or ``None`` when no IP
-        could answer. Callers read ``ha_hostname`` to learn whether the device
-        is provisioned at all, and ``ha_port`` to learn whether it is aimed at
-        a port we would still send -- both answers come from the same one
-        request, and asking twice would invite the two to disagree.
-
-        Decided by reading the values that decide it rather than by a
-        ``status`` field.
-
-        This used to ask ``GET /api/info`` for ``status == "unconfigured"``.
-        ``Document/PROTOCOL.md`` described such a field, but its own example
-        response did not contain one, and firmware 11.2.7 does not send one
-        either (measured: ``device_id``, ``device_name``, ``version``,
-        ``protocol_version``, ``capabilities``). So the check read ``None``
-        every time, never matched, and a remote that had lost its
-        configuration was never repaired. The simulator implemented the
-        sentence rather than the example, which is why it went unnoticed.
-
-        ``None`` is its own answer and must stay one: "we could not ask" is not
-        the same as "it is fine", and treating it as one is what left a
-        factory-reset remote unrepaired for so long.
+        See :func:`provisioning.async_read_ha_config`; this flow asks over the
+        addresses mDNS advertised for the device.
         """
-        session = async_get_clientsession(self.hass, verify_ssl=False)
-        for device_ip in device_ips:
-            url = f"http://{device_ip}:{self._DEVICE_HTTP_PORT}/api/config/ha"
-            try:
-                async with session.get(url, timeout=_PROVISION_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        _LOGGER.debug("GET %s returned %s", url, resp.status)
-                        continue
-                    # `content_type=None` because the parse is the check: this
-                    # firmware answers an unknown path with its Wi-Fi setup
-                    # page under HTTP 200, so a body that is not JSON means the
-                    # endpoint is absent, not that the device is unprovisioned.
-                    cfg = await resp.json(content_type=None)
-            except Exception as err:
-                _LOGGER.debug("GET %s failed: %s", url, err)
-                continue
-            if not isinstance(cfg, dict):
-                _LOGGER.debug("GET %s did not return an object", url)
-                continue
-            _LOGGER.debug(
-                "Device %s reports ha_hostname=%r ha_port=%r",
-                device_ip, cfg.get("ha_hostname"), cfg.get("ha_port"),
-            )
-            return cfg
-        return None
+        return await provisioning.async_read_ha_config(
+            self.hass, device_ips, self._DEVICE_HTTP_PORT
+        )
 
     # ------------------------------------------------------------------
     # HA address resolution — what we send to the device
     # ------------------------------------------------------------------
 
     def _supervisor_hostname(self) -> str | None:
-        """HA's OS hostname from the Supervisor, qualified as ``<name>.local``."""
-        try:
-            is_hassio, get_host_info = _supervisor_api()
-            if not (is_hassio and get_host_info) or not is_hassio(self.hass):
-                return None
-            hostname = ((get_host_info(self.hass) or {}).get("hostname") or "").strip()
-        except Exception as err:
-            _LOGGER.debug("Supervisor host info unavailable: %s", err)
-            return None
-        if not hostname:
-            return None
-        return hostname if hostname.endswith(_MDNS_DOMAIN) else f"{hostname}{_MDNS_DOMAIN}"
+        return provisioning.supervisor_hostname(self.hass)
 
     def _server_port(self) -> int:
-        """The port Home Assistant is actually listening on.
-
-        Only ever a fallback: it is where HA binds *locally*, so with a reverse
-        proxy, Nabu Casa, or a Docker port mapping in front of it, this is not
-        the port the device must use -- the configured URL is, and it wins.
-
-        But when no URL yields a port, a constant is the worst available answer.
-        Under Supervisor the default is 80, not 8123
-        (``http/config.py:default_server_port``), and ``SETUP_PORT`` or the UI's
-        "Server port" can move it anywhere. This reads it instead of guessing.
-        """
-        port = getattr(getattr(self.hass, "http", None), "server_port", None)
-        if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
-            return port
-        return _LAST_RESORT_HA_PORT
+        return provisioning.server_port(self.hass)
 
     def _url_address(self, **kwargs: Any) -> tuple[str | None, int | None]:
-        """``(hostname, port)`` from one of HA's configured URLs.
-
-        Returns ``(None, None)`` when the URL is unset, unparseable, or points
-        at Nabu Casa's remote-UI relay.
-        """
-        try:
-            parsed = urlparse(get_url(self.hass, allow_cloud=False, **kwargs))
-        except Exception as err:
-            _LOGGER.debug("get_url(%s) failed: %s", kwargs, err)
-            return None, None
-
-        hostname = parsed.hostname
-        if not hostname or hostname.lower().endswith(_CLOUD_DOMAIN):
-            return None, None
-        return hostname.rstrip("."), parsed.port or _SCHEME_PORTS.get(
-            parsed.scheme, self._server_port()
-        )
+        return provisioning.url_address(self.hass, **kwargs)
 
     def _external_address(self) -> tuple[str | None, int | None]:
-        """``(hostname, port)`` from HA's external URL, or ``(None, None)``.
-
-        Bare IPs, Nabu Casa relays, and ``.local`` names are excluded — the
-        point of this source is a hostname that resolves via normal DNS, so the
-        device can reconnect without mDNS.
-        """
-        host, port = self._url_address(allow_internal=False)
-        if not host or _is_ip(host) or host.lower().endswith(_MDNS_DOMAIN):
-            return None, None
-        return host, port
+        return provisioning.external_address(self.hass)
 
     def _ha_address(self) -> tuple[str, int]:
-        """Return the ``(ha_hostname, ha_port)`` to send to the device.
-
-        Priority:
-
-        1. **External URL hostname** — a real DNS name the device can resolve
-           without mDNS, and unambiguous on a multi-HA network.
-        2. **Supervisor OS hostname** (``<name>.local``) — unique per host,
-           published over mDNS.
-        3. **Internal URL hostname**, when it is a name (not an IP).
-        4. ``homeassistant.local`` — last resort.
-
-        The port always travels with the hostname it came from.
-        """
-        ext_host, ext_port = self._external_address()
-        if ext_host:
-            return ext_host, ext_port or self._server_port()
-
-        _, internal_port = self._url_address(allow_external=False)
-        port = internal_port or self._server_port()
-
-        if hostname := self._supervisor_hostname():
-            return hostname, port
-
-        internal_host, _ = self._url_address(allow_external=False)
-        if internal_host and not _is_ip(internal_host):
-            return internal_host, port
-
-        return _FALLBACK_HA_HOSTNAME, port
+        return provisioning.ha_address(self.hass)
 
     async def _async_ha_address(self) -> tuple[str, int]:
-        """``_ha_address()`` with the mDNS name verified to point back at *us*.
-
-        A ``.local`` candidate is resolved and checked against this host's own
-        LAN address. If it points elsewhere, the IP is sent instead.
-        """
-        hostname, port = self._ha_address()
-
-        if _is_ip(hostname) or not hostname.lower().endswith(_MDNS_DOMAIN):
-            return hostname, port
-
-        own_ip = await self.hass.async_add_executor_job(_local_ip)
-        if not own_ip:
-            return hostname, port
-
-        resolved = await self.hass.async_add_executor_job(_resolve_all, hostname)
-        if own_ip in resolved:
-            return hostname, port
-
-        _LOGGER.warning(
-            "%s resolves to %s, not to this Home Assistant (%s) — provisioning "
-            "with the IP instead",
-            hostname, ", ".join(sorted(resolved)) or "nothing", own_ip,
-        )
-        return own_ip, port
+        return await provisioning.async_ha_address(self.hass)
 
     async def _async_address_is_stale(self, cfg: dict, unique_id: str) -> bool:
         """Whether the device is aimed somewhere we would no longer send it.
@@ -537,54 +305,18 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
 
     async def _try_reprovision(self, device_ips: list[str]) -> None:
-        """Push HA's address to the device so it can open its WebSocket."""
+        """Push HA's address to the device so it can open its WebSocket.
+
+        Needs a port from the mDNS SRV record: without one there is no evidence
+        the device even has its HTTP management API up, and the device's own
+        announcement is the only thing that can say so here.
+        """
         if not self.discovered_port:
             _LOGGER.debug("No device port known — skipping provisioning")
             return
 
-        session = async_get_clientsession(self.hass, verify_ssl=False)
-        ha_hostname, ha_port = await self._async_ha_address()
-
-        # HA's stable instance UUID — lets the device verify it is reconnecting
-        # to the same HA, not a neighbour with an identical hostname.
-        try:
-            from homeassistant.helpers.instance_id import async_get as _async_get_instance_id
-            ha_uuid = await _async_get_instance_id(self.hass)
-        except Exception:
-            ha_uuid = None
-
-        payload: dict[str, object] = {
-            "ha_hostname": ha_hostname,
-            "ha_port": ha_port,
-        }
-        if ha_uuid:
-            payload["ha_uuid"] = ha_uuid
-
-        # Include HA's TLS certificate for WSS certificate pinning.
-        wss_cert = await self.hass.async_add_executor_job(get_ha_certificate_pem, self.hass)
-        if wss_cert:
-            payload["wss_cert"] = wss_cert
-
-        port = self._DEVICE_HTTP_PORT
-        for device_ip in device_ips:
-            url = f"http://{device_ip}:{port}/api/config/ha"
-            try:
-                async with session.post(
-                    url, json=payload, timeout=_PROVISION_TIMEOUT
-                ) as resp:
-                    if resp.status == 200:
-                        _LOGGER.info(
-                            "Provisioned device at %s:%d -> %s:%s",
-                            device_ip, port, ha_hostname, ha_port,
-                        )
-                        return
-                    _LOGGER.debug("POST %s returned %s", url, resp.status)
-            except Exception as err:
-                _LOGGER.debug("POST %s failed: %s", url, err)
-
-        _LOGGER.warning(
-            "Provisioning failed for all IPs %s (port %d)",
-            device_ips, port,
+        await provisioning.async_provision(
+            self.hass, device_ips, self._DEVICE_HTTP_PORT
         )
 
     # ------------------------------------------------------------------

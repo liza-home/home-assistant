@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 import aiohttp
+from yarl import URL
 
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -38,39 +39,19 @@ FIRMWARE_RELEASE_API = _os.environ.get(
     f"http://firmware.api.ruwido.com/{MODEL_ID}/?latest=true",
 )
 
-# OTA polling: check every 5 s for up to 5 minutes (60 attempts).
-_OTA_POLL_INTERVAL = 5
-_OTA_MAX_ATTEMPTS = 60
+_TITLE = "lizaIP Firmware"
+# Longest device status shown in the update dialog's heading.
+_OTA_STATUS_MAX_LEN = 80
+
+# OTA polling: ask the device every second (a request answered late just
+# delays the next one), for up to 5 minutes.
+_OTA_POLL_INTERVAL = 1
+_OTA_POLL_TIMEOUT = 300
 
 # After the image is committed the device reboots. Keep the update card in
 # "installing" state until it is back, so the reported version is the new one.
 _OTA_REBOOT_POLL_INTERVAL = 2
 _OTA_REBOOT_TIMEOUT = 120
-
-# Fallback progress for firmware that reports only a status string (no numeric
-# percentage). Matched as a substring against the lower-cased status, longest
-# first, so "download complete" wins over "download".
-_OTA_STATUS_PROGRESS: dict[str, float] = {
-    "download started": 10,
-    "download complete": 30,
-    "image verification": 45,
-    "image flashing": 70,
-    "image commit": 100,
-    "commit success": 100,
-}
-
-
-def _progress_from_status(status: str) -> float | None:
-    """Map a textual OTA status onto a rough completion percentage.
-
-    Used only when the device does not report a numeric ``progress`` value, so
-    the HA progress bar still advances through the update stages.
-    """
-    normalized = status.lower()
-    for text in sorted(_OTA_STATUS_PROGRESS, key=len, reverse=True):
-        if text in normalized:
-            return _OTA_STATUS_PROGRESS[text]
-    return None
 
 
 def _normalize_version(version: str | None) -> str | None:
@@ -114,18 +95,22 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
 
     Installed version:  read from the hello handshake (device reports its version).
     Latest version:     fetched from the firmware release server at HA update-check intervals.
+    Release notes:      the release's Markdown `body`: the CHANGELOG sections of every
+                        release since the installed version (`?since=`).
     Install:            POSTs to the device's HTTP management API (/Device/OTA);
                         the device downloads, verifies, and applies the update then reboots.
     """
 
     _attr_translation_key = "firmware"
     _attr_entity_category = EntityCategory.CONFIG
+    # PROGRESS only so the entity owns `in_progress` (HA refuses a second
+    # install while it is set); no `update_percentage` is ever published.
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL
         | UpdateEntityFeature.PROGRESS
+        | UpdateEntityFeature.RELEASE_NOTES
     )
     _attr_should_poll = True
-    _attr_title = "lizaIP Firmware"
 
     def __init__(
         self,
@@ -137,9 +122,11 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         self._attr_unique_id = f"{entry.entry_id}_firmware"
         self._latest_version: str | None = None
         self._release_url: str | None = None
+        self._release_notes: str | None = None
+        # What GET /Device/OTA last said during an install; None otherwise.
+        self._ota_status: str | None = None
         self._firmware_url: str | None = None
         self._attr_in_progress: bool = False
-        self._attr_update_percentage: float | None = None
 
     async def async_added_to_hass(self) -> None:
         """Register availability + trigger first firmware check."""
@@ -180,18 +167,42 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         return _normalize_version(self._latest_version)
 
     @property
+    def title(self) -> str:
+        """Heading of the update dialog, with the device's status while installing.
+
+        It is the only text the dialog refreshes during an install (with
+        release notes supported it does not show `release_summary`).
+        """
+        return f"{_TITLE}: {self._ota_status}" if self._ota_status else _TITLE
+
+    @property
     def release_url(self) -> str | None:
         return self._release_url
 
+    async def async_release_notes(self) -> str | None:
+        """Markdown notes of the latest release (the server's `body`)."""
+        return self._release_notes
+
 
     # ── Polling ───────────────────────────────────────────────────────────
+
+    def _release_check_url(self) -> URL:
+        """The release API, asking for the notes of every release since ours.
+
+        `since` makes the server's `body` cover all releases after the
+        installed one, not just the newest; servers that do not know it
+        ignore it. Left out while the installed version is unknown.
+        """
+        url = URL(FIRMWARE_RELEASE_API)
+        installed = self.installed_version
+        return url.update_query(since=installed) if installed else url
 
     async def async_update(self) -> None:
         """Fetch the latest firmware version from the release server."""
         try:
             session = async_get_clientsession(self.hass)
             async with session.get(
-                FIRMWARE_RELEASE_API,
+                self._release_check_url(),
                 timeout=aiohttp.ClientTimeout(total=10),
                 headers={"Accept": "application/json"},
             ) as resp:
@@ -210,6 +221,8 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         if tag:
             self._latest_version = tag
         self._release_url = release.get("html_url")
+        body = release.get("body")
+        self._release_notes = (body.strip() or None) if isinstance(body, str) else None
 
         # Find the OTA firmware asset: prefer .bin, fall back to .tar.
         self._firmware_url = None
@@ -255,14 +268,21 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             url,
         )
 
-        # Show the bar at 0 % immediately; _poll_ota_completion advances it.
-        self._set_progress(0)
+        # The device reports stages, not a percentage: the card shows an
+        # indeterminate bar, and the dialog heading the stage (see `title`).
+        self._set_installing()
+
+        # The device repeats the previous update's final report until this one
+        # starts; remember it so it is not taken for this update's completion.
+        try:
+            previous = (await self._connection.get_ota_reply()).raw
+        except Exception:  # noqa: BLE001 - only a hint; the install goes on
+            previous = None
 
         try:
             await self._connection.update_firmware(url)
         except HomeAssistantError as err:
             self._attr_in_progress = False
-            self._attr_update_percentage = None
             self.async_write_ha_state()
             # Log the underlying cause: the UI only shows the translated message,
             # which loses the exception chain.
@@ -279,59 +299,67 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
                 translation_placeholders={"error": str(err)},
             ) from err
 
-        # Poll OTA status in the background — the WebSocket will disconnect when
-        # the device starts flashing, so don't block the install call.
-        self.hass.async_create_background_task(
-            self._poll_ota_completion(),
-            name=f"lizaip_ota_poll_{self.unique_id}",
-        )
+        # Stay inside async_install until the device is back: HA clears
+        # in_progress the moment it returns, which made the card drop the
+        # "installing" state between the request and the first poll.
+        try:
+            await self._poll_ota_completion(previous)
+        finally:
+            # HA writes the state right after async_install returns or raises.
+            self._ota_status = None
 
-    async def _poll_ota_completion(self) -> None:
-        """Background task: poll OTA status until commit or timeout.
+    async def _poll_ota_completion(self, previous: str | None = None) -> None:
+        """Poll OTA status until commit, disconnect or timeout.
 
-        Publishes `update_percentage` on every poll so the HA update card renders
-        a live progress bar.
+        Each new status goes into the dialog heading. *previous* is the reply
+        from before the update; while the device still answers with it, it is
+        not this update's report.
         """
         _LOGGER.debug("Starting OTA status polling for %s", self._entry_title)
-        for attempt in range(_OTA_MAX_ATTEMPTS):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _OTA_POLL_TIMEOUT
+        attempt = 0
+        while loop.time() < deadline:
+            attempt += 1
             await asyncio.sleep(_OTA_POLL_INTERVAL)
 
             if not self._connection.connected:
+                # The device only reboots once the image is committed.
                 _LOGGER.debug(
                     "OTA poll [%s]: device disconnected (rebooting?), stopping poll",
                     self._entry_title,
                 )
-                # The device only reboots once the image is committed, so treat a
-                # drop mid-update as "nearly done" rather than leaving a stale bar.
-                self._set_progress(100)
                 break
 
+            # A busy device often misses the timeout; keep polling.
             try:
-                status, percent = await self._connection.get_ota_progress()
-            except Exception as err:
+                reply = await self._connection.get_ota_reply()
+            except Exception as err:  # noqa: BLE001 - keep polling
                 _LOGGER.debug(
                     "OTA poll [%s] attempt %d error: %s",
-                    self._entry_title, attempt + 1, err,
+                    self._entry_title, attempt, err,
                 )
                 continue
-
-            # Firmware that answers in plain text reports no percentage — derive a
-            # coarse one from the status string so the bar still advances.
-            if percent is None:
-                percent = _progress_from_status(status)
-            self._set_progress(percent)
-
             _LOGGER.debug(
-                "OTA poll [%s] attempt %d: %r (%s%%)",
-                self._entry_title, attempt + 1, status, percent,
+                "OTA poll [%s] attempt %d: %r",
+                self._entry_title, attempt, reply.raw,
             )
+            if previous is not None and reply.raw == previous:
+                continue
+
+            status = reply.status
+            shown = status if len(status) <= _OTA_STATUS_MAX_LEN else (
+                status[: _OTA_STATUS_MAX_LEN - 1].rstrip() + "…"
+            )
+            if shown != self._ota_status:
+                self._ota_status = shown
+                self.async_write_ha_state()
 
             normalized = status.lower()
             if "commit success" in normalized or "image commit" in normalized:
                 _LOGGER.info(
                     "OTA completed on %s: %s", self._entry_title, status
                 )
-                self._set_progress(100)
                 break
 
         # The device reboots into the new image. Stay "in progress" until it is
@@ -340,8 +368,8 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         # before settling, and the more-info dialog closes on stale data.
         await self._await_reconnect()
 
+        self._ota_status = None
         self._attr_in_progress = False
-        self._attr_update_percentage = None
         self.async_write_ha_state()
 
     async def _await_reconnect(self) -> None:
@@ -349,7 +377,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
 
         Returns as soon as the WebSocket is up again, or after
         ``_OTA_REBOOT_TIMEOUT`` seconds so a device that fails to return never
-        leaves the entity stuck showing a progress bar.
+        leaves the entity stuck "installing".
         """
         if self._connection.connected:
             return
@@ -372,8 +400,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             self._entry_title, deadline,
         )
 
-    def _set_progress(self, percent: float | None) -> None:
-        """Publish OTA progress to the update card."""
+    def _set_installing(self) -> None:
+        """Show the update card as installing."""
         self._attr_in_progress = True
-        self._attr_update_percentage = percent
         self.async_write_ha_state()

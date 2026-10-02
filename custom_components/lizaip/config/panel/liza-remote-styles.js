@@ -187,6 +187,16 @@ export const STYLES = `
     border-bottom-color: var(--app-header-text-color, #fff);
     font-weight: 500;
   }
+  /* The gear: no text to pad around, so it is squared up to the same 44px
+     target as the labelled tabs' height on a tablet. */
+  .toolbar-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    padding: 6px 10px;
+    --mdc-icon-size: 20px;
+  }
 
   .actions-search {
     display: flex;
@@ -594,7 +604,23 @@ export const STYLES = `
     flex-wrap: wrap;
     align-items: flex-start;
     gap: 12px;
-    padding: 14px 12px;
+    /* 47px, not 14px, at the bottom: the inline overflow-x:auto on this
+       element (set where it is rendered) forces overflow-y to the computed
+       value "auto" too (CSS requires that once either axis isn't "visible"),
+       which turns this row into a scroll container. A scroll container's own
+       height comes only from normal layout -- a translateY shift (see
+       .page-thumb.subpage) moves paint, not layout, so the shifted 7% was
+       *scrollable* overflow rather than visible, and a min-height bump here
+       cannot reach it either, since content already determines the row's
+       height well past any floor that sets. The fixed crop every thumbnail's
+       svg uses (viewBox "32 33 108 295" in _refreshSVG) makes a thumb's
+       rendered height entirely predictable from its own fixed width: content
+       width 168px (180 minus this rule's own 12px side padding, times two)
+       times 295/108 is ~459px, so its 7% is ~32px -- the extra 33px here, on
+       top of the original 14px, is that shift, made part of the row's actual
+       layout height so nothing is left over to scroll for.
+    */
+    padding: 14px 12px 47px 12px;
     scrollbar-width: thin;
   }
   .pages-list::-webkit-scrollbar { height: 4px; }
@@ -620,10 +646,35 @@ export const STYLES = `
     border-color: color-mix(in srgb, var(--primary-text-color) 20%, transparent);
     transform: scale(1.03);
   }
+  /* A subpage is darker than a main page: it is not in the list the remote
+     pages through, so the strip has to say so without a label. Placed before
+     .active so selecting one still shows the selection colour -- the tint says
+     what the page is, the border says which page you are on, and they are
+     different questions. */
+  .page-thumb.subpage {
+    background: color-mix(in srgb, var(--primary-text-color) 14%, transparent);
+    border-color: color-mix(in srgb, var(--primary-text-color) 18%, transparent);
+    /* Sits lower than the main pages beside it -- a second, independent cue
+       (besides the tint) that it is out of the remote's page list. 7% of its
+       own box, via transform rather than a percentage margin: a vertical
+       margin's percentage is of the *container's width*, which would have
+       shifted every subpage by the same amount regardless of its own height. */
+    transform: translateY(7%);
+  }
+  .page-thumb.subpage:hover {
+    background: color-mix(in srgb, var(--primary-text-color) 18%, transparent);
+    /* Same specificity as .page-thumb:hover, declared after it, so its lone
+       transform: scale(1.03) would otherwise win outright and the offset
+       would vanish exactly while hovering. Restated together with it. */
+    transform: translateY(7%) scale(1.03);
+  }
   .page-thumb.active {
     border-color: var(--liza-selected);
     background: rgba(3,169,244,.04);
     box-shadow: 0 0 12px rgba(3,169,244,.2);
+  }
+  .page-thumb.subpage.active {
+    background: color-mix(in srgb, var(--primary-text-color) 14%, rgba(3,169,244,.04));
   }
   .page-thumb.pg-empty:not(.active) {
   }
@@ -1415,6 +1466,11 @@ export const STYLES = `
     background: var(--secondary-background-color);
     outline: none;
   }
+  .face-menu-sep {
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--divider-color);
+  }
 
   /* --- Inline accordion editor --- */
   .btn-inline-editor {
@@ -1500,6 +1556,58 @@ export const STYLES = `
     font-size: var(--liza-font-s);
     color: var(--liza-muted-text);
     margin-top: 8px;
+  }
+
+  /* --- Settings tab --- */
+  .settings-view {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    max-width: 640px;
+  }
+  .settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 0 16px 16px;
+  }
+  /* The number field gets what .config-field gives its text inputs; it is
+     the only number input in the panel, so it is named here. */
+  .settings-body input[type="number"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    background: var(--card-background-color);
+    color: var(--primary-text-color);
+    font-size: var(--liza-font-m);
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+  .settings-body input[type="number"]:focus {
+    outline: none;
+    border-color: var(--primary-color);
+  }
+  /* Dark like the remote's own screen, so the preview shows the text the
+     way it will be seen there. */
+  .settings-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 64px;
+    border-radius: 8px;
+    background: #000;
+  }
+  .settings-preview img {
+    max-width: 100%;
+  }
+  .settings-fonts-hint {
+    text-align: left;
+  }
+  .settings-actions {
+    display: flex;
+    gap: 8px;
   }
 
   /* --- Debug tab --- */
@@ -2425,6 +2533,11 @@ export const STYLES = `
     .toolbar-tab {
       flex: 1;
       text-align: center;
+    }
+    /* Only as wide as the gear: an equal share would give an icon the room
+       of a word and push the labelled tabs into two lines. */
+    .toolbar-tab-icon {
+      flex: 0 0 auto;
     }
     :host a[href],
     :host button,

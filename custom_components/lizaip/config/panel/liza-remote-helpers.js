@@ -338,7 +338,8 @@ export const HelpersMixin = {
     if (this._isExternalUrl(val) || this._isImageUrl(val)) {
       src = this._iconImgSrc(val, size);
     } else if (needsImgserv) {
-      src = this._imgservUrl(val, size, this._getThemeMode()) + (tintable ? `&fg=${encodeURIComponent(color)}` : "");
+      src = this._imgservUrl(val, size, this._getThemeMode()) + (tintable ? `&fg=${encodeURIComponent(color)}` : "")
+        + (size === "title" && val.startsWith("text:") ? this._titleTextStyle(val) : "");
     } else {
       // Tinted via CSS, not imgserv: keeps the vector instead of resampling.
       const css = tintable ? this._cssColor(color) : "";
@@ -474,6 +475,39 @@ export const HelpersMixin = {
     return `/api/imgserv/${icon}${sep}size=${size}${modeStr}&alpha=1`;
   },
 
+  /**
+   * `&font_size=…&font=…` for a text preview of *kind*, or "" on defaults.
+   *
+   * *kind* is "title" or "tooltip"; the style is the remote's text settings
+   * (`_loadTextSettings`), which are absent until loaded and then read as
+   * defaults.
+   *
+   * imgserv already draws a `size=title` request in the default font at the
+   * default size, so a remote on default settings asks for the same preview URLs
+   * it always did.
+   */
+  _textStyleQuery(kind) {
+    const s = this._textSettings;
+    const style = s?.settings?.[kind];
+    const def = s?.defaults?.[kind];
+    if (!style || !def) return "";
+    let q = "";
+    if (style.font_size !== def.font_size) q += `&font_size=${encodeURIComponent(style.font_size)}`;
+    if (style.font !== def.font) q += `&font=${encodeURIComponent(style.font)}`;
+    return q;
+  },
+
+  /**
+   * The title style for a preview of a text title *value*, the rule
+   * `resolve_title_url` applies on the way to the device: a title naming its
+   * own `font_size=` or `font=` keeps all of it.
+   */
+  _titleTextStyle(value) {
+    const v = String(value ?? "");
+    if (v.includes("font_size=") || v.includes("font=")) return "";
+    return this._textStyleQuery("title");
+  },
+
   /** Tint applied to previews of the page being edited; "" when none is set. */
   _currentPageColor() {
     return this._pages?.[this._currentPageIdx]?.default_color || "";
@@ -490,7 +524,8 @@ export const HelpersMixin = {
     const tintable = !!color && !icon.includes("fg=") && /^(mdi:|phu:|text:)/.test(icon);
     const fg = tintable ? `&fg=${encodeURIComponent(color)}` : "";
     if (icon.startsWith("mdi:") || icon.startsWith("text:") || icon.startsWith("logo:") || icon.startsWith("phu:") || icon.startsWith("file:") || icon.startsWith("media:")) {
-      src = this._imgservUrl(icon, "title", mode) + fg;
+      src = this._imgservUrl(icon, "title", mode) + fg
+        + (icon.startsWith("text:") ? this._titleTextStyle(icon) : "");
     } else if (icon.startsWith("imgserv://")) {
       src = `/api/imgserv/${icon.slice(10)}${icon.includes("?") ? "&" : "?"}alpha=1`;
     } else if (this._isExternalUrl(icon)) {
@@ -503,7 +538,8 @@ export const HelpersMixin = {
       // would otherwise malform the request or graft on query structure of its
       // own. Matches the slider's identical construction in _refreshSVG.
       const bareFg = color && !icon.includes("fg=") ? `&fg=${encodeURIComponent(color)}` : "";
-      src = `/api/imgserv/text:${encodeURIComponent(icon)}?size=title&mode=${mode}&alpha=1${bareFg}`;
+      src = `/api/imgserv/text:${encodeURIComponent(icon)}?size=title&mode=${mode}&alpha=1${bareFg}`
+        + this._titleTextStyle(icon);
     }
     return `<img src="${this._esc(src)}" alt="" style="height:${height}px;object-fit:contain;border-radius:2px" />`;
   },
