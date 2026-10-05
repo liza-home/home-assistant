@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant
 
 from ..const import (
     DOMAIN,
+    longtouch_steps,
     resolve_icon_url,
     resolve_title_url,
     resolve_tooltip_url,
@@ -35,14 +36,45 @@ from .button_rendering import (
     _get_service_icons,
     _resolve_button_icon,
     _resolve_button_tooltip,
+    with_resolved_image,
 )
 from ..device.services import _selected_entry_ids
+from .text_style import longtouch_enabled
 from .internal_commands import (
     build_page_context,
     resolve_action as resolve_internal_action,
 )
+from ..state_icon import (
+    IconStyle,
+    IconStyleOptions,
+    icon_style_for,
+    read_icon_style_options,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _button_icon_style(
+    hass: HomeAssistant | None,
+    assign: dict,
+    page_color: str,
+    style_options: IconStyleOptions | None = None,
+) -> IconStyle:
+    """Tint and fill for a button's tile, from the light it is bound to.
+
+    The listener resolves its live push through the same ``icon_style_for``, so
+    the two agree by construction -- otherwise the first state change after a
+    sync would restyle a freshly-pushed tile. *style_options* is part of that
+    agreement: the step and both switches are read from the same entry options
+    on both paths.
+    """
+    config = assign.get("config", [])
+    step = config[0] if isinstance(config, list) and config else {}
+    opts = style_options or read_icon_style_options(None)
+    return icon_style_for(
+        hass, step, page_color,
+        fill_step=opts.step, fill=opts.fill, tint=opts.tint,
+    )
 
 
 def _get_device_connection(hass: HomeAssistant, entry: ConfigEntry):
@@ -114,6 +146,7 @@ async def _build_page_payload(
     library = await store.async_get_action_library(device_id)
     text_settings = await store.async_get_settings(device_id)
     tooltip_style = text_settings["tooltip"]
+    longtouch = longtouch_enabled(text_settings)
     lib_by_id = {a["id"]: a for a in library if isinstance(a, dict) and "id" in a}
 
     page_store_id = page_config.get("id", 1)
@@ -123,6 +156,10 @@ async def _build_page_payload(
 
     # Page-level default icon color (6-char hex, no #)
     page_color = page_config.get("default_color", "")
+
+    # Resolved once per page, not per button: they cannot change mid-payload,
+    # and the live listener reads the same options so the two producers agree.
+    style_options = read_icon_style_options(getattr(entry, "options", None))
 
     # Fetch HA service icons for stateless action fallback
     service_icons = await _get_service_icons(hass)
@@ -139,7 +176,7 @@ async def _build_page_payload(
         action_id = assign.get("action_id")
         if not action_id:
             # No action — still resolve per-button image and tooltip if configured
-            assign_image = assign.get("image")
+            assign_image = with_resolved_image(assign, hass).get("image")
             img_tile = resolve_icon_url(assign_image, color=page_color) if assign_image else ""
             buttons.append({
                 "name": button_name,
@@ -188,7 +225,12 @@ async def _build_page_payload(
             "Button %s: action_id=%s, action_def.icon=%s, service=%s, resolved=%s",
             button_name, action_id, action_def.get("icon"), action_def.get("service"), resolved_icon,
         )
-        img_tile = resolve_icon_url(resolved_icon, color=page_color)
+        tile_style = _button_icon_style(hass, assign, page_color, style_options)
+        img_tile = resolve_icon_url(
+            resolved_icon,
+            color=tile_style.color,
+            percent=tile_style.percent,
+        )
 
         # Tooltip: dynamic next-state label
         tooltip_text = _resolve_button_tooltip(
@@ -209,6 +251,11 @@ async def _build_page_payload(
             # as a button event, Home Assistant receives it and calls the
             # service with the target the step actually names.
             internal = ("ha_event", {})
+        if internal is not None and longtouch and longtouch_steps(assign):
+            # A long touch holds the click back until the finger lifts, which
+            # only Home Assistant can do: run by the remote, the command would
+            # fire on press, before anyone knows the touch will be long.
+            internal = None
         if internal is not None:
             action_type, action_params = internal
 
@@ -240,7 +287,11 @@ async def _build_page_payload(
             })
 
     # Page-level properties — img_title is always a URL to a PNG image
-    page_img_title = page_config.get("image", "")
+    # Entity variables resolve as they do on a button; one with no value leaves
+    # the title strip blank rather than drawing half a name.
+    page_img_title = with_resolved_image(
+        {"image": page_config.get("image", "")}, hass,
+    ).get("image") or ""
     img_title = resolve_title_url(page_img_title, page_color, text_settings["title"])
 
     page_data = {

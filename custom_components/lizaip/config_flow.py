@@ -400,7 +400,9 @@ class LizaIPOptionsFlowHandler(config_entries.OptionsFlow):
     One page. The settings people actually change — optimistic updates, the
     remote's language — are at the top, and the two groups that are set once
     and then left alone sit below them in collapsed sections, each behind a
-    disclosure arrow.
+    disclosure arrow. The icon fill step is still an entry option, but it is
+    edited in the panel's gear tab (``lizaip_config/set_icon_options``), next to
+    the preview it changes; merging on save leaves it untouched here.
 
     Sections rather than subpages: Home Assistant will happily render a menu of
     links (``async_show_menu``), but a menu is a page of its own and cannot

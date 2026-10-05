@@ -14,6 +14,7 @@ from ._state import (
     clear_slider_state,
     get_current_page,
 )
+from . import longtouch
 from .buttons import execute_action
 from .helpers import _coerce_page_id, _normalize_position, _raw_page_id, _resolve_entry_id
 from .selection import _record_selection
@@ -114,8 +115,17 @@ def setup(hass: HomeAssistant) -> None:
                 hass, entry_id, button_key, page_id, interaction=interaction,
             )
 
+        if interaction == "touch":
+            await longtouch.on_touch(hass, entry_id, button_key, page_id)
+        elif interaction == "release":
+            await longtouch.on_release(hass, entry_id, button_key)
+
         if interaction != "click":
             _LOGGER.debug("  → ignoring interaction=%s (only click fires)", interaction)
+            return
+
+        if longtouch.on_click(entry_id, button_key):
+            _LOGGER.debug("  → click held until release (button has a long touch)")
             return
 
         await execute_action(hass, entry_id, button_key, page_id)

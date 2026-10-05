@@ -71,6 +71,11 @@ LANGUAGE_AUTO: Final = "auto"
 # Fired when a button's icon/tooltip needs to be refreshed on the device
 ICON_UPDATE_EVENT: Final = "lizaip_config_icon_update"
 
+# Fired when we have just commanded a value and are drawing the tile from that
+# intent rather than waiting for the entity to confirm it. Carries only
+# ``entity_id``; the predicted value itself lives in :mod:`optimistic`.
+PREDICTED_UPDATE_EVENT: Final = "lizaip_predicted_update"
+
 
 # ---------------------------------------------------------------------------
 # Icon defaults (single source of truth for all icon mappings)
@@ -212,7 +217,9 @@ def _ascii_safe_path(value: str) -> str:
     return "".join(c if c.isascii() else quote(c, safe="") for c in value)
 
 
-def resolve_icon_url(icon: str, size: str = "tile", color: str = "") -> str:
+def resolve_icon_url(
+    icon: str, size: str = "tile", color: str = "", percent: int | None = None,
+) -> str:
     """Convert an icon value to a fetchable URL.
 
     - MDI strings (mdi:lightbulb) → imgserv://mdi:lightbulb?size={size}&fg={color|FFFFFF}
@@ -252,10 +259,18 @@ def resolve_icon_url(icon: str, size: str = "tile", color: str = "") -> str:
     default keeps the historical passthrough: an unrecognised scheme such as
     ``ftp://host/a.png`` is handed on untouched rather than silently turned into
     a picture of the word "ftp://host/a.png".
+
+    The optional `percent` param (0-100) is imgserv's fill level: the bottom
+    `percent`% of the finished image keeps its alpha and the rows above are
+    dimmed, which is how a lamp's brightness reaches its tile. It is appended
+    only on the branches that address imgserv -- a `ha://`, `local://` or
+    `data:` value is fetched or decoded by the device itself, and an already
+    written `imgserv://` value belongs to whoever typed it, query and all.
     """
     icon = icon.strip() if icon else ""
     if not icon:
         return ""
+    pct = f"&percent={percent}" if percent is not None else ""
     # Scheme tests run against a lowercased copy; the returned value always uses the
     # original casing so signed URLs and file names stay byte-exact.
     low = icon.lower()
@@ -267,25 +282,25 @@ def resolve_icon_url(icon: str, size: str = "tile", color: str = "") -> str:
         # byte, so an already percent-encoded URL is untouched.
         return _ascii_safe_path(icon)
     if low.startswith(("http://", "https://")):
-        return f"imgserv://{encode_media_source(icon)}?size={size}&mode=dark"
+        return f"imgserv://{encode_media_source(icon)}?size={size}&mode=dark{pct}"
     if icon.startswith("/"):
         return f"ha://{_ascii_safe_path(icon.lstrip('/'))}"
     fg = color.lstrip("#") if color else ""
     if icon.startswith("mdi:"):
         mdi_fg = fg or "FFFFFF"
-        return f"imgserv://mdi:{icon[4:]}?size={size}&fg={mdi_fg}"
+        return f"imgserv://mdi:{icon[4:]}?size={size}&fg={mdi_fg}{pct}"
     if icon.startswith("media:"):
         # The value is a URL in its own right — encode it so its query survives.
-        return f"imgserv://{encode_media_source(icon[6:])}?size={size}&mode=dark"
+        return f"imgserv://{encode_media_source(icon[6:])}?size={size}&mode=dark{pct}"
     # imgserv source types: logo:, text:, phu:, file:
     if icon.startswith(("logo:", "text:", "phu:", "file:")):
         sep = "&" if "?" in icon else "?"
         # Tint monochrome sources (text:, phu:); leave logos/photos untouched
         tintable = icon.startswith(("text:", "phu:"))
         color_suffix = f"&fg={fg}" if fg and tintable and "fg=" not in icon else ""
-        return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}&mode=dark{color_suffix}"
+        return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}&mode=dark{color_suffix}{pct}"
 
-    return resolve_icon_url(f"text:{icon}", size, color)
+    return resolve_icon_url(f"text:{icon}", size, color, percent)
 
 
 def _text_style_query(kind: str, style: Mapping[str, Any] | None) -> str:
@@ -960,6 +975,22 @@ ASSIGNMENT_LABEL_EDITED_KEY: Final = "label_edited"
 ASSIGNMENT_INTERNAL_TARGET_NAME_KEY: Final = "internal_target_name"
 
 
+# The steps a button runs when the finger stays on it for
+# ``LONGTOUCH_SECONDS``. Same shape as ``config`` (a list holding one step),
+# beside it rather than inside it because the panel keeps only ``config[0]``.
+# Absent or empty: the button has no long touch, and its click runs on press.
+ASSIGNMENT_LONGTOUCH_KEY: Final = "longtouch"
+
+#: How long a finger must rest on a button before its long touch runs.
+LONGTOUCH_SECONDS: Final = 2.0
+
+
+def longtouch_steps(assign) -> list:
+    """The long-touch steps of a stored button, or ``[]`` when it has none."""
+    steps = assign.get(ASSIGNMENT_LONGTOUCH_KEY) if isinstance(assign, dict) else None
+    return steps if isinstance(steps, list) and steps else []
+
+
 def name_is_user_written(assign) -> bool:
     """True when the user typed this button's name into the panel's Label field.
 
@@ -1165,8 +1196,105 @@ def state_token_label(
 _DANGLING_SEPARATOR_RE = re.compile(r"^[\s:;,/\-–—]+|[\s:;,/\-–—]+$")
 
 
-def substitute_label_tokens(text: str, values: dict[str, str]) -> str:
+# ---------------------------------------------------------------------------
+# ``${sensor.x}`` entity variables in tooltips and icons
+# ---------------------------------------------------------------------------
+
+#: ``${domain.object_id}`` or ``${domain.object_id.attribute}``. Told apart from
+#: ``${STATE}`` by the dot, so the two never claim the same text.
+ENTITY_TOKEN_RE = re.compile(
+    r"\$\{\s*([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?\s*\}"
+)
+
+#: States that say the entity has nothing to report. A variable reading one of
+#: them resolves to nothing rather than printing "unavailable" on the remote.
+_NO_VALUE_STATES: Final = frozenset({"unavailable", "unknown", ""})
+
+
+def entity_token_entities(text: Any) -> set[str]:
+    """Entity ids named by ``${domain.object_id[.attribute]}`` in *text*."""
+    if not isinstance(text, str) or "${" not in text:
+        return set()
+    return {m.group(1).lower() for m in ENTITY_TOKEN_RE.finditer(text)}
+
+
+def _display_precision(hass: HomeAssistant, entity_id: str) -> int | None:
+    """The number of decimals Home Assistant shows *entity_id* with, if set."""
+    try:
+        from homeassistant.helpers import entity_registry as er
+        entry = er.async_get(hass).async_get(entity_id)
+    except Exception:  # noqa: BLE001 - no registry (tests, early start)
+        return None
+    if entry is None:
+        return None
+    options = (entry.options or {}).get("sensor") or {}
+    for key in ("display_precision", "suggested_display_precision"):
+        value = options.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
+def _format_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(_format_value(v) for v in value if v is not None)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def entity_token_value(
+    hass: HomeAssistant,
+    entity_id: str,
+    attribute: str | None = None,
+    with_unit: bool = True,
+) -> str:
+    """What ``${entity_id}`` (or ``${entity_id.attribute}``) reads right now.
+
+    The state comes with its unit ("21.5 °C") and rounded to the precision
+    Home Assistant shows it with. An attribute is printed as stored. Missing,
+    unknown or unavailable reads as nothing, so the token collapses away.
+    """
+    state = hass.states.get(entity_id) if hass is not None else None
+    if state is None:
+        return ""
+    if attribute:
+        return _format_value((state.attributes or {}).get(attribute))
+    value = state.state
+    if not isinstance(value, str) or value in _NO_VALUE_STATES:
+        return ""
+    precision = _display_precision(hass, entity_id)
+    if precision is not None:
+        try:
+            value = f"{float(value):.{precision}f}"
+        except ValueError:
+            pass
+    unit = (state.attributes or {}).get("unit_of_measurement")
+    return f"{value} {unit}" if with_unit and isinstance(unit, str) and unit else value
+
+
+def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
+    """Replace every ``${domain.object_id[.attribute]}`` in *text* with its value.
+
+    Anything other than a string with a token in it is returned unchanged.
+    """
+    if not isinstance(text, str) or "${" not in text:
+        return text
+    return ENTITY_TOKEN_RE.sub(
+        lambda m: entity_token_value(hass, m.group(1).lower(), m.group(2)), text,
+    )
+
+
+def substitute_label_tokens(
+    text: str, values: dict[str, str], hass: HomeAssistant | None = None,
+) -> str:
     """Replace ``${TOKEN}`` placeholders in *text* from *values*.
+
+    With *hass*, entity variables (``${sensor.x}``) are filled in first.
 
     Token matching is case-insensitive and tolerates inner whitespace, so
     ``${STATE}``, ``${state}`` and ``${ State }`` are the same token. A token
@@ -1176,6 +1304,8 @@ def substitute_label_tokens(text: str, values: dict[str, str]) -> str:
     """
     if not text or "${" not in text:
         return text
+    if hass is not None:
+        text = substitute_entity_tokens(text, hass)
     lookup = {k.lower(): v for k, v in values.items()}
     substituted = LABEL_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
     # A token that collapsed can leave a separator joining nothing — a goto
@@ -1193,7 +1323,7 @@ def substitute_label_tokens(text: str, values: dict[str, str]) -> str:
 # URL — the exact thing the token regex is careful to prevent for ``${}``.
 # Bounded to a token-shaped run, not to the next brace: a greedy match would
 # eat the rest of the label, turning "Vor ${STATE nach" into "Vor".
-_BROKEN_TOKEN_RE = re.compile(r"\$\{\s*\w*\s*\}?")
+_BROKEN_TOKEN_RE = re.compile(r"\$\{\s*[\w.]*\s*\}?")
 
 def clean_label_text(text: str) -> str:
     """Make *text* safe to put in an imgserv URL and tidy to read.

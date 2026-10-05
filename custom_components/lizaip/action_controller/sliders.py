@@ -71,6 +71,14 @@ class SliderControl:
     supported: Mapping[str, Any] | None = None
     #: Attribute names for the live min/max range, e.g. ``("min", "max")``.
     range_attrs: tuple[str, str] | None = None
+    #: Whether sliding *up* should *lower* the value. Only true for colour
+    #: temperature, because kelvin runs backwards from the thing being adjusted:
+    #: warm is ~2200K and cool ~6500K, so "more kelvin" is "less warm". This
+    #: slider is a blind relative drag with no track or gradient to look at, so
+    #: "up = more" is the only intuition available, and for a colour control
+    #: that reads as warmer. It is a UX judgement, not a derivation -- see the
+    #: README for what Home Assistant does and why its case differs.
+    invert: bool = False
 
 
 #: Controls in per-domain priority order; the first supported row is the
@@ -88,6 +96,7 @@ SLIDER_CONTROLS: tuple[SliderControl, ...] = (
         data_key="color_temp_kelvin", min=2000, max=6500, icon="mdi:thermometer",
         supported={"color_mode": "color_temp"},
         range_attrs=("min_color_temp_kelvin", "max_color_temp_kelvin"),
+        invert=True,
     ),
     SliderControl(
         id="media-volume", domain="media_player", label="Volume",
@@ -133,6 +142,21 @@ SLIDER_CONTROLS: tuple[SliderControl, ...] = (
         range_attrs=("min_humidity", "max_humidity"),
     ),
 )
+
+
+#: Mechanics of the rows that invert, so a stored config can be matched back to
+#: its capability. Direction belongs to the *control*, not to the saved config:
+#: keying it off the mechanics means configs written before this existed behave
+#: correctly without a migration, and no new key has to be threaded through the
+#: panel, the websocket sanitiser and the layout generator.
+_INVERTED_MECHANICS: frozenset[tuple[str, str]] = frozenset(
+    (c.service, c.data_key) for c in SLIDER_CONTROLS if c.invert
+)
+
+
+def control_inverts(service: str, data_key: str) -> bool:
+    """Whether the control these mechanics describe runs its drag backwards."""
+    return (service, data_key) in _INVERTED_MECHANICS
 
 
 def control_range(control: SliderControl, state: State | None) -> tuple[float, float]:

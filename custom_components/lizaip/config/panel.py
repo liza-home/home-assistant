@@ -7,7 +7,7 @@ import os
 from aiohttp import web
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.components.frontend import async_remove_panel
 from homeassistant.components.http import HomeAssistantView
@@ -15,6 +15,7 @@ from homeassistant.components.panel_custom import async_register_panel
 
 from ..action_controller import (
     clear_slider_state,
+    get_current_page,
     setup as setup_action_dispatch,
     setup_state_listener,
 )
@@ -25,8 +26,10 @@ from ..const import (
     resolve_tooltip_url,
 )
 from .const import CONFIG_CHANGED_EVENT
+from .icon_push import IconPushQueue
 from . import device_sync as _device_sync_mod
 from .layouts import refresh as _layout_refresh
+from .variables import async_setup_variable_listener
 from .websocket import register_commands
 from ..device.const import LIZAIP_HELLO_EVENT
 
@@ -154,8 +157,18 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             device_id = dev.id
             break
 
+    # The live icon-update callback below cannot await; read the text settings
+    # now so it finds them kept rather than falling back to the defaults.
+    store = hass.data[DOMAIN]["_store"]
+    if device_id is not None:
+        await store.async_get_settings(device_id)
+
     # State listener → icon updates
     entry_data["state_unsub"] = await setup_state_listener(hass, entry)
+    # Entity variables in tooltips and icons → resync when their entity moves.
+    entry_data["variable_unsub"] = await async_setup_variable_listener(
+        hass, entry, _device_sync_mod.sync_config_to_device
+    )
 
     async def _on_config_changed(event: Event) -> None:
         if event.data.get("entry_id") == entry.entry_id:
@@ -171,12 +184,30 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             await _layout_refresh.async_handle_hello(hass, entry)
             await _device_sync_mod.sync_config_to_device(hass, entry)
 
-    async def _on_icon_update(event: Event) -> None:
-        if event.data.get("device_id") != device_id:
-            return
-        # Get device connection
+    async def _send_page(page_id: int, buttons: list[dict]) -> None:
+        """One `set_page` round-trip, resolving the connection at send time.
+
+        Looked up per send rather than captured: the queue coalesces across the
+        await, so a drain that began while the device was connected can reach
+        this line after it dropped.
+        """
         conn = entry.runtime_data if hasattr(entry, "runtime_data") else None
         if conn is None or not getattr(conn, "connected", False):
+            return
+        await conn.set_page(page_id, buttons=buttons)
+
+    push_queue = IconPushQueue(
+        _send_page,
+        current_page=lambda: get_current_page(entry.entry_id),
+    )
+    entry_data["icon_push_queue"] = push_queue
+
+    # A plain callback, so it cannot start a concurrent round-trip of its own.
+    # The tooltip style therefore comes from `cached_settings`, warmed during
+    # entry setup, rather than an awaited disk read.
+    @callback
+    def _on_icon_update(event: Event) -> None:
+        if event.data.get("device_id") != device_id:
             return
 
         # Resolve page IDs — they are 32-bit integers matching protocol page IDs
@@ -204,8 +235,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             if tooltip is not None:
                 page_color = upd.get("page_color", "")
                 if tooltip_style is None:
-                    settings = await hass.data[DOMAIN]["_store"].async_get_settings(device_id)
-                    tooltip_style = settings["tooltip"]
+                    tooltip_style = store.cached_settings(device_id)["tooltip"]
                 btn_data["img_tooltip"] = resolve_tooltip_url(
                     tooltip, page_color, tooltip_style,
                 )
@@ -213,12 +243,16 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             if len(btn_data) > 1:  # has more than just "name"
                 page_buttons.setdefault(pid_int, []).append(btn_data)
 
-        # Send partial set_page per page (only changed buttons)
+        # Handed to the queue rather than sent here, so a dimmer ramp cannot
+        # stack four `set_page` requests deep and turn a ~111 ms acknowledgement
+        # into a 1.5 s one.
         for pid_int, buttons in page_buttons.items():
-            try:
-                await conn.set_page(pid_int, buttons=buttons)
-            except Exception as err:
-                _LOGGER.warning("set_page (partial) failed for page %s: %s", pid_int, err)
+            push_queue.submit(pid_int, buttons)
+        push_queue.schedule(
+            lambda coro: entry.async_create_background_task(
+                hass, coro, "lizaip_icon_push",
+            ),
+        )
 
     entry_data["sync_unsub"] = hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed)
     entry_data["icon_sync_unsub"] = hass.bus.async_listen(ICON_UPDATE_EVENT, _on_icon_update)
@@ -248,8 +282,17 @@ async def async_unload_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     # base value was read from an entity this entry owns.
     clear_slider_state(entry.entry_id)
 
+    # Before the unsubscribes below, so a drain cannot start a fresh round-trip
+    # against a connection this unload is about to drop. The task is tied to
+    # the entry and would be cancelled anyway; this also discards the pending
+    # set, which a reload would otherwise re-send as stale state.
+    push_queue = entry_data.get("icon_push_queue")
+    if push_queue is not None:
+        push_queue.close()
+
     for key in (
         "state_unsub",
+        "variable_unsub",
         "sync_unsub",
         "icon_sync_unsub",
         "hello_sync_unsub",

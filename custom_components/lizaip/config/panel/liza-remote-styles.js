@@ -1558,6 +1558,13 @@ export const STYLES = `
     margin-top: 8px;
   }
 
+  .action-editor-heading {
+    margin: 0;
+    font-size: var(--liza-font-m);
+    font-weight: 500;
+    color: var(--liza-muted-text);
+  }
+
   /* --- Settings tab --- */
   .settings-view {
     display: flex;
@@ -1572,10 +1579,11 @@ export const STYLES = `
     gap: 16px;
     padding: 0 16px 16px;
   }
-  /* The number field gets what .config-field gives its text inputs; it is
-     the only number input in the panel, so it is named here. */
+  /* The step field gets what .config-field gives its text inputs, but not its
+     width: it holds two digits, and a full-width box reads as a place to type
+     a sentence. Same reason .slider-factor-input is narrowed. */
   .settings-body input[type="number"] {
-    width: 100%;
+    width: 88px;
     padding: 10px 12px;
     border: 1px solid var(--divider-color);
     border-radius: 8px;
@@ -1589,6 +1597,55 @@ export const STYLES = `
     outline: none;
     border-color: var(--primary-color);
   }
+  /* Left-aligned, unlike .hint-text, which is the centred empty-state style
+     for a view with nothing in it yet. Centring a card's opening sentence sets
+     it adrift from the fields it introduces. */
+  .settings-card-description {
+    margin: 0;
+    color: var(--liza-muted-text);
+    font-size: var(--liza-font-s);
+    line-height: 1.45;
+  }
+  .settings-switch-list {
+    display: flex;
+    flex-direction: column;
+  }
+  /* The control sits on the right of the name it belongs to, the way HA's own
+     settings rows read, so the eye runs name → explanation → state. */
+  .settings-switch-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 0;
+    border-top: 1px solid var(--divider-color, rgba(127,127,127,.15));
+  }
+  .settings-switch-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .settings-switch-text label {
+    font-size: var(--liza-font-m);
+    font-weight: 500;
+    color: var(--primary-text-color);
+    cursor: pointer;
+  }
+  .settings-switch-text .config-field-hint { margin-top: 0; }
+  .settings-switch-row ha-switch { flex: none; margin-top: 2px; }
+  /* Indented under the switch it depends on, and dimmed rather than hidden
+     while that switch is off: a field that vanishes leaves the user unsure
+     whether it still exists. */
+  .settings-switch-detail {
+    padding: 2px 0 14px 16px;
+    border-left: 2px solid var(--divider-color, rgba(127,127,127,.15));
+    margin-left: 4px;
+  }
+  .settings-switch-detail.is-off { opacity: .45; }
+  /* A two-digit number in a full-width box reads as a text field. The unit
+     sits beside it rather than in the hint, where it has to be hunted for. */
+  .settings-step-input { display: flex; align-items: center; gap: 8px; }
+  .settings-step-input input { flex: none; }
+  .settings-step-unit {
+    color: var(--liza-muted-text);
+    font-size: var(--liza-font-m);
+  }
   /* Dark like the remote's own screen, so the preview shows the text the
      way it will be seen there. */
   .settings-preview {
@@ -1601,6 +1658,17 @@ export const STYLES = `
   }
   .settings-preview img {
     max-width: 100%;
+  }
+  .settings-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .settings-toggle input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--primary-color);
   }
   .settings-fonts-hint {
     text-align: left;

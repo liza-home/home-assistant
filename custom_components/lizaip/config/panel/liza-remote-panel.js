@@ -1392,6 +1392,8 @@ class LizaRemotePanel extends HTMLElement {
   _isAssignedRecord(assign) {
     if (!assign) return false;
     if (assign.image) return true;
+    // A long touch is something the button does, and ✕ clears it.
+    if (Array.isArray(assign.longtouch) && assign.longtouch.length) return true;
     return this._hasRunnableAction(assign);
   }
 
@@ -2073,6 +2075,77 @@ class LizaRemotePanel extends HTMLElement {
     }
   }
 
+  // Whether this remote's settings (the gear tab) have long touch on. Off
+  // until they are loaded.
+  _longtouchEnabled() {
+    return this._textSettings?.settings?.longtouch?.enabled === true;
+  }
+
+  // The long-touch steps of the selected button. One shared empty list when
+  // there are none, so the identity test that keeps the editor from being
+  // reset (and folded up) on every render holds for an empty button too.
+  _longtouchSequence() {
+    const key = this._selectedButton?.key;
+    const steps = key ? this._editAssign(key)?.longtouch : null;
+    if (Array.isArray(steps) && steps.length) return steps;
+    return this._noLongtouch || (this._noLongtouch = []);
+  }
+
+  /**
+   * The editor for the action a long touch runs, below the click's.
+   *
+   * Reused exactly while the click editor is: that one is cleared wherever the
+   * editing context changes, and a long-touch editor built beside a different
+   * click editor belongs to another button.
+   */
+  async _mountLongtouchEditor(containerId) {
+    const container = this.shadowRoot?.querySelector(`#${containerId}`);
+    if (!container) return;
+    const sequence = this._longtouchSequence();
+    if (this._longEditorEl && this._editorEl && this._longEditorOwner === this._editorEl) {
+      container.replaceChildren(this._longEditorEl);
+      this._longEditorEl.hass = this._editorHass();
+      this._longEditorEl.narrow = this._narrow;
+      if (this._longEditorEl.actions !== sequence) this._longEditorEl.actions = sequence;
+      this._enforceSingleAction(this._longEditorEl);
+      return;
+    }
+    container.innerHTML = "";
+    this._longEditorEl = null;
+    await this._loadHaComponents();
+    if (!customElements.get("ha-automation-action")) return;
+    const editor = document.createElement("ha-automation-action");
+    editor.hass = this._editorHass();
+    editor.narrow = this._narrow;
+    editor.actions = sequence;
+    editor.addEventListener("value-changed", (ev) => this._onLongtouchChanged(ev));
+    container.appendChild(editor);
+    this._longEditorEl = editor;
+    this._longEditorOwner = this._editorEl;
+    this._enforceSingleAction(editor);
+  }
+
+  _onLongtouchChanged(ev) {
+    ev.stopPropagation();
+    const value = ev.detail?.value;
+    const key = this._selectedButton?.key;
+    if (!Array.isArray(value) || !key) return;
+    // One step, like the click: the editor below it is a single action.
+    if (value.length) {
+      this._editAssignEnsure(key).longtouch = [value[0]];
+    } else {
+      const assign = this._editAssign(key);
+      if (assign) delete assign.longtouch;
+    }
+    const sequence = this._longtouchSequence();
+    if (this._longEditorEl) {
+      if (this._longEditorEl.actions !== sequence) this._longEditorEl.actions = sequence;
+      this._enforceSingleAction(this._longEditorEl);
+    }
+    this._scheduleAutoSave();
+    this._refreshSVG();
+  }
+
   /**
    * `hass` for the action editor, with every internal command narrowed to this device.
    *
@@ -2207,12 +2280,14 @@ class LizaRemotePanel extends HTMLElement {
       sr.querySelector("#liza-fab-style")?.remove();
       sr.querySelector("#liza-btn-style")?.remove();
       styleEl.disabled = false;
-      const hasAction = this._sequence && this._sequence.length > 0;
+      const isLong = editor === this._longEditorEl;
+      const sequence = isLong ? this._longtouchSequence() : this._sequence;
+      const hasAction = sequence && sequence.length > 0;
       let btn = editor.parentElement?.querySelector(".liza-add-action-btn");
       if (!btn) {
         btn = document.createElement("button");
         btn.className = "liza-add-action-btn";
-        btn.innerHTML = `+ Add action`;
+        btn.textContent = `+ ${this._t(isLong ? "add_longtouch_action" : "add_click_action")}`;
         btn.addEventListener("click", () => {
           const nativeBtn = sr.querySelector(".buttons ha-button") || sr.querySelector("ha-button-menu");
           if (nativeBtn) nativeBtn.click();

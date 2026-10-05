@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,7 +16,27 @@ _LOGGER = logging.getLogger(__name__)
 _DEFAULT_PAGE_ID = 1
 
 #: Coalesce bursty state/attribute changes into one icon update.
-_STATE_DEBOUNCE_SECONDS = 0.5
+_STATE_DEBOUNCE_SECONDS = 0.2
+
+#: The longest a change may sit unsent while changes keep arriving.
+#:
+#: The debounce above is a *trailing* one: every new event cancels the pending
+#: flush and starts the wait again. That is right for a burst with an end --
+#: one logical transition reported as several attribute writes -- but a dimmer
+#: being held has no end, so the deadline was pushed out on every frame and the
+#: icon froze at whatever it showed when the ramp started, only catching up once
+#: the user let go. Capping the wait turns that into a steady ~5 updates/sec.
+#:
+#: Measured, so please do not "optimise" this downwards without re-measuring.
+#: Once icon pushes were serialised (see `config/icon_push.py`) the obvious next
+#: move looked like halving this to push twice as often. The hardware says no:
+#: over a 168-step ramp the device answered a `set_page` in 280 ms on average,
+#: a ceiling of ~3.6 round-trips/sec, while this cap already permits ~10/sec
+#: (~5 flushes, and a lamp commonly owns a button on two pages). Demand already
+#: exceeds the device by roughly 3x, so the limiter is the device, not this
+#: number. Halving it would ask for ~20/sec against the same ceiling: the
+#: surplus is coalesced away, buying no freshness and burning CPU in a hot path.
+_STATE_MAX_WAIT_SECONDS = 0.2
 
 #: Fixed-button context per config entry: entry_id → grid button key.
 #: Grid keys only; fixed buttons never become their own context. The slider
@@ -37,6 +58,11 @@ _selected_control: dict[str, str] = {}
 #: Selected sensitivity per config entry: entry_id → factor.
 #: Safe to freeze: it describes the physical track, not entity mechanics.
 _selected_factor: dict[str, float] = {}
+
+#: Touches being timed on buttons with a long touch:
+#: (entry_id, button_key) → ``longtouch._Gesture``. Kept here so
+#: ``clear_slider_state`` drops them with the rest of the page's state.
+_button_gestures: dict[tuple[str, str], Any] = {}
 
 #: Last known page per config entry: entry_id → page_id.
 #: Used to infer unannounced page changes and as ``_coerce_page_id``'s fallback.
@@ -143,6 +169,9 @@ def clear_slider_state(entry_id: str) -> None:
         _slider_touch_state.pop(key, None)
         _LOGGER.debug("Cleared slider gesture state for %s", key)
     _clear_selected_device(entry_id)
+    # A touch on a button no longer on screen will not be released there.
+    for key in [k for k in _button_gestures if k[0] == entry_id]:
+        _button_gestures.pop(key).cancel()
     # Page changes reset fixed-button overrides; resolve_fixed_action also
     # re-checks that the context button is still present.
     if _selected_button.pop(entry_id, None) is not None:

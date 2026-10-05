@@ -11,7 +11,7 @@ from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.script import SCRIPT_MODE_PARALLEL, Script
 
-from ..const import normalise_payload
+from ..const import longtouch_steps, normalise_payload
 from ..const import (
     CONF_OPTIMISTIC_UPDATES,
     DOMAIN,
@@ -33,6 +33,7 @@ from ._state import (
     _DEFAULT_PAGE_ID,
     get_selected_button,
 )
+from ..state_icon import entity_icon_style, read_icon_style_options
 from .helpers import (
     _get_store,
     _resolve_device_id,
@@ -40,6 +41,8 @@ from .helpers import (
     service_name,
 )
 from .overrides import resolve_fixed_action
+from ..config.internal_commands import get_internal_command
+from ..config.text_style import longtouch_enabled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +73,7 @@ async def _get_script(
     page_id: int,
     button_key: str,
     actions: list,
+    gesture: str = "click",
 ) -> Script | None:
     """Return the cached Script, rebuilding when the source config changed."""
     cache = _script_cache(hass, entry_id)
@@ -80,7 +84,9 @@ async def _get_script(
         )
         return None
 
-    cache_key = (page_id, button_key)
+    # A click keeps the key it always had; a long touch is a second script on
+    # the same button.
+    cache_key = (page_id, button_key) if gesture == "click" else (page_id, f"{button_key}:{gesture}")
     cached = cache.get(cache_key)
     if cached is not None and cached[0] == actions:
         return cached[1]
@@ -101,7 +107,7 @@ async def _get_script(
     script = Script(
         hass,
         sequence,
-        f"liza_{button_key}_click",
+        f"liza_{button_key}_{gesture}",
         DOMAIN,
         script_mode=SCRIPT_MODE_PARALLEL,
     )
@@ -403,10 +409,27 @@ async def _fire_optimistic_update(
             page_color = p.get("default_color", "")
             break
 
-    resolved = resolve_icon_url(icon, color=page_color)
-
-    # Use the device language; the correcting state listener uses the same entry.
+    # Resolved here rather than below with the language, because the style call
+    # needs it: the fill quantum has to match the one the sync and the listener
+    # used, or this optimistic repaint would show a level neither of them draws.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
+
+    # Against the *predicted* state, not the current one: a press that turns a
+    # lamp off must not draw the off icon in the style it is about to lose.
+    style_options = read_icon_style_options(getattr(entry, "options", None))
+    tile_style = entity_icon_style(
+        state,
+        assume_state=predicted_ha_state,
+        step=style_options.step,
+        fill=style_options.fill,
+        tint=style_options.tint,
+    ).on_page(page_color)
+
+    resolved = resolve_icon_url(
+        icon, color=tile_style.color, percent=tile_style.percent,
+    )
+
+    # Same entry as the style above; the correcting state listener uses it too.
     lang = get_ui_language(hass, entry)
     tooltip_label = get_action_label(predicted_action_key, lang)
     entity_name = (
@@ -432,6 +455,99 @@ async def _fire_optimistic_update(
     })
 
 
+async def resolve_button_assignment(
+    hass: HomeAssistant,
+    entry_id: str,
+    button_key: str,
+    page_id: int = _DEFAULT_PAGE_ID,
+) -> tuple[str | None, dict | None]:
+    """``(device_id, assignment)`` a press of *button_key* runs right now.
+
+    The fixed-button context applies, so this is the override when the selected
+    grid button has one.
+    """
+    device_id = _resolve_device_id(hass, entry_id)
+    if not device_id:
+        return None, None
+    assignments = await _get_store(hass).async_get_assignments(device_id, page_id)
+    assign = resolve_fixed_action(assignments, get_selected_button(entry_id), button_key)
+    return device_id, assign if isinstance(assign, dict) else None
+
+
+async def longtouch_assignment(
+    hass: HomeAssistant,
+    entry_id: str,
+    button_key: str,
+    page_id: int = _DEFAULT_PAGE_ID,
+) -> list:
+    """The long-touch steps *button_key* runs now; ``[]`` when it has none.
+
+    Also ``[]`` while the remote's settings have long touch off: the steps stay
+    stored, but the button clicks on press as if they were not there.
+    """
+    device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+    steps = longtouch_steps(assign)
+    if not steps:
+        return []
+    settings = await _get_store(hass).async_get_settings(device_id)
+    return steps if longtouch_enabled(settings) else []
+
+
+def _bind_internal_steps(actions: list, entry_id: str) -> list:
+    """Point device-local steps that name no remote at this one.
+
+    A button's ``lizaip.*`` step stores no target, meaning "the remote this
+    button is on". Run by Home Assistant instead of the remote, the same call
+    without a target addresses every remote, so the entry is filled in.
+    """
+    bound = []
+    for step in actions:
+        if (
+            isinstance(step, dict)
+            and get_internal_command(step.get("action") or step.get("service")) is not None
+            and not step.get("target")
+            and not (step.get("data") or {}).get("config_entry_id")
+        ):
+            step = {**step, "data": {**(step.get("data") or {}), "config_entry_id": entry_id}}
+        bound.append(step)
+    return bound
+
+
+async def execute_longtouch(
+    hass: HomeAssistant,
+    entry_id: str,
+    button_key: str,
+    page_id: int = _DEFAULT_PAGE_ID,
+) -> None:
+    """Run the long-touch steps of *button_key*.
+
+    Only the wake prelude is inferred, as for a click: a long touch that
+    starts an app on a sleeping TV still has to wake it first. Launch
+    verification and the optimistic icon belong to the click, whose state the
+    button shows.
+    """
+    actions = await longtouch_assignment(hass, entry_id, button_key, page_id)
+    if not actions:
+        _LOGGER.debug("execute_longtouch: no long touch for %s/%s", page_id, button_key)
+        return
+    before = _inferred_prelude(hass, actions[0])
+    actions = _bind_internal_steps(actions, entry_id)
+    script = await _get_script(
+        hass, entry_id, page_id, button_key,
+        (before or []) + actions, gesture="longtouch",
+    )
+    if script is None:
+        return
+    _LOGGER.info(
+        "Executing %s (%d steps) for page=%s button=%s",
+        script.name, len(script.sequence), page_id, button_key,
+    )
+    try:
+        await script.async_run(context=Context())
+    except Exception:
+        _LOGGER.exception("Long touch failed for %s/%s", page_id, button_key)
+
+
 async def execute_action(
     hass: HomeAssistant,
     entry_id: str,
@@ -439,22 +555,14 @@ async def execute_action(
     page_id: int = _DEFAULT_PAGE_ID,
 ) -> None:
     """Run the HA script action assigned to a clicked button."""
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
     if not device_id:
         _LOGGER.warning("execute_action: device for entry %s not found", entry_id)
         return
-
-    store = _get_store(hass)
-    assignments = await store.async_get_assignments(device_id, page_id)
-    # Overrides share the cache key with defaults, but _get_script validates by
-    # action content so switching contexts rebuilds instead of running stale code.
-    assign = resolve_fixed_action(assignments, get_selected_button(entry_id), button_key)
-    if not assign or not isinstance(assign, dict):
+    if not assign:
         _LOGGER.info(
-            "execute_action: no assignment for button '%s' on page %s "
-            "(device=%s, assigned_keys=%s)",
+            "execute_action: no assignment for button '%s' on page %s (device=%s)",
             button_key, page_id, device_id,
-            list(assignments.keys()) if assignments else "none",
         )
         return
 
@@ -498,7 +606,7 @@ async def execute_action(
             )
 
     # Order: wake, capture, button action, check; non-list siblings are ignored.
-    actions = own_actions
+    actions = _bind_internal_steps(own_actions, entry_id)
     if capture:
         actions = capture + actions
     if isinstance(before, list) and before:

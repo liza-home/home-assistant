@@ -29,6 +29,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.icon import async_get_icons
 
 from ..const import (
+    ENTITY_TOKEN_RE,
+    entity_token_entities,
+    entity_token_value,
     service_name,
     ATTR_ICONS,
     DOMAIN_ICONS,
@@ -180,7 +183,7 @@ def _fill_label_tokens(
             internal_service, data, internal_context, _internal_target_hint(assign)
         )
 
-    return substitute_label_tokens(text, values)
+    return substitute_label_tokens(text, values, hass)
 
 
 def _resolve_button_tooltip(
@@ -648,6 +651,34 @@ _ICON_LADDER = (
 )
 
 
+def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
+    """*assign* with the entity variables in its image filled in.
+
+    ``mdi:weather-${weather.home}`` or ``text:${sensor.outdoor}`` follow the
+    entity. An image that resolves to nothing (the entity is unavailable) is
+    dropped, so the button falls back to the icon it would derive without one.
+    """
+    image = assign.get("image") if isinstance(assign, dict) else None
+    if not entity_token_entities(image):
+        return assign
+    # All or nothing: half an icon name ("mdi:weather-") draws a broken glyph.
+    missing = False
+    # A unit belongs in drawn text, never in a name: "mdi:battery-80 %" is no
+    # icon at all. Text is a ``text:`` image or one with no scheme before the
+    # variable, which `resolve_icon_url` draws as text.
+    prefix = image.split("${", 1)[0]
+    with_unit = prefix.lower().startswith("text:") or ":" not in prefix
+
+    def _value(match) -> str:
+        nonlocal missing
+        value = entity_token_value(hass, match.group(1).lower(), match.group(2), with_unit)
+        missing = missing or not value
+        return value
+
+    resolved = ENTITY_TOKEN_RE.sub(_value, image).strip()
+    return {**assign, "image": None if missing or not resolved else resolved}
+
+
 def _resolve_button_icon(
     action_def: dict,
     assign: dict,
@@ -663,6 +694,7 @@ def _resolve_button_icon(
     service = action_def.get("service", "")
     svc_domain = service.split(".")[0] if "." in service else ""
     config = assign.get("config", [])
+    assign = with_resolved_image(assign, hass)
 
     # The same state the label speaks about, so an area-bound button's face and
     # its words agree about whether the room is on.

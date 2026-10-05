@@ -78,6 +78,8 @@ The Buttons tab shows the remote face, with that remote's pages beside it.
 - Give it a **Tooltip** — the text shown when a button is touched.
   `${STATE}` is replaced by what pressing the button does, `${NAME}`
   by what it opens, and the hint under the field shows what it currently reads.
+  A tooltip can also show a live value from Home Assistant, such as a
+  temperature or a battery level — see [Live values on the remote](#live-values-on-the-remote).
 
 Clicking a button on *another* page's thumbnail jumps to that page and selects that
 button in one go.
@@ -112,6 +114,102 @@ source.
 
 To let a button switch pages, give it the built-in **Go to page** action and choose the
 destination.
+
+### Live values on the remote
+
+A button's **Tooltip**, a button's **Image** and a page **title** can show the current
+value of any Home Assistant entity. Write the entity ID in `${…}`:
+
+| You write | The remote shows |
+|---|---|
+| `${sensor.outdoor_temperature}` | the state with its unit, e.g. `21.5 °C` |
+| `${weather.home.temperature}` | one attribute of the entity, e.g. `18` (no unit) |
+
+The entity ID is the one shown under **Settings → Entities** in Home Assistant. Numbers
+are rounded the way Home Assistant displays them, so a sensor you set to one decimal
+shows one decimal here too.
+
+**Examples**
+
+| Field | You write | The remote shows |
+|---|---|---|
+| Tooltip | `Outside ${sensor.outdoor_temperature}` | Outside 21.5 °C |
+| Tooltip | `Battery ${sensor.lizaip_1c63499a7193_battery}` | Battery 85 % |
+| Tooltip | `${media_player.living_room.media_title}` | the song that is playing |
+| Tooltip | `${STATE} · ${sensor.desk_lamp_power}` | Off · 12 W |
+| Image | `${sensor.outdoor_temperature}` | the value drawn as the button's picture |
+| Image | `text:${weather.home.temperature}°` | 18° |
+| Image | `${sensor.lizaip_battery_icon}` | an icon chosen by a helper — see below |
+| Page title | `Living room ${sensor.living_room_temperature}` | Living room 22 °C |
+
+- **It stays current.** When the value changes, the remote is updated within about two
+  seconds. A sensor that changes every second is still sent at most every two seconds.
+- **Missing values disappear.** If the entity is `unavailable`, `unknown` or does not
+  exist, the variable is left out: "Battery ${…}" then reads just "Battery". An image
+  whose variable has no value falls back to the icon the button would show anyway; a
+  title stays blank.
+- **Units only appear in text.** In an icon name such as `mdi:battery-${…}` the unit is
+  left out, because `mdi:battery-80 %` is not an icon.
+- The editor shows the current value as well: the preview draws it, and the hint under
+  the field says what it reads right now.
+
+#### An icon that follows a value — the battery level
+
+An icon name has to match an existing icon exactly. Battery icons exist in steps of ten
+(`mdi:battery-10` … `mdi:battery-90`, plus `mdi:battery` for full and
+`mdi:battery-outline` for empty), while the battery sensor reports every percent — so
+`mdi:battery-${sensor.…_battery}` would ask for `mdi:battery-87`, which does not exist.
+A small **template helper** in Home Assistant turns the level into the right icon name.
+
+1. In Home Assistant open **Settings → Devices & services → Helpers → Create helper →
+   Template → Template a sensor**.
+2. **Name:** `lizaIP battery icon` — this creates the entity `sensor.lizaip_battery_icon`.
+3. **State template** — replace `sensor.lizaip_1c63499a7193_battery` with the battery
+   sensor of your remote:
+
+   ```jinja
+   {% set b = states('sensor.lizaip_1c63499a7193_battery') | int(-1) %}
+   {% if b < 0 %}unavailable
+   {% elif b >= 95 %}mdi:battery
+   {% elif b < 5 %}mdi:battery-outline
+   {% else %}mdi:battery-{{ [[(b + 5) // 10 * 10, 10] | max, 90] | min }}
+   {% endif %}
+   ```
+
+   Leave unit, device class and state class empty. The preview at the bottom of the
+   dialog should show something like `mdi:battery-80`.
+4. **Submit**, then in the lizaIP editor set the button's **Image** (or a page title) to
+
+   ```
+   ${sensor.lizaip_battery_icon}
+   ```
+
+   The helper already returns the full icon name, so nothing goes in front of it. (A
+   helper that returns only `battery-80` works too; then write `mdi:${sensor.lizaip_battery_icon}`.) Add a
+   tooltip such as `Battery ${sensor.lizaip_1c63499a7193_battery}` for the exact number.
+
+If you prefer YAML, the same helper in `configuration.yaml` — with a charging icon while
+the remote sits in its charger:
+
+```yaml
+template:
+  - sensor:
+      - name: "lizaIP battery icon"
+        availability: "{{ has_value('sensor.lizaip_1c63499a7193_battery') }}"
+        state: >
+          {% set b = states('sensor.lizaip_1c63499a7193_battery') | int(0) %}
+          {% set charging = is_state('binary_sensor.lizaip_1c63499a7193_charging', 'on') %}
+          {% set icon = 'mdi:battery-charging' if charging else 'mdi:battery' %}
+          {% if b >= 95 %}{{ icon ~ ('-100' if charging else '') }}
+          {% elif b < 5 %}{{ icon }}-outline
+          {% else %}{{ icon }}-{{ [[(b + 5) // 10 * 10, 10] | max, 90] | min }}
+          {% endif %}
+```
+
+The same pattern works for anything with stepped icons — Wi-Fi strength
+(`mdi:wifi-strength-1` … `-4`), or the weather, whose states (`sunny`, `rainy`,
+`partlycloudy`, …) need mapping to icon names such as `mdi:weather-sunny` or
+`mdi:weather-partly-cloudy`.
 
 ### The vertical slider
 

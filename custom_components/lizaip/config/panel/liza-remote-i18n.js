@@ -128,9 +128,86 @@ export const STRINGS = {
     it: "Per emoji a colori in titoli ed etichette, metti anche NotoColorEmoji.ttf in {path}.",
     es: "Para emojis en color en títulos y etiquetas, coloca también NotoColorEmoji.ttf en {path}.",
   },
+  add_click_action: {
+    en: "Add click action", de: "Klick-Aktion hinzufügen", fr: "Ajouter une action de clic",
+    it: "Aggiungi azione clic", es: "Añadir acción de clic",
+  },
+  add_longtouch_action: {
+    en: "Add long-touch action", de: "Aktion für langes Berühren hinzufügen",
+    fr: "Ajouter une action d’appui long", it: "Aggiungi azione tocco lungo",
+    es: "Añadir acción de toque largo",
+  },
+  click_action: {
+    en: "Click", de: "Klick", fr: "Clic", it: "Clic", es: "Clic",
+  },
+  longtouch_action: {
+    en: "Long touch (2 s)", de: "Langes Berühren (2 s)", fr: "Appui long (2 s)",
+    it: "Tocco lungo (2 s)", es: "Toque largo (2 s)",
+  },
+  settings_buttons: {
+    en: "Buttons", de: "Tasten", fr: "Boutons", it: "Pulsanti", es: "Botones",
+  },
+  settings_longtouch: {
+    en: "Long touch", de: "Langes Berühren", fr: "Appui long", it: "Tocco lungo", es: "Toque largo",
+  },
+  settings_longtouch_hint: {
+    en: "Resting a finger on a button for 2 seconds runs its long-touch action. On buttons that have one, the click runs when the finger lifts.",
+    de: "Bleibt ein Finger 2 Sekunden auf einer Taste, läuft ihre Aktion für langes Berühren. Bei Tasten mit einer solchen Aktion läuft der Klick erst beim Loslassen.",
+    fr: "Laisser le doigt 2 secondes sur un bouton lance son action d’appui long. Sur les boutons qui en ont une, le clic part au moment où le doigt se lève.",
+    it: "Tenere il dito su un pulsante per 2 secondi esegue la sua azione di tocco lungo. Sui pulsanti che ne hanno una, il clic parte quando si solleva il dito.",
+    es: "Mantener el dedo 2 segundos sobre un botón ejecuta su acción de toque largo. En los botones que tienen una, el clic se ejecuta al levantar el dedo.",
+  },
+  settings_icons: {
+    en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
+  },
+  settings_icon_color_enabled: {
+    en: "Tint icons with the light's colour",
+    de: "Symbole in der Lampenfarbe einfärben",
+    fr: "Teinter les icônes avec la couleur de la lampe",
+    it: "Colora le icone con il colore della luce",
+    es: "Tintar los iconos con el color de la luz",
+  },
+  settings_icon_color_enabled_hint: {
+    en: "A button bound to a lit lamp takes that lamp's colour instead of the page colour.",
+    de: "Eine Taste, die einer eingeschalteten Lampe zugeordnet ist, übernimmt deren Farbe statt der Seitenfarbe.",
+    fr: "Un bouton associé à une lampe allumée prend la couleur de cette lampe au lieu de celle de la page.",
+    it: "Un pulsante associato a una luce accesa assume il colore di quella luce invece di quello della pagina.",
+    es: "Un botón asociado a una lámpara encendida toma el color de esa lámpara en lugar del de la página.",
+  },
+  settings_icon_fill_enabled: {
+    en: "Fill icons with the light's brightness",
+    de: "Symbole nach Helligkeit füllen",
+    fr: "Remplir les icônes selon la luminosité",
+    it: "Riempi le icone in base alla luminosità",
+    es: "Rellenar los iconos según el brillo",
+  },
+  settings_icon_fill_enabled_hint: {
+    en: "Fills the icon from the bottom, like a gauge. Independent of the tint above.",
+    de: "Füllt das Symbol von unten wie eine Anzeige. Unabhängig von der Einfärbung darüber.",
+    fr: "Remplit l'icône par le bas, comme une jauge. Indépendant de la teinte ci-dessus.",
+    it: "Riempie l'icona dal basso, come un indicatore. Indipendente dalla colorazione sopra.",
+    es: "Rellena el icono desde abajo, como un indicador. Independiente del tinte de arriba.",
+  },
+  settings_fill_step: {
+    en: "Fill step", de: "Füllschritt", fr: "Pas de remplissage", it: "Passo di riempimento", es: "Paso de relleno",
+  },
+  settings_icon_card_description: {
+    en: "How buttons bound to a light show what that light is doing. Each switch works on its own, and both affect every button on this remote.",
+    de: "Wie Tasten, die einer Lampe zugeordnet sind, deren Zustand anzeigen. Jeder Schalter wirkt für sich, und beide betreffen alle Tasten dieser Fernbedienung.",
+    fr: "Comment les boutons associés à une lampe montrent l'état de celle-ci. Chaque interrupteur agit séparément, et les deux affectent tous les boutons de cette télécommande.",
+    it: "Come i pulsanti associati a una luce mostrano il suo stato. Ogni interruttore agisce per conto proprio ed entrambi riguardano tutti i pulsanti di questo telecomando.",
+    es: "Cómo los botones asociados a una luz muestran su estado. Cada interruptor actúa por su cuenta y ambos afectan a todos los botones de este mando.",
+  },
+  settings_fill_step_hint: {
+    en: "From {min} to {max}. Smaller is smoother; larger makes dimming feel quicker, since the remote fetches a new image for every fill level.",
+    de: "Von {min} bis {max}. Kleiner ist flüssiger; größer lässt das Dimmen schneller wirken, da die Fernbedienung für jede Füllstufe ein neues Bild lädt.",
+    fr: "De {min} à {max}. Plus petit est plus fluide ; plus grand rend la variation plus réactive, car la télécommande charge une nouvelle image pour chaque niveau.",
+    it: "Da {min} a {max}. Più piccolo è più fluido; più grande rende la regolazione più reattiva, perché il telecomando scarica una nuova immagine per ogni livello.",
+    es: "De {min} a {max}. Más pequeño es más suave; más grande hace que la regulación se sienta más rápida, ya que el mando descarga una imagen nueva por cada nivel.",
+  },
   settings_reset: {
-    en: "Restore defaults", de: "Standard wiederherstellen", fr: "Rétablir les valeurs par défaut",
-    it: "Ripristina predefiniti", es: "Restablecer valores predeterminados",
+    en: "Restore fonts", de: "Schriften zurücksetzen", fr: "Rétablir les polices",
+    it: "Ripristina caratteri", es: "Restablecer fuentes",
   },
   settings_saved: {
     en: "Settings saved. The remote redraws its pages.",
@@ -1139,6 +1216,13 @@ export const STRINGS = {
     fr: "<code>${STATE}</code> suit l'entité — remplacez-le pour corriger la formulation.",
     it: "<code>${STATE}</code> segue l'entità — sostituiscilo per correggere la formulazione.",
     es: "<code>${STATE}</code> sigue a la entidad — sustitúyalo para corregir la redacción.",
+  },
+  variable_hint: {
+    en: "<code>${sensor.…}</code> shows that entity's current value, <code>${sensor.….attribute}</code> one of its attributes.",
+    de: "<code>${sensor.…}</code> zeigt den aktuellen Wert dieser Entität, <code>${sensor.….attribut}</code> eines ihrer Attribute.",
+    fr: "<code>${sensor.…}</code> affiche la valeur actuelle de cette entité, <code>${sensor.….attribut}</code> l'un de ses attributs.",
+    it: "<code>${sensor.…}</code> mostra il valore attuale di quell'entità, <code>${sensor.….attributo}</code> uno dei suoi attributi.",
+    es: "<code>${sensor.…}</code> muestra el valor actual de esa entidad, <code>${sensor.….atributo}</code> uno de sus atributos.",
   },
   label_name_hint: {
     en: "<code>${NAME}</code> is replaced by what the button opens.",

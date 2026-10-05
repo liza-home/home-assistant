@@ -6,6 +6,38 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.2b2] - 2026-10-05
+
+### Added
+
+- **Show live values from Home Assistant on a button.** Write
+  `${sensor.outdoor_temperature}` into a button's tooltip -- for example
+  `Outside ${sensor.outdoor_temperature}` -- and the remote shows the current
+  value with its unit, such as "Outside 21.5 °C". `${weather.home.temperature}`
+  shows a single attribute. It works in a button's image too: an image of
+  `${sensor.outdoor_temperature}` puts the value itself on the button, and
+  `mdi:battery-${sensor.phone_battery}` picks the icon by value. Page titles
+  accept the same variables. The remote updates as the
+  value changes; if the entity is unavailable, the button falls back to its
+  usual icon and text.
+- **Long touch.** Rest a finger on a button for 2 seconds to run a second
+  action. Turn it on per remote with the new "Long touch" switch in the gear
+  tab; each button then gets a "Long touch" action below its click action.
+  On buttons that have one, the click runs when you lift your finger, so the
+  remote can tell a tap from a long touch. With the switch off, nothing
+  changes.
+- **Buttons that show what a light is doing.** A button bound to a light can
+  take on the lamp's colour (including the warmth of a white lamp) and fill
+  its icon from the bottom like a gauge as the lamp dims. Both are switched on
+  per remote under "Icon options" in the gear tab, where you can also choose
+  how finely the fill follows the brightness. The button reacts as soon as you
+  press it, without waiting for the lamp to report back.
+
+### Changed
+
+- **Colour temperature slider.** Sliding up now makes the light warmer instead
+  of colder.
+
 ## [2026.10.2b1] - 2026-10-02
 
 ### Added
@@ -16,10 +48,16 @@ The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.M
 
 - **Choose the font and size of titles and tooltips.** A new gear tab in the
   editor sets, for each remote, the font and size of page titles and of
-  tooltips, with a live preview and a button to restore the defaults. Your own
+  tooltips, with a live preview and a "Restore fonts" button. Your own
   fonts work too: put `.ttf` or `.otf` files into `/config/lizaip/fonts/` and
   they appear in the list. For colourful emoji in titles and labels, put
   `NotoColorEmoji.ttf` into the same folder.
+
+- **Set how finely light icons fill, in the gear tab.** A button for a light
+  fills its icon like a gauge as the lamp gets brighter. How fine that fill is
+  -- smoother, or quicker while dimming -- is now set in the editor's gear tab
+  under "Icon options", instead of in the integration's Configure dialog. Your
+  existing setting is kept.
 
 - **Sonos Radio and Sonos Playlists pages.** Two new layouts, titled with the
   Sonos logo: one puts your favourite radio stations on buttons 1-12, the other

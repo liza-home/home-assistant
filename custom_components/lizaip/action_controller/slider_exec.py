@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant
 
+from .. import optimistic
 from ..slider_throttle import has_moved, read_cooldown_seconds
 from ._state import (
     _DEFAULT_PAGE_ID,
@@ -22,6 +23,7 @@ from .helpers import _get_store, _resolve_device_id, split_service
 from .sliders import (
     SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY,
     _effective_target,
+    control_inverts,
     last_touched_slider_actions,
     resolve_control,
     slider_follows,
@@ -32,7 +34,9 @@ _LOGGER = logging.getLogger(__name__)
 #: Sensitivity bounds for the drag factor. The panel advertises them on its
 #: number input, but those attributes only feed form validity — and layout YAML
 #: reaches the executor without any sanitising — so they are enforced here too.
-#: A factor of 0 makes every delta zero; a negative one inverts the drag.
+#: A factor of 0 makes every delta zero, so the floor keeps a slider usable.
+#: Direction is deliberately not a factor concern: it belongs to the control
+#: (see ``SliderControl.invert``), which is why this floor can stay positive.
 SLIDER_FACTOR_MIN = 0.1
 SLIDER_FACTOR_MAX = 5.0
 
@@ -117,20 +121,25 @@ class _Mechanics:
     factor: float
     val_min: float
     val_max: float
+    #: Sliding up lowers the value; see ``SliderControl.invert``.
+    invert: bool = False
 
     @classmethod
     def from_config(cls, slider_cfg: dict) -> "_Mechanics":
         attribute = slider_cfg.get("attribute", "volume_level")
+        service = slider_cfg.get("service", "media_player.volume_set")
+        data_key = slider_cfg.get("data_key", attribute)
         return cls(
             target_entity=slider_cfg.get("target_entity", ""),
             attribute=attribute,
-            service=slider_cfg.get("service", "media_player.volume_set"),
-            data_key=slider_cfg.get("data_key", attribute),
+            service=service,
+            data_key=data_key,
             factor=_slider_num(
                 slider_cfg, "factor", 1.0, SLIDER_FACTOR_MIN, SLIDER_FACTOR_MAX,
             ),
             val_min=_slider_num(slider_cfg, "min", 0.0),
             val_max=_slider_num(slider_cfg, "max", 1.0),
+            invert=control_inverts(service, data_key),
         )
 
     def has_usable_range(self, slider_key: str) -> bool:
@@ -149,12 +158,48 @@ class _Mechanics:
 
     def value_at(self, base_value: float, travelled: float) -> float:
         """The value `travelled` (in normalized track units) away from `base_value`."""
-        delta = travelled * self.factor * (self.val_max - self.val_min)
+        direction = -1.0 if self.invert else 1.0
+        delta = travelled * self.factor * direction * (self.val_max - self.val_min)
         return max(self.val_min, min(self.val_max, base_value + delta))
 
-    async def write(self, hass: HomeAssistant, value: float) -> None:
-        """Call the configured service with `value`."""
+    def predict(self, hass: HomeAssistant, value: float) -> None:
+        """Publish `value` as where this light is *about* to be, if it is one.
+
+        Split out of :meth:`write` so the icon can be driven from the finger
+        rather than from the command stream. The two run at very different
+        rates: the device reports a drag every 20-60ms, but `light.turn_on` is
+        throttled to one call per `slider_throttle` (250ms by default) to keep
+        the Hue bridge from coalescing them away. Predicting only alongside a
+        command therefore aliased the tile down to 4 updates/sec and left it up
+        to a whole throttle window behind the finger, on top of the flush wait.
+
+        Calling this on every slide event costs nothing when it is throttled --
+        a prediction is a dict write plus an event, both local -- and means the
+        next flush always carries where the finger *is*, not where it was when
+        the last command happened to go out.
+        """
+        domain, _ = split_service(self.service)
+        if domain == "light" and self.data_key == "brightness" and self.target_entity:
+            optimistic.predict(hass, self.target_entity, value)
+
+    async def write(
+        self, hass: HomeAssistant, value: float, *, predict: bool = True,
+    ) -> None:
+        """Call the configured service with `value`.
+
+        `predict` is only ever False when the caller has already published this
+        exact value -- the slide path predicts ahead of the throttle. Each
+        prediction fires a bus event that wakes the icon listener, so repeating
+        one would cost a second flush for a tile that is already correct.
+        """
         domain, svc = split_service(self.service)
+        # Before the await, not after: the point is to beat the round trip, and
+        # the service call is the slow half of it. Predicting first lets the
+        # tile move while the command is still in flight. Still done here for
+        # callers that have not predicted -- a lift committing the tail of a
+        # drag is the one that matters, being the final resting value.
+        if predict:
+            self.predict(hass, value)
         await hass.services.async_call(
             domain, svc, {"entity_id": self.target_entity, self.data_key: round(value, 3)},
         )
@@ -370,6 +415,9 @@ def _begin_gesture(
         "pending_pos": None,
         # Selection-following only: the mechanics this gesture is pinned to.
         "resolved": pinned_cfg,
+        # Seeded with the origin, so a device restating the pinned position
+        # does not publish a prediction of the value the lamp is already at.
+        "last_pred_pos": position,
     }
 
 
@@ -440,13 +488,28 @@ async def _do_slide(
     now = time.monotonic()
     touch["ts"] = now
 
+    # Ahead of the throttle, deliberately. The throttle exists to protect the
+    # *bridge* from a 30Hz command stream; it has nothing to say about how
+    # often the icon may move. Predicting here is what lets the fill track the
+    # finger instead of the command cadence -- see `_Mechanics.predict`.
+    #
+    # Still guarded on actual movement, though. A device that restates a
+    # position the finger has not left would otherwise keep refreshing the
+    # prediction's TTL, holding an overlay alive over a lamp that has already
+    # arrived -- the tile would then be pinned to a stale value for as long as
+    # the restating continued.
+    if position != touch.get("last_pred_pos"):
+        touch["last_pred_pos"] = position
+        mech.predict(hass, _value_at(mech, touch, position))
+
     if _throttled(hass, entry_id, touch, position, now):
         # Remembered, not discarded: if the finger lifts without the device
         # restating the position, this is the only record of where it ended.
         touch["pending_pos"] = position
         return
 
-    await _write(hass, mech, touch, _SLIDE, slider_key, position)
+    # Already predicted above, whether or not the position had moved.
+    await _write(hass, mech, touch, _SLIDE, slider_key, position, predict=False)
     # Only after the write landed. `last_pos` is the record of what reached the
     # entity, and `touch_end` skips its commit when the final position matches
     # it — advancing it on a failed write would strand the gesture.
@@ -476,6 +539,11 @@ async def _do_end(
     _LOGGER.debug("Slider touch_end: %s (from '%s')", slider_key, interaction)
 
 
+def _value_at(mech: _Mechanics, touch: dict, pos: float) -> float:
+    """The value `pos` implies, relative to the gesture's origin."""
+    return mech.value_at(touch["base_value"], pos - touch["zero_pos"])
+
+
 async def _write(
     hass: HomeAssistant,
     mech: _Mechanics,
@@ -483,19 +551,48 @@ async def _write(
     phase: str,
     slider_key: str,
     pos: float,
+    *,
+    predict: bool = True,
 ) -> None:
     """Write the value `pos` implies, relative to the gesture's origin.
 
     Deliberately unguarded: `execute_slider_action` already wraps the whole
     coroutine, and letting a failure propagate is what keeps the `last_pos`
-    bookkeeping honest — a swallowed one is indistinguishable from success.
+    bookkeeping honest -- a swallowed one is indistinguishable from success.
+
+    Skips the service call when the payload would repeat the last one. The
+    throttle cannot catch this: it asks whether the *finger* moved, while
+    `value_at` clamps, so every distinct position inside a clamped region
+    yields an identical value and passes. Dragging down on a lamp that is
+    already at the bottom therefore wrote `brightness: 0` once per throttle
+    window for the whole gesture -- and Home Assistant routes a brightness of 0
+    to `async_turn_off`, so each one was a bridge round trip telling an off
+    lamp to turn off. The comparison is against the *rounded* value because
+    that is what reaches the service; anything finer would dedupe on a
+    difference the lamp never sees.
     """
-    new_value = mech.value_at(touch["base_value"], pos - touch["zero_pos"])
+    new_value = _value_at(mech, touch, pos)
     _LOGGER.debug(
         "Slider %s: %s pos=%.3f new=%.3f → %s(%s)",
         slider_key, phase, pos, new_value, mech.service, mech.target_entity,
     )
-    await mech.write(hass, new_value)
+    sent_value = round(new_value, 3)
+    if sent_value == touch.get("last_value"):
+        # Still predicted when asked: the caller that passes `predict=True` is
+        # committing a lift, and the tile should settle on the resting value
+        # even though the lamp already has it.
+        if predict:
+            mech.predict(hass, new_value)
+        _LOGGER.debug(
+            "Slider %s: %s would repeat %s — not calling %s",
+            slider_key, phase, sent_value, mech.service,
+        )
+        return
+
+    await mech.write(hass, new_value, predict=predict)
+    # After the await, mirroring `last_pos`: a failed call must not be recorded
+    # as sent, or the retry at the same value would be deduped away.
+    touch["last_value"] = sent_value
 
 
 async def execute_slider_action(

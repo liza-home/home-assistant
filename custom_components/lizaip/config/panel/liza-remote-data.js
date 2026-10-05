@@ -188,9 +188,36 @@ export const DataMixin = {
       this._loadPages(), this._loadActions(), this._loadActionLabels(), this._loadBlueprint(),
       // The title previews are drawn in the remote's text settings.
       this._loadTextSettings(),
+      this._loadIconOptions(),
     ]);
     await this._loadAssignments();
     await this._loadGlobalUsage();
+  },
+
+  /**
+   * How finely this entry fills a brightness icon.
+   *
+   * Loaded per entry, alongside the pages, because the panel renders its own
+   * preview of every tile instead of fetching the device's images: a stale
+   * step here means the preview shows a fill the hardware never draws. A
+   * failure leaves the helper on its default, which is the right answer for
+   * every entry that has not changed the setting.
+   */
+  async _loadIconOptions() {
+    try {
+      const r = await this._hass.callWS({
+        type: "lizaip_config/get_icon_options", entry_id: this._currentEntry,
+      });
+      this._applyIconOptions(r || null);
+    } catch (e) { this._applyIconOptions(null); }
+  },
+
+  /** Put one `icon_options` reply into the fields the preview reads. */
+  _applyIconOptions(r) {
+    this._iconOptions = r;
+    this._iconFillStep = r?.icon_fill_step ?? null;
+    this._iconFillEnabled = r?.icon_fill_enabled === true;
+    this._iconColorEnabled = r?.icon_color_enabled === true;
   },
 
   async _loadPages() {

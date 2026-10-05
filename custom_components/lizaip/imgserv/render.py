@@ -48,6 +48,8 @@ from PIL import Image, ImageDraw
 from .const import (
     FLATTEN_COLOR,
     MAX_SIZE,
+    PERCENT_FEATHER_FRACTION,
+    PERCENT_FEATHER_MIN_ROWS,
     PERCENT_TINT_ALPHA,
     TRANSPARENT,
 )
@@ -92,6 +94,47 @@ def save_png(img: Image.Image, keep_alpha: bool = False) -> bytes:
 
 
 
+def _ink_boundary_row(alpha: np.ndarray, percent: float, height: int) -> float:
+    """Return the row where ``percent``% of the glyph's *ink* sits below.
+
+    Splitting the tile geometrically assumes ink is spread evenly down it, and
+    icons are not drawn that way. ``mdi:lightbulb-off`` is the worst case: its
+    bottom fifth is the detached screw base, then a transparent gap, then the
+    body. Filling by row means low levels spend their whole budget on the base
+    and the gap, so the tile reads as a lit indicator rather than a low level,
+    and the percentages that land in the gap light nothing new at all -- a dead
+    zone where dragging the dimmer visibly does nothing.
+
+    Measuring in ink instead removes both. Empty rows cost nothing because they
+    contribute no ink, so the boundary always lands where there is something to
+    light, and equal percent steps light equal amounts of glyph.
+
+    The return value is deliberately *fractional*. Snapping to a whole row would
+    trade the old dead zone for a new one: a row holding a lot of ink absorbs a
+    wide range of percentages into one identical picture. A fractional boundary
+    shifts the feather ramp smoothly, so every level still renders differently.
+    """
+    ink = alpha.sum(axis=1, dtype=np.float64)
+    total = float(ink.sum())
+    if total <= 0.0:
+        # Nothing to measure (a blank tile): fall back to the geometric split.
+        return height * (100.0 - percent) / 100.0
+
+    target = total * percent / 100.0
+    # cum_below[r] is the ink held by rows r..bottom, so it falls as r rises.
+    cum_below = np.cumsum(ink[::-1])[::-1]
+    # `target` is a fraction of `total`, and cum_below[0] *is* `total`, so the
+    # top row always qualifies and this is never empty.
+    row = int(np.nonzero(cum_below >= target)[0][-1])
+    # Including all of `row` overshoots by this much; give back that fraction of
+    # it so the boundary moves continuously rather than in row-sized jumps.
+    surplus = float(cum_below[row]) - target
+    row_ink = float(ink[row])
+    if row_ink > 0.0:
+        return row + min(1.0, surplus / row_ink)
+    return float(row)
+
+
 def apply_percent_tint(
     img: Image.Image,
     percent: int | None,
@@ -101,8 +144,23 @@ def apply_percent_tint(
     ``percent`` splits the image into two horizontal bands on the *finished*
     image (after crop/resize):
 
-    * bottom ``percent``% keeps its original alpha ("full")
+    * the bottom band, holding ``percent``% of the glyph's ink, keeps its
+      original alpha ("full")
     * rows above are scaled to :data:`PERCENT_TINT_ALPHA` ("empty")
+
+    The split is measured in ink, not in rows -- see :func:`_ink_boundary_row`
+    for why, and note that the two are identical for an evenly-inked tile, so
+    this only changes shapes that are actually lopsided.
+
+    The two bands are joined by a short ramp rather than a step — see
+    :data:`PERCENT_FEATHER_FRACTION`. The ramp sits *above* the boundary, so the
+    filled band is never eaten into.
+
+    The extremes keep a hard edge on purpose. At 0 and 100 there is no boundary
+    inside the image to soften — one band covers the whole tile — and feathering
+    there would bleed a gradient in from an edge that does not exist. They are
+    also pinned geometrically: "empty" and "full" mean the whole tile regardless
+    of where the ink is.
 
     No colour tinting happens here; RGB stays unchanged.
     """
@@ -113,13 +171,24 @@ def apply_percent_tint(
     rgba = np.array(img.convert("RGBA"), dtype=np.float32)
     height = rgba.shape[0]
 
-    # Fill starts at this row; ceil() avoids overstating the filled level.
-    start_row = int(np.ceil(height * (100 - percent) / 100.0))
-    start_row = max(0, min(start_row, height))
-
-    # Scale alpha of the unfilled remainder; keep RGB untouched.
-    if start_row > 0:
-        rgba[:start_row, :, 3] *= PERCENT_TINT_ALPHA
+    if 0 < percent < 100:
+        start_row = _ink_boundary_row(rgba[:, :, 3], float(percent), height)
+        feather = max(
+            float(PERCENT_FEATHER_MIN_ROWS), height * PERCENT_FEATHER_FRACTION,
+        )
+        rows = np.arange(height, dtype=np.float32)
+        # 0 well above the boundary, 1 at and below it. Anchoring the ramp's
+        # *end* at start_row is what keeps the filled band untouched.
+        ramp = np.clip((rows - (start_row - feather)) / feather, 0.0, 1.0)
+        scale = PERCENT_TINT_ALPHA + (1.0 - PERCENT_TINT_ALPHA) * ramp
+        rgba[:, :, 3] *= scale[:, None]
+    else:
+        # The extremes are geometric, so this is a whole row: 0 at 100 (nothing
+        # dimmed) and `height` at 0 (all of it). ceil() avoids overstating the
+        # filled level. Scales alpha only; RGB stays untouched.
+        start_row = int(np.ceil(height * (100 - percent) / 100.0))
+        if start_row > 0:
+            rgba[:start_row, :, 3] *= PERCENT_TINT_ALPHA
 
     return Image.fromarray(np.clip(np.round(rgba), 0, 255).astype(np.uint8), "RGBA")
 

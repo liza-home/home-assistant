@@ -80,6 +80,20 @@ FLATTEN_COLOR: Final = (0, 0, 0)
 # dimming drift apart.
 PERCENT_TINT_ALPHA: Final = 0.70
 
+# How much of the image height the fill boundary is blurred across, as a
+# fraction. A hard switch from ``PERCENT_TINT_ALPHA`` to full alpha draws a
+# visible horizontal rule across the glyph, and on a 50px tile that line is as
+# prominent as the fill it is meant to describe. Ramping the alpha across a few
+# rows instead reads as a level rather than a cut, and it hides the residual
+# quantisation step: the boundary between two adjacent ``percent`` values moves
+# by less than the width of the ramp, so the fill appears to slide.
+PERCENT_FEATHER_FRACTION: Final = 0.08
+
+# Never let the ramp collapse to nothing on a small image — below two rows it
+# is a hard edge again — and never let it grow so wide on a large one that the
+# fill stops having a discernible top.
+PERCENT_FEATHER_MIN_ROWS: Final = 2
+
 
 
 # ── Fonts and colours ─────────────────────────────────────────────────────

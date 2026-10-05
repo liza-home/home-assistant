@@ -41,14 +41,31 @@ from ..action_controller import (
     setup_state_listener,
 )
 from ..const import (
+    ASSIGNMENT_LONGTOUCH_KEY,
     DOMAIN,
     ICON_DEFAULTS,
     async_preload_action_labels,
     get_ui_language,
     load_action_labels,
+    longtouch_steps,
 )
 from ..imgserv.const import build_palette
 from ..imgserv.fonts import list_fonts, user_fonts_dir
+from ..state_brightness import (
+    CONF_ICON_FILL_ENABLED,
+    CONF_ICON_FILL_STEP,
+    DEFAULT_ICON_FILL_ENABLED,
+    DEFAULT_ICON_FILL_STEP,
+    ICON_FILL_STEP_MAX,
+    ICON_FILL_STEP_MIN,
+    read_fill_enabled,
+    read_fill_step,
+)
+from ..state_color import (
+    CONF_ICON_COLOR_ENABLED,
+    DEFAULT_ICON_COLOR_ENABLED,
+    read_color_enabled,
+)
 from .text_style import (
     TEXT_KINDS,
     default_settings,
@@ -449,6 +466,11 @@ def _build_assignment_entry(
     for sibling in ("before", "after"):
         if isinstance(assign_data.get(sibling), list):
             entry[sibling] = assign_data[sibling]
+    # Stored only when it has a step: absence is "no long touch", and an empty
+    # list would make the device hold back the click for nothing.
+    longtouch = longtouch_steps(assign_data)
+    if longtouch:
+        entry[ASSIGNMENT_LONGTOUCH_KEY] = longtouch
     # Only grid buttons can contextually override fixed buttons; absence means
     # inherit. Fixed buttons are resolved actions, never contexts.
     if is_grid_button(button_key):
@@ -489,6 +511,8 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_refresh_dynamic,
         ws_set_dynamic_binding,
         ws_get_features,
+        ws_get_icon_options,
+        ws_set_icon_options,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -811,6 +835,133 @@ async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device
     except Exception as exc:
         _LOGGER.error("Save assignments failed: %s", exc)
         connection.send_error(msg["id"], "save_failed", str(exc))
+
+
+def icon_options_for_entry(hass: HomeAssistant, entry_id: str) -> dict:
+    """The icon-rendering settings for one entry, as the panel receives them.
+
+    Kept out of the handler so it can be exercised without Home Assistant's
+    websocket decorators, which replace the handler with a task-scheduling
+    wrapper.
+
+    Always answers: an unknown entry, or one whose options cannot be read,
+    yields the default rather than an error, because the default is the right
+    value for every entry that has not changed the setting and a panel left
+    without a reply renders no preview at all.
+    """
+    entry = hass.config_entries.async_get_entry(entry_id)
+    return _icon_options_reply(getattr(entry, "options", None))
+
+
+def _icon_options_reply(options: object) -> dict:
+    """The values plus what the gear tab needs to edit them."""
+    return {
+        "icon_fill_step": read_fill_step(options),
+        "icon_fill_enabled": read_fill_enabled(options),
+        "icon_color_enabled": read_color_enabled(options),
+        "defaults": {
+            "icon_fill_step": DEFAULT_ICON_FILL_STEP,
+            "icon_fill_enabled": DEFAULT_ICON_FILL_ENABLED,
+            "icon_color_enabled": DEFAULT_ICON_COLOR_ENABLED,
+        },
+        "limits": {"icon_fill_step": {"min": ICON_FILL_STEP_MIN, "max": ICON_FILL_STEP_MAX}},
+    }
+
+
+def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict) -> dict:
+    """Save the icon options named in *changes*; returns the new reply.
+
+    Stored in ``entry.options`` as before the gear tab took it over, so every
+    reader keeps working and no migration is needed. The options update fires
+    the entry's update listener, which resyncs the remote with the new values.
+
+    A partial update, so one field can be changed without the caller sending
+    back the two it is not touching and clobbering a concurrent change.
+
+    Raises ``KeyError`` for an unknown entry and ``ValueError`` for a bad step
+    or a non-boolean switch -- strictly, unlike `read_fill_step`, because a
+    typo should be refused, not silently clamped.
+    """
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None:
+        raise KeyError(entry_id)
+
+    updates: dict = {}
+    if CONF_ICON_FILL_STEP in changes:
+        fill_step = changes[CONF_ICON_FILL_STEP]
+        # bool is an int subclass; JSON `true` must not pass as 1.
+        if (
+            isinstance(fill_step, bool)
+            or not isinstance(fill_step, int)
+            or not ICON_FILL_STEP_MIN <= fill_step <= ICON_FILL_STEP_MAX
+        ):
+            raise ValueError(
+                f"icon_fill_step must be a whole number from "
+                f"{ICON_FILL_STEP_MIN} to {ICON_FILL_STEP_MAX}"
+            )
+        updates[CONF_ICON_FILL_STEP] = fill_step
+
+    for key in (CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED):
+        if key in changes:
+            value = changes[key]
+            if not isinstance(value, bool):
+                raise ValueError(f"{key} must be true or false")
+            updates[key] = value
+
+    if updates:
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, **updates},
+        )
+    return _icon_options_reply({**entry.options, **updates})
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/get_icon_options",
+    "entry_id": str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Report the icon-rendering settings the panel has to mirror.
+
+    The panel draws its own preview of every button rather than fetching the
+    device's images, so anything that changes how a tile is rendered has to
+    reach it as a value. The brightness fill step is configurable per entry,
+    and a panel still assuming the default would quietly disagree with the
+    hardware it is supposed to be showing.
+
+    Entry-scoped, unlike `get_features`: that answers what this *build*
+    contains, which is the same for every entry, whereas this is a setting one
+    entry can hold differently from the next.
+    """
+    connection.send_result(msg["id"], icon_options_for_entry(hass, msg["entry_id"]))
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/set_icon_options",
+    "entry_id": str,
+    vol.Optional("icon_fill_step"): object,
+    vol.Optional("icon_fill_enabled"): object,
+    vol.Optional("icon_color_enabled"): object,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Save the icon-rendering settings edited in the gear tab."""
+    changes = {
+        key: msg[key]
+        for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled")
+        if key in msg
+    }
+    try:
+        reply = set_icon_options_for_entry(hass, msg["entry_id"], changes)
+    except KeyError:
+        connection.send_error(msg["id"], "not_found", "Config entry not found")
+        return
+    except ValueError as exc:
+        connection.send_error(msg["id"], "invalid_format", str(exc))
+        return
+    connection.send_result(msg["id"], reply)
 
 
 @websocket_api.websocket_command({"type": "lizaip_config/get_pages", "entry_id": str})
@@ -1537,7 +1688,7 @@ def _rewrite_references(value: Any, pattern: re.Pattern, mapping: dict[str, str]
 #: contain an old entity id as plain text, because retargeting must not
 #: rewrite what the user authored (only what the page itself depends on).
 _ENTITY_BEARING_BUTTON_KEYS: Final = frozenset(
-    {"config", "overrides", "slider_actions", ASSIGNMENT_DYNAMIC_KEY}
+    {"config", ASSIGNMENT_LONGTOUCH_KEY, "overrides", "slider_actions", ASSIGNMENT_DYNAMIC_KEY}
 )
 
 

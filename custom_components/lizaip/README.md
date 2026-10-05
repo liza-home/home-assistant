@@ -12,6 +12,7 @@ lizaip/
   strings.json
   services.yaml        # HA service definitions
   diagnostics.py       # Diagnostics support
+  state_color.py       # Entity-derived icon tint (light rgb_color → fg=)
 
   event.py             # Platform wrapper → device/event.py
   number.py            # Platform wrapper → device/number.py
@@ -135,6 +136,68 @@ before this option existed.
 The device itself keeps reporting at full rate either way: slider events are fire-and-forget
 and the protocol has no return channel, so there is no way to ask for less.
 
+### Slider direction
+
+Sliding up raises the value — except for **colour temperature**, where up means *warmer*,
+which lowers the kelvin number.
+
+Kelvin runs backwards from the thing being adjusted: warm light is around 2200 K and cool
+light around 6500 K, so "more kelvin" is "less warm". This remote's slider is a *blind,
+relative* drag — there is no track and no gradient to look at — so the only intuition
+available is "up = more", and for a colour control "more" reads as warmer.
+
+Home Assistant is worth comparing, but it does not settle the question:
+
+| Control | Inverted? | Warm end |
+| --- | --- | --- |
+| `ha-state-control-light-brightness` (vertical) | no | — |
+| `light-color-temp-picker` (vertical, more-info) | **yes** | top |
+| `hui-light-color-temp-card-feature` (horizontal) | no | left |
+
+So HA's actual rule is "the warm end comes first in the gradient" — left when horizontal,
+top when vertical — not a claim that up means warmer. HA can treat direction as a layout
+choice because its sliders are *absolute* and draw the gradient: you look at the colours and
+touch the one you want. A blind relative drag has no equivalent affordance, so direction has
+to carry the meaning on its own. The vertical picker agreeing with us is corroboration, not
+the reason.
+
+This is a UX judgement rather than something derivable, and there is deliberately **no
+opt-out**: direction is a property of the capability, not a per-slider preference, so two
+remotes cannot end up disagreeing. It is derived from the control's mechanics on every event
+(`sliders.control_inverts`), so configurations written before this existed pick it up with no
+migration.
+
+### Icon tint and fill
+
+A button bound to a light can fill its icon from the bottom, like a gauge, to show how
+bright the lamp is, and can take that lamp's colour instead of the page colour. Both are
+**off until switched on**, per remote, in the panel's [gear tab](#settings-gear-tab),
+under **Icon options** — they repaint every button bound to a light, which is a visible
+change to a remote the user has already arranged:
+
+| Option | Default | Effect |
+|---|---|---|
+| Tint icons with the light's colour | off | A lit lamp's colour replaces the page colour. |
+| Fill icons with the light's brightness | off | Fills the icon from the bottom. |
+| Fill step | `5 %` | How much the fill advances per level. Range 1–25. |
+
+The two switches are independent: the fill can be on with the tint off, and the reverse.
+The fill step applies only while the fill is on, so the gear tab greys it out otherwise.
+
+The default is measured rather than chosen, but the measurement that decides it is not the
+renderer's. A button icon is 50 pixels tall, so 50 levels is every fill that can be drawn
+differently, and 2 % lands exactly on that ceiling — which is why the step was 2 for a
+while. The ceiling turned out to be the wrong budget. The level is part of the image URL,
+so a percent the remote has not cached costs it a fetch before it can paint: a novel
+`set_page` measures p50 ~220 ms against ~58 ms for one already in cache. Step 2 mints 50
+distinct URLs per lamp per page and spends a whole dimmer sweep paying that penalty; step 5
+mints 20, warms the cache 2.5× sooner, and still renders all 20 levels distinctly, so
+nothing is lost to aliasing. Lower it toward 1 for a smoother fill if the device keeps up,
+raise it if a sweep still feels heavy or to get the older, coarser look back.
+
+The config panel's button previews follow the same setting, so what it shows stays the
+image the remote is actually drawing.
+
 ## Data update mechanism
 
 This integration uses a **local push** model. The physical device initiates a persistent
@@ -217,7 +280,7 @@ Every request walks the same four steps, whatever the source type:
 
 1. **Render** — the source draws its subject on a transparent canvas, in `fg`
 2. **Crop** — the transparent margin is trimmed (`crop`, on by default)
-3. **Mount** — the subject is composited onto `bg`; with `percent`, the lower band stays opaque and the upper remainder is dimmed via alpha
+3. **Mount** — the subject is composited onto `bg`; with `percent`, the lower band stays opaque and the upper remainder is dimmed via alpha, the two joined by a short gradient rather than a hard line. The band holding `percent` % of the glyph's *ink* is what stays opaque, not the bottom `percent` % of the rows
 4. **Encode** — the PNG is written, flattened onto black unless `alpha=1`
 
 ### Query parameters
@@ -234,7 +297,7 @@ which only mean something for `text:`.
 | `mode` | `dark` (white default fg) or `light` (black default fg) — sets the default **foreground only**, never the background | — |
 | `crop` | Trim the transparent margin: `1`/`true` or `0`/`false`/`no`. Ignored for `text:` | `1` (enabled) |
 | `alpha` | Keep the alpha channel (`1`) instead of flattening onto black (`0`). Use `1` for browser previews, `0` for the device | `0` |
-| `percent` | Fill level `0`–`100`: the bottom N % stays fully opaque; the upper remainder is dimmed via alpha (`70%`) | — |
+| `percent` | Fill level `0`–`100`: the band holding N % of the icon's ink stays fully opaque; the upper remainder is dimmed via alpha (`70%`), with the boundary feathered across ~8 % of the height so it reads as a level rather than a cut. Measured in ink rather than rows so transparent gaps cost nothing — see **Fill is measured in ink** below. `0` and `100` are uniform, having no boundary | — |
 | `font` | Font ID for `text:` source (see [Available Fonts](#available-fonts)) | `filson-light` |
 | `font_size` | Font size in pixels for `text:` source | `title` 48, `tooltip` 24, otherwise the image height |
 
@@ -432,6 +495,34 @@ entities. When their state changes, the device button icon is updated in real ti
 
 State changes are debounced (500 ms) and deduplicated to avoid unnecessary device updates.
 
+### Entity variables
+
+Button tooltips (`label`), button images (`image`, including context overrides) and
+page titles (`image` of a page) accept `${domain.object_id}` and
+`${domain.object_id.attribute}`. User documentation with examples, including a template
+helper for battery icons: [README.public.md → Live values on the remote](../../README.public.md#live-values-on-the-remote).
+
+- **Value** (`const.entity_token_value`): the state rounded to the entity registry's
+  `options.sensor.display_precision` (else `suggested_display_precision`) plus
+  `unit_of_measurement`; an attribute as stored (lists joined with `, `, booleans
+  `on`/`off`, whole floats without `.0`). `unknown`, `unavailable` or a missing entity
+  yields `""`, and the token collapses together with a dangling separator.
+- **Tooltips**: `substitute_label_tokens(text, values, hass)` fills entity tokens before
+  `${STATE}`/`${NAME}`, in both the sync ladder (`button_rendering`) and the live ladder
+  (`action_controller/icons.py`). `${STATE}`/`${NAME}` never match the entity pattern
+  (no dot), and a label of only an entity token counts as the user's own words.
+- **Images and titles** (`button_rendering.with_resolved_image`): all or nothing — if
+  any token is empty the image is dropped and the derived icon is used (a title is
+  blank). The unit is only added when the image is drawn text (`text:` or no scheme
+  before the token).
+- **Live updates** (`config/variables.py`): watches every entity named in a label, image
+  or page title, refreshes that set on `CONFIG_CHANGED_EVENT`, and on a state change
+  runs `sync_config_to_device` at most every 2 s. The value is part of the page payload
+  and therefore of the page hash, so only pages whose output changed are resent.
+- **Panel**: `_entityTokenValue`, `_substituteEntityTokens`, `_resolveImageVariables`
+  and `_pageTitleImage` in `liza-remote-helpers.js` mirror the Python, reading
+  `hass.states` and `hass.entities[…].display_precision`.
+
 ### Pages
 
 The device supports multiple pages of buttons. Pages are managed via the config panel:
@@ -445,8 +536,14 @@ The gear icon at the right end of the panel's tabs opens the settings of the sel
 remote: the **font** and **font size** of page **titles** and of **tooltips**. The font
 list holds the bundled fonts and your own from `/config/lizaip/fonts/`; the size is
 limited to what fits the image (titles 6–50 px, tooltips 6–40 px). A preview shows the
-result, and **Restore defaults** goes back to Filson Soft Light at 48 px (titles) and
+result, and **Restore fonts** (right below the font hint) goes back to Filson Soft Light at 48 px (titles) and
 24 px (tooltips).
+
+The **Icon options** card holds the two [icon tint and fill](#icon-tint-and-fill)
+switches and the fill step (1–25 %, default 5 %). The switches both start off, so
+neither the tint nor the fill appears until asked for. All three are stored
+in the integration entry's options rather than in `settings.yaml`, and a change resyncs
+the remote. **Restore fonts** leaves them alone.
 
 A change is saved at once to `/config/lizaip/<device_id>/settings.yaml` and pushed to
 the remote:
@@ -557,6 +654,337 @@ Three places build a button label and all three read the option from the same
 config entry, or the label would change under the user: `button_rendering` (at
 save time), `action_controller/icons` (on the next state change) and
 `action_controller/buttons` (the optimistic update on press).
+
+## Light colour on button icons
+
+A button bound to a colour-capable light renders its tile icon in the light's own
+colour, the way Home Assistant tints a light's icon on a tile card. A red lamp and
+a blue lamp no longer look identical on the remote.
+
+`state_color.py` is a port of HA's `hui-tile-card._computeStateColor`:
+
+```
+rgb2hsv(rgb_color)          # h 0-360, s 0-1, v 0-255
+if s < 0.1:   v = 225       # near-white: dim it instead of inventing a hue
+elif s < 0.4: s = 0.4       # washed out: boost so it stays legible
+hsv2rgb(...) -> hex         # handed to imgserv as ?fg=
+```
+
+...with one exemption: a light reporting `color_mode: color_temp` skips both
+rules and is handed on exactly as HA computed it.
+
+Those two rules are HA's, and right in HA — a dashboard can be on a light theme,
+where a pale 5000 K white on white is invisible. This display is not that:
+`imgserv` flattens every tile onto `FLATTEN_COLOR`, black, so a near-white tint
+already reads, and the contrast they buy is contrast already had.
+
+Applied to a tunable-white lamp they are actively destructive. The blackbody
+line HA walks for `color_temp_kelvin` has a near-constant hue, so *saturation is
+the only thing* separating 2700 K from 5000 K — and `s = 0.4` erases exactly
+that. Measured over 2000-6500 K in 250 K steps, before the exemption:
+
+| | distinct tints | worst collision |
+| --- | --- | --- |
+| with the clamps | 12 / 19 | 3750-5500 K, eight steps, all `FFC898` |
+| exempt | 18 / 19 | one pair, 6000/6250 K |
+
+So a 1750 K band across the most-used part of the range drew one identical tile
+— dragging the temperature slider moved the icon not at all — and then the
+near-white rule discarded the hue and snapped 5750 K upwards to grey. The one
+surviving collision is the channel quantiser (`_QUANTIZE_STEP`, 8) merging two
+RGBs that differ by less than a step, which is the URL-cache budget working as
+intended rather than a rule eating the signal.
+
+The exemption is deliberately narrow: an `rgb`/`hs`/`xy` light keeps HA's
+behaviour unchanged, so the divergence is confined to the case that needs it.
+`tests/parity_cases.json#icon_tint` carries cases on both sides of the gate.
+
+The colour reaches the hardware as a normal `img_tile` URL — there is no new
+protocol surface. Two producers build it and must agree, or a tile would visibly
+change colour a second after the page loads:
+
+* `device_sync._button_icon_style` — the full page sync.
+* `action_controller/state_listener` — the live update, pushed as a partial
+  `set_page` when the light changes. `EVENT_STATE_CHANGED` fires on attribute
+  changes too, so a colour change alone is enough.
+
+Both resolve the colour from the button's *whole* target via
+`state_icon.icon_style_for_entities`, never from the entity that happened to
+change. A button bound to an area has several lights, and any of them firing
+wakes it: the listener once tinted from that one lamp, so an off member
+repainted the tile to the page colour while a lit member was still on, and with
+two members dirty in one flush the winner came down to set-iteration order.
+
+That resolver also returns the brightness fill alongside the tint, so both
+facets come off the *same* member. Read facet-by-facet they could disagree — a
+lit but colourless bulb supplying the level while a second, coloured lamp
+supplied the tint, drawing a tile neither lamp was showing.
+
+#### How smoothly the fill tracks the lamp
+
+Two numbers and a gradient, all three there for the same reason — a fill that
+snaps between a handful of poses reads as a status light, not as a level:
+
+* **`state_brightness._QUANTIZE_STEP` (2)** is a pixel budget, not a round
+  number. Every tile is 50 px (`SIZE_IDS`), so there is a hard ceiling on how
+  many *distinguishable* fills the renderer can produce, and the step was picked
+  to sit exactly on it. Running each candidate through `apply_percent_tint` and
+  comparing the resulting alpha columns:
+
+  | step | levels | distinct renders | adjacent levels that differ |
+  | ---: | -----: | ---------------: | --------------------------: |
+  |   10 |     10 |               10 |                      9 of 9 |
+  |    5 |     20 |               20 |                    19 of 19 |
+  |    2 |     50 |               50 |                    49 of 49 |
+  |    1 |    100 |           **51** |                **50 of 99** |
+
+  2 saturates the renderer — every level is its own picture. 1 adds fifty more
+  levels and *one* more picture: half of its levels are byte-identical to their
+  neighbour, so they are cache entries and `set_page` traffic buying a
+  difference nobody can see. That cost is real, because the value goes into the
+  image URL and one lamp can own a button on three pages.
+
+  The old step of 20 used five of the available positions, jumping a fifth of
+  the glyph at a time; 10 moved it ~4.8 px at a time, and that quantum was what
+  remained of the "steppiness". Note none of this is a *frame-rate* choice —
+  `_STATE_MAX_WAIT_SECONDS` below caps pushes at ~5/sec whatever the step is.
+  What a finer step buys is that each of those frames lands on the value the
+  finger is at rather than on the nearest multiple of 10.
+  `tests/test_render.py::test_every_level_the_quantiser_can_emit_is_its_own_picture`
+  asserts the table against the live constant, so tightening the step without
+  re-measuring fails rather than shipping silently.
+
+  The 5 above is only the *default*, and it is deliberately coarser than the
+  table's ceiling of 2: the table says what the renderer can draw, not what the
+  *device* can afford to fetch. A percent it has not cached costs it an image
+  fetch before it can paint — p50 ~220 ms against ~58 ms cached — so 20 levels
+  warm the cache 2.5× sooner than 50 while still rendering distinctly.
+  **Gear tab → Icon options → Fill step** (WS `lizaip_config/set_icon_options`,
+  stored in `entry.options`; it used to be an options-flow section)
+  overrides it per entry, anywhere from 1 to 25. The table says what the
+  renderer can draw; it cannot say what a given install should pay for, and the
+  two considerations pull apart on a layout that repeats one lamp across many
+  pages, where each extra level multiplies into that many more `set_page`
+  pushes and cached images. Reading it is `state_brightness.read_fill_step`,
+  which is deliberately unshockable — options outlive the version that wrote
+  them and can be hand-edited in `.storage`, and this runs inside a state
+  callback, so a value it could not parse would take down the flush for every
+  button on the page rather than mis-draw one. Anything unusable falls back to
+  the default and anything out of range is clamped.
+
+  Three places build a tile's style — the page push (`config/device_sync.py`),
+  the live state listener, and the button entity — and all three resolve the
+  step from the same entry options. They have to: they render into the same
+  image URL, so one of them still assuming the default would keep re-pushing
+  its own answer and the icon would oscillate between two fills instead of
+  settling. `tests/test_state_icon.py::TestTheFillStepIsConfigurable` pins each
+  path separately for that reason.
+
+  The panel is the fourth renderer and the awkward one, because it draws its
+  own preview rather than fetching the device's images. It learns the step over
+  `lizaip_config/get_icon_options`, which is entry-scoped — unlike
+  `get_features`, which answers for the whole build — and it asks per entry,
+  alongside the pages, since two remotes can hold different steps and the panel
+  switches between them without reloading. If the call fails it stays on the
+  default, which is right for every entry that has not changed the setting.
+  `tests/parity_cases.json` carries `icon_fill` cases at steps 1, 10 and 25 as
+  well as the default, so the two quantisers are pinned against each other
+  across the configurable range rather than only where they started.
+* **`imgserv.const.PERCENT_FEATHER_FRACTION` (0.08)** ramps the alpha across the
+  boundary instead of switching it. A hard switch drew a horizontal rule as
+  prominent as the fill it described, and the ramp also hides what is left of
+  the quantisation: adjacent levels overlap, so the fill appears to slide. The
+  ramp is anchored to *end* at the boundary, so the filled band is never shaved
+  — the filled band is fully opaque either way. `0` and `100` keep a hard
+  edge, having no interior boundary to soften.
+* **Fill is measured in ink, not in rows** (`render._ink_boundary_row`). Splitting
+  the tile geometrically assumes the glyph is spread evenly down it, and icons
+  are not drawn that way. `mdi:lightbulb-off` is the worst case: its bottom fifth
+  is the detached screw base, then a transparent gap, then the body. Filling by
+  row, low levels spent their whole budget on the base and the gap — the tile
+  read as a lit indicator rather than a low level — and the levels whose boundary
+  landed *in* the gap drew the identical picture, so the dimmer moved and the
+  icon did not. Measured on the real glyph, consecutive 5 % levels changed the
+  lit area by anywhere from 0.2 to 3.1 percentage points, and the top three
+  levels were indistinguishable. Measuring in ink makes every step light the same
+  amount of glyph (1.2–2.1 points on the same icon, no stalled levels), and costs
+  nothing on an evenly-inked tile, where the two rules agree exactly. The boundary
+  is deliberately *fractional*: snapping it to a whole row would trade the old
+  dead zone for a new one, since an ink-dense row would otherwise absorb a wide
+  range of percentages into one identical picture.
+* **`_STATE_MAX_WAIT_SECONDS` (0.2)** caps how long a change may wait while more
+  keep arriving. The debounce beside it is *trailing*: each event cancels the
+  pending flush and restarts the wait. A burst with an end settles fine, but a
+  dimmer being held has no end, so the deadline receded on every frame and the
+  icon froze at whatever it showed when the ramp started, snapping to the final
+  value only once the user let go. The listener now also fires the *leading*
+  edge — the first change after a quiet spell goes out at once rather than
+  serving a debounce first, which is what makes switching a lamp on feel
+  immediate. `last_sent` still drops any flush that would change nothing.
+
+`action_controller/buttons` is the third, evaluating the tint against the
+*predicted* state so a press that turns a lamp off does not briefly paint the off
+icon in the colour the lamp is about to stop showing. A press on "turn on" is left
+alone: it cannot predict the colour of a lamp that is still off, and the state
+listener corrects the tile a moment later anyway.
+
+#### Why the fill does not wait for the lamp
+
+Even with all of the above, the fill lagged the user's finger by about a second.
+None of it was our latency. Measured on real hardware:
+
+| Stage | Cadence |
+| --- | --- |
+| Slider touch events from the remote | ~20–60 ms |
+| `slider_throttle` outbound cap | 250 ms (`DEFAULT_SLIDER_MIN_INTERVAL_MS`) |
+| Hue bridge → `EVENT_STATE_CHANGED` | **~1 s** (7 commands came back as 3 events) |
+| Our push once the state lands | 0 ms on the leading edge |
+
+The bottleneck is the third row, and it is not a polling problem — the bridge is
+API v2, so the events arrive over SSE and it is *coalescing* rather than lagging.
+Home Assistant's own Hue integration never fills that gap: `async_turn_on` awaits
+the bridge PUT and returns, and `brightness` is read live from the resource,
+updated only by the event stream. The value we just commanded is nowhere.
+
+So `optimistic.py` keeps it. `slider_exec` already computes the exact target
+brightness in order to send it, a quarter-second to a second before the lamp says
+so; the tile is drawn from that until the lamp catches up. This is the pattern HA
+uses wherever it has no fast authoritative answer — `light.template`,
+`light.mqtt` and `demo` all set the attribute they just commanded and write state
+immediately. The fill now moves at slider cadence rather than lamp cadence.
+
+**The prediction is published ahead of the throttle, not alongside the command.**
+That distinction is the whole point and it was missed at first. Row two of the
+table caps `light.turn_on` at one call per 250 ms, because the bridge coalesces
+a faster stream away — but nothing about that constraint applies to a local dict
+write and a local event. Predicting inside `_Mechanics.write` meant the icon
+inherited the command cadence: four updates a second, aliased against a 5/sec
+flush, so the tile could be a whole throttle window *plus* a flush window behind
+the finger. `_do_slide` now predicts on every touch event and lets the service
+call stay thinned, which bounds the lag at the flush window alone. The
+prediction is still skipped when the position has not actually moved, so a
+device restating a held position cannot keep refreshing the TTL of an overlay
+the lamp has already matched.
+
+**The throttle thins by position; a second guard thins by value.** `has_moved`
+asks whether the *finger* moved, but `value_at` clamps to the range. Inside a
+clamped region — the finger below the bottom or above the top — every distinct
+position yields an identical value, passes the movement check, and was written
+once per interval for the whole gesture. On a light that is the worst case
+there is: Home Assistant routes `brightness: 0` to `async_handle_light_off_service`,
+so dragging down on an already-off lamp spent the gesture telling the bridge to
+turn off a lamp that was already off. `_write` now skips the call when the
+payload would repeat the last one, compared on the *rounded* value because that
+is what reaches the service. It is recorded after the await, mirroring
+`last_pos`: a failed call must not be remembered as sent, or the retry would be
+deduped away.
+
+Three rules keep it honest:
+
+* **Brightness only.** A drag cannot change a lamp's colour, and guessing at
+anything else would be inventing state we were never told.
+* **`PREDICTION_TTL_SECONDS` (2.0).** A prediction the lamp never confirms —
+because it clamped the value, was unreachable, or the command was lost — must
+not outlive the moment it was plausible, or the tile lies until the next
+gesture. The gesture keeps refreshing it, so this is only ever the tail after
+the finger lifts.
+
+#### Why only one icon update is in flight at a time
+
+Everything above decides *what* the tile should show. This decides how it gets
+there, and it was the larger share of the lag.
+
+The device acknowledges a `set_page`, but the integration used to start the next
+one on a timer regardless of whether the previous had come back. That is
+open-loop: it assumes a service rate instead of observing one. Measured over a
+dimmer ramp on real hardware, 22.5 % of the time two or more requests were
+outstanding, peaking four deep, and the wait showed up exactly where you would
+expect — p90 408 ms, p99 993 ms, worst case 1567 ms, against a device that
+answers a single request in 51–111 ms. Those were not a slow device; they were
+requests queued behind other requests.
+
+So the push is now closed-loop (`config/icon_push.py`): one request in flight
+per device, and anything arriving meanwhile is *merged into* the pending set
+rather than queued behind it. The device's own acknowledgement becomes the
+clock, so the push rate tracks whatever the hardware can absorb — quicker than a
+fixed timer when it is idle, and automatically backing off when it is not,
+instead of making a bad moment worse. Re-measured after the change, over a
+168-step ramp: never more than one request outstanding, and the median
+round-trip roughly halved, 111 ms → 60 ms.
+
+Three details carry the design:
+
+* **Coalescing merges per button, it does not replace.** A newer frame usually
+carries only `img_tile`, because the state listener omits a tooltip that has not
+changed to save the device a second image fetch — while still recording it as
+sent. Replacing wholesale would discard a tooltip that could then never be
+offered again, so newer keys win and older keys survive.
+* **Dropping superseded frames is the point, not a concession.** A ramp's
+intermediate values are stale the moment a newer one exists. The *final* value
+is never dropped: a page is removed from the pending set immediately before it
+is sent, so anything submitted mid-flight is still waiting afterwards.
+* **The visible page goes first.** One lamp commonly owns a button on several
+pages, and the sends are serialised, so the tile you are actually looking at
+would otherwise wait a full round-trip behind a page nobody can see.
+
+What remains is the device. With nothing queued inside the integration, the
+occasional 1–2 s acknowledgement has no log activity between send and reply at
+all — it is firmware or Wi-Fi, not something this code can schedule around.
+That is also why the listener's flush cap was left alone; see
+`_STATE_MAX_WAIT_SECONDS`, which records the arithmetic.
+
+* **Settle on agreement, not on any update.** The prediction stands down when the
+lamp lands within `_SETTLE_TOLERANCE` of it, so a report from *mid-ramp* does not
+yank the tile back down. Exact equality would not do: Hue stores brightness as a
+percentage and converts both ways, so a commanded 200 comes back as 199 or 201
+and the prediction would be held to its full TTL on every drag. The tolerance is
+sized against *that* round-trip error (~2 % of full scale) rather than against
+the icon's quantise step — the step is a rendering choice and has already moved
+twice, while the bridge's rounding has not. A lamp reporting `off` cancels
+outright.
+
+* **Zero is the one brightness that is not "on".** The prediction reports `off`
+for a commanded brightness of 0 rather than a 0 % fill. Home Assistant coerces
+the service value to an int, so anything under 1 reaches the lamp as 0, and
+`light.turn_on` with 0 switches it off — measured on hardware. Forcing `on`
+regardless used to light a tile for a dark lamp, and dragging *down* on an
+already-off lamp had no safety net: the state never changes, so no event ever
+arrives for the settle path to retire the prediction on, and the fill floors at
+one whole step rather than 0 %. The result was a dimmed bulb with its base lit
+for the entire gesture plus the TTL. The same rule pays off in the other
+direction, too — a lit lamp dragged to the bottom now reads as off at once
+instead of waiting on the bridge.
+
+### The config panel previews the same colour
+
+The panel's button previews are tinted too, so the preview matches the tile the
+device is actually drawing — for a button bound to a single entity. A button
+targeting an area or a device previews in the page colour, because the panel
+resolves a step's entity from the config alone and has no area registry to
+expand; the device still tints those correctly. The panel cannot call
+`state_color.py`, so
+`liza-remote-helpers._entityIconColor` is a second implementation of the same
+algorithm — including Python's banker's rounding in the quantiser, which
+`Math.round` does not share.
+
+Two implementations of one rule is exactly the drift this repo has been bitten by
+before, so it is pinned rather than trusted: `tests/parity_cases.json#icon_tint`
+holds the vectors, and `tests/test_parity.py` and `tests/js/parity.test.mjs`
+assert them against their own side. Change the rule in one language and only that
+side goes red, naming the case that moved.
+
+### A group is drawn in its own colour, like HA draws it
+
+A light *group* — a Hue room or zone, or HA's own light-group helper — is treated
+as an ordinary light: it is drawn in the `rgb_color` it reports itself, which is
+the value HA's tile card uses. So the room's button and the room's dashboard tile
+always agree, even when they disagree with a lamp inside the room.
+
+They can disagree. Hue derives a room's colour by majority vote among the lamps
+that are *on* (`hue/v2/group.py::_update_values`), so an Office whose only
+reachable lamp is green can still report 3312 K warm white, because two lamps the
+bridge believes are on — but which HA shows `unavailable` — outvote it. The
+dashboard shows warm white there, and so does the remote.
 
 ## Diagnostics
 

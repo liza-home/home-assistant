@@ -136,6 +136,7 @@ def _compute_next_state_tooltip_inner(
             substitute_label_tokens(
                 stored_name,
                 {"state": token_state},
+                hass,
             )
         )
         if resolved:
@@ -165,6 +166,7 @@ def _compute_next_state_tooltip_inner(
         resolved = substitute_label_tokens(
             stored_name,
             {"state": token_state},
+            hass,
         )
         if resolved:
             return f"{entity_name} {resolved}" if entity_name else resolved

@@ -695,7 +695,8 @@ const sliderIconFor = (controls, assign) => {
 // That is not this gate's business — it reports what the strip stores, and a
 // following slider stores nothing. The remote face asks this same question, for
 // the reasons below.
-export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_actions?.mode || assign?.image);
+export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_actions?.mode || assign?.image
+  || assign?.longtouch?.length);
 
 // The face paints from `isConfigured`, i.e. from what a control *stores*, and
 // every control on it is read the same way. This is worth a note because it was
@@ -944,6 +945,9 @@ export const ButtonsViewMixin = {
               shape: { size: "title", box: { w: TITLE_PREVIEW_W, h: TITLE_PREVIEW_H } },
               previewClass: "icon-preview-title",
               slotId: "ps-icon-picker-slot",
+              hint: this._hasEntityToken(pageImgTitle)
+                ? `${this._resolveImageVariables(pageImgTitle) ? this._t("label_now_reads", { text: this._esc(this._resolveImageVariables(pageImgTitle)) }) : ''}${this._t("variable_hint")}`
+                : "",
             })}
           </div>` : '';
 
@@ -1074,6 +1078,10 @@ export const ButtonsViewMixin = {
     // action of its own: a label-only override is dropped by the writers, so
     // accepting one would be a field that takes a value and loses it.
     const labelNeedsAction = editingOverride && !this._isAssignedRecord(this._editAssign(selBtn.key) || {});
+    // Only where the remote has long touch on, and not in a context: the
+    // remote holds a click back for the long touch of the button itself, not
+    // of an override the selection swaps in.
+    const showLongtouch = !!this._longtouchEnabled?.() && !editingOverride;
     const selAssigned = this._isAssignedRecord(selAssign);
     const selEntity = selAssign.config ? this._getTargetEntityFromConfig(selAssign.config) : null;
     // A proportional slider has no action_id and no library entry, so the shared
@@ -1892,7 +1900,8 @@ export const ButtonsViewMixin = {
     // -- true, and no help at all in telling whether it is working. Naming the
     // current answer is the difference between a field that looks broken and
     // one that is visibly live.
-    const labelResolved = (labelShowsState || labelShowsName)
+    const labelShowsVariable = this._hasEntityToken(labelFieldValue);
+    const labelResolved = (labelShowsState || labelShowsName || labelShowsVariable)
       ? this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign)
       : "";
     // A device-local command whose target the device cannot resolve is sent
@@ -1985,6 +1994,9 @@ export const ButtonsViewMixin = {
       autoIcon: autoImageIcon,
       color: this._currentPageColor(),
       slotId: "config-icon-picker-slot",
+      hint: this._hasEntityToken(imageVal)
+        ? `${this._resolveImageVariables(imageVal) ? this._t("label_now_reads", { text: this._esc(this._resolveImageVariables(imageVal)) }) : ''}${this._t("variable_hint")}`
+        : "",
     }) : '';
 
     // The Label field, built here and handed to the header. It renders under a
@@ -2014,7 +2026,9 @@ export const ButtonsViewMixin = {
           ? `${labelResolved ? this._t("label_now_reads", { text: this._esc(labelResolved) }) : ''}${this._t("label_state_hint")}`
           : labelShowsName
             ? `${labelResolved ? this._t("label_now_reads", { text: this._esc(labelResolved) }) : ''}${this._t("label_name_hint")}`
-            : "",
+            : labelShowsVariable
+              ? `${labelResolved ? this._t("label_now_reads", { text: this._esc(labelResolved) }) : ''}${this._t("variable_hint")}`
+              : "",
     });
 
     return `
@@ -2037,9 +2051,15 @@ export const ButtonsViewMixin = {
           labelFieldHtml,
         })}
         <div class="config-card-body">
+          ${showLongtouch ? `<h3 class="action-editor-heading">${this._esc(this._t("click_action"))}</h3>` : ''}
           <div class="config-field">
             <div id="button-editor-container"></div>
           </div>
+          ${showLongtouch ? `
+          <h3 class="action-editor-heading">${this._esc(this._t("longtouch_action"))}</h3>
+          <div class="config-field">
+            <div id="button-longtouch-editor-container"></div>
+          </div>` : ''}
           <!-- A device-local command whose target the device cannot resolve is
                sent disarmed. It belongs to the action, not to the button's
                appearance, so it stays in the body beside the action editor
@@ -2394,7 +2414,7 @@ export const ButtonsViewMixin = {
       // branch below matches a title pasted with surrounding whitespace.
       // An unset title renders nothing — the device shows a blank title bar, so the
       // preview must too. Never substitute the page id as a stand-in label.
-      const rawTitle = String(page.image || "").trim();
+      const rawTitle = this._pageTitleImage(page);
       const mode = this._getThemeMode();
       const pgColor = page.default_color || "";
       // Only tint monochrome sources; logos/photos keep their natural colors, and
@@ -2594,7 +2614,13 @@ export const ButtonsViewMixin = {
         // unassigned — the fixed control the page leaves blank but the context
         // drives would come out greyed under the icon just drawn for it.
         const overlayAssign = assignFor(btn.key);
-        const src = this._buildTileImgUrl(icon, mode, pgColor, isConfigured(overlayAssign));
+        // The bound light's own colour and level, so the preview matches the
+        // tile the device is drawing. Falls back to the page colour like
+        // everything else.
+        const tileStyle = this._buttonIconStyle(overlayAssign, pgColor);
+        const src = this._buildTileImgUrl(
+          icon, mode, tileStyle.color, isConfigured(overlayAssign), tileStyle.percent,
+        );
         if (!src) return;
         const el = this._tileImg(pageIdx, btn.key, src);
         el.className = 'pg-btn-img';
@@ -2667,28 +2693,33 @@ export const ButtonsViewMixin = {
         if (!action) return;
         const newIcon = this._resolveButtonIcon(assign, action);
         if (!newIcon) return;
-        const newSrc = this._buildTileImgUrl(newIcon, mode, pageColor, true);
+        const tileStyle = this._buttonIconStyle(assign, pageColor);
+        const newSrc = this._buildTileImgUrl(
+          newIcon, mode, tileStyle.color, true, tileStyle.percent,
+        );
         if (img.getAttribute('src') !== newSrc) img.setAttribute('src', newSrc);
       });
     });
   },
 
   /** Build an imgserv tile URL for a button icon. */
-  _buildTileImgUrl(icon, mode, pageColor, isTinted) {
+  _buildTileImgUrl(icon, mode, color, isTinted, percent = null) {
     icon = String(icon ?? '').trim();
     if (!icon) return '';
+    // Nulled rather than defaulted to 0: no fill is not a fill of nothing.
+    const pct = percent === null || percent === undefined ? '' : `&percent=${percent}`;
     if (this._isExternalUrl(icon) || icon.startsWith('media:')) {
       const target = this._isExternalUrl(icon) ? icon : icon.slice(6);
-      return this._imgservUrl(this._mediaSource(target), 'tile', mode);
+      return this._imgservUrl(this._mediaSource(target), 'tile', mode) + pct;
     }
     if (icon.startsWith('/') || icon.startsWith('data:')) return icon;
     const tintable = icon.startsWith('mdi:') || icon.startsWith('text:') || icon.startsWith('phu:') || !icon.includes(':');
-    const fgParam = pageColor && isTinted && tintable && !icon.includes('fg=') ? `&fg=${pageColor}` : '';
+    const fgParam = color && isTinted && tintable && !icon.includes('fg=') ? `&fg=${color}` : '';
     if (icon.startsWith('mdi:') || icon.startsWith('logo:') || icon.startsWith('phu:') || icon.startsWith('text:') || icon.startsWith('file:')) {
       const sep = icon.includes('?') ? '&' : '?';
-      return `/api/imgserv/${icon}${sep}size=tile&mode=${mode}${fgParam}&alpha=1`;
+      return `/api/imgserv/${icon}${sep}size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
     }
-    return `/api/imgserv/mdi:${icon}?size=tile&mode=${mode}${fgParam}&alpha=1`;
+    return `/api/imgserv/mdi:${icon}?size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
   },
 
   _refreshButtonIcons() {
@@ -2999,7 +3030,8 @@ export const ButtonsViewMixin = {
     // empty, so "unchanged" would be true of the entity and false of the DOM.
     this._lastSectionsEntity = this._entityOfSelectedButton();
 
-    this._mountEditor("button-editor-container");
+    Promise.resolve(this._mountEditor("button-editor-container"))
+      .then(() => this._mountLongtouchEditor?.("button-longtouch-editor-container"));
 
     // Tooltip input
     const labelInput = this.shadowRoot.querySelector(".config-label-input");

@@ -1,4 +1,5 @@
-"""The per-remote text settings: which font and size titles and tooltips use.
+"""The per-remote settings: which font and size titles and tooltips use, and
+whether buttons react to a long touch.
 
 Stored as ``settings.yaml`` in the remote's folder::
 
@@ -8,6 +9,8 @@ Stored as ``settings.yaml`` in the remote's folder::
     tooltip:
       font: filsonsoft-light
       font_size: 24
+    longtouch:
+      enabled: false
 
 A remote without the file, or with a value that makes no sense, gets the
 defaults -- the same text the remote showed before the settings existed.
@@ -21,15 +24,28 @@ from ..imgserv.fonts import DEFAULT_FONT_ID
 
 TEXT_KINDS: Final = ("title", "tooltip")
 
+#: Off by default: with it on, a button with a long touch holds its click back
+#: until the finger lifts, which a remote set up before long touch existed
+#: should not start doing on its own.
+LONGTOUCH_SECTION: Final = "longtouch"
+
 # Smaller than this is unreadable on the remote's screen.
 MIN_FONT_SIZE: Final = 6
 
 
 def default_settings() -> dict[str, dict[str, Any]]:
-    return {
+    settings: dict[str, dict[str, Any]] = {
         kind: {"font": DEFAULT_FONT_ID, "font_size": SIZE_IDS[kind].font_size}
         for kind in TEXT_KINDS
     }
+    settings[LONGTOUCH_SECTION] = {"enabled": False}
+    return settings
+
+
+def longtouch_enabled(settings: Any) -> bool:
+    """Whether *settings* turn long touch on for the remote."""
+    section = settings.get(LONGTOUCH_SECTION) if isinstance(settings, dict) else None
+    return isinstance(section, dict) and section.get("enabled") is True
 
 
 def font_size_limits(kind: str) -> tuple[int, int]:
@@ -60,6 +76,8 @@ def normalize_settings(raw: Any) -> dict[str, dict[str, Any]]:
             settings[kind]["font"] = font.strip().lower()
         if _font_size_ok(kind, given.get("font_size")):
             settings[kind]["font_size"] = given["font_size"]
+    if longtouch_enabled(raw):
+        settings[LONGTOUCH_SECTION]["enabled"] = True
     return settings
 
 
@@ -71,11 +89,21 @@ def validate_settings(raw: Any, font_ids: set[str]) -> dict[str, dict[str, Any]]
     """
     if not isinstance(raw, dict):
         raise ValueError("settings must be a mapping")
-    unknown = set(raw) - set(TEXT_KINDS)
+    unknown = set(raw) - set(TEXT_KINDS) - {LONGTOUCH_SECTION}
     if unknown:
         raise ValueError(f"unknown setting: {', '.join(sorted(unknown))}")
     settings = default_settings()
+    if LONGTOUCH_SECTION in raw:
+        given = raw[LONGTOUCH_SECTION]
+        if not isinstance(given, dict) or set(given) - {"enabled"}:
+            raise ValueError(f"{LONGTOUCH_SECTION} must be a mapping with only 'enabled'")
+        if "enabled" in given:
+            if not isinstance(given["enabled"], bool):
+                raise ValueError(f"{LONGTOUCH_SECTION}: enabled must be true or false")
+            settings[LONGTOUCH_SECTION]["enabled"] = given["enabled"]
     for kind, given in raw.items():
+        if kind == LONGTOUCH_SECTION:
+            continue
         if not isinstance(given, dict):
             raise ValueError(f"{kind} must be a mapping")
         unknown = set(given) - {"font", "font_size"}

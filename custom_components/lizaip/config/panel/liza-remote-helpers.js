@@ -407,7 +407,9 @@ export const HelpersMixin = {
    */
   _htmlIconField({ label, value = "", autoIcon = "", color = "", shape = null,
                    previewClass = "", slotId = "", slotAttrs = "", hint = "" }) {
-    const preview = this._configImagePreviewHtml(value, autoIcon, color, shape);
+    // A variable is previewed as what it reads now; one with no value previews
+    // the derived icon, which is what the remote falls back to as well.
+    const preview = this._configImagePreviewHtml(this._resolveImageVariables(value) || "", autoIcon, color, shape);
     return `
         <div class="config-field">
           <label>${this._esc(label)}</label>
@@ -705,6 +707,176 @@ export const HelpersMixin = {
       || states[0]
       || null
     );
+  },
+
+  /**
+   * The panel half of the light-colour tint.
+   *
+   * A port of `state_color.entity_icon_color`. The two must agree or a preview
+   * would show a colour the device never draws, which is worse than not tinting
+   * at all -- `tests/parity_cases.json#icon_tint` is the contract that pins it.
+   *
+   * Colour-temp lights skip the two contrast rules, for the reason recorded on
+   * `_COLOR_TEMP_MODE` in `state_color.py`: the blackbody line's hue barely
+   * moves, so saturation is all a tunable-white lamp has, and the two rules
+   * would flatten its whole cool half onto one colour.
+   */
+  _entityIconColor(state) {
+    if (!state || !String(state.entity_id ?? "").startsWith("light.")) return "";
+    if (state.state !== "on") return "";
+
+    const rgb = state.attributes?.rgb_color;
+    if (!Array.isArray(rgb) || rgb.length !== 3) return "";
+    // Mirrors `state_color._parse_rgb`, range included: a finite channel far
+    // outside 0-255 turns the HSV arithmetic into NaN rather than clipping.
+    if (rgb.some((c) => typeof c !== "number" || !Number.isFinite(c))) return "";
+    if (rgb.some((c) => c < 0 || c > 255)) return "";
+
+    let [h, s, v] = this._rgbToHsv(rgb[0], rgb[1], rgb[2]);
+    if (state.attributes?.color_mode !== "color_temp") {
+      if (s < 0.1) v = 225;
+      else if (s < 0.4) s = 0.4;
+    }
+
+    const [r, g, b] = this._hsvToRgb(h, s, v);
+    return [r, g, b].map((c) => this._quantChannel(c)).join("");
+  },
+
+  /**
+   * Mirrors `state_brightness._QUANTIZE_STEP`. The step is a pixel budget: at
+   * 10 the fill boundary jumped ~4.8px at a time, which is the "steppiness" the
+   * fill used to have. 2 saturates the renderer -- a 50px tile can only render
+   * 50 distinguishable fills -- but the device, not the renderer, is the
+   * bottleneck: a `percent` it has not cached costs it an image fetch, p50
+   * ~220ms against ~58ms for one it has. 5 is the default because 20 levels
+   * warm that cache far sooner while still rendering distinctly. See the
+   * Python docstring for the measured table. The two halves must agree exactly
+   * or the panel preview shows a fill level the device never draws.
+   */
+  BRIGHTNESS_QUANTIZE_STEP: 5,
+
+  /**
+   * The step this entry is actually configured for, once known.
+   *
+   * Null until `lizaip_config/get_icon_options` answers, which is why every
+   * read falls back to the default above rather than to nothing: a preview
+   * drawn a moment before the reply should still be right for the common case,
+   * not blank.
+   */
+  _iconFillStep: null,
+
+  /**
+   * Whether this entry draws the fill and the tint at all.
+   *
+   * Both start off, matching the Python defaults, so a preview drawn before
+   * `get_icon_options` answers shows the untouched tile.
+   */
+  _iconFillEnabled: false,
+  _iconColorEnabled: false,
+
+  /** The configured fill step, or the built-in default. */
+  _fillStep() {
+    const step = this._iconFillStep;
+    return typeof step === "number" && Number.isFinite(step) && step > 0
+      ? step
+      : this.BRIGHTNESS_QUANTIZE_STEP;
+  },
+
+  /**
+   * The panel half of the brightness fill.
+   *
+   * A port of `state_brightness.entity_brightness_percent`. Same contract as the
+   * tint above: a preview showing a fill the device never draws is worse than
+   * showing none, so the quantisation has to match exactly -- including the
+   * banker's rounding, via `_roundHalfEven`.
+   *
+   * Returns `null` for "no fill", never 0: an off lamp's tile is drawn as it
+   * always was, and a lit one never falls below a single step, since an empty
+   * tile is what "off" looks like.
+   */
+  _entityBrightnessPercent(state, step) {
+    if (!state || !String(state.entity_id ?? "").startsWith("light.")) return null;
+    if (state.state !== "on") return null;
+
+    const raw = state.attributes?.brightness;
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+
+    const percent = Math.max(0, Math.min(100, (raw / 255) * 100));
+    // Explicit argument first so the parity harness can drive this at a step
+    // the panel is not currently configured for.
+    const quantum = typeof step === "number" && Number.isFinite(step) && step > 0
+      ? step
+      : this._fillStep();
+    const snapped = this._roundHalfEven(percent / quantum) * quantum;
+    return Math.max(quantum, Math.min(100, snapped));
+  },
+
+  /**
+   * Tint and fill for a button's tile, from the light it is bound to.
+   *
+   * Both facets come from the one entity, so the tile cannot end up showing one
+   * lamp's colour at another's level -- `state_icon.icon_style_for` resolves
+   * them in a single pass for the same reason.
+   *
+   * A facet that is switched off yields exactly what a button bound to nothing
+   * yields, so a disabled feature leaves no trace in the preview.
+   */
+  _buttonIconStyle(assign, pageColor) {
+    if (!this._iconFillEnabled && !this._iconColorEnabled) {
+      return { color: pageColor, percent: null };
+    }
+    // Every member, not just the first, mirroring `icon_style_for_entities`:
+    // an area whose alphabetically first lamp is off would otherwise preview
+    // unstyled while the remote shows the lit lamp beside it.
+    for (const eid of this._getTargetEntitiesFromConfig(assign?.config) || []) {
+      const state = this._hass?.states?.[eid];
+      const color = this._iconColorEnabled ? this._entityIconColor(state) : "";
+      const percent = this._iconFillEnabled ? this._entityBrightnessPercent(state) : null;
+      if (color || percent !== null) return { color: color || pageColor, percent };
+    }
+    return { color: pageColor, percent: null };
+  },
+
+  /** HA frontend's `rgb2hsv`. Returns [h 0-360, s 0-1, v 0-255]. */
+  _rgbToHsv(r, g, b) {
+    const v = Math.max(r, g, b);
+    const c = v - Math.min(r, g, b);
+    let h;
+    if (!c) h = 0;
+    else if (v === r) h = (g - b) / c;
+    else if (v === g) h = 2 + (b - r) / c;
+    else h = 4 + (r - g) / c;
+    if (h < 0) h += 6;
+    return [60 * h, v ? c / v : 0, v];
+  },
+
+  /** HA frontend's `hsv2rgb`. Inverse of `_rgbToHsv`. */
+  _hsvToRgb(h, s, v) {
+    const f = (n) => {
+      const k = (n + h / 60) % 6;
+      return v - v * s * Math.max(Math.min(k, 4 - k, 1), 0);
+    };
+    return [f(5), f(3), f(1)];
+  },
+
+  /** Clamp to 0-255, quantise to 8, and render as two hex digits. */
+  _quantChannel(value) {
+    const clamped = Math.max(0, Math.min(255, this._roundHalfEven(value)));
+    const q = Math.min(255, this._roundHalfEven(clamped / 8) * 8);
+    return q.toString(16).toUpperCase().padStart(2, "0");
+  },
+
+  /**
+   * Python's `round` is banker's rounding and `Math.round` is not, so a channel
+   * landing exactly on a half-step would quantise one way here and the other on
+   * the device -- rgb(12,20,28) is such a case, and it is in the parity file.
+   */
+  _roundHalfEven(value) {
+    const floor = Math.floor(value);
+    const diff = value - floor;
+    if (diff > 0.5) return floor + 1;
+    if (diff < 0.5) return floor;
+    return floor % 2 === 0 ? floor : floor + 1;
   },
 
   _getDisplayIconForState(action, entityId, stateIcons) {
@@ -1283,12 +1455,13 @@ export const HelpersMixin = {
    */
   _resolveButtonIcon(assign, action, fallback = "") {
     const a = assign || {};
-    if (a.image_pinned && a.image) return a.image;
+    const image = this._resolveImageVariables(a.image);
+    if (a.image_pinned && image) return image;
 
     const payload = this._getPayloadDisplay(a.config);
     if (payload?.thumbnail) return payload.thumbnail;
 
-    if (a.image) return a.image;
+    if (image) return image;
 
     const service = this._stepService(a.config) || action?.service || "";
 
@@ -1429,9 +1602,69 @@ export const HelpersMixin = {
     return this._isTwoWayService(svc) || this._isAttributeStateService(svc);
   },
 
+  // `${sensor.outdoor}` / `${sensor.outdoor.attribute}`. Mirrors
+  // `ENTITY_TOKEN_RE` in const.py.
+  ENTITY_TOKEN_RE: /\$\{\s*([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?\s*\}/g,
+
+  _formatEntityValue(value) {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "boolean") return value ? "on" : "off";
+    if (Array.isArray(value)) {
+      return value.filter((v) => v !== null && v !== undefined).map((v) => this._formatEntityValue(v)).join(", ");
+    }
+    return String(value);
+  },
+
+  /**
+   * What `${entity_id}` (or `${entity_id.attribute}`) reads right now. Mirrors
+   * `entity_token_value`: the state rounded to its display precision and
+   * followed by its unit, an attribute as stored, and nothing at all for a
+   * missing, unknown or unavailable entity.
+   */
+  _entityTokenValue(entityId, attribute, withUnit = true) {
+    const st = this._hass?.states?.[entityId];
+    if (!st) return "";
+    if (attribute) return this._formatEntityValue(st.attributes?.[attribute]);
+    let value = st.state;
+    if (typeof value !== "string" || ["", "unknown", "unavailable"].includes(value)) return "";
+    const precision = this._hass?.entities?.[entityId]?.display_precision;
+    if (Number.isInteger(precision) && precision >= 0 && value.trim() !== "" && !Number.isNaN(Number(value))) {
+      value = Number(value).toFixed(precision);
+    }
+    const unit = st.attributes?.unit_of_measurement;
+    return withUnit && typeof unit === "string" && unit ? `${value} ${unit}` : value;
+  },
+
+  /** Every entity variable in *text* replaced by its current value. */
+  _substituteEntityTokens(text) {
+    if (typeof text !== "string" || !text.includes("${")) return text;
+    return text.replace(this.ENTITY_TOKEN_RE, (_, eid, attr) => this._entityTokenValue(eid.toLowerCase(), attr));
+  },
+
+  /**
+   * A button image with its entity variables filled in, or null when one of
+   * them has no value -- half an icon name ("mdi:weather-") is a broken glyph,
+   * so the button falls back to the icon it derives. Mirrors
+   * `with_resolved_image`.
+   */
+  _resolveImageVariables(image) {
+    if (typeof image !== "string" || !image.includes("${")) return image;
+    let missing = false;
+    // A unit belongs in drawn text, never in a name. Mirrors the Python.
+    const prefix = image.split("${")[0];
+    const withUnit = prefix.toLowerCase().startsWith("text:") || !prefix.includes(":");
+    const out = image.replace(this.ENTITY_TOKEN_RE, (_, eid, attr) => {
+      const v = this._entityTokenValue(eid.toLowerCase(), attr, withUnit);
+      if (!v) missing = true;
+      return v;
+    }).trim();
+    return missing || !out ? null : out;
+  },
+
   /** Resolve `${TOKEN}` placeholders for *display only* — never for storage. */
   _substituteLabelTokens(text, values) {
     if (!text || !text.includes("${")) return text;
+    text = this._substituteEntityTokens(text);
     const lookup = {};
     for (const [k, v] of Object.entries(values)) lookup[k.toLowerCase()] = v;
     // `\w*`, not `\w+`: `${}` and `${ }` must be consumed too, or a brace
@@ -1600,6 +1833,20 @@ export const HelpersMixin = {
     return !!text && /\$\{\s*state\s*\}/i.test(text);
   },
 
+  /**
+   * The title image the remote draws for *page*, trimmed. Entity variables
+   * read as they do there; one with no value leaves the strip blank, exactly
+   * as `device_sync` sends it.
+   */
+  _pageTitleImage(page) {
+    return String(this._resolveImageVariables(page?.image) || "").trim();
+  },
+
+  /** Does this text name an entity variable (`${sensor.outdoor}`)? */
+  _hasEntityToken(text) {
+    return typeof text === "string" && new RegExp(this.ENTITY_TOKEN_RE.source).test(text);
+  },
+
   /** The same test for `${NAME}`, which only device-local commands resolve. */
   _labelHasNameToken(text) {
     return !!text && /\$\{\s*name\s*\}/i.test(text);
@@ -1696,7 +1943,7 @@ export const HelpersMixin = {
     if (!text) return text;
     let out = text;
     const hadToken = out.includes("${");
-    if (hadToken) out = out.replace(/\$\{\s*\w*\s*\}?/g, "");
+    if (hadToken) out = out.replace(/\$\{\s*[\w.]*\s*\}?/g, "");
     // Anything still holding a brace cannot be parsed as a URL by the device.
     if (out.includes("{") || out.includes("}")) out = out.replace(/[{}]/g, "");
     // A separator left joining nothing once a placeholder resolved away --

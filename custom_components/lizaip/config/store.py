@@ -26,6 +26,7 @@ from ..action_controller import (
     SLIDER_VERTICAL_KEY,
     sanitize_slider_override,
 )
+from ..const import longtouch_steps
 from .const import (
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_LABEL_EDITED_KEY,
@@ -187,6 +188,8 @@ class LizaRemoteStore:
         if btn_data.get("image"):
             return False
         if btn_data.get("config"):
+            return False
+        if longtouch_steps(btn_data):
             return False
         if btn_data.get("label"):
             return False
@@ -876,6 +879,16 @@ class LizaRemoteStore:
                 raw = await self._hass.async_add_executor_job(self._read_yaml, path)
             self._settings[device_id] = normalize_settings(raw)
         return deepcopy(self._settings[device_id])
+
+    def cached_settings(self, device_id: str) -> dict[str, dict[str, Any]]:
+        """The kept text settings without touching the disk; defaults if unread.
+
+        For synchronous callers such as the live icon-update callback, which
+        must not await. Entry setup warms the cache with `async_get_settings`,
+        so the defaults only show for a remote whose settings were never read.
+        """
+        kept = self._settings.get(device_id)
+        return deepcopy(kept) if kept is not None else normalize_settings(None)
 
     async def async_set_settings(self, device_id: str, settings: dict) -> dict[str, dict[str, Any]]:
         """Save the text settings; returns them as stored."""
