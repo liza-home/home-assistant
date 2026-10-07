@@ -68,6 +68,71 @@ _button_gestures: dict[tuple[str, str], Any] = {}
 #: Used to infer unannounced page changes and as ``_coerce_page_id``'s fallback.
 _current_page: dict[str, int] = {}
 
+#: Cycle position per cycling button: (entry_id, page_id, button_key) → index.
+#:
+#: The index of the step the **next** press will run, not the one the last
+#: press ran. Stated that way because it is the value the device tile draws:
+#: a cycling button has no state to read back, so the only honest thing it can
+#: show is what pressing it will do.
+#:
+#: Runtime-only, and that is a decision rather than an omission. Nothing can be
+#: read back from an IR target to resync a persisted position, so a position
+#: restored from disk would be a confident claim about a device that may have
+#: been used with its own remote in the meantime. Starting from the first step
+#: after a restart is both honest and predictable. It also keeps ``toggle``
+#: purely declarative on disk, so the page hash — which is what decides whether
+#: the device is re-synced — never moves because somebody pressed a button.
+#:
+#: Keyed by page as well as button because two pages built from one layout
+#: share button keys; without the page id they would share a position too.
+_cycle_position: dict[tuple[str, int, str], int] = {}
+
+
+def cycle_index(entry_id: str, page_id: int, button_key: str, length: int) -> int:
+    """The index *this* press should run, wrapped into a list of *length*.
+
+    Pure: it advances nothing. The reader for the device tile and the reader
+    for the press itself ask the same question, and only one of them is allowed
+    to have a side effect — otherwise merely repainting an icon would skip a
+    step.
+
+    Wrapping happens on read rather than on write so that shortening the rule
+    list in the panel cannot leave a stored index pointing past its end.
+    """
+    if length <= 0:
+        return 0
+    return _cycle_position.get((entry_id, page_id, button_key), 0) % length
+
+
+def advance_cycle(entry_id: str, page_id: int, button_key: str, length: int) -> int:
+    """Move *button_key* on to the next step and return the new index.
+
+    Called once per press, after the step to run has been read. The returned
+    value is what the tile should now draw — the next press's step.
+    """
+    if length <= 0:
+        return 0
+    key = (entry_id, page_id, button_key)
+    nxt = (_cycle_position.get(key, 0) + 1) % length
+    _cycle_position[key] = nxt
+    _LOGGER.debug("Cycle %s now at step %s of %s", key, nxt, length)
+    return nxt
+
+
+def clear_cycle_state(entry_id: str) -> None:
+    """Forget every cycle position held for *entry_id*.
+
+    Unload only, deliberately not page change. A cycling button's position
+    describes a conversation with a device that a page change does not
+    interrupt: navigating away from a transport page and back should not put
+    the button back on *play*. That is the opposite of the slider gesture state
+    beside it, which a page change genuinely invalidates — the finger is gone
+    and no ``touch_end`` is coming.
+    """
+    for key in [k for k in _cycle_position if k[0] == entry_id]:
+        _cycle_position.pop(key, None)
+    _LOGGER.debug("Cleared cycle positions for %s", entry_id)
+
 
 def get_current_page(entry_id: str) -> int | None:
     return _current_page.get(entry_id)

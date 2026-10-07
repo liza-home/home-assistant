@@ -30,7 +30,13 @@ from urllib.parse import quote, unquote
 
 import yaml
 
-from .imgserv.const import SIZE_IDS
+from .imgserv.const import (  # noqa: F401 -- the registry is re-exported
+    NATIVE_SOURCE_TYPES,
+    SIZE_IDS,
+    _custom_icon_prefixes,
+    custom_icon_prefixes,
+    set_custom_icon_prefixes,
+)
 from .imgserv.fonts import DEFAULT_FONT_ID
 
 if TYPE_CHECKING:
@@ -292,11 +298,13 @@ def resolve_icon_url(
     if icon.startswith("media:"):
         # The value is a URL in its own right — encode it so its query survives.
         return f"imgserv://{encode_media_source(icon[6:])}?size={size}&mode=dark{pct}"
-    # imgserv source types: logo:, text:, phu:, file:
-    if icon.startswith(("logo:", "text:", "phu:", "file:")):
+    # imgserv source types: logo:, text:, phu:, file:, and the extra icon
+    # sets the frontend registered (drawn from their uploaded shapes).
+    custom = custom_icon_scheme(icon)
+    if icon.startswith(("logo:", "text:", "phu:", "file:")) or custom:
         sep = "&" if "?" in icon else "?"
-        # Tint monochrome sources (text:, phu:); leave logos/photos untouched
-        tintable = icon.startswith(("text:", "phu:"))
+        # Tint monochrome sources (text:, icons); leave logos/photos untouched
+        tintable = icon.startswith(("text:", "phu:")) or bool(custom)
         color_suffix = f"&fg={fg}" if fg and tintable and "fg=" not in icon else ""
         return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}&mode=dark{color_suffix}{pct}"
 
@@ -321,13 +329,58 @@ def _text_style_query(kind: str, style: Mapping[str, Any] | None) -> str:
     return query
 
 
+# What `resolve_icon_url` dispatches on before its text fallback. URL schemes are
+# case-insensitive (RFC 3986); imgserv source types are not, the server matching
+# them exactly.
+_URL_PREFIXES: Final = ("http://", "https://", "ha://", "imgserv://", "local://", "data:")
+_SOURCE_PREFIXES: Final = ("mdi:", "phu:", "logo:", "text:", "file:", "media:", "/")
+
+
+def custom_icon_scheme(value: str) -> str:
+    """``"hue:"`` when *value* starts with a registered extra icon set, else ``""``."""
+    head, sep, _ = (value or "").partition(":")
+    return f"{head}:" if sep and head in _custom_icon_prefixes else ""
+
+
+def is_media_source(value: str) -> bool:
+    """True when *value* names a picture rather than words to print.
+
+    Mirrors `_isMediaSource` in liza-remote-helpers.js: the editor draws its
+    preview by the same rule, so a field cannot preview text and send an icon.
+    """
+    value = value.strip() if value else ""
+    return (
+        value.lower().startswith(_URL_PREFIXES)
+        or value.startswith(_SOURCE_PREFIXES)
+        or bool(custom_icon_scheme(value))
+    )
+
+
 def resolve_tooltip_url(
     text: str, color: str = "", style: Mapping[str, Any] | None = None,
 ) -> str:
-    """The URL for the words printed under a button; ``""`` clears it."""
-    if not text:
+    """The URL for what is printed under a button; ``""`` clears it.
+
+    The tooltip takes the same values as a button's image and a page's title:
+    anything imgserv can draw, with plain words drawn as ``text:``. Only text
+    takes the tooltip font, and a ``text:`` value naming its own ``font_size=``
+    or ``font=`` keeps it -- the rule `resolve_title_url` applies.
+    """
+    value = text.strip() if text else ""
+    if not value:
         return ""
-    url = resolve_icon_url(f"text:{text}", size="tooltip", color=color)
+    explicit = is_media_source(value)
+    if not explicit:
+        value = f"text:{value}"
+    url = resolve_icon_url(value, size="tooltip", color=color)
+    if not url.startswith("imgserv://text:") or (
+        explicit and (
+            value.lower().startswith("imgserv://")
+            or "font_size=" in value
+            or "font=" in value
+        )
+    ):
+        return url
     return url + _text_style_query("tooltip", style)
 
 
@@ -1211,6 +1264,69 @@ ENTITY_TOKEN_RE = re.compile(
 _NO_VALUE_STATES: Final = frozenset({"unavailable", "unknown", ""})
 
 
+#: A weather entity's state is a condition code ("partlycloudy"), neither a word
+#: to print nor an icon name. Icons as the HA frontend draws them; every slug
+#: starts with ``weather-`` so ``mdi:weather-${weather.x}`` stays one icon.
+WEATHER_CONDITION_ICONS: Final = {
+    "clear-night": "weather-night",
+    "cloudy": "weather-cloudy",
+    "exceptional": "weather-cloudy-alert",
+    "fog": "weather-fog",
+    "hail": "weather-hail",
+    "lightning": "weather-lightning",
+    "lightning-rainy": "weather-lightning-rainy",
+    "partlycloudy": "weather-partly-cloudy",
+    "pouring": "weather-pouring",
+    "rainy": "weather-rainy",
+    "snowy": "weather-snowy",
+    "snowy-rainy": "weather-snowy-rainy",
+    "sunny": "weather-sunny",
+    "windy": "weather-windy",
+    "windy-variant": "weather-windy-variant",
+}
+
+#: Home Assistant's English names for the conditions, for when its translation
+#: cache has none in the wanted language.
+WEATHER_CONDITION_LABELS: Final = {
+    "clear-night": "Clear, night",
+    "cloudy": "Cloudy",
+    "exceptional": "Exceptional",
+    "fog": "Fog",
+    "hail": "Hail",
+    "lightning": "Lightning",
+    "lightning-rainy": "Lightning, rainy",
+    "partlycloudy": "Partly cloudy",
+    "pouring": "Pouring",
+    "rainy": "Rainy",
+    "snowy": "Snowy",
+    "snowy-rainy": "Snowy, rainy",
+    "sunny": "Sunny",
+    "windy": "Windy",
+    "windy-variant": "Windy, cloudy",
+}
+
+
+def _weather_condition_label(hass: HomeAssistant, condition: str) -> str:
+    """*condition* as Home Assistant names it in the UI language."""
+    try:
+        from homeassistant.helpers.translation import async_get_cached_translations
+        cached = async_get_cached_translations(
+            hass, get_ui_language(hass), "entity_component", "weather",
+        )
+    except Exception:  # noqa: BLE001 - no cache (tests, early start)
+        cached = {}
+    label = cached.get(f"component.weather.entity_component._.state.{condition}")
+    return label if isinstance(label, str) and label else WEATHER_CONDITION_LABELS[condition]
+
+
+def weather_condition_icon(hass: HomeAssistant, entity_id: str) -> str | None:
+    """The icon slug (``weather-sunny``) for a weather entity's condition."""
+    if not entity_id.startswith("weather.") or hass is None:
+        return None
+    state = hass.states.get(entity_id)
+    return WEATHER_CONDITION_ICONS.get(getattr(state, "state", None))
+
+
 def entity_token_entities(text: Any) -> set[str]:
     """Entity ids named by ``${domain.object_id[.attribute]}`` in *text*."""
     if not isinstance(text, str) or "${" not in text:
@@ -1256,7 +1372,9 @@ def entity_token_value(
     """What ``${entity_id}`` (or ``${entity_id.attribute}``) reads right now.
 
     The state comes with its unit ("21.5 °C") and rounded to the precision
-    Home Assistant shows it with. An attribute is printed as stored. Missing,
+    Home Assistant shows it with. A weather condition reads as Home Assistant
+    names it ("Partly cloudy"), except in an icon name (*with_unit* False),
+    where the raw code is kept. An attribute is printed as stored. Missing,
     unknown or unavailable reads as nothing, so the token collapses away.
     """
     state = hass.states.get(entity_id) if hass is not None else None
@@ -1267,6 +1385,8 @@ def entity_token_value(
     value = state.state
     if not isinstance(value, str) or value in _NO_VALUE_STATES:
         return ""
+    if with_unit and entity_id.startswith("weather.") and value in WEATHER_CONDITION_LABELS:
+        return _weather_condition_label(hass, value)
     precision = _display_precision(hass, entity_id)
     if precision is not None:
         try:
@@ -1287,6 +1407,55 @@ def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
     return ENTITY_TOKEN_RE.sub(
         lambda m: entity_token_value(hass, m.group(1).lower(), m.group(2)), text,
     )
+
+
+def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
+    """*image* with its entity variables filled in, or None if one has no value.
+
+    ``mdi:weather-${weather.home}`` or ``text:${sensor.outdoor}`` follow the
+    entity, and a weather entity alone (``${weather.home}``) or after ``mdi:``
+    is drawn as its condition's icon. Used for every picture a button can
+    carry -- its image, its per-state icons, its action's icons, a toggle
+    rule's icon -- and the page title, so all of them read variables the same
+    way. Anything without a variable is returned unchanged.
+
+    Lives here rather than in ``config.button_rendering``, where it grew, so
+    that ``action_controller.icons`` can reach it too: a toggle rule's icon
+    accepts exactly the same syntax as a button's and had been going to the
+    device unresolved. ``config.button_rendering`` imports *from* that module,
+    so the shared piece cannot live in either.
+    """
+    if not entity_token_entities(image):
+        return image
+    # All or nothing: half an icon name ("mdi:weather-") draws a broken glyph.
+    missing = False
+    # A unit belongs in drawn text, never in a name: "mdi:battery-80 %" is no
+    # icon at all. Text is a ``text:`` image or one with no scheme before the
+    # variable, which `resolve_icon_url` draws as text.
+    prefix = image.split("${", 1)[0]
+    with_unit = prefix.lower().startswith("text:") or ":" not in prefix
+    whole = ENTITY_TOKEN_RE.fullmatch(image.strip())
+
+    def _value(match) -> str:
+        nonlocal missing
+        eid = match.group(1).lower()
+        icon = None if match.group(2) else weather_condition_icon(hass, eid)
+        if icon:
+            # A weather condition is drawn as its icon: alone it is the whole
+            # name, after "mdi:" the slug, after "mdi:weather-" the rest of it.
+            before = image[:match.start()].lower()
+            if whole:
+                return f"mdi:{icon}"
+            if before.endswith("mdi:weather-"):
+                return icon.removeprefix("weather-")
+            if before.endswith("mdi:"):
+                return icon
+        value = entity_token_value(hass, eid, match.group(2), with_unit)
+        missing = missing or not value
+        return value
+
+    resolved = ENTITY_TOKEN_RE.sub(_value, image).strip()
+    return None if missing or not resolved else resolved
 
 
 def substitute_label_tokens(

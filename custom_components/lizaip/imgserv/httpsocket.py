@@ -2,7 +2,8 @@
 
     GET /api/imgserv/<source>:<value>?<options>
 
-**Sources** — ``mdi:``, ``phu:``, ``logo:``, ``text:``, ``file:``, ``media:``.
+**Sources** — ``mdi:``, ``logo:``, ``text:``, ``file:``, ``media:``, and any
+icon set the browser registered, ``phu:`` among them (``render_custom.py``).
 
 **Options**, all optional, all shared by every source:
 
@@ -48,11 +49,11 @@ from .const import (
     MAX_SIZE,
     MODE_DEFAULTS,
     SIZE_IDS,
+    custom_icon_prefixes,
 )
 from .render import finalize_png
 from .render_logo import render_logo
 from .render_mdi import render_mdi_icon
-from .render_phu import render_phu_icon
 from .render_static import load_static_image
 from .fonts import user_fonts_dir
 from .render_text import render_text
@@ -297,6 +298,8 @@ class LizaIPImageView(HomeAssistantView):
             options = _Options.from_query(request.query)
             source_type, value = _split_source(source, request.query)
             source_def = _SOURCES.get(source_type)
+            if source_def is None and source_type in custom_icon_prefixes():
+                source_def = _Source(partial(_handle_custom, source_type=source_type))
             if source_def is None:
                 raise _ImgservError(400, f"Unknown source type: '{source_type}'")
             image = await source_def.handler(hass, value, options)
@@ -335,8 +338,8 @@ class LizaIPImageView(HomeAssistantView):
 async def _render_icon(hass, render_fn, value, label, options: _Options, **kwargs):
     """Run an icon renderer in the executor and translate its failures.
 
-    Shared by ``mdi``, ``phu`` and ``logo``: same dispatch, same error mapping,
-    different function and extra kwargs.
+    Shared by ``mdi``, ``logo`` and the browser icon sets: same dispatch, same
+    error mapping, different function and extra kwargs.
     """
     if not value:
         raise _ImgservError(400, f"Missing {label}")
@@ -358,8 +361,22 @@ async def _handle_mdi(hass, value, options: _Options):
     return await _render_icon(hass, render_mdi_icon, value, "MDI icon", options)
 
 
-async def _handle_phu(hass, value, options: _Options):
-    return await _render_icon(hass, render_phu_icon, value, "PHU icon", options)
+async def _handle_custom(hass, value, options: _Options, *, source_type: str):
+    """An icon set registered in the browser, drawn from the shape it uploaded.
+
+    A name it has not uploaded yet is noted, so the panel can fetch it the next
+    time it opens -- the only way a name made up by a template gets here.
+    """
+    from .render_custom import get_custom_icons  # needs the root const; see __init__
+
+    icons = get_custom_icons(hass)
+    if icons is None:
+        raise _ImgservError(404, f"{source_type} icon '{value}' not found")
+    if f"{source_type}:{value}" not in icons.icons:
+        icons.note_missing(source_type, value)
+    return await _render_icon(
+        hass, partial(icons.render, source_type), value, f"{source_type} icon", options,
+    )
 
 
 async def _handle_logo(hass, value, options: _Options):
@@ -462,7 +479,6 @@ class _Source:
 
 _SOURCES: dict[str, _Source] = {
     "mdi": _Source(_handle_mdi),
-    "phu": _Source(_handle_phu),
     "logo": _Source(_handle_logo),
     "text": _Source(_handle_text, croppable=False),
     "file": _Source(_handle_file),

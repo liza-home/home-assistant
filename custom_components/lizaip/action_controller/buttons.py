@@ -1,9 +1,9 @@
 """Compiling and running the action behind a button press."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Mapping
-from copy import deepcopy
 
 import voluptuous as vol
 
@@ -23,7 +23,10 @@ from ..const import (
     build_launch_capture,
     build_launch_verification,
     catchall_state_icon,
+    clean_label_text,
+    resolve_image_tokens,
     get_action_label,
+    substitute_label_tokens,
     get_ui_language,
     is_state_toggle_service,
     resolve_icon_url,
@@ -31,18 +34,31 @@ from ..const import (
 )
 from ._state import (
     _DEFAULT_PAGE_ID,
+    advance_cycle,
+    cycle_index,
     get_selected_button,
 )
 from ..state_icon import entity_icon_style, read_icon_style_options
 from .helpers import (
     _get_store,
     _resolve_device_id,
+    first_step,
     resolve_step_entity,
     service_name,
 )
 from .overrides import resolve_fixed_action
 from ..config.internal_commands import get_internal_command
-from ..config.text_style import longtouch_enabled
+from ..config.text_style import longtouch_enabled, toggle_enabled
+from .icons import toggle_icon
+from .toggle import (
+    MODE_CYCLE,
+    TOGGLE_KEY,
+    resolve_rule_label,
+    rule_steps,
+    runtime_assign,
+    toggle_mode,
+    toggle_rules,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,7 +69,7 @@ _LOGGER = logging.getLogger(__name__)
 
 def _script_cache(
     hass: HomeAssistant, entry_id: str,
-) -> dict[tuple[int, str], tuple[list, Script]] | None:
+) -> dict[tuple[int, str], tuple[str, Script]] | None:
     """Return the compiled-Script cache living on the entry's connection.
 
     ``None`` means the entry is gone or unloaded. Callers must not fall back to
@@ -65,6 +81,23 @@ def _script_cache(
     if entry is None:
         return None
     return getattr(getattr(entry, "runtime_data", None), "script_cache", None)
+
+
+def _actions_fingerprint(actions: list) -> str:
+    """A stable digest of an action list, for spotting edits.
+
+    The cache used to keep a `deepcopy` of the actions beside the compiled
+    Script purely to compare against next time -- a second full copy of every
+    button's action tree, held for as long as the entry is loaded. The digest
+    answers the same question in a few dozen bytes.
+
+    `repr` rather than a serialiser because it is cheap and the content is
+    plain scalars, lists and dicts read from YAML. It distinguishes values a
+    serialiser might flatten (`1` from `"1"`, `True` from `1`), which is the
+    safe direction: a false "changed" recompiles a Script, a false "unchanged"
+    would run the button's old behaviour until the next reload.
+    """
+    return hashlib.md5(repr(actions).encode()).hexdigest()
 
 
 async def _get_script(
@@ -87,8 +120,9 @@ async def _get_script(
     # A click keeps the key it always had; a long touch is a second script on
     # the same button.
     cache_key = (page_id, button_key) if gesture == "click" else (page_id, f"{button_key}:{gesture}")
+    fingerprint = _actions_fingerprint(actions)
     cached = cache.get(cache_key)
-    if cached is not None and cached[0] == actions:
+    if cached is not None and cached[0] == fingerprint:
         return cached[1]
 
     # cv.SCRIPT_SCHEMA compiles stored template strings before Script runs them.
@@ -115,8 +149,9 @@ async def _get_script(
         # Build first, then retire the old one: the superseded Script holds
         # condition listeners and sub-scripts that only `async_unload` releases.
         await cached[1].async_unload()
-    # Snapshot to detect later edits even if the caller mutates the list.
-    cache[cache_key] = (deepcopy(actions), script)
+    # Keyed by content, so a later edit recompiles even if the caller mutated
+    # the list it handed in.
+    cache[cache_key] = (fingerprint, script)
     return script
 
 
@@ -299,6 +334,98 @@ def _is_optimistic(hass: HomeAssistant, entry_id: str) -> bool:
     return enabled
 
 
+async def _fire_cycle_update(
+    hass: HomeAssistant,
+    device_id: str,
+    page_id: int,
+    button_key: str,
+    assign: Mapping,
+    entry_id: str,
+) -> None:
+    """Repaint a cycle button with the step its *next* press will run.
+
+    Cycle mode exists for devices that report nothing back, so no
+    ``EVENT_STATE_CHANGED`` is ever going to arrive and the state listener will
+    never repaint this tile. The press is the only moment the glyph can change,
+    which makes this the one update that has to happen here.
+
+    Deliberately not gated on ``CONF_OPTIMISTIC_UPDATES``, unlike
+    ``_fire_optimistic_update`` beside it. That option governs *guessing* at a
+    device's state from a service call; the cycle position is not a guess but a
+    fact this integration owns, and suppressing it would leave the button
+    permanently showing step one while quietly running the others.
+
+    Called after ``resolve_toggle_steps`` has already advanced the position, so
+    ``toggle_icon`` reads the step that comes next — which is exactly the one
+    the tile should advertise.
+    """
+    entity = resolve_step_entity(first_step(dict(assign)), hass)
+    icon = toggle_icon(
+        assign, None, entry_id, page_id, button_key,
+        entity.split(".")[0] if entity else "",
+        hass=hass,
+    )
+    if not icon:
+        # Rule icons are optional, and a cycle with none is a button the user
+        # chose to leave looking constant. Firing a blank would erase the glyph
+        # device_sync painted rather than leave it alone.
+        return
+
+    rules = toggle_rules(assign)
+    if not rules:
+        return
+    index = cycle_index(entry_id, page_id, button_key, len(rules))
+
+    store = _get_store(hass)
+    pages = await store.async_get_pages(device_id)
+    page_color = ""
+    for page in pages:
+        if page.get("id", _DEFAULT_PAGE_ID) == page_id:
+            page_color = page.get("default_color", "")
+            break
+
+    # A cycle step's name can only come from the user: there is no state to
+    # phrase and an IR command is a key code, not a sentence. Falling back to
+    # the button's own label keeps the tooltip truthful rather than blank.
+    #
+    # Resolved, not merely cleaned. This used to go straight to
+    # `clean_label_text`, which *strips* a `${sensor.x}` instead of filling it
+    # in -- so a press tooltip of "Battery ${sensor.foo_battery}" reached the
+    # device as the bare word "Battery", while press 1's own tooltip, which
+    # goes through `icons.py` and `substitute_label_tokens`, read "Battery
+    # 87 %". One field, two behaviours, and the panel offered the same syntax
+    # in both.
+    #
+    # `${STATE}` and `${NAME}` used to be the surviving half of that same
+    # split: an empty value map here collapsed them, so the one syntax the
+    # Tooltip field advertises most prominently was the one a press could not
+    # use. `resolve_rule_label` fills them from the press's own target, which
+    # is the subject a cycle step actually speaks about.
+    # The device's own language option, so a press resolving `${STATE}` reads
+    # the same word the rest of its tile does. Only `entry_id` reaches here.
+    entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
+    tooltip = clean_label_text(
+        resolve_rule_label(rules[index], hass, entry)
+        or substitute_label_tokens(assign.get("label") or "", {}, hass)
+    )
+
+    _LOGGER.debug(
+        "Cycle update: %s/%s → next step %d/%d icon=%s",
+        page_id, button_key, index + 1, len(rules), icon,
+    )
+
+    hass.bus.async_fire(ICON_UPDATE_EVENT, {
+        "device_id": device_id,
+        "updates": [{
+            "page_id": page_id,
+            "button_key": button_key,
+            "icon": resolve_icon_url(icon, color=page_color),
+            "tooltip": tooltip,
+            "page_color": page_color,
+        }],
+    })
+
+
 async def _fire_optimistic_update(
     hass: HomeAssistant,
     device_id: str,
@@ -400,7 +527,12 @@ async def _fire_optimistic_update(
         state_icons, state.entity_id.split(".")[0], predicted_ha_state, svc,
     )
 
-    icon = override if override else action_icon
+    # Variables read as the sync reads them; one with no value falls back to
+    # the action's own icon, and with neither there is nothing to predict.
+    icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
+    if not icon:
+        _LOGGER.debug("Optimistic: predicted icon has no value — skipping")
+        return
 
     pages = await store.async_get_pages(device_id)
     page_color = ""
@@ -548,6 +680,49 @@ async def execute_longtouch(
         _LOGGER.exception("Long touch failed for %s/%s", page_id, button_key)
 
 
+def resolve_toggle_steps(
+    hass: HomeAssistant,
+    entry_id: str,
+    page_id: int,
+    button_key: str,
+    assign: Mapping,
+    actions: list[dict],
+) -> list[dict]:
+    """Pick the steps this press should run, honouring an optional ``toggle``.
+
+    ``toggle`` is a sibling of ``config``, never a replacement for it: six other
+    call sites (icons, tooltips, the watched-entity set, device_sync labels, the
+    optimistic update and the panel's action matcher) read ``config[0]`` as "the
+    step that represents this button". Returning ``actions`` unchanged whenever
+    the toggle is absent, malformed or unmatched is what keeps those honest.
+
+    The returned list is substituted for ``own_actions``, so the inferred wake
+    prelude and launch verification are derived from the step actually about to
+    run rather than from the declared default.
+    """
+    mode = toggle_mode(assign)
+    if mode is None:
+        return actions
+
+    rules = toggle_rules(assign)
+    if not rules:
+        return actions
+
+    if mode == MODE_CYCLE:
+        index = cycle_index(entry_id, page_id, button_key, len(rules))
+        # Advance before running, not after: a step that fails on an IR blaster
+        # gives no feedback either way, and leaving the position parked would
+        # trap the user on the broken entry with no way to step past it.
+        advance_cycle(entry_id, page_id, button_key, len(rules))
+        _LOGGER.debug(
+            "toggle(cycle): step %d/%d for %s/%s",
+            index + 1, len(rules), page_id, button_key,
+        )
+        return rule_steps(rules[index])
+
+    return actions
+
+
 async def execute_action(
     hass: HomeAssistant,
     entry_id: str,
@@ -570,25 +745,42 @@ async def execute_action(
         _LOGGER.debug("execute_action: no action_id for %s/%s", page_id, button_key)
         return
 
+    # Asked only of a button that actually carries a block. This runs on every
+    # press of every button, and the overwhelming majority have no toggle to
+    # suppress -- so the common path stays exactly the lookup-free press it was
+    # before the feature existed.
+    if TOGGLE_KEY in assign:
+        assign = runtime_assign(
+            assign,
+            toggle_enabled(await _get_store(hass).async_get_settings(device_id)),
+        )
+
     actions = assign.get("config", [])
     if not isinstance(actions, list) or not actions:
         _LOGGER.debug("execute_action: empty action config for %s/%s", page_id, button_key)
         return
 
-    # Preserve the button's own steps for verification retries.
-    own_actions = actions
+    # Preserve the button's own steps for verification retries. A ``toggle``
+    # block may substitute a different rule's steps here; ``config`` stays the
+    # declared default that everything else in the integration reads.
+    own_actions = resolve_toggle_steps(
+        hass, entry_id, page_id, button_key, assign, actions,
+    )
 
     # ``before`` is a sibling of ``config`` because panel/device_sync treat
     # ``config[0]`` as the action. Absence licenses inference; ``[]`` suppresses.
+    # Inference reads ``own_actions[0]``, not ``actions[0]``: when a toggle rule
+    # swapped the step in, the device that needs waking is the one the rule is
+    # about to talk to.
     before = assign.get("before")
     if before is None:
-        before = _inferred_prelude(hass, actions[0])
+        before = _inferred_prelude(hass, own_actions[0])
         if before:
             _LOGGER.debug(
                 "Inferred wake prelude for %s/%s (%s on %s): %s",
                 page_id, button_key,
-                actions[0].get("action") or actions[0].get("service"),
-                resolve_step_entity(actions[0], hass), before,
+                own_actions[0].get("action") or own_actions[0].get("service"),
+                resolve_step_entity(own_actions[0], hass), before,
             )
 
     # Keep wake/check conditions inside the script; Python-side state branching
@@ -622,8 +814,14 @@ async def execute_action(
         script.name, len(script.sequence), page_id, button_key,
     )
 
+    # A cycle button has no state listener to correct it, so its repaint is
+    # unconditional and comes first: see _fire_cycle_update.
+    if toggle_mode(assign) == MODE_CYCLE:
+        await _fire_cycle_update(
+            hass, device_id, page_id, button_key, assign, entry_id,
+        )
     # Optimistic icon updates are corrected by the real state listener.
-    if _is_optimistic(hass, entry_id):
+    elif _is_optimistic(hass, entry_id):
         await _fire_optimistic_update(
             hass, device_id, page_id, button_key, assign, own_actions, entry_id,
         )

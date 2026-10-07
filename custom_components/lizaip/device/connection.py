@@ -68,6 +68,7 @@ from .const import (
     LIZAIP_HELLO_EVENT,
 )
 from .protocol import (
+    DEFAULT_REQUEST_TIMEOUT,
     ERR_INTERNAL,
     PROTOCOL_VERSION,
     LizaIPProtocol,
@@ -110,7 +111,7 @@ class LizaIPConnection:
         # they outlive garbage collection and must be unloaded explicitly. Tying
         # the cache to the connection bounds their lifetime to the config entry
         # instead of the module, so a reload cannot strand the previous set.
-        self.script_cache: dict[tuple[int, str], tuple[list, Script]] = {}
+        self.script_cache: dict[tuple[int, str], tuple[str, Script]] = {}
 
         # Entity-platform callbacks
         self._button_callbacks: dict[str, Callable[[str, dict[str, Any]], None]] = {}
@@ -156,10 +157,29 @@ class LizaIPConnection:
         # confirmed/updated by _probe_device() after every hello.
         self._device_http_port: int | None = entry.data.get("device_port")
 
-        # Cached device page state — populated after first sync, reset on disconnect.
-        # None means "unknown, must query device". After sync it holds what was last sent.
-        self._known_page_hashes: dict[int, int] | None = None  # page_id → hash
+        # What the device is known to hold: page_id → the `set_page` payload it
+        # was last given, its hash included. `None` means "unknown, ask the
+        # device". One dict rather than a hash map beside a payload map: the
+        # two used to be written in six places and could drift, and every
+        # reader then needed a hash comparison to decide whether to believe the
+        # payload. Reset on disconnect and on a failed sync.
+        self._known_pages: dict[int, dict] | None = None
         self._known_main_pages: list[int] | None = None  # ordered page IDs
+        # Page syncs must not interleave: two of them racing send conflicting
+        # `set_main_pages` orders and each diffs against a cache the other is
+        # still writing. Also held by the pushes that bypass a full sync -- the
+        # order push after `set_pages` and the `clear_all` service.
+        self._page_sync_lock = asyncio.Lock()
+        # Consecutive failed page syncs. Survives disconnects on purpose: a
+        # device that drops the socket mid-sync every time is the case the
+        # repair issue exists for, and resetting here would hide it.
+        self._page_sync_failures = 0
+        # Page IDs this device refused to both create and write during this
+        # session. Firmware reports no page-count limit in its capabilities, so
+        # the ceiling can only be learned by hitting it; remembering it stops
+        # every later sync from spending four doomed round-trips per page.
+        # Cleared on disconnect, so a firmware update or reset gets a fresh try.
+        self._rejected_pages: set[int] = set()
 
         # Wire up protocol event/request handlers
         self._protocol.on_event("button", self._on_button_event)
@@ -323,8 +343,9 @@ class LizaIPConnection:
                 self._ws = None
                 self._protocol.set_ws(None)
                 # Unknown device state after disconnect — must re-query on next connect
-                self._known_page_hashes = None
+                self._known_pages = None
                 self._known_main_pages = None
+                self._rejected_pages = set()
                 _LOGGER.warning(
                     "Device %s is unavailable (WebSocket disconnected)",
                     self._entry.title,
@@ -407,31 +428,66 @@ class LizaIPConnection:
     # out-of-range value with error 400 anyway (PROTOCOL.md §5), so failing here
     # gives a clearer traceback and avoids a pointless round-trip.
 
-    async def add_page(self, page_id: int) -> dict[str, Any]:
+    async def add_page(
+        self, page_id: int, *, timeout: float = DEFAULT_REQUEST_TIMEOUT
+    ) -> dict[str, Any]:
         return await self._protocol.send_request(
-            "add_page", {"page_id": validate_page_id(page_id)}
+            "add_page", {"page_id": validate_page_id(page_id)}, timeout=timeout
         )
 
-    async def del_page(self, page_id: int) -> dict[str, Any]:
+    async def del_page(
+        self, page_id: int, *, timeout: float = DEFAULT_REQUEST_TIMEOUT
+    ) -> dict[str, Any]:
         return await self._protocol.send_request(
-            "del_page", {"page_id": validate_page_id(page_id)}
+            "del_page", {"page_id": validate_page_id(page_id)}, timeout=timeout
         )
 
-    async def set_page(self, page_id: int, **kwargs: Any) -> dict[str, Any]:
+    async def set_page(
+        self, page_id: int, *, timeout: float = DEFAULT_REQUEST_TIMEOUT, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Write a page.
+
+        *timeout* is keyword-only and never reaches the wire: a page payload is
+        splatted in as ``**page_data``, and the device has no ``timeout`` field,
+        so keeping it out of ``kwargs`` is what lets the caller pick a deadline
+        without the value being mistaken for page content.
+        """
         return await self._protocol.send_request(
-            "set_page", {"page_id": validate_page_id(page_id), **kwargs}
+            "set_page", {"page_id": validate_page_id(page_id), **kwargs}, timeout=timeout
         )
+
+    async def clear_all(self) -> dict[str, Any]:
+        """Remove every page from the device.
+
+        The page cache is dropped first, not after: it describes pages that are
+        about to stop existing, and a failure part way through would otherwise
+        leave it claiming a device state nobody can rely on. Forgetting it means
+        the next sync re-reads `get_pages` and rebuilds from what is really there.
+        """
+        self._known_pages = None
+        self._known_main_pages = None
+        return await self._protocol.send_request("clear_all")
 
     async def goto_page(self, page_id: int) -> dict[str, Any]:
         return await self._protocol.send_request(
             "goto_page", {"page_id": validate_page_id(page_id)}
         )
 
-    async def get_pages(self) -> list[dict[str, Any]]:
-        result = await self._protocol.send_request("get_pages")
+    async def get_pages(self, *, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> list[dict[str, Any]]:
+        """Every page the device holds, with its content hash.
+
+        *timeout* is settable because this one answer grows with the number of
+        pages: a remote carrying a hundred of them needs noticeably longer to
+        assemble and send the listing than the default allows, and a timeout
+        here is expensive -- the caller cannot tell a slow device from an empty
+        one without it.
+        """
+        result = await self._protocol.send_request("get_pages", timeout=timeout)
         return result.get("pages", [])
 
-    async def set_main_pages(self, pages: list[int]) -> dict[str, Any]:
+    async def set_main_pages(
+        self, pages: list[int], *, timeout: float = DEFAULT_REQUEST_TIMEOUT
+    ) -> dict[str, Any]:
         """Set the swipe-navigation page order.
 
         *pages* is a list of ``page_id`` integers; the wire payload wraps each
@@ -441,10 +497,11 @@ class LizaIPConnection:
         return await self._protocol.send_request(
             "set_main_pages",
             {"pages": [{"page_id": validate_page_id(p)} for p in pages]},
+            timeout=timeout,
         )
 
-    async def get_main_pages(self) -> list[int]:
-        result = await self._protocol.send_request("get_main_pages")
+    async def get_main_pages(self, *, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> list[int]:
+        result = await self._protocol.send_request("get_main_pages", timeout=timeout)
         return result.get("pages", [])
 
     async def set_brightness(self, value: float) -> dict[str, Any]:

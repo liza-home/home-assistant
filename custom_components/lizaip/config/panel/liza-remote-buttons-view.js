@@ -3,10 +3,16 @@
  * HTML generation and wiring for the Buttons tab (pages, SVG, button config).
  */
 
-import { drawSVG, getPathBounds } from "./liza-remote-svg.js";
-import { badNumber } from "./liza-remote-helpers.js";
+import { drawSVG, getPathBounds, armSuppress, suppressedNow } from "./liza-remote-svg.js";
+import { badNumber, isIconSource } from "./liza-remote-helpers.js";
 
 const capitalize = (s) => s.replace(/\b\w/g, c => c.toUpperCase());
+
+// The only mode a `toggle` block has. Written explicitly rather than left out:
+// `sanitize_toggle` refuses a block whose mode it does not recognise, which is
+// what makes a block saved by the revision that also had a state mode go inert
+// instead of being silently reread as a cycle.
+const MODE_CYCLE = "cycle";
 
 export const isGridBtn = (key) => /^button_\d+$/.test(key);
 const isSliderBtn = (key) => /^slider_/.test(key);
@@ -17,6 +23,17 @@ const isSliderBtn = (key) => /^slider_/.test(key);
 // device pads it with on either side is not part of it.
 const TITLE_PREVIEW_H = 28;
 const TITLE_PREVIEW_W = TITLE_PREVIEW_H * 4;
+// The tooltip's, at the same width: imgserv's `tooltip` size is 200x40.
+const TOOLTIP_PREVIEW_H = Math.round(TITLE_PREVIEW_W * 40 / 200);
+
+// The thumbnail in a press row's heading. Explicit because the preview helper
+// defaults to the 28px box a *field* gets, and that box is written inline --
+// as `width`/`height` on an <img> and `--mdc-icon-size` on an <ha-icon> -- so
+// a stylesheet cannot cut it down to heading size afterwards. Left to the
+// default, a row drawing an icon and a row drawing a picture ended up
+// different heights, which tilted the heading off the line the number and the
+// chevron sit on and pushed one row's words up against its glyph.
+const PRESS_GLYPH_SHAPE = { size: 20, box: { w: 20, h: 20 } };
 
 // The fixed *buttons* whose press a grid button may override, mirroring
 // `OVERRIDABLE_FIXED_BUTTONS` in action_controller/overrides.py. A Set rather
@@ -761,7 +778,6 @@ export const ButtonsViewMixin = {
       // is what it is.
       const filledCount = allBtnKeys.filter(k => isConfigured(pageAssigns[k])).length;
 
-      const emptyClass = filledCount === 0 ? 'pg-empty' : '';
       // The tooltip keeps every fact in one string -- a hover tooltip cannot
       // offer to skip half of itself. The announcement splits: the name is
       // which page and where it sits, and the fill count becomes a
@@ -814,7 +830,7 @@ export const ButtonsViewMixin = {
       // invisible yet focusable (2.4.7) and still hit-tested. Placed before
       // the container so the tab order reads page, delete, buttons.
       return `
-        <div class="page-thumb ${isActive ? 'active' : ''} ${emptyClass} ${page.subpage ? 'subpage' : ''}" data-page-idx="${i}" data-page-id="${this._esc(String(page.id))}" draggable="true"${groupAttrs}>
+        <div class="page-thumb ${isActive ? 'active' : ''} ${page.subpage ? 'subpage' : ''}" data-page-idx="${i}" data-page-id="${this._esc(String(page.id))}" draggable="true"${groupAttrs}>
           ${isActive ? delIcon : ''}<span id="${descId}" class="liza-sr-only">${this._esc(fillDesc)}</span>
           <div class="pg-svg-container" data-page-idx="${i}" data-page-id="${this._esc(String(page.id))}"${pictureAttrs}></div>
         </div>`;
@@ -889,16 +905,12 @@ export const ButtonsViewMixin = {
     // It is the *same* field as a button's Image, down to the class names: the
     // title is a button like any other, and editing it used to be a different
     // gesture entirely — a display row with a pencil, a raw text box that took
-    // `mdi:`/`text:`/`logo:` prefixes by hand, and a ✓/✕ pair to commit. The
-    // button card has an icon picker, a preview and a mode toggle, and commits
-    // as you go. So does this now. What it does not have is the Tooltip field:
-    // the title bar prints its own picture and has no second line to caption.
-    //
-    // One control, not two. There used to be an Icon/URL toggle here and on the
-    // button card, each revealing one of a pair of inputs — but `ha-icon-picker`
-    // takes a custom value, so a URL, a `logo:` or a bare label can simply be
-    // typed into it. The second input was a mode switch guarding a box that was
-    // never needed.
+    // `mdi:`/`text:`/`logo:` prefixes by hand, and a ✓/✕ pair to commit. Now
+    // it is the shared media field the button's Image and Tooltip use: one
+    // copy-pasteable text box taking every imgserv source, saving on Enter or
+    // blur, with `mdi:`/`phu:` suggestions. What it does not have is the
+    // Tooltip field: the title bar prints its own picture and has no second
+    // line to caption.
     //
     // Previewed through `_configImagePreviewHtml`, the button card's own, so
     // the two fields agree about tint and what an empty slot looks like. What
@@ -938,16 +950,13 @@ export const ButtonsViewMixin = {
     // those arrows onto a third line.
     const titleEditorHtml = this._pageTitleSelected ? `
           <div class="ps-title-editor" id="pageTitleEditor">
-            ${this._htmlIconField({
+            <span class="title-icon-field">${this._htmlIconField({
               label: this._t("image"),
               value: pageImgTitle,
               color: pageDefaultColor,
               shape: { size: "title", box: { w: TITLE_PREVIEW_W, h: TITLE_PREVIEW_H } },
               previewClass: "icon-preview-title",
               slotId: "ps-icon-picker-slot",
-              hint: this._hasEntityToken(pageImgTitle)
-                ? `${this._resolveImageVariables(pageImgTitle) ? this._t("label_now_reads", { text: this._esc(this._resolveImageVariables(pageImgTitle)) }) : ''}${this._t("variable_hint")}`
-                : "",
             })}
           </div>` : '';
 
@@ -1018,13 +1027,46 @@ export const ButtonsViewMixin = {
   // picture is called. What the order decides is which question the open card
   // asks first, and that is "what does it look like".
   _htmlConfigCardHeader(o) {
+    const fields = `${o.appearanceHostHtml || ''}${o.labelFieldHtml || ''}`;
+    const cycling = !!o.pressRowOneHeadHtml;
+    // With a cycle on the button, the two fields above are press 1's and
+    // belong in the list with the rest. The row *wraps* the hosts rather than
+    // inlining what is in them: the appearance host is rebuilt by assigning
+    // innerHTML and the Tooltip is deliberately not in a host at all (see
+    // ENTITY_SECTION_HOST), so flattening them into the row would either lose
+    // a host or put a half-typed name where a rebuild could throw it away.
+    // Wrapping costs nothing and keeps both guarantees.
+    //
+    // `#config-card-presses` is `display: contents`, so presses 2..N land as
+    // siblings of this row and the list's spacing and rail treat every press
+    // the same.
+    //
+    // Emitted even when there is no cycle, and neutralised with `press-plain`
+    // -- which is `display: contents` the whole way down, so a button with one
+    // action lays out exactly as it did when these elements did not exist.
+    // The alternative was to emit the wrapper only when cycling, and then
+    // adding a second action would be a change of *structure*;
+    // `_refreshButtonEntitySections` patches hosts and cannot build a wrapper
+    // around them, and the only other way to get one is a full re-render,
+    // which tears down the action editor the user is typing in. A class is
+    // something a patch can flip.
     return `
       <div class="config-card-header cch">
         ${o.subtitleHtml || ''}
         <div class="cch-editor" id="configCardEditor">
           <div class="cch-editor-inner">
-            ${o.appearanceHostHtml || ''}
-            ${o.labelFieldHtml || ''}
+            <div class="press-appearance-section${cycling ? "" : " press-plain"}" id="config-card-press-section">
+              <div id="config-card-press-head">${o.pressSectionLabelHtml || ''}</div>
+              <div class="press-appearance-list"${cycling
+                ? ` role="group" aria-labelledby="liza-press-appearance-label" aria-describedby="liza-press-appearance-hint"`
+                : ''}>
+                <details class="press-appearance-row" data-press-idx="0" ${cycling ? (o.pressRowOneOpen ? "open" : "") : "open"}>
+                  ${o.pressRowOneHeadHtml || `<summary class="press-appearance-head"></summary>`}
+                  ${fields}
+                </details>
+                ${o.pressListHtml || ''}
+              </div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -1828,16 +1870,26 @@ export const ButtonsViewMixin = {
                  the card. -->
             <h3 class="config-section-title">${this._t("appearance")}</h3>
             ${iconFieldHtml}
-            ${configFieldHtml({
-              label: this._t("label"),
-              control: `<input type="text" class="config-label-input" value="${this._esc(apprCtx ? apprCtx.label : (selAssign.label || selDefault))}" ${apprCtx ? `placeholder="${this._esc(apprCtx.autoLabel)}"` : ""} />`,
-              hint: apprCtx
-                ? this._t("label_own_hint", {
-                    name: this._esc(contextName),
-                    auto: this._esc(apprCtx.autoLabel),
-                  })
-                : "",
-            })}
+            ${(() => {
+              const sliderLabel = apprCtx ? apprCtx.label : (selAssign.label || selDefault);
+              return this._htmlIconField({
+                label: this._t("label"),
+                value: sliderLabel || apprCtx?.autoLabel || "",
+                inputValue: sliderLabel,
+                inputClass: "config-label-input",
+                placeholder: apprCtx ? apprCtx.autoLabel : "",
+                color: this._currentPageColor(),
+                shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
+                previewClass: "icon-preview-title",
+                slotId: "config-label-slot",
+                hint: apprCtx
+                  ? this._t("label_own_hint", {
+                      name: this._esc(contextName),
+                      auto: this._esc(apprCtx.autoLabel),
+                    })
+                  : "",
+              });
+            })()}
           </div>
         </ha-card>`;
     }
@@ -1913,16 +1965,7 @@ export const ButtonsViewMixin = {
 
     const stateIcons = selAssign.state_icons || {};
     const iconDomain = selEntity ? selEntity.split(".")[0] : (selAction?.service || "").split(".")[0];
-    let actionStates = selAction?.states || [];
-    if (actionStates.length === 0 && selAction) {
-      const { attribute, states: derivedStates } = this._getStatesForAction(selAction, selEntity);
-      const defaults = this._getDefaultIcons(iconDomain, attribute);
-      actionStates = derivedStates.map(s => ({
-        state: s,
-        icon: defaults[s] || "",
-        attribute: attribute || undefined,
-      }));
-    }
+    let actionStates = this._actionStates(selAction, selEntity);
     // Grandfather any state the user has already overridden but that the list
     // above no longer offers — a service whose rows were narrowed, or an action
     // re-pointed at a different entity.
@@ -1973,7 +2016,7 @@ export const ButtonsViewMixin = {
       stateIconsHtml = `
         <div class="config-field state-icons-section">
           <label id="liza-btn-icons-label">${this._t("button_icons")}</label>
-          <div class="state-icons-list">${rows}</div>
+          <div class="state-icons-list" role="group" aria-labelledby="liza-btn-icons-label">${rows}</div>
         </div>`;
     }
 
@@ -1994,10 +2037,200 @@ export const ButtonsViewMixin = {
       autoIcon: autoImageIcon,
       color: this._currentPageColor(),
       slotId: "config-icon-picker-slot",
-      hint: this._hasEntityToken(imageVal)
-        ? `${this._resolveImageVariables(imageVal) ? this._t("label_now_reads", { text: this._esc(this._resolveImageVariables(imageVal)) }) : ''}${this._t("variable_hint")}`
-        : "",
     }) : '';
+
+    // How each of the *later* presses looks. Press 1 is the button, so the
+    // Image and Tooltip fields above already answer for it; presses 2..N have
+    // no fields of their own anywhere else, because the action editor draws
+    // them as Home Assistant action cards and an action card has nowhere to
+    // put an icon.
+    //
+    // Here rather than under the editor on purpose: this section is already
+    // the card's answer to "what does this button look like", and for a cycle
+    // the honest answer is "it depends which press". Mechanics under Click,
+    // looks under Appearance.
+    //
+    // Each press is drawn with the *same* two fields as press 1, at the same
+    // width and in the same order -- the row is a second copy of the pair
+    // above it, numbered. It previously used a cramped half-width picker and a
+    // bare input, so the same two questions were asked twice in two shapes and
+    // the later presses read as an afterthought rather than as peers.
+    //
+    // Including the variable hint and the resolved readout. That used to be the
+    // one honest difference: `${sensor.x}` worked for press 1 and quietly did
+    // nothing here, so the hint was withheld rather than advertise a feature
+    // the backend did not implement. All three missing pieces are now in place
+    // -- the repaint resolves the tooltip and the icon
+    // (`action_controller/buttons.py`, `icons.toggle_icon`), and
+    // `config/variables.py` collects `toggle.rules[].label`/`.icon` so a
+    // change to the named entity resyncs the page instead of leaving the value
+    // frozen at whatever it read when the press ran.
+    const pressRules = this._toggleRules(selBtn.key);
+    const pressTitles = this._pressHeadings(pressRules);
+    // Whether the presses are shown as a list at all. Below two there is no
+    // cycle, so there is nothing to number and the button's Image and Tooltip
+    // stay the plain pair of fields they have always been.
+    const showPressList = isGridBtn(selBtn.key) && this._toggleFeatureEnabled?.()
+      && pressRules.length > 1;
+    const pressAppearanceHtml = showPressList
+      ? `${pressRules.slice(1).map((rule, i) => {
+            const idx = i + 1;
+            // Each press is a labelled group, not a bare box. Every row holds
+            // a field called "image" and a field called "Tooltip", so down a
+            // list of three presses a screen reader announces "image" three
+            // times with nothing to tell them apart -- the ordinal and the
+            // action name that separate them for a sighted user sit beside
+            // the fields, not attached to them. The group name carries both,
+            // built from strings that are already translated, so this needs
+            // no key of its own.
+            // The action while it still tells the presses apart, the user's
+            // own wording when it does not -- see `_pressHeadings`. Naming
+            // every row from the label would print one long string twice,
+            // stacked on the Tooltip field that writes it; naming every row
+            // from the action gave three steps of one service three identical
+            // headings.
+            const actionName = pressTitles[idx];
+            // Shut unless the user opened it, or `_applyCycle` opened it
+            // because they just added this press. Read from the panel rather
+            // than left to the DOM: these rows are rebuilt on every keystroke
+            // elsewhere in the card, so a row remembering its own state would
+            // forget it immediately.
+            const open = this._openPresses?.has(`${selBtn.key}:${idx}`);
+            // What the device falls back to when this press stores nothing of
+            // its own -- the glyph the backend derives from the step's service
+            // (`toggle.step_icon`) and the caption the heading above already
+            // asks for. Computed once per row because both the preview and the
+            // input now need them, and two copies of the expression is how
+            // the box and the field it labels drift apart.
+            const derivedIcon = this._getServiceIcon(rule.config?.[0]?.action || "", selEntity);
+            const derivedLabel = this._pressDefaultLabel(
+              rule,
+              this._toggleRuleName(rule),
+            );
+            // The subject this press speaks about, which is its *own* target
+            // and not the button's. A cycle exists because its steps differ,
+            // often in what they point at, so reading every press's `${STATE}`
+            // off the button's declared action would phrase press 3 in terms
+            // of press 1. `resolve_rule_label` in `toggle.py` answers the same
+            // question the same way, and a synthetic action carrying the step's
+            // service is what keeps them agreeing: a press has no action-library
+            // entry the backend can see, so the step's service is the only
+            // service both sides can read.
+            const pressService = rule.config?.[0]?.action || "";
+            const pressAction = { service: pressService };
+            const pressEntity = this._getTargetEntityFromConfig(rule.config || []) || selEntity;
+            // What the remote prints for this press right now, tokens read.
+            const pressResolved = this._displayLabel(
+              rule.label || "", pressAction, pressEntity, rule.config, rule,
+            );
+            // The same three lessons press 1's Tooltip offers, on the same
+            // conditions. They used to be withheld here on the grounds that a
+            // cycle step has no state to phrase -- but a step most certainly
+            // does: `light.turn_on` produces "On" whatever the lamp is doing.
+            // The tokens collapsed only because both backend producers passed
+            // an empty value map, which is now fixed, so withholding the hint
+            // would be hiding a feature that works.
+            const pressShowsState = this._labelHasStateToken(rule.label || "")
+              && !!this._displayLabel("${STATE}", pressAction, pressEntity, rule.config);
+            const pressShowsName = this._labelHasNameToken(rule.label || "")
+              && !!this._displayLabel("${NAME}", pressAction, pressEntity, rule.config);
+            const pressShowsVariable = this._hasEntityToken(rule.label || "");
+            const pressNowReads = (pressShowsState || pressShowsName || pressShowsVariable)
+              ? pressResolved
+              : "";
+            // <details> rather than a div with a click handler, and native
+            // rather than `ha-expansion-panel`: it is the pattern the debug
+            // view already uses here, it is keyboard- and screen-reader-
+            // operable without a line of code, and a closed <details> keeps
+            // its contents in the DOM -- which the icon picker needs, because
+            // it is mounted into a slot inside a row that may be shut.
+            return `
+            <details class="press-appearance-row" data-press-idx="${idx}" ${open ? "open" : ""}>
+              ${this._pressRowHeadHtml({
+                idx,
+                name: actionName,
+                glyphHtml: this._configImagePreviewHtml(
+                  this._resolveImageVariables(rule.icon || "") || "",
+                  derivedIcon,
+                  this._currentPageColor(),
+                  PRESS_GLYPH_SHAPE,
+                ),
+              })}
+              ${this._htmlIconField({
+                // "Image", the same word press 1's field uses, and now said
+                // only once -- `_htmlIconField` hands it to the picker, which
+                // floats it inside the box, instead of also printing it above.
+                label: this._t("image"),
+                value: rule.icon || "",
+                // What the device draws when the press names no icon of its
+                // own: the backend derives the same glyph from the step's
+                // service (`toggle.step_icon`). Left blank, the preview showed
+                // the broken-image fallback, which reads as "no icon" when the
+                // press in fact has a perfectly good one.
+                autoIcon: derivedIcon,
+                // Prefilled with the derived glyph when the press stores no
+                // icon, which is what press 1's Image field has always done
+                // (see the note at `_mountIconPicker` for the button's own
+                // picker). It was left blank here, so the one field that was
+                // meant to be press 1's twin was the one field that did not
+                // behave like it: press 1 read `mdi:lightbulb-on` while an
+                // untouched press read nothing, and the difference looked like
+                // a press that had lost its icon rather than one inheriting.
+                // Display only -- `_wireMediaInput` commits nothing until the
+                // text differs from what the field was opened with -- so a
+                // press that shows the derived glyph still stores no icon and
+                // still follows the action if it is changed.
+                inputValue: rule.icon || derivedIcon,
+                color: this._currentPageColor(),
+                slotAttrs: `data-toggle-idx="${idx}"`,
+              })}
+              ${this._htmlIconField({
+                label: this._t("tooltip"),
+                // The same field press 1's Tooltip is, down to the preview:
+                // a tooltip takes any media source now, not just words, so a
+                // press that wants a glyph for its caption can have one. It
+                // was a bare text input left over from when a tooltip was
+                // only text -- which meant no suggestions, no commit on
+                // Enter, and no sight of what the remote would actually draw.
+                //
+                // The preview reads the tokens; the input keeps what was
+                // typed. Resolved through the twin of the backend's
+                // `clean_label_text(substitute_label_tokens(...))`, so the
+                // preview and the device agree.
+                // Falls back to the derived caption for the same reason the
+                // Image field falls back to the derived glyph: blank, the
+                // preview drew `mdi:image-off-outline` -- "nothing here" --
+                // beside a field promising a name, while the device prints the
+                // derived caption perfectly well.
+                value: pressResolved || derivedLabel,
+                inputValue: rule.label || derivedLabel,
+                inputClass: "toggle-press-label",
+                // What the device draws when this press names no tooltip:
+                // the subject the step points at, read the same way press 1's
+                // field reads it, with the service's name when there is no
+                // subject to name. The heading above asks the same question
+                // of the same helper, so an untouched press reads the same in
+                // both places.
+                // Still set, for the one case the prefill does not cover:
+                // a user who clears the field is shown what clearing it buys
+                // them rather than an empty box.
+                placeholder: derivedLabel,
+                color: this._currentPageColor(),
+                shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
+                previewClass: "icon-preview-title",
+                slotAttrs: `data-toggle-label-idx="${idx}"`,
+                // Press 1's three lessons, chosen by the same ladder and in
+                // the same order, so the two fields teach one syntax rather
+                // than two dialects of it.
+                hint: this._tokenHint(pressNowReads, {
+                  state: pressShowsState,
+                  name: pressShowsName,
+                  variable: pressShowsVariable,
+                }),
+              })}
+            </details>`;
+          }).join("")}`
+      : '';
 
     // The Label field, built here and handed to the header. It renders under a
     // context, on the same code path and at the same width, because a card that
@@ -2013,22 +2246,41 @@ export const ButtonsViewMixin = {
     // damage is bounded — but the label would be dropped with them, silently,
     // which is a field that accepts a value and loses it. So it says what it
     // needs first.
-    const labelFieldHtml = labelIsDead ? '' : configFieldHtml({
+    // Press 1's row heading, from the same pair the field below it is given:
+    // the stored tooltip resolved, and the default it offers when blank. A
+    // glyph caption is skipped -- it is drawn as the glyph, and a heading
+    // reading `mdi:battery-50` is a filename read as a sentence.
+    const pressOneTitle = (
+      (labelFieldValue && !this._isMediaSource?.(labelFieldValue)
+        ? (this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign) || labelFieldValue)
+        : "")
+      || selDefault || pressTitles[0] || ""
+    );
+    const labelFieldHtml = labelIsDead ? '' : this._htmlIconField({
       label: this._t("tooltip"),
-      control: `<input type="text" class="config-label-input" value="${this._esc(labelFieldValue)}" placeholder="${this._esc(selDefault)}" ${labelNeedsAction ? "disabled" : ""} />`,
-      action: labelNeedsAction ? '' : `${
-        (currentLabel && currentLabel !== autoLabel)
-          ? `<button class="config-label-reset" data-a11y-focus-after=".config-label-input" title="${this._esc(this._t("reset_tooltip"))}" aria-label="${this._esc(this._t("reset_tooltip"))}"><span aria-hidden="true">↺</span></button>` : ''
-      }<button class="config-label-cancel" data-a11y-focus-after=".config-label-input" title="${this._esc(this._t("discard_change"))}" aria-label="${this._esc(this._t("discard_change"))}" style="display:none"><ha-icon icon="mdi:close" style="--mdc-icon-size:18px;" aria-hidden="true"></ha-icon></button><button class="config-label-save" data-a11y-focus-after=".config-label-input" title="${this._esc(this._t("save_tooltip"))}" aria-label="${this._esc(this._t("save_tooltip"))}" style="display:none"><ha-icon icon="mdi:check" style="--mdc-icon-size:18px;" aria-hidden="true"></ha-icon></button>`,
+      // The preview draws what the remote prints, tokens read; the field
+      // holds the stored text, tokens and all.
+      value: labelFieldValue
+        ? (this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign) || labelFieldValue)
+        : "",
+      inputValue: labelFieldValue,
+      inputClass: "config-label-input",
+      placeholder: selDefault,
+      disabled: labelNeedsAction,
+      color: this._currentPageColor(),
+      shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
+      previewClass: "icon-preview-title",
+      slotId: "config-label-slot",
+      action: (!labelNeedsAction && currentLabel && currentLabel !== autoLabel)
+        ? `<button class="config-label-reset" data-a11y-focus-after=".config-label-input" title="${this._esc(this._t("reset_tooltip"))}" aria-label="${this._esc(this._t("reset_tooltip"))}"><span aria-hidden="true">↺</span></button>`
+        : '',
       hint: labelNeedsAction
         ? this._t("tooltip_needs_action")
-        : labelShowsState
-          ? `${labelResolved ? this._t("label_now_reads", { text: this._esc(labelResolved) }) : ''}${this._t("label_state_hint")}`
-          : labelShowsName
-            ? `${labelResolved ? this._t("label_now_reads", { text: this._esc(labelResolved) }) : ''}${this._t("label_name_hint")}`
-            : labelShowsVariable
-              ? `${labelResolved ? this._t("label_now_reads", { text: this._esc(labelResolved) }) : ''}${this._t("variable_hint")}`
-              : "",
+        : this._tokenHint(labelResolved, {
+          state: labelShowsState,
+          name: labelShowsName,
+          variable: labelShowsVariable,
+        }),
     });
 
     return `
@@ -2049,15 +2301,86 @@ export const ButtonsViewMixin = {
           appearanceHostHtml:
             `<div id="config-card-appearance">${imageFieldHtml}${stateIconsHtml}</div>`,
           labelFieldHtml,
+          // A second host, after the Tooltip rather than inside the first.
+          //
+          // The press rows have to follow press 1's *pair* of fields, not sit
+          // between them: a list of later presses wedged between the Image and
+          // the Tooltip it comes after reads as though the Tooltip belongs to
+          // the last press in the list. The Tooltip cannot simply move up into
+          // the appearance host either -- see ENTITY_SECTION_HOST, it is a
+          // sibling precisely so an entity change cannot discard a name typed
+          // but not yet confirmed. So the list moves out instead.
+          //
+          // Still a refreshable host of its own, because each row's derived
+          // glyph is resolved against the button's entity domain and that
+          // entity is chosen inside the action editor. The press labels are
+          // safe here where the Tooltip was not: they commit on `change`, so
+          // they hold no pending state for a rebuild to throw away.
+          //
+          // Emitted unconditionally for the same reason as the other host: a
+          // rebuild can empty a host that exists and cannot create one that
+          // does not.
+          pressListHtml: `<div id="config-card-presses">${pressAppearanceHtml}</div>`,
+          // Press 1 as a row of the same list, numbered and collapsible like
+          // the rest. It used to be a loose pair of fields above a list of
+          // "later presses", which made the first step look like the button's
+          // real appearance and the others like overrides of it. They are not:
+          // each press is one step of a cycle, and after a reorder any of them
+          // can be first. Equal rows say that; a heading saying "later" said
+          // the opposite.
+          //
+          // Only the *heading* is passed. The fields stay where they are --
+          // see the two hosts above -- and the header wraps them rather than
+          // inlining them, so neither loses its identity or its refresh rules.
+          pressSectionLabelHtml: showPressList
+            ? `<label id="liza-press-appearance-label">${this._esc(this._t("toggle_press_appearance"))}</label>
+               <span class="config-field-hint" id="liza-press-appearance-hint">${this._esc(this._t("toggle_press_appearance_hint"))}</span>`
+            : "",
+          pressRowOneHeadHtml: showPressList
+            ? this._pressRowHeadHtml({
+                idx: 0,
+                // Press 1 cannot go through `_pressHeadings`: its tooltip is
+                // stored on the assignment, not on its rule, so the rule it
+                // would be read from is blank. Taken from the two values its
+                // own Tooltip field is handed instead -- the resolved text,
+                // then the placeholder -- which is what agreement between a
+                // heading and the field under it actually means.
+                name: pressOneTitle,
+                glyphHtml: this._configImagePreviewHtml(
+                  this._resolveImageVariables(imageVal) || "",
+                  autoImageIcon,
+                  this._currentPageColor(),
+                  PRESS_GLYPH_SHAPE,
+                ),
+              })
+            : "",
+          pressRowOneOpen: !!this._openPresses?.has(`${selBtn.key}:0`),
         })}
         <div class="config-card-body">
           ${showLongtouch ? `<h3 class="action-editor-heading">${this._esc(this._t("click_action"))}</h3>` : ''}
-          <div class="config-field">
+          <div class="config-field action-field">
+            <!-- The one thing the editor below cannot say about itself. Its
+                 list normally means "do all of these"; on a grid button with
+                 toggles on it means "do the next one each press". Said before
+                 the list rather than after, because a user who adds a second
+                 action expecting both to run has already been surprised by the
+                 time they reach a line underneath. Only once there is an
+                 action to add a second one to: on a blank button the sentence
+                 describes nothing the user can see. -->
+            ${isGridBtn(selBtn.key) && this._toggleFeatureEnabled?.() && selAssign.config?.length
+              ? `<span class="config-field-hint">${this._esc(this._t("toggle_click_hint"))}${
+                  // The nudge, only while there is nothing to cycle through.
+                  // The sentence above describes the list at any length; this
+                  // one is advice, and advice that stays on screen after it
+                  // has been taken is how the line came to tell a button with
+                  // three presses to add a second one.
+                  pressRules.length > 1 ? "" : ` ${this._esc(this._t("toggle_click_hint_add"))}`
+                }</span>` : ''}
             <div id="button-editor-container"></div>
           </div>
           ${showLongtouch ? `
           <h3 class="action-editor-heading">${this._esc(this._t("longtouch_action"))}</h3>
-          <div class="config-field">
+          <div class="config-field action-field">
             <div id="button-longtouch-editor-container"></div>
           </div>` : ''}
           <!-- A device-local command whose target the device cannot resolve is
@@ -2083,8 +2406,8 @@ export const ButtonsViewMixin = {
    *
    * Display only. The tile already draws this glyph via `_resolveButtonIcon`,
    * so showing it here just stops the field from claiming the button has no
-   * icon. Nothing is written unless the user picks something — `value-changed`
-   * fires on input, not on assignment.
+   * icon. Nothing is written unless the user changes it — the media field
+   * commits only a value that differs from the one it was opened with.
    *
    * A payload thumbnail is skipped: it is a URL, and this control is in icon
    * mode, so handing it over would blank the picker anyway.
@@ -2306,9 +2629,91 @@ export const ButtonsViewMixin = {
     });
   },
 
+  /**
+   * Move the page thumbnails into `this._pages` order without re-rendering.
+   *
+   * A reorder changes where pages sit and nothing about what is on them, but
+   * `_render()` rewrites the shadow root wholesale: every thumb is rebuilt from
+   * a string, every `.pg-svg-container` is a new empty node, and `_refreshSVG()`
+   * then redraws every page face and re-attaches every image. Paying that to
+   * move one card is what made a drop lag behind the drag.
+   *
+   * Moving the existing nodes keeps their drawn faces, their cached `<img>`
+   * elements and their already-wired listeners. Only the attributes that encode
+   * a *position* have to be rewritten, which `_relabelPageThumbs` does.
+   *
+   * Returns false if the DOM is not in the state this can safely patch, in
+   * which case the caller should fall back to a full render.
+   */
+  _reorderPageDom() {
+    const strip = this.shadowRoot?.querySelector(".pages-list");
+    if (!strip || !this._blueprint) return false;
+
+    const byId = new Map();
+    strip.querySelectorAll(".page-thumb").forEach(el => byId.set(el.dataset.pageId, el));
+    if (byId.size !== this._pages.length) return false;
+
+    const thumbs = this._pages.map(p => byId.get(String(p.id)));
+    if (thumbs.some(el => !el)) return false;
+
+    // The add button is the strip's last child and has to stay there, so every
+    // thumb is moved in front of it in turn; after the last one the row reads
+    // in `_pages` order. Re-inserting a node that is already in place is a
+    // no-op move, so the common "dragged one card" case touches few nodes.
+    const anchor = strip.querySelector(".page-add-btn");
+    for (const el of thumbs) {
+      if (anchor) strip.insertBefore(el, anchor);
+      else strip.appendChild(el);
+    }
+
+    this._relabelPageThumbs();
+    return true;
+  },
+
+  /**
+   * Rewrite the position-derived bits of each thumb after a move.
+   *
+   * `data-page-idx` is an index into `_pages`, and the spoken name carries
+   * "page n of m", so both go stale the moment a page moves. Everything else on
+   * a thumb describes the page itself and survives untouched.
+   */
+  _relabelPageThumbs() {
+    const bp = this._blueprint;
+    if (!bp) return;
+
+    this._pages.forEach((page, i) => {
+      const el = this.shadowRoot?.querySelector(
+        `.page-thumb[data-page-id="${CSS.escape(String(page.id))}"]`
+      );
+      if (!el) return;
+
+      el.dataset.pageIdx = String(i);
+      el.querySelectorAll("[data-page-idx]").forEach(n => { n.dataset.pageIdx = String(i); });
+
+      const isActive = i === this._currentPageIdx;
+      const subpageNote = page.subpage ? `, ${this._t("a11y_subpage")}` : "";
+      const spokenName = this._t("page_name_pos", {
+        name: this._pageLabel(page), n: i + 1, m: this._pages.length,
+      }) + subpageNote;
+
+      // The open page is named by `data-a11y-name` and a closed one by the
+      // container's `aria-label`/`title` — the same split `_render()` makes,
+      // so a relabelled thumb is indistinguishable from a re-rendered one.
+      if (isActive) el.dataset.a11yName = spokenName;
+      const picture = el.querySelector(".pg-svg-container");
+      if (picture && !isActive) {
+        picture.setAttribute("aria-label", `${this._t("a11y_open_page", { name: spokenName })}.`);
+        picture.setAttribute("title", this._pageFillLabel(page, i, bp));
+      }
+    });
+  },
+
   _refreshSVG() {
     const bp = this._blueprint;
     if (!bp) return;
+    // The tiles below are about to be rebuilt, so what the icon pass learned
+    // from the previous ones no longer describes anything on screen.
+    this._invalidateFaceCaches();
 
     this.shadowRoot.querySelectorAll(".pg-svg-container").forEach(container => {
       const pageIdx = parseInt(container.dataset.pageIdx);
@@ -2419,7 +2824,9 @@ export const ButtonsViewMixin = {
       const pgColor = page.default_color || "";
       // Only tint monochrome sources; logos/photos keep their natural colors, and
       // a title carrying its own fg= has already said what it wants.
-      const tintable = /^(mdi:|phu:|text:)/.test(rawTitle);
+      // A bare word is drawn as text, so it tints like `text:` does.
+      const tintable = isIconSource(rawTitle) || rawTitle.startsWith("text:")
+        || (!!rawTitle && !this._isMediaSource(rawTitle));
       const fgSlider = pgColor && tintable && !rawTitle.includes("fg=") ? `&fg=${pgColor}` : "";
       let sliderImageUrl = null;
       if (!rawTitle) {
@@ -2430,7 +2837,8 @@ export const ButtonsViewMixin = {
           + this._titleTextStyle(rawTitle);
       } else if (rawTitle.startsWith("mdi:")) {
         sliderImageUrl = `/api/imgserv/${rawTitle}?size=title&mode=${mode}${fgSlider}&alpha=1`;
-      } else if (rawTitle.startsWith("phu:")) {
+      } else if (isIconSource(rawTitle)) {
+        // phu: and the extra icon sets (hue:, ...), drawn from their uploaded shapes.
         const sep = rawTitle.includes("?") ? "&" : "?";
         sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
       } else if (rawTitle.startsWith("logo:")) {
@@ -2444,9 +2852,13 @@ export const ButtonsViewMixin = {
         sliderImageUrl = `/api/imgserv/${inner}${sep}size=title&mode=${mode}&alpha=1`;
       } else if (this._isExternalUrl(rawTitle)) {
         sliderImageUrl = this._imgservUrl(this._mediaSource(rawTitle), "title", mode);
+      } else if (rawTitle.startsWith("file:")) {
+        sliderImageUrl = this._imgservUrl(rawTitle, "title", mode);
+      } else if (rawTitle.startsWith("/")) {
+        sliderImageUrl = rawTitle;
       } else {
-        const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/text:${encodeURIComponent(rawTitle)}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`
+        // Encoded, so the words never carry a "?" of their own.
+        sliderImageUrl = `/api/imgserv/text:${encodeURIComponent(rawTitle)}?size=title&mode=${mode}${fgSlider}&alpha=1`
           + this._titleTextStyle(rawTitle);
       }
 
@@ -2668,6 +3080,25 @@ export const ButtonsViewMixin = {
     // without a full redraw (avoids re-fetching images that haven't changed).
     if (!this._blueprint) return;
     const mode = this._getThemeMode();
+
+    // Home Assistant assigns `hass` on every state change anywhere in the
+    // house, and this walk is O(pages x buttons x actions) -- on a full remote
+    // that is thousands of operations, nearly always to conclude that nothing
+    // moved. So the walk records which entities it actually read, and a later
+    // tick that touched none of them returns here instead.
+    //
+    // HA replaces a state object rather than mutating it, so identity is a
+    // sufficient and very cheap test. The face epoch covers everything else:
+    // any edit that could change *which* entities matter redraws the face,
+    // and a redraw invalidates the set rather than trusting it.
+    if (this._svgIconDeps
+        && this._svgIconEpoch === this._faceEpoch
+        && this._svgIconMode === mode
+        && this._svgIconDepsUnchanged()) {
+      return;
+    }
+    const deps = new Map();
+
     this.shadowRoot.querySelectorAll(".pg-svg-container").forEach(container => {
       const pageIdx = parseInt(container.dataset.pageIdx);
       const page = this._pages[pageIdx];
@@ -2689,6 +3120,12 @@ export const ButtonsViewMixin = {
         // feature.
         const assign = isActive ? this._editAssign(key) : pageAssigns[key];
         if (!assign?.action_id) return;
+        // Recorded before the early returns below, because an entity that
+        // currently resolves to no icon still has to be watched: it is exactly
+        // the one whose next state change should bring the tile back.
+        for (const eid of this._getTargetEntitiesFromConfig(assign.config) || []) {
+          if (!deps.has(eid)) deps.set(eid, this._hass?.states?.[eid]);
+        }
         const action = this._actions.find(a => a.id === assign.action_id);
         if (!action) return;
         const newIcon = this._resolveButtonIcon(assign, action);
@@ -2700,6 +3137,36 @@ export const ButtonsViewMixin = {
         if (img.getAttribute('src') !== newSrc) img.setAttribute('src', newSrc);
       });
     });
+
+    this._svgIconDeps = deps;
+    this._svgIconEpoch = this._faceEpoch;
+    this._svgIconMode = mode;
+  },
+
+  /**
+   * Whether every entity the last icon pass read still holds the same state.
+   *
+   * An entity that has since disappeared from `hass` compares equal to the
+   * `undefined` recorded for one that was already missing, so a button bound
+   * to a removed entity does not spin the walk on every tick.
+   */
+  _svgIconDepsUnchanged() {
+    const states = this._hass?.states;
+    for (const [eid, recorded] of this._svgIconDeps) {
+      if (states?.[eid] !== recorded) return false;
+    }
+    return true;
+  },
+
+  /**
+   * Drop what the icon pass remembered, because the face it described is gone.
+   *
+   * Called wherever the face is rebuilt: the set of entities on screen is a
+   * product of that markup, so it cannot outlive it.
+   */
+  _invalidateFaceCaches() {
+    this._faceEpoch = (this._faceEpoch || 0) + 1;
+    this._svgIconDeps = null;
   },
 
   /** Build an imgserv tile URL for a button icon. */
@@ -2713,48 +3180,13 @@ export const ButtonsViewMixin = {
       return this._imgservUrl(this._mediaSource(target), 'tile', mode) + pct;
     }
     if (icon.startsWith('/') || icon.startsWith('data:')) return icon;
-    const tintable = icon.startsWith('mdi:') || icon.startsWith('text:') || icon.startsWith('phu:') || !icon.includes(':');
+    const tintable = isIconSource(icon) || icon.startsWith('text:') || !icon.includes(':');
     const fgParam = color && isTinted && tintable && !icon.includes('fg=') ? `&fg=${color}` : '';
-    if (icon.startsWith('mdi:') || icon.startsWith('logo:') || icon.startsWith('phu:') || icon.startsWith('text:') || icon.startsWith('file:')) {
+    if (isIconSource(icon) || icon.startsWith('logo:') || icon.startsWith('text:') || icon.startsWith('file:')) {
       const sep = icon.includes('?') ? '&' : '?';
       return `/api/imgserv/${icon}${sep}size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
     }
     return `/api/imgserv/mdi:${icon}?size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
-  },
-
-  _refreshButtonIcons() {
-    const rows = this.shadowRoot?.querySelectorAll(".button-row");
-    if (!rows || !this._blueprint) return;
-    const buttons = this._blueprint.buttons;
-    rows.forEach((row) => {
-      const idx = parseInt(row.dataset.idx);
-      const btn = buttons[idx];
-      if (!btn) return;
-      // Routed through the edit slot with the other three, though nothing
-      // currently renders `.button-row` — the list view it belonged to is gone,
-      // so the loop above never runs. Left consistent rather than left behind:
-      // a row list that comes back reading the page default would reintroduce
-      // exactly the mismatch this change removes from the face.
-      const assign = this._editAssign(btn.key);
-      if (!assign?.action_id) return;
-      const action = this._actions.find(a => a.id === assign.action_id);
-      if (!action) return;
-      const newIcon = this._resolveButtonIcon(assign, action);
-      const wrap = row.querySelector(".btn-icon-wrap");
-      if (!wrap) return;
-      const currentIcon = wrap.querySelector("ha-icon");
-      const currentImg = wrap.querySelector("img");
-      if (this._isImageUrl(newIcon)) {
-        // Compare against the src that would actually be rendered — external URLs are
-        // proxied through imgserv, so matching the raw config value never hits and the
-        // wrapper would be rebuilt on every refresh.
-        if (currentImg?.getAttribute("src") === this._iconImgSrc(newIcon, 20)) return;
-        wrap.innerHTML = this._renderIconHtml(newIcon, 20);
-      } else {
-        if (currentIcon && currentIcon.getAttribute("icon") === newIcon) return;
-        wrap.innerHTML = this._renderIconHtml(newIcon, 20);
-      }
-    });
   },
 
   _updateActiveGridCell() {
@@ -2768,7 +3200,7 @@ export const ButtonsViewMixin = {
       el.addEventListener("click", (e) => {
         // A long-press fires the menu and then, on most touch stacks, a click.
         // Without this the page would change out from under the open menu.
-        if (el._lizaSuppressClick) { el._lizaSuppressClick = false; return; }
+        if (suppressedNow(el)) return;
         const idx = parseInt(el.dataset.pageIdx);
         // On the current page, a button's own handler owns a click on it.
         // Anywhere else on that page -- the face background or the frame
@@ -2831,6 +3263,8 @@ export const ButtonsViewMixin = {
       const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
       el.addEventListener("touchstart", (e) => {
         cancel();
+        // A new gesture starts: anything the last one left behind is stale.
+        armSuppress(el, false);
         const touch = e.touches && e.touches[0];
         const x = touch ? touch.clientX : 0;
         const y = touch ? touch.clientY : 0;
@@ -2838,7 +3272,7 @@ export const ButtonsViewMixin = {
           timer = null;
           // The click handler above switches pages; without this the menu
           // would open on a page the user is no longer looking at.
-          el._lizaSuppressClick = true;
+          armSuppress(el, true);
           this._showPageMenu(idx, { clientX: x, clientY: y });
         }, 500);
       }, { passive: true });
@@ -2856,36 +3290,7 @@ export const ButtonsViewMixin = {
       });
     });
 
-    // Drag-and-drop reorder (drag from anywhere on the page thumb)
-    {
-      let dragIdx = null;
-      this.shadowRoot.querySelectorAll(".page-thumb[draggable]").forEach(el => {
-        el.addEventListener("dragstart", (e) => {
-          dragIdx = parseInt(el.dataset.pageIdx);
-          el.classList.add("dragging");
-          e.dataTransfer.effectAllowed = "move";
-        });
-        el.addEventListener("dragend", () => {
-          el.classList.remove("dragging");
-          dragIdx = null;
-          this.shadowRoot.querySelectorAll(".page-thumb").forEach(t => t.classList.remove("drag-over"));
-        });
-        el.addEventListener("dragover", (e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          el.classList.add("drag-over");
-        });
-        el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
-        el.addEventListener("drop", (e) => {
-          e.preventDefault();
-          el.classList.remove("drag-over");
-          const dropIdx = parseInt(el.dataset.pageIdx);
-          if (dragIdx !== null && dragIdx !== dropIdx) {
-            this._reorderPage(dragIdx, dropIdx);
-          }
-        });
-      });
-    }
+    this._wirePageReorder();
 
     this._refreshSVG();
 
@@ -2898,22 +3303,222 @@ export const ButtonsViewMixin = {
     }
   },
 
+  /**
+   * Where a dragged page would land, as an index into the reordered list.
+   *
+   * Measured against the thumbs' midpoints rather than asking which thumb is
+   * under the pointer. "Which thumb" cannot answer the only question a reorder
+   * asks -- before it or after it -- which is why the old blue tint on the
+   * hovered thumb told the user nothing they could act on.
+   *
+   * Reading rects instead of elements is also what makes the slot *after the
+   * last page* addressable. There is no element there to hover, so the old
+   * handler could only ever drop onto the final thumb and let splice decide.
+   *
+   * `rects` is in page order and excludes the add button, which shares the
+   * strip but is not a page. Returns an index in the list as it will be once
+   * the move is applied, which is what `_reorderPage` takes.
+   */
+  _pageDropIndex(clientX, rects, dragIdx) {
+    let before = 0;
+    while (before < rects.length) {
+      const r = rects[before];
+      if (clientX < r.left + r.width / 2) break;
+      before++;
+    }
+    // `before` counts the thumbs the pointer has passed, the dragged one
+    // included. It is still occupying a slot it is about to vacate, so once
+    // the pointer is past it every count is one too high.
+    return before > dragIdx ? before - 1 : before;
+  },
+
+  /**
+   * How far one thumb slides to open the gap, in px.
+   *
+   * Taking an item out at `dragIdx` and putting it back at `dropIdx` displaces
+   * everything in between by exactly the dragged item's own outer width --
+   * whatever the others happen to measure. So one `shift`, read once at
+   * dragstart, drives the whole strip, and nothing has to be re-measured while
+   * the pointer moves.
+   *
+   * The two directions are not symmetric: dragging right, the passed-over
+   * thumbs close up behind it; dragging left, they open ahead of it. Hence the
+   * half-open ranges -- `dropIdx` itself moves in one case and not the other.
+   *
+   * The dragged thumb travels too, across the slots it passes. A native drag
+   * leaves the source element in place at reduced opacity, so without this the
+   * strip shows two holes -- one where the thumb still sits and one where it is
+   * going -- and neither reads as the answer. Moved, there is one picture: the
+   * row in its prospective order, with the thumb ghosted on its landing slot.
+   * This is the one step that assumes the thumbs are equal width, which
+   * `.page-thumb`'s fixed 180px makes true; the displaced thumbs above do not.
+   */
+  _pageDragShift(idx, dragIdx, dropIdx, shift) {
+    if (idx === dragIdx) return (dropIdx - dragIdx) * shift;
+    if (idx > dragIdx && idx <= dropIdx) return -shift;
+    if (idx < dragIdx && idx >= dropIdx) return shift;
+    return 0;
+  },
+
+  /**
+   * Drag-to-reorder for the pages strip, with the landing slot shown as a gap.
+   *
+   * The strip, not each thumb, listens for `dragover` and `drop`: a gap at the
+   * end of the row has no thumb over it, and per-thumb handlers also left the
+   * padding between thumbs dead.
+   *
+   * The offset is written as a custom property rather than an inline
+   * `transform`, which would outrank -- and so silently discard --
+   * `.page-thumb.subpage`'s own `translateY(7%)` and the hover scale. See the
+   * `--pg-shift` rules in the stylesheet.
+   */
+  _wirePageReorder() {
+    const strip = this.shadowRoot.querySelector(".pages-list");
+    if (!strip) return;
+    const thumbs = () => Array.from(strip.querySelectorAll(".page-thumb[draggable]"));
+
+    let dragIdx = null;
+    let shift = 0;
+    let dropIdx = null;
+    // The thumbs' slots, measured once while the row is still untransformed,
+    // and the scroll offset that measurement was taken at.
+    //
+    // Re-reading them per dragover would feed this its own output: the gap is
+    // drawn with transforms, and a transformed element reports the moved box.
+    // The slots the pointer is being compared against are the ones the row
+    // will settle into, which do not change during a drag -- only the scroll
+    // does, and that is one subtraction.
+    let slots = [];
+    let scrollAt = 0;
+    // The pending dragover frame, and the pointer position it will read. Held
+    // outside the handler so `clear()` can cancel a frame that would otherwise
+    // paint a drag that has already ended.
+    let rafId = null;
+    let lastX = 0;
+
+    const paint = (to) => {
+      if (dragIdx === null || to === dropIdx) return;
+      dropIdx = to;
+      thumbs().forEach((t, i) => {
+        const dx = this._pageDragShift(i, dragIdx, to, shift);
+        t.style.setProperty("--pg-shift", `${dx}px`);
+      });
+    };
+    const clear = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      thumbs().forEach(t => t.style.removeProperty("--pg-shift"));
+      dragIdx = null;
+      dropIdx = null;
+      slots = [];
+    };
+
+    thumbs().forEach(el => {
+      el.addEventListener("dragstart", (e) => {
+        dragIdx = parseInt(el.dataset.pageIdx);
+        dropIdx = dragIdx;
+        slots = thumbs().map(t => {
+          const b = t.getBoundingClientRect();
+          return { left: b.left, width: b.width };
+        });
+        scrollAt = strip.scrollLeft;
+        // The gap between thumbs travels with them, so the slot a thumb
+        // vacates is its own width plus one gap.
+        shift = slots[dragIdx].width + this._stripGap(strip);
+        el.classList.add("dragging");
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      });
+      el.addEventListener("dragend", () => {
+        el.classList.remove("dragging");
+        clear();
+      });
+    });
+
+    strip.addEventListener("dragover", (e) => {
+      if (dragIdx === null) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      // dragover fires far faster than the strip can be repainted, and each one
+      // used to re-query every thumb and rescan the slots. The pointer is read
+      // here, where the event is still live, and the work is folded into the
+      // next frame -- so a burst of events costs one pass, not one each.
+      lastX = e.clientX;
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (dragIdx === null) return;
+        this._autoScrollStrip(strip, lastX);
+        // Back into the frame the slots were measured in: scrolling the strip
+        // right by d moves its content left by d, so a fixed slot's clientX
+        // falls by d and has to be given back.
+        const x = lastX + (strip.scrollLeft - scrollAt);
+        paint(this._pageDropIndex(x, slots, dragIdx));
+      });
+    });
+
+    strip.addEventListener("drop", (e) => {
+      if (dragIdx === null) return;
+      e.preventDefault();
+      const from = dragIdx;
+      const to = dropIdx;
+      // The row is frozen for the length of the swap. `.page-thumb` transitions
+      // its transform, so dropping the offsets starts a 150ms slide back to
+      // the arrangement the drag began with -- which plays out *after* the DOM
+      // has already been reordered, so the card the user just placed visibly
+      // travels back to where it came from and settles again. Nothing here is
+      // an animation worth keeping: the move is instant and correct, and the
+      // transition only had the old positions to animate from.
+      strip.classList.add("reordering");
+      // Transforms are dropped before the move, not after: the re-render
+      // replaces these elements, and a shifted thumb left behind for a frame
+      // is the flicker the gap exists to avoid.
+      strip.querySelectorAll(".page-thumb").forEach(t => t.classList.remove("dragging"));
+      clear();
+      if (to !== null && from !== to) this._reorderPage(from, to);
+      // Commit the reordered, unshifted row while transitions are still off,
+      // then let them back in for ordinary hovers. Reading a layout property
+      // is what forces that commit; without it the class could go away in the
+      // same frame it was added and change nothing.
+      void strip.offsetWidth;
+      requestAnimationFrame(() => strip.classList.remove("reordering"));
+    });
+  },
+
+  /** The strip's own `gap`, in px, falling back to the stylesheet's 12. */
+  _stripGap(strip) {
+    const raw = getComputedStyle?.(strip)?.columnGap || "";
+    const n = parseFloat(raw);
+    return Number.isFinite(n) ? n : 12;
+  },
+
+  /**
+   * Scroll the strip when a drag nears either edge.
+   *
+   * The strip is `overflow-x: auto` with fixed-width thumbs, so past about five
+   * pages the target is off-screen -- and a native drag does not scroll its
+   * container on its own in every browser, which made those pages unreachable
+   * by drag at all.
+   */
+  _autoScrollStrip(strip, clientX) {
+    const r = strip.getBoundingClientRect?.();
+    if (!r || strip.scrollWidth <= strip.clientWidth) return;
+    const EDGE = 40;
+    const STEP = 18;
+    if (clientX < r.left + EDGE) strip.scrollLeft -= STEP;
+    else if (clientX > r.right - EDGE) strip.scrollLeft += STEP;
+  },
+
   _wirePageSettingsPanel(bp) {
     // --- Title image wiring ---
     //
-    // The same three controls the button card's Image field has, wired the same
-    // way: a mode toggle that only swaps what is visible, an icon picker that
-    // commits on pick, and a raw box that commits on change. There is no ✓/✕
-    // pair any more — the button card has never had one, and a title that saves
-    // when you leave the box is the same promise every other field makes.
-    // A bare word is a label, so it is stored as one. Kept from the old editor:
-    // it is what lets "Kitchen" be typed instead of "text:Kitchen".
-    const normalizeTitle = (raw) => {
-      const value = (raw || "").trim();
-      if (!value) return "";
-      return /^(mdi:|text:|logo:|phu:|file:|imgserv:\/\/|https?:\/\/|data:)/.test(value)
-        ? value : `text:${value}`;
-    };
+    // The same media field as the button image and the tooltip: one text box
+    // that saves on Enter or blur. The value is stored as typed — "Kitchen"
+    // stays "Kitchen", because the device draws anything that is not a media
+    // source as text, and a `text:` the user never typed must not appear in
+    // the box the next time it opens.
+    const normalizeTitle = (raw) => (raw || "").trim();
 
     const saveTitle = async (raw) => {
       const page = this._pages[this._currentPageIdx];
@@ -2933,9 +3538,8 @@ export const ButtonsViewMixin = {
       this._render();
     };
 
-    // The stored title verbatim, whatever shape it has. The picker takes a
-    // custom value, so a `text:` label or a URL sits in it as readily as an
-    // `mdi:` name — which is what let the separate raw box go.
+    // The stored title verbatim, whatever shape it has, so it can be copied
+    // out and pasted into another field as is.
     this._mountIconPicker(
       this.shadowRoot.querySelector("#ps-icon-picker-slot"),
       this._pages[this._currentPageIdx]?.image || "",
@@ -3033,54 +3637,19 @@ export const ButtonsViewMixin = {
     Promise.resolve(this._mountEditor("button-editor-container"))
       .then(() => this._mountLongtouchEditor?.("button-longtouch-editor-container"));
 
-    // Tooltip input
+    // Tooltip input -- the same field as the Image above it, committed the
+    // same way: on Enter or on leaving the field, never per keystroke, so a
+    // half-typed name is not drawn on the remote. Escape puts it back.
     const labelInput = this.shadowRoot.querySelector(".config-label-input");
-    if (labelInput) {
-      // Re-derived here, not inherited: these are locals of the *render*
-      // method, and the blur handler that used to live here referenced them
-      // anyway. Nothing invoked it in a test, so the ReferenceError it threw on
-      // every blur of this field went unnoticed.
-      const selAssign = this._editAssign(selBtn.key) || {};
-      const selAction = selAssign.action_id
-        ? this._actions.find(a => a.id === selAssign.action_id) : null;
-      const selEntity = selAssign.config
-        ? this._getTargetEntityFromConfig(selAssign.config) : null;
-
-      // A tooltip edit is *not* auto-saved. Every other field on this card
-      // commits on a debounce, but a half-typed name would then be pushed to
-      // the remote and drawn on the device between keystrokes. The edit is
-      // held here until it is confirmed, and ✕ puts the field back.
-      const saveBtn = this.shadowRoot.querySelector(".config-label-save");
-      const cancelBtn = this.shadowRoot.querySelector(".config-label-cancel");
-      const resetBtn = this.shadowRoot.querySelector(".config-label-reset");
-      // The input was just rendered with the field's full text, so its own
-      // value is the pristine mark -- no need to re-derive it here and risk
-      // drifting from what was drawn.
-      const pristine = labelInput.value;
-      // No banner preview and no pending dot to keep in step any more: the
-      // header showed the button's name only because it doubled as a
-      // disclosure control, and an uncommitted edit could be hidden behind that
-      // fold. The field is always on screen now, with ✓ and ✕ beside it, so the
-      // edit says what it is where it is being made.
-
-      const syncDirty = () => {
-        const dirty = labelInput.value !== pristine;
-        if (saveBtn) saveBtn.style.display = dirty ? "" : "none";
-        if (cancelBtn) cancelBtn.style.display = dirty ? "" : "none";
-        // The reset button would commit a different tooltip in one click, which
-        // is not something to offer while an unconfirmed edit is pending.
-        if (resetBtn) resetBtn.style.display = dirty ? "none" : "";
-      };
-
-      const commit = () => {
+    if (labelInput && !labelInput.disabled) {
+      const commit = (typed) => {
         const appr = this._sliderAppearanceTarget(selBtn.key);
         if (appr?.scoped) {
           const rec = this._assignments[appr.key] || (this._assignments[appr.key] = {});
           // Empty is the inherit spelling, as with every other slider axis on a
           // grid button: storing "" would pin a blank label over the control's
-          // own name. Trimmed for the same reason the button label below is.
-          const scopedName = labelInput.value.trim();
-          if (scopedName) rec[appr.nameKey] = scopedName;
+          // own name.
+          if (typed) rec[appr.nameKey] = typed;
           else delete rec[appr.nameKey];
           this._scheduleAutoSave();
           this._refreshSVG();
@@ -3088,11 +3657,9 @@ export const ButtonsViewMixin = {
           return;
         }
         const assign = this._editAssignEnsure(selBtn.key);
-        // Trimmed, because the box's surrounding whitespace is not part of any
-        // name: storing it left the field re-rendering as the derived label
-        // with the stray spaces still on the end, and committing *that* would
-        // have frozen the derived name in as if it had been typed.
-        const typed = labelInput.value.trim();
+        // `typed` arrives trimmed: the box's surrounding whitespace is not part
+        // of any name, and storing it left the field re-rendering as the
+        // derived label with the stray spaces still on the end.
         assign.label = typed;
         // The field is drawn as `prefix + stored`, so its value is exactly what
         // the remote should print — room name included if it was left in, gone
@@ -3109,17 +3676,11 @@ export const ButtonsViewMixin = {
         this._scheduleAutoSave();
         this._render();
       };
-
-      labelInput.addEventListener("input", syncDirty);
-      labelInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") { e.preventDefault(); if (labelInput.value !== pristine) commit(); }
-        else if (e.key === "Escape") { e.preventDefault(); labelInput.value = pristine; syncDirty(); }
-      });
-      saveBtn?.addEventListener("click", commit);
-      cancelBtn?.addEventListener("click", () => { labelInput.value = pristine; syncDirty(); });
-      // Set the initial state from the same function that maintains it, rather
-      // than trusting the inline style in the markup to agree with it.
-      syncDirty();
+      this._wireMediaInput(
+        labelInput,
+        labelInput.parentElement?.querySelector?.(".liza-media-suggest") || null,
+        commit,
+      );
     }
     this.shadowRoot.querySelector(".config-label-reset")?.addEventListener("click", () => {
       const assign = this._editAssign(selBtn.key);
@@ -3473,7 +4034,7 @@ export const ButtonsViewMixin = {
       this._flushAutoSave();
       this._contextKey = null;
       const assign = this._editAssign(selBtn.key);
-      this._sequence = assign?.config ? [...assign.config] : [];
+      this._sequence = this._cycleSequence(assign, selBtn.key);
       this._editorEl = null;
       this._render();
     });
@@ -3510,10 +4071,10 @@ export const ButtonsViewMixin = {
   // Kept as a named unit rather than inlined into its one caller: it owns
   // the domain filtering and the hass-not-ready degradation, neither of
   // which is about the field it happens to be mounted in.
-  _mountEntityPicker(container, value, onChange) {
+  _mountEntityPicker(container, value, onChange, opts = {}) {
     // The field's name. A label outside a shadow root cannot name the control
     // inside it, so it goes on the picker, which renders it itself.
-    const entityLabel = this._t("entity");
+    const entityLabel = opts.label || this._t("entity");
     if (this._hass) {
       const picker = document.createElement("ha-entity-picker");
       picker.hass = this._hass;
@@ -3522,8 +4083,11 @@ export const ButtonsViewMixin = {
       // readable attribute plus a matching *_set service — and choosing one
       // landed on "No presets for sensor", a dead end dressed as guidance.
       // Filtering makes that state unreachable instead of merely explained.
-      const sliderDoms = sliderDomains(this._sliderControls);
-      if (sliderDoms) picker.includeDomains = sliderDoms;
+      // Callers that drive something other than a slider say so; the slider
+      // filter is this helper's default, not a fact about every entity field.
+      const doms = opts.includeDomains !== undefined
+        ? opts.includeDomains : sliderDomains(this._sliderControls);
+      if (doms) picker.includeDomains = doms;
       picker.label = entityLabel;
       picker.allowCustomEntity = true;
       picker.value = value;
@@ -3940,6 +4504,13 @@ export const ButtonsViewMixin = {
   // confirmed.
   ENTITY_SECTION_HOST: "#config-card-appearance",
 
+  // The press list's host. A second one, not a second region of the first: the
+  // rows render after the Tooltip and the Tooltip is deliberately not inside a
+  // host at all (see above), so the only way for the list to follow it is to
+  // have a host of its own. Refreshed alongside the first because each row's
+  // derived glyph is resolved against the button's entity domain.
+  PRESS_SECTION_HOST: "#config-card-presses",
+
   _refreshButtonEntitySections() {
     const host = this.shadowRoot?.querySelector(this.ENTITY_SECTION_HOST);
     if (!host) return;
@@ -3963,7 +4534,81 @@ export const ButtonsViewMixin = {
     // wrapper inside a conditional and the bug returns with this line looking
     // innocent.
     host.innerHTML = fresh ? fresh.innerHTML : "";
+
+    // The press rows, from the same scratch render. Same contract as above,
+    // and the same reason for the `: ""` arm.
+    const pressHost = this.shadowRoot.querySelector(this.PRESS_SECTION_HOST);
+    if (pressHost) {
+      const freshPresses = scratch.querySelector(this.PRESS_SECTION_HOST);
+      pressHost.innerHTML = freshPresses ? freshPresses.innerHTML : "";
+    }
+
+    // Everything about the press list that is *not* inside either host: the
+    // section's name, press 1's heading, and whether the list is a list at all.
+    //
+    // These sit outside because the list has to contain press 1's two fields,
+    // and those fields are the two hosts. So the wrapper cannot be a host
+    // itself, and the pieces of it that depend on the entity have to be synced
+    // by hand. Attributes and whole elements rather than innerHTML on a
+    // container: nothing here holds text the user is part-way through typing
+    // -- the Tooltip that does is inside the row and is not touched.
+    this._syncPressSection(this.shadowRoot, scratch);
+
     this._wireButtonEntitySections(bp, selBtn);
+  },
+
+  /**
+   * Carry the press list's own markup across from a fresh render.
+   *
+   * Its own, meaning the parts that are not inside either host: the section's
+   * name, press 1's heading, and whether the list is a list at all. They sit
+   * outside because the list has to *contain* press 1's two fields, and those
+   * fields are the two hosts -- so the wrapper cannot be a host itself.
+   *
+   * Separate from the caller so the one transition that cannot be reasoned
+   * about from the markup -- a button crossing between one action and two,
+   * where the row has to appear or disappear without a re-render -- can be
+   * driven directly by a test.
+   */
+  _syncPressSection(live, scratch) {
+    const section = live?.querySelector("#config-card-press-section");
+    const freshSection = scratch?.querySelector("#config-card-press-section");
+    if (section && freshSection) {
+      // Gaining or losing a cycle. The structure is already there either way;
+      // this is the one bit of state that says which it is.
+      section.className = freshSection.className;
+      const head = section.querySelector("#config-card-press-head");
+      const freshHead = freshSection.querySelector("#config-card-press-head");
+      if (head && freshHead) head.innerHTML = freshHead.innerHTML;
+      // The summary carries the ordinal, the name and the glyph, all three
+      // derived from the entity. Replaced whole; the `toggle` listener and the
+      // open state both belong to the <details> around it, so neither is lost.
+      const rowHead = section.querySelector('.press-appearance-row[data-press-idx="0"] > summary');
+      const freshRowHead = freshSection.querySelector('.press-appearance-row[data-press-idx="0"] > summary');
+      if (rowHead && freshRowHead) rowHead.replaceWith(freshRowHead);
+      // Losing the cycle has to force the row open. `press-plain` hides the
+      // summary, so a row the user had collapsed would stay collapsed with
+      // nothing left to click -- and since the row holds the button's Image
+      // and Tooltip, deleting an action made both fields vanish.
+      //
+      // Only in that direction. Gaining a cycle leaves the row as the user
+      // had it, which is open, because until this moment it was not a row and
+      // its fields were simply the card's.
+      const row = section.querySelector('.press-appearance-row[data-press-idx="0"]');
+      const freshRow = freshSection.querySelector('.press-appearance-row[data-press-idx="0"]');
+      if (row && freshRow?.hasAttribute("open")) row.setAttribute("open", "");
+      const list = section.querySelector(".press-appearance-list");
+      const freshList = freshSection.querySelector(".press-appearance-list");
+      if (list && freshList) {
+        // `role="group"` names itself from the section label, which only
+        // exists while cycling. Carried over rather than left stale, so the
+        // list never advertises a name that is no longer on the page.
+        ["role", "aria-labelledby", "aria-describedby"].forEach(a => {
+          const v = freshList.getAttribute(a);
+          if (v === null) list.removeAttribute(a); else list.setAttribute(a, v);
+        });
+      }
+    }
   },
 
   // Everything on the button card derived from the button's *entity*: the
@@ -4037,8 +4682,11 @@ export const ButtonsViewMixin = {
       },
     );
 
-    // State icon pickers
+    // State icon fields
     this._wireStateIconPickers(selBtn);
+
+    // Toggle rules
+    this._wireToggleSection(selBtn);
   },
 
   /**
@@ -4054,6 +4702,386 @@ export const ButtonsViewMixin = {
    * would leave no way to say so — every row would read as overridden and the
    * preview beside it already shows what the device will draw.
    */
+  // ── Virtual toggle button ─────────────────────────────────────────────
+  //
+  // One button, several steps. The block is a sibling of `config`, never a
+  // replacement for it: `config[0]` stays the step that names the button, owns
+  // the subject entity and runs when no rule matches. Six readers across the
+  // backend derive meaning from `config[0]`, so the editor must never let a
+  // toggle empty it.
+  //
+  // Two modes, one shape. `state` picks the rule whose `state` matches what the
+  // subject entity reports; `cycle` ignores state and runs the next rule in
+  // order, which is the only thing that works for a device that reports nothing
+  // back (IR blasters, one-way RF).
+
+  // The rules currently stored, always an array so callers can map over it.
+  // Defensive rather than trusting: the block round-trips through YAML that a
+  // user may edit by hand.
+  _toggleBlock(selKey) {
+    const assign = this._editAssign(selKey) || {};
+    const block = assign.toggle;
+    return (block && typeof block === "object" && !Array.isArray(block)) ? block : null;
+  },
+
+  _toggleRules(selKey) {
+    const block = this._toggleBlock(selKey);
+    return Array.isArray(block?.rules) ? block.rules : [];
+  },
+
+    /**
+   * Mutate the stored block through one helper so every writer prunes the same
+   * way. An empty `toggle` must never reach disk: `store.py` treats presence as
+   * "this button toggles", and `{}` would claim that while doing nothing.
+   *
+   * Only the per-press *appearance* writes through here now -- an icon, a
+   * tooltip. The presses themselves are the action editor's list, and
+   * `_applyCycle` writes those, so nothing here adds or removes a rule.
+   *
+   * It does not touch `config`. The rules → `config` direction used to live
+   * here and also refilled `_sequence` from step 1, which under a cycle would
+   * truncate the editor's list to its first press on every icon change.
+   */
+  _toggleUpdate(selKey, fn) {
+    const target = this._editAssignEnsure(selKey);
+    const block = (target.toggle && typeof target.toggle === "object" && !Array.isArray(target.toggle))
+      ? target.toggle : { mode: MODE_CYCLE, rules: [] };
+    if (!Array.isArray(block.rules)) block.rules = [];
+    const keep = fn(block);
+    if (keep === false || block.rules.length < 2) {
+      // Fewer than two presses is not a cycle -- it is the button's own action,
+      // which `config` already holds. Dropping the block here keeps the card
+      // and the store telling the same story.
+      delete target.toggle;
+    } else {
+      block.mode = MODE_CYCLE;
+      target.toggle = block;
+    }
+    this._scheduleAutoSave();
+    this._refreshSVG();
+    this._render();
+  },
+
+  /**
+   * Keep the toggle's first step equal to the button's own action.
+   *
+   * The `config` → rules direction, for edits made in the action editor. The
+   * executor runs `rules[position]`, so a step 1 that no longer matches the
+   * action the card displays would run something the user cannot see -- the
+   * exact failure the merged section exists to rule out.
+   *
+   * Only ever touches `rules[0]`: the later steps are the user's own.
+   */
+  _syncToggleFirstStep(target) {
+    const rules = target?.toggle?.rules;
+    if (!Array.isArray(rules) || !rules.length) return;
+    if (!Array.isArray(target.config) || !target.config.length) return;
+    const first = rules[0] || (rules[0] = {});
+    first.config = JSON.parse(JSON.stringify(target.config));
+    if (target.action_id) first.action_id = target.action_id;
+    else delete first.action_id;
+  },
+
+
+  // What a press is called when nothing else can name it: whatever Home
+  // Assistant calls the service, then the library's name, then the bare
+  // service. Never blank -- a summary with a hole in it is harder to read than
+  // one that says "pick an action".
+  //
+  // The user's own wording is deliberately *not* consulted here. Both callers
+  // reach this only after the label has already been tried and found empty
+  // (see `_pressHeadings` and `_pressDefaultLabel`), so reading it again would
+  // be a branch that cannot be taken.
+  //
+  // Home Assistant's name outranks the library's on purpose. The action cards
+  // directly above this summary are drawn by HA and titled in HA's words, so
+  // taking the library name first meant the same two presses were called
+  // "Apagado -> On" here and "Turn off light" / "Turn on light" six lines up --
+  // two vocabularies for one pair of steps, with nothing on the card to say
+  // they were the same thing.
+  //
+  // The library still wins for anything HA has never heard of, which is the
+  // case that matters for it: an IR or RF command is not in the service
+  // registry, and its library entry is the only name it has.
+  /**
+   * What to call each press on its row, one name per rule.
+   *
+   * A shut row is a preview of the button on that press, and it has exactly
+   * two things to preview: the picture and the words. The glyph beside the
+   * heading is already the Image field; the heading is the Tooltip field, so
+   * what a row shows and what the remote draws are the same thing said twice
+   * rather than two different facts the user has to reconcile.
+   *
+   * It did name the action instead, on the reasoning that a heading sitting
+   * directly above the Tooltip field should not print that field's text a
+   * second time. True while every row is open -- but rows are shut most of
+   * the time, and shut is when the heading is the only thing there is. The
+   * cost showed up as soon as two presses differed only in their tooltip:
+   * one row read "Apagado" and the next "On", the first a caption and the
+   * second a service, with nothing to say why.
+   *
+   * Blank falls through to the same default the field offers, so an untouched
+   * press is headed by what it will draw rather than by nothing. Resolved the
+   * way the device resolves it -- `_substituteLabelTokens` is the twin of the
+   * backend's `substitute_label_tokens` -- so the heading says the words the
+   * remote will actually print.
+   */
+  _pressHeadings(rules) {
+    return (rules || []).map(rule => {
+      // Only when the tooltip is *words*. A tooltip takes any media source
+      // now, so a press captioned with a glyph would put `mdi:battery-50` up
+      // as its heading -- a filename read as a sentence. That caption is
+      // already drawn, as the glyph; the heading falls through instead.
+      const raw = rule?.label || "";
+      // Through the same resolver the field below the heading uses, against
+      // the press's own target. An empty value map was passed here, which
+      // *stripped* a stored `${STATE}` instead of reading it -- so a press
+      // captioned "Schreibtisch ${STATE}" was headed by the bare word
+      // "Schreibtisch" while the field under it, and the remote, said
+      // "Schreibtisch On".
+      const tip = this._isMediaSource?.(raw)
+        ? ""
+        : this._displayLabel(
+            raw,
+            { service: rule?.config?.[0]?.action || "" },
+            this._getTargetEntityFromConfig(rule?.config || []),
+            rule?.config,
+            rule,
+          );
+      return tip || this._pressDefaultLabel(rule, this._toggleRuleName(rule));
+    });
+  },
+
+  /**
+   * What a press's Tooltip field offers when it is left blank.
+   *
+   * The same question press 1's field answers, so it has to be answered the
+   * same way. Press 1 shows `_computeLabel`, which reads the subject the step
+   * points at; a press row showed `_toggleRuleName`, which is the service's
+   * name and nothing else. Two rows apart, the same empty field promised
+   * "Turn on" in one place and "Desk lamp" in the other, and only one of them
+   * was what the remote would draw.
+   *
+   * Falls back to the row's heading, which is what it used to show outright.
+   *
+   * `_computeLabel` returns a *template* for a two-way service -- a bare
+   * `${STATE}`, which the caller persists and the device resolves per press.
+   * Correct to store, unreadable to show: a press duplicated from a
+   * `light.toggle` was headed `${STATE}` and offered it as its placeholder,
+   * next to a sibling reading "Schreibtisch Apagado".
+   *
+   * So the template is resolved the way the device resolves it, through the
+   * same two helpers press 1's field uses. Not `_resolveLabel` on its own,
+   * which re-derives the whole ladder from the *entity's* state and so heads
+   * every press of a media button "TV Pause" whatever its own service is;
+   * `_displayLabel` fills the token against this press's service and target,
+   * and `_labelPrefix` contributes the entity name the device draws in front.
+   */
+  _pressDefaultLabel(rule, fallback = "") {
+    const action = rule?.action_id
+      ? (this._actions || []).find(a => a.id === rule.action_id) || null
+      : null;
+    const entity = this._getTargetEntityFromConfig?.(rule?.config) || "";
+    const derived = this._computeLabel(action, entity, rule?.config);
+    if (!derived) return fallback;
+    const body = this._displayLabel(derived, action, entity, rule?.config);
+    const prefix = this._labelPrefix(action, entity, rule?.config, derived, rule);
+    return [prefix, body].filter(Boolean).join(" ") || fallback;
+  },
+
+  /**
+   * The heading of one press row, for every press including the first.
+   *
+   * One function because the rows are meant to be indistinguishable: press 1
+   * is a step of the cycle like any other, and a heading built separately for
+   * it is how the two drift into looking like different kinds of thing.
+   */
+  _pressRowHeadHtml({ idx, name, glyphHtml }) {
+    return `
+              <summary class="press-appearance-head" role="group" aria-label="${this._esc(`${idx + 1}. ${name}`)}">
+                <span class="press-appearance-num" aria-hidden="true">${idx + 1}</span>
+                ${/* A shut row still has to say which press it is about, and
+                      the two fields that would answer are the ones it just
+                      hid. The glyph the press will wear rides on the heading,
+                      drawn by the same resolver the field below uses. */""}
+                <span class="press-appearance-glyph" aria-hidden="true">${glyphHtml}</span>
+                <span class="press-appearance-title">${this._esc(name)}</span>
+              </summary>`;
+  },
+
+  // The hint under a Tooltip field: at most one lesson, about the token the
+  // field actually holds, prefixed by what the remote prints for it right now.
+  //
+  // One ladder for press 1 and for presses 2..N. They were written separately
+  // and drifted -- same three rungs, same order, two copies to keep in step --
+  // which is the whole reason the two fields once explained themselves
+  // differently.
+  _tokenHint(resolved, { state, name, variable } = {}) {
+    const lesson = state ? "label_state_hint" : name ? "label_name_hint" : variable ? "variable_hint" : "";
+    if (!lesson) return "";
+    const reads = resolved ? this._t("label_now_reads", { text: this._esc(resolved) }) : "";
+    return `${reads}${this._t(lesson)}`;
+  },
+
+  _toggleRuleName(rule) {
+    const svcPath = rule?.config?.[0]?.action || "";
+    const [svcDomain, svc] = svcPath.split(".");
+    const haName = (svcDomain && svc)
+      ? this._hass?.services?.[svcDomain]?.[svc]?.name
+      : "";
+    if (haName) return haName;
+    const act = (this._actions || []).find(a => a.id === rule?.action_id);
+    if (act?.name) return act.name;
+    return svc ? svc.replace(/_/g, " ") : this._t("toggle_pick_action");
+  },
+
+  /**
+   * Wire the per-press appearance rows.
+   *
+   * All that is left of the toggle's own wiring. The presses themselves are
+   * the action editor's list -- Home Assistant adds, reorders and deletes them
+   * through its own controls, and `_applyCycle` writes what comes back -- so
+   * the only thing bound here is how each press *looks*.
+   */
+  _wireToggleSection(selBtn) {
+    // Mirrors the render condition exactly. Rows that were never drawn have
+    // nothing to wire, and asking for their slots anyway means a slider's
+    // panel can bind the grid editor's picker -- the two live in one shadow
+    // root, so a stale id is not a null lookup but someone else's node.
+    if (!isGridBtn(selBtn.key) || !this._toggleFeatureEnabled?.()) return;
+    const root = this.shadowRoot;
+    const key = selBtn.key;
+
+    // Wired as the media input it now is, not on `change`: that gives a press
+    // the suggestion list, commit-on-Enter and commit-on-blur that press 1's
+    // Tooltip has, from the one helper that defines what those mean.
+    root.querySelectorAll(".icon-picker-slot[data-toggle-label-idx]").forEach(slot => {
+      const idx = Number(slot.dataset.toggleLabelIdx);
+      const input = slot.querySelector(".toggle-press-label");
+      if (!input) return;
+      this._wireMediaInput(
+        input,
+        slot.querySelector(".liza-media-suggest"),
+        (typed) => {
+          const text = String(typed || "").trim();
+          this._toggleUpdate(key, (block) => {
+            const rule = block.rules[idx];
+            if (!rule) return;
+            if (text) rule.label = text; else delete rule.label;
+          });
+        },
+      );
+    });
+
+    const entity = this._editAssign(key)?.config
+      ? this._getTargetEntityFromConfig(this._editAssign(key).config)
+      : null;
+    root.querySelectorAll(".icon-picker-slot[data-toggle-idx]").forEach(slot => {
+      const idx = Number(slot.dataset.toggleIdx);
+      const rule = this._toggleRules(key)[idx] || {};
+      // The derived glyph when the press stores none, matching what the render
+      // put in the markup. `_mountIconPicker` assigns `input.value`, so
+      // leaving the fallback out here would blank the prefill a moment after
+      // it was drawn -- and it is what press 1's picker is mounted with.
+      this._mountIconPicker(
+        slot,
+        rule.icon || this._getServiceIcon(rule.config?.[0]?.action || "", entity),
+        (picked) => {
+        this._toggleUpdate(key, (block) => {
+          const row = block.rules[idx];
+          if (!row) return;
+          if (picked) row.icon = picked; else delete row.icon;
+          });
+        },
+      );
+    });
+
+    // Per element, not delegated: `toggle` does not bubble, so a listener on
+    // the list would never hear it. The debug view binds its <details> the
+    // same way and for the same reason.
+    root.querySelectorAll("details.press-appearance-row").forEach(row => {
+      // Press 1's row survives `_refreshButtonEntitySections` -- it is the
+      // wrapper the rebuilt hosts live in, not something the rebuild replaces
+      // -- so without a guard it would collect another listener every time the
+      // button's entity changed.
+      if (row.dataset.pressBound) return;
+      row.dataset.pressBound = "1";
+      const id = `${key}:${Number(row.dataset.pressIdx)}`;
+      row.addEventListener("toggle", () => {
+        if (row.open) this._openPresses?.add(id); else this._openPresses?.delete(id);
+      });
+    });
+
+    this._wirePressHighlight(key);
+  },
+
+  /**
+   * Point at the action card a press row is about.
+   *
+   * The appearance rows and the action cards are two lists of the same presses
+   * in the same order, and the only thing tying row 3 to card 3 used to be
+   * counting. `ha-automation-action` publishes `highlightedActions` -- the same
+   * property Home Assistant uses to flash a row it has just scrolled to -- so
+   * touching a press row can ask HA to mark its own card, in HA's own styling,
+   * with no reaching into the editor's internals.
+   *
+   * Matched by identity, not by index: `_cycleSequence` hands the editor the
+   * very step objects the rules hold, so `includes` on the editor's side finds
+   * the same object and nothing has to agree about numbering.
+   *
+   * Entirely cosmetic, so every step is optional-chained. An older frontend
+   * without the property simply drops the assignment and the rows still edit.
+   */
+  _wirePressHighlight(key) {
+    const root = this.shadowRoot;
+    const rows = root.querySelectorAll("[data-press-idx]");
+    if (!rows.length) return;
+
+    const mark = (idx) => {
+      const editor = this._editorEl;
+      if (!editor) return;
+      const step = idx === null ? null : this._toggleRules(key)[idx]?.config?.[0];
+      // `[]` rather than undefined to clear: the property is read with
+      // `?.includes(...)`, and handing it a non-array would make every row
+      // match nothing in a way that depends on HA's implementation.
+      editor.highlightedActions = step ? [step] : [];
+    };
+
+    rows.forEach(row => {
+      const idx = Number(row.dataset.pressIdx);
+      row.addEventListener("focusin", () => mark(idx));
+      row.addEventListener("mouseenter", () => mark(idx));
+      row.addEventListener("mouseleave", () => mark(null));
+      row.addEventListener("focusout", () => {
+        // Only when focus has actually left the row: moving between the
+        // picker and the tooltip input inside one row fires focusout first,
+        // and clearing there would strobe the highlight off and on again.
+        if (!row.contains(root.activeElement)) mark(null);
+      });
+    });
+  },
+
+  /**
+   * The states an action can be in, as `{state, icon, attribute}` rows.
+   *
+   * The action's own declared list wins; otherwise it is derived from the
+   * target entity's domain. Shared by the state-icon rows and the toggle rules
+   * so both offer the same vocabulary — a state the user can give an icon to
+   * but cannot write a rule for would be an arbitrary difference.
+   */
+  _actionStates(action, entity) {
+    if (!action) return [];
+    if (action.states?.length) return action.states;
+    const domain = entity ? entity.split(".")[0] : (action.service || "").split(".")[0];
+    const { attribute, states } = this._getStatesForAction(action, entity);
+    const defaults = this._getDefaultIcons(domain, attribute);
+    return states.map(s => ({
+      state: s,
+      icon: defaults[s] || "",
+      attribute: attribute || undefined,
+    }));
+  },
+
   _wireStateIconPickers(selBtn) {
     this.shadowRoot.querySelectorAll(".icon-picker-slot[data-state]").forEach(slot => {
       const state = slot.dataset.state;

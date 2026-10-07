@@ -56,6 +56,31 @@ def async_register_services(hass: HomeAssistant) -> None:
             }),
         )
 
+    async def _handle_clear_pages(call: ServiceCall) -> None:
+        """Wipe every page off the targeted devices and rebuild them from the store.
+
+        The protocol's full re-sync (PROTOCOL.md §clear_all). Nothing is lost:
+        the store holds the pages and the rebuild follows the wipe.
+        """
+        from ..config.device_sync import sync_config_to_device
+
+        for entry in _target_entries(hass, call.data):
+            conn = entry.runtime_data
+            _LOGGER.info("lizaip.clear_device_pages: clearing %s", entry.title)
+            async with conn._page_sync_lock:
+                await conn.clear_all()
+            await sync_config_to_device(hass, entry)
+
+    if not hass.services.has_service(DOMAIN, "clear_device_pages"):
+        hass.services.async_register(
+            DOMAIN,
+            "clear_device_pages",
+            _handle_clear_pages,
+            schema=vol.Schema({
+                vol.Optional("config_entry_id"): cv.string,
+            }),
+        )
+
     for command in enabled_commands():
         if not hass.services.has_service(DOMAIN, command.service):
             _register_internal_command(hass, command)

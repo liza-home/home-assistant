@@ -71,17 +71,34 @@ PAGE_ID_SCHEMA = vol.All(int, vol.Range(min=MIN_PAGE_ID, max=MAX_PAGE_ID))
 
 
 def generate_page_id(existing_ids: set[int] | None = None) -> int:
-    """Generate the next sequential page ID (max existing + 1).
+    """Generate the lowest page ID not already in *existing_ids*.
 
-    Avoids collisions with *existing_ids* if provided. Only the lower bound is
-    enforced — 0 is reserved by the protocol (see PROTOCOL.md §3 "Rules") — so
-    the result exceeds ``MAX_PAGE_ID`` when *existing_ids* already holds it.
-    That is reachable only through a hand-edited page file; ``is_valid_page_id``
-    is the gate that catches it during sync.
+    Deliberately reuses ids freed by deleted pages rather than always minting
+    ``max + 1``. A monotonic counter turns the id into a high-water mark that
+    deleting pages never lowers, so a device that has had pages added and
+    removed over time ends up handing out ids far above its page count. Some
+    firmware rejects a page id above its own ceiling with a protocol error, and
+    because the counter only ever climbs the rejection is permanent — deleting
+    pages to make room does not help. Reuse keeps ids dense.
+
+    Reuse is safe because a deleted page is removed from the device with
+    ``del_page`` before its id can be handed out again, and a page's identity
+    never outlives its id: callers merge stored page metadata by id only for
+    pages that arrived carrying one, so a freshly minted page cannot inherit the
+    colour or title of the page that previously held its id.
+
+    Only the lower bound is enforced — 0 is reserved by the protocol (see
+    PROTOCOL.md §3 "Rules") — so the result exceeds ``MAX_PAGE_ID`` only when
+    every valid id is taken. ``is_valid_page_id`` is the gate that catches it
+    during sync.
     """
     if not existing_ids:
         return MIN_PAGE_ID
-    return max(max(existing_ids) + 1, MIN_PAGE_ID)
+    taken = {pid for pid in existing_ids if isinstance(pid, int)}
+    candidate = MIN_PAGE_ID
+    while candidate in taken and candidate <= MAX_PAGE_ID:
+        candidate += 1
+    return candidate
 
 
 # A page the remote keeps but does not show in its swipeable main-page list.

@@ -144,6 +144,43 @@ export const STRINGS = {
     en: "Long touch (2 s)", de: "Langes Berühren (2 s)", fr: "Appui long (2 s)",
     it: "Tocco lungo (2 s)", es: "Toque largo (2 s)",
   },
+  settings_device: {
+    en: "Device", de: "Gerät", fr: "Appareil", it: "Dispositivo", es: "Dispositivo",
+  },
+  settings_clear_pages: {
+    en: "Clear and rebuild pages", de: "Seiten löschen und neu aufbauen",
+    fr: "Effacer et reconstruire les pages", it: "Cancella e ricostruisci le pagine",
+    es: "Borrar y reconstruir las páginas",
+  },
+  settings_clear_pages_busy: {
+    en: "Rebuilding…", de: "Wird neu aufgebaut…", fr: "Reconstruction…",
+    it: "Ricostruzione…", es: "Reconstruyendo…",
+  },
+  settings_clear_pages_hint: {
+    en: "Removes every page from the remote and writes them all back from this configuration. Use it when the remote's pages no longer match what you see here. Nothing stored is lost.",
+    de: "Entfernt alle Seiten von der Fernbedienung und schreibt sie aus dieser Konfiguration neu. Nützlich, wenn die Seiten der Fernbedienung nicht mehr zu dem passen, was hier steht. Es geht nichts Gespeichertes verloren.",
+    fr: "Supprime toutes les pages de la télécommande puis les réécrit à partir de cette configuration. À utiliser quand les pages de la télécommande ne correspondent plus à ce qui est affiché ici. Rien d’enregistré n’est perdu.",
+    it: "Rimuove tutte le pagine dal telecomando e le riscrive da questa configurazione. Da usare quando le pagine del telecomando non corrispondono più a quanto mostrato qui. Non si perde nulla di salvato.",
+    es: "Elimina todas las páginas del mando y las vuelve a escribir desde esta configuración. Úsalo cuando las páginas del mando ya no coincidan con lo que ves aquí. No se pierde nada de lo guardado.",
+  },
+  settings_clear_pages_confirm: {
+    en: "Clear every page from the remote and write them back from this configuration?",
+    de: "Alle Seiten von der Fernbedienung löschen und aus dieser Konfiguration neu schreiben?",
+    fr: "Effacer toutes les pages de la télécommande et les réécrire à partir de cette configuration ?",
+    it: "Cancellare tutte le pagine dal telecomando e riscriverle da questa configurazione?",
+    es: "¿Borrar todas las páginas del mando y volver a escribirlas desde esta configuración?",
+  },
+  settings_clear_pages_done: {
+    en: "Pages rebuilt", de: "Seiten neu aufgebaut", fr: "Pages reconstruites",
+    it: "Pagine ricostruite", es: "Páginas reconstruidas",
+  },
+  settings_clear_pages_failed: {
+    en: "Could not rebuild the pages: {error}",
+    de: "Seiten konnten nicht neu aufgebaut werden: {error}",
+    fr: "Impossible de reconstruire les pages : {error}",
+    it: "Impossibile ricostruire le pagine: {error}",
+    es: "No se han podido reconstruir las páginas: {error}",
+  },
   settings_buttons: {
     en: "Buttons", de: "Tasten", fr: "Boutons", it: "Pulsanti", es: "Botones",
   },
@@ -156,6 +193,16 @@ export const STRINGS = {
     fr: "Laisser le doigt 2 secondes sur un bouton lance son action d’appui long. Sur les boutons qui en ont une, le clic part au moment où le doigt se lève.",
     it: "Tenere il dito su un pulsante per 2 secondi esegue la sua azione di tocco lungo. Sui pulsanti che ne hanno una, il clic parte quando si solleva il dito.",
     es: "Mantener el dedo 2 segundos sobre un botón ejecuta su acción de toque largo. En los botones que tienen una, el clic se ejecuta al levantar el dedo.",
+  },
+  settings_toggle: {
+    en: "Toggle", de: "Umschalten", fr: "Bascule", it: "Alternanza", es: "Alternar",
+  },
+  settings_toggle_hint: {
+    en: "Lets a button carry several actions and step through them, one per press. Adds a Toggle section to every grid button. Switching this off leaves the steps stored but makes those buttons run their normal action again.",
+    de: "Lässt eine Taste mehrere Aktionen tragen und bei jedem Druck zur nächsten springen. Fügt jeder Rastertaste einen Bereich „Umschalten“ hinzu. Beim Ausschalten bleiben die Schritte gespeichert, die Tasten führen aber wieder ihre normale Aktion aus.",
+    fr: "Permet à un bouton de porter plusieurs actions et de passer à la suivante à chaque appui. Ajoute une section Bascule à chaque bouton de la grille. En désactivant, les étapes restent enregistrées mais ces boutons relancent leur action normale.",
+    it: "Consente a un pulsante di contenere più azioni e di passare alla successiva a ogni pressione. Aggiunge una sezione Alternanza a ogni pulsante della griglia. Disattivandola i passaggi restano salvati, ma i pulsanti tornano a eseguire la loro azione normale.",
+    es: "Permite que un botón lleve varias acciones y avance a la siguiente en cada pulsación. Añade una sección Alternar a cada botón de la cuadrícula. Al desactivarlo los pasos siguen guardados, pero esos botones vuelven a ejecutar su acción normal.",
   },
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
@@ -467,6 +514,58 @@ export const STRINGS = {
   icon_color: {
     en: "Icon color", de: "Symbolfarbe", fr: "Couleur des icônes",
     it: "Colore delle icone", es: "Color de los iconos",
+  },
+
+  // ── virtual toggle button ──────────────────────────────────────────
+  // What the list means, at any length. It used to open with "Add a second
+  // action", which is advice rather than a description -- and the line shows
+  // for every button that has an action at all, so a button already cycling
+  // through three presses was being told to add a second one.
+  toggle_click_hint: {
+    en: "This button cycles: each press runs the next action, then starts over.",
+    de: "Diese Taste schaltet durch: Jeder Druck führt die nächste Aktion aus, dann beginnt es von vorn.",
+    fr: "Cette touche défile : chaque pression exécute l'action suivante, puis recommence.",
+    it: "Questo tasto scorre: ogni pressione esegue l'azione successiva, poi ricomincia.",
+    es: "Este botón alterna: cada pulsación ejecuta la siguiente acción y luego vuelve a empezar.",
+  },
+  // The advice half, kept separate because it only applies while there is
+  // nothing to cycle through yet.
+  toggle_click_hint_add: {
+    en: "Add another action to build the cycle.",
+    de: "Fügen Sie eine weitere Aktion hinzu, um den Durchlauf aufzubauen.",
+    fr: "Ajoutez une autre action pour construire le cycle.",
+    it: "Aggiungi un'altra azione per costruire il ciclo.",
+    es: "Añada otra acción para construir el ciclo.",
+  },
+  // Names what the section edits, not what the user does to the remote. It was
+  // "Presses", which named the input while every field under it sets an output,
+  // and as a heading read as a count rather than as something configurable.
+  // The per-press framing is not lost by dropping it from the title: the
+  // numbered rail shows it, and the hint below says it in words.
+  toggle_press_appearance: {
+    en: "Appearance", de: "Darstellung", fr: "Apparence",
+    it: "Aspetto", es: "Apariencia",
+  },
+  // Carries the one fact the numbered list cannot show. The rail stops after
+  // the last press on purpose -- nothing follows the final number -- so the
+  // sequence does not appear to run off the end; that the cycle wraps is said
+  // here in words instead, which is where the chip strip's loop glyph went
+  // when that strip was removed as a duplicate of the list.
+  toggle_press_appearance_hint: {
+    en: "How the button looks at each step. Each press moves on to the next, and the last starts over.",
+    de: "Wie die Taste bei jedem Schritt aussieht. Jeder Druck geht zum nächsten, und nach dem letzten beginnt es von vorn.",
+    fr: "L'apparence de la touche à chaque étape. Chaque pression passe à la suivante, et la dernière recommence.",
+    it: "L'aspetto del tasto a ogni passo. Ogni pressione passa al successivo e dopo l'ultimo si ricomincia.",
+    es: "El aspecto del botón en cada paso. Cada pulsación pasa al siguiente y la última vuelve a empezar.",
+  },
+  toggle_add_press: {
+    en: "Add next press", de: "Nächsten Druck hinzufügen",
+    fr: "Ajouter la pression suivante", it: "Aggiungi pressione successiva",
+    es: "Añadir siguiente pulsación",
+  },
+  toggle_pick_action: {
+    en: "Pick an action", de: "Aktion wählen", fr: "Choisir une action",
+    it: "Scegli un'azione", es: "Elegir una acción",
   },
   layout: {
     en: "Layout", de: "Layout", fr: "Disposition",
@@ -851,21 +950,12 @@ export const STRINGS = {
   },
 
   // ── tooltips and sliders ───────────────────────────────────────────
-  save_tooltip: {
-    en: "Save tooltip", de: "Kurzinfo speichern", fr: "Enregistrer l'infobulle",
-    it: "Salva descrizione", es: "Guardar descripción",
-  },
   reset_tooltip: {
     en: "Reset to auto-generated tooltip",
     de: "Auf automatisch erzeugte Kurzinfo zurücksetzen",
     fr: "Revenir à l'infobulle générée automatiquement",
     it: "Ripristina la descrizione generata automaticamente",
     es: "Restablecer la descripción generada automáticamente",
-  },
-  discard_change: {
-    en: "Discard this change", de: "Diese Änderung verwerfen",
-    fr: "Annuler cette modification", it: "Annulla questa modifica",
-    es: "Descartar este cambio",
   },
   use_for_slider: {
     en: "Use for slider", de: "Für Schieberegler verwenden",

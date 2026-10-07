@@ -4,7 +4,9 @@ Provides an HTTP endpoint that serves dynamically generated PNG images:
 
     GET /api/imgserv/<source>:<value>?<options>
 
-Sources: ``mdi:``, ``phu:``, ``logo:``, ``text:``, ``file:``, ``media:``.
+Sources: ``mdi:``, ``logo:``, ``text:``, ``file:``, ``media:``, and the icon
+sets registered in the browser (``phu:``, ``hue:``, ...; see
+``render_custom.py``).
 Options: ``size``, ``fg``/``color``, ``bg``, ``mode``, ``crop``, ``alpha``,
 ``percent``, ``font``, ``font_size`` — see ``httpsocket.py`` for the full
 request table and ``render.py`` for the shared pipeline they drive.
@@ -22,6 +24,10 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_imgserv(hass: HomeAssistant) -> None:
-    """Register the image server HTTP view."""
+    """Register the image server HTTP view and the browser icon sets' store."""
+    # Here, not at the top: it needs the root const, which imports this package.
+    from .render_custom import async_setup_custom_icons
+
+    await async_setup_custom_icons(hass)
     hass.http.register_view(LizaIPImageView)
     _LOGGER.info("lizaIP Image Server registered at %s", IMG_PATH)

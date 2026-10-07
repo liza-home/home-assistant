@@ -96,24 +96,50 @@ export const SettingsViewMixin = {
       </ha-card>`;
   },
 
-  _htmlSettingsLongtouchCard() {
-    const id = "liza-settings-longtouch";
-    const hintId = `${id}-hint`;
+  /**
+   * The Buttons card: the remote's press-behaviour switches.
+   *
+   * Both are off until asked for, and for the same reason -- a remote set up
+   * before either existed must keep behaving exactly as it did. That makes the
+   * row shape shared rather than coincidental, so it is written once.
+   */
+  _htmlSettingsButtonsCard() {
     return `
       <ha-card outlined class="settings-card">
         <div class="actions-card-header">
           <h2 class="actions-card-title">${this._esc(this._t("settings_buttons"))}</h2>
         </div>
         <div class="settings-body">
-          <div class="settings-toggle">
-            <input type="checkbox" role="switch" id="${id}" class="settings-longtouch"
-                   ${this._longtouchEnabled() ? "checked" : ""}
-                   ${this._textSettingsBusy ? "disabled" : ""} aria-describedby="${hintId}">
-            <label for="${id}">${this._esc(this._t("settings_longtouch"))}</label>
+          <div class="settings-switch-list">
+            ${this._htmlFeatureSwitch("longtouch", "settings_longtouch", "settings_longtouch_hint")}
+            ${this._htmlFeatureSwitch("toggle", "settings_toggle", "settings_toggle_hint")}
           </div>
-          <span class="config-field-hint" id="${hintId}">${this._esc(this._t("settings_longtouch_hint"))}</span>
         </div>
       </ha-card>`;
+  },
+
+  /**
+   * One feature switch.
+   *
+   * The same row as the icon options below it: a checkbox and a toggle sitting
+   * one card apart read as two different kinds of setting, when enabling long
+   * touch and enabling the coloured icons are the same kind of decision.
+   */
+  _htmlFeatureSwitch(section, labelKey, hintKey) {
+    const id = `liza-settings-${section}`;
+    const hintId = `${id}-hint`;
+    const labelId = `${id}-label`;
+    return `
+      <div class="settings-switch-row">
+        <div class="settings-switch-text">
+          <label id="${labelId}" for="${id}">${this._esc(this._t(labelKey))}</label>
+          <span class="config-field-hint" id="${hintId}">${this._esc(this._t(hintKey))}</span>
+        </div>
+        <ha-switch id="${id}" class="settings-feature-switch" data-section="${section}"
+                   ${this._featureEnabled(section) ? "checked" : ""}
+                   ${this._textSettingsBusy ? "disabled" : ""}
+                   aria-labelledby="${labelId}" aria-describedby="${hintId}"></ha-switch>
+      </div>`;
   },
 
   /** Empty when the backend sends no limits, i.e. cannot save the step. */
@@ -203,7 +229,8 @@ export const SettingsViewMixin = {
           </button>
         </div>
         ${this._htmlSettingsIconCard()}
-        ${this._htmlSettingsLongtouchCard()}
+        ${this._htmlSettingsButtonsCard()}
+        ${this._htmlSettingsDeviceCard()}
       </div>`;
   },
 
@@ -264,10 +291,61 @@ export const SettingsViewMixin = {
     this._saveTextSettings(next);
   },
 
+  /**
+   * The device card: actions that change the remote itself, not the stored
+   * configuration.
+   *
+   * It sits last because clearing the pages is the heaviest thing on the
+   * screen, and the hint has to say plainly that nothing is lost — the store
+   * keeps the pages and the rebuild follows the wipe.
+   */
+  _htmlSettingsDeviceCard() {
+    return `
+      <ha-card outlined class="settings-card">
+        <div class="actions-card-header">
+          <h2 class="actions-card-title">${this._esc(this._t("settings_device"))}</h2>
+        </div>
+        <div class="settings-body">
+          <p class="config-field-hint">${this._esc(this._t("settings_clear_pages_hint"))}</p>
+          <div class="settings-actions">
+            <button type="button" class="debug-btn settings-clear-pages" ${this._clearPagesBusy ? "disabled" : ""}>
+              ${this._esc(this._t(this._clearPagesBusy ? "settings_clear_pages_busy" : "settings_clear_pages"))}
+            </button>
+          </div>
+        </div>
+      </ha-card>`;
+  },
+
+  /**
+   * Wipe the remote's pages and rebuild them from the store.
+   *
+   * Confirmed first: it is a visible interruption on the device — the screen
+   * empties and fills again — and a mis-click deserves a way out even though
+   * no configuration is at risk.
+   */
+  async _clearDevicePages() {
+    if (!this._currentEntry || this._clearPagesBusy) return;
+    if (!window.confirm(this._t("settings_clear_pages_confirm"))) return;
+    this._clearPagesBusy = true;
+    this._render();
+    try {
+      await this._hass.callWS({
+        type: "lizaip_config/clear_device_pages", entry_id: this._currentEntry,
+      });
+      this._toast(this._t("settings_clear_pages_done"));
+    } catch (e) {
+      this._toast(this._t("settings_clear_pages_failed", { error: String(e?.message || e) }));
+    } finally {
+      this._clearPagesBusy = false;
+      this._render();
+    }
+  },
+
   _wireSettingsView() {
     const root = this.shadowRoot;
-    root.querySelector(".settings-longtouch")?.addEventListener("change", (ev) =>
-      this._changeTextSetting("longtouch", "enabled", ev.target.checked));
+    root.querySelectorAll(".settings-feature-switch").forEach((el) =>
+      el.addEventListener("change", (ev) =>
+        this._changeTextSetting(el.dataset.section, "enabled", ev.target.checked)));
     root.querySelectorAll(".settings-font").forEach((el) =>
       el.addEventListener("change", () => this._changeTextSetting(el.dataset.kind, "font", el.value)));
     // "change", not "input": typing 24 would otherwise save 2 on the way.
@@ -300,12 +378,18 @@ export const SettingsViewMixin = {
     // `ha-switch` is not a native input, so `<label for>` does not reach it.
     // `preventDefault` so that a browser which *does* forward the click cannot
     // toggle the switch as well and have the two handlers undo each other.
+    // Both kinds of row share this label, so where the new value goes is read
+    // off the switch rather than off the row it was found in.
     root.querySelectorAll(".settings-switch-text label").forEach((el) =>
       el.addEventListener("click", (ev) => {
         ev.preventDefault();
         const sw = root.querySelector(`#${el.getAttribute("for")}`);
-        if (sw && !sw.disabled) this._saveIconOptions({ [sw.dataset.key]: !sw.checked });
+        if (!sw || sw.disabled) return;
+        if (sw.dataset.section) this._changeTextSetting(sw.dataset.section, "enabled", !sw.checked);
+        else this._saveIconOptions({ [sw.dataset.key]: !sw.checked });
       }));
+    root.querySelector(".settings-clear-pages")?.addEventListener(
+      "click", () => this._clearDevicePages());
     root.querySelector(".settings-reset")?.addEventListener("click", () => {
       const { settings, defaults } = this._textSettings ?? {};
       if (!settings || !defaults) return;

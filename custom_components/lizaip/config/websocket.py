@@ -30,10 +30,12 @@ from ..action_controller import (
     SLIDER_TARGET_ENTITY,
     SLIDER_TARGET_LAST_TOUCHED,
     SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY,
+    TOGGLE_KEY,
     follows_selection_only,
     is_grid_button,
     last_touched_slider_actions,
     sanitize_slider_override,
+    sanitize_toggle,
     targets_entity,
     targets_last_touched,
     targets_last_touched_or_entity,
@@ -73,7 +75,7 @@ from .text_style import (
     validate_settings,
 )
 from .internal_commands import get_internal_command, panel_descriptors, pinned_page_ids
-from .device_sync import step_targets_entry
+from .device_sync import step_targets_entry, sync_config_to_device
 from .const import (
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
@@ -471,6 +473,14 @@ def _build_assignment_entry(
     longtouch = longtouch_steps(assign_data)
     if longtouch:
         entry[ASSIGNMENT_LONGTOUCH_KEY] = longtouch
+    # ``toggle`` is a sibling of ``config`` for the same reason before/after are:
+    # ``config[0]`` must keep meaning "the step that represents this button" for
+    # icons, tooltips, the watched-entity set and the panel's action matcher.
+    # sanitize_toggle returns {} for anything that would not run, and an empty
+    # dict is never written — absence is the only spelling for "no toggle".
+    toggle = sanitize_toggle(assign_data.get(TOGGLE_KEY))
+    if toggle:
+        entry[TOGGLE_KEY] = toggle
     # Only grid buttons can contextually override fixed buttons; absence means
     # inherit. Fixed buttons are resolved actions, never contexts.
     if is_grid_button(button_key):
@@ -487,6 +497,7 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_get_actions,
         ws_save_actions,
         ws_get_assignments,
+        ws_get_all_assignments,
         ws_save_assignments,
         ws_get_pages,
         ws_set_pages,
@@ -500,6 +511,7 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_get_slider_controls,
         ws_get_internal_commands,
         ws_goto_page,
+        ws_clear_device_pages,
         ws_list_layouts,
         ws_list_layout_devices,
         ws_list_layout_config_entries,
@@ -553,6 +565,13 @@ def _requires_device(handler):
 #: blueprint: two remotes of different models may be set up at once, and each
 #: has to keep its own face.
 _BLUEPRINT_CACHE_KEY: Final = "_blueprints"
+
+#: How many parsed faces to keep. The key is the device-reported ``model_id``,
+#: which is not a value this integration controls, so an unbounded dict here
+#: grows with every string a remote has ever reported. Well past any real
+#: household: a site with more distinct models than this re-parses the least
+#: recently used one, which is a disk read, not an error.
+_BLUEPRINT_CACHE_MAX: Final = 8
 
 
 def _blueprint_id(hass: HomeAssistant, entry_id: str | None) -> str:
@@ -642,11 +661,15 @@ async def _async_blueprint(hass: HomeAssistant, entry_id: str | None = None) -> 
     blueprint_id = _blueprint_id(hass, entry_id)
     cached = cache.get(blueprint_id)
     if cached is not None:
+        # Re-insert so the eviction below drops the face nobody is wearing.
+        cache[blueprint_id] = cache.pop(blueprint_id)
         return cached
 
     parsed = await hass.async_add_executor_job(_parse_blueprint, blueprint_id)
     if parsed.get("buttons"):
         cache[blueprint_id] = parsed
+        while len(cache) > _BLUEPRINT_CACHE_MAX:
+            cache.pop(next(iter(cache)))
     return parsed
 
 
@@ -764,6 +787,33 @@ async def ws_get_assignments(hass: HomeAssistant, connection, msg: dict, device_
     store = _get_store(hass)
     assignments = await store.async_get_assignments(device_id, page_id)
     connection.send_result(msg["id"], {"assignments": assignments, "page_id": page_id})
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/get_all_assignments",
+    "entry_id": str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_requires_device
+async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+    """Every page's assignments in one answer.
+
+    The panel's usage scan -- which action is still used, and where -- needs
+    all of them, and used to ask page by page. That is one round trip per
+    page on every config change, so the cost of editing anything grew with
+    the number of pages; at a hundred pages it was a hundred round trips for
+    a single rename.
+
+    Keys are strings because JSON has no integer keys: the client reads them
+    back as the strings it sends elsewhere, so page ids are stringified here
+    rather than leaving each caller to guess which form it got.
+    """
+    store = _get_store(hass)
+    all_assignments = await store.async_get_all_assignments(device_id)
+    connection.send_result(msg["id"], {
+        "assignments": {str(pid): assigns for pid, assigns in all_assignments.items()},
+    })
 
 
 @websocket_api.websocket_command({
@@ -999,6 +1049,126 @@ async def _reserved_page_ids(store, device_id: str, in_use: set[int]) -> set[int
     return reserved
 
 
+def _deliverable_main_pages(conn, pages: list) -> list[int] | None:
+    """The main-page order to push straight from the panel, or ``None``.
+
+    `set_main_pages` is all-or-nothing -- naming one page the device does not
+    hold makes it reject the whole order -- and a rejection arrives without a
+    `seq_id`, costing the caller a ten-second timeout. So this shortcut is
+    taken only when the device holds every main page and nothing has to be
+    added first.
+
+    Returning ``None`` costs nothing: the full sync that follows filters the
+    order down to the pages that actually landed and sends it from there,
+    which is what lets a remote with one unstorable page still be reordered.
+    """
+    if not _device_holds_every_page(conn, pages):
+        return None
+    return [p["id"] for p in pages if not is_subpage(p)]
+
+
+def _device_holds_every_page(conn, pages: list) -> bool:
+    """Whether the device holds every main page, so a sync has nothing to add.
+
+    Narrowing a `config_changed` event to "order only" lets the sync skip
+    rebuilding page payloads, which is only safe once there is nothing else
+    for it to do. While one page is missing it still has to retry adding it.
+    """
+    known = getattr(conn, "_known_pages", None)
+    return known is not None and all(
+        p["id"] in known for p in pages if not is_subpage(p)
+    )
+
+
+def _reordered_pages(stored: list, incoming: list) -> list | None:
+    """*incoming* as a pure reorder of *stored*, or ``None`` if it is not one.
+
+    A reorder keeps every page and every field; only the sequence moves. Any
+    page added, removed or edited means the caller has to take the full path,
+    which rewrites the page files. The stored dicts are returned rather than
+    the client's, so nothing the panel omitted can be dropped.
+    """
+    if len(stored) != len(incoming):
+        return None
+
+    by_id: dict = {}
+    for page in stored:
+        if not isinstance(page, dict) or not page.get("id"):
+            return None
+        by_id[page["id"]] = page
+
+    out = []
+    seen = set()
+    for page in incoming:
+        if not isinstance(page, dict):
+            return None
+        base = by_id.get(page.get("id"))
+        if base is None or page["id"] in seen:
+            return None
+        # The panel echoes back the page it was given, so a field that differs
+        # is an edit riding along with the move and has to take the slow path.
+        merged = dict(base)
+        merged.update(page)
+        if merged != base:
+            return None
+        seen.add(page["id"])
+        out.append(base)
+
+    return out
+
+
+async def _reorder_pages_fast(
+    hass: HomeAssistant, connection, msg: dict, device_id: str, store, pages: list
+) -> None:
+    """Persist and push a page reorder, answering the panel before touching the device.
+
+    Order is two lists of ids on disk (``page_order.yaml``, ``main_pages.yaml``)
+    and one ``set_main_pages`` on the wire — PROTOCOL.md §"display order is
+    defined solely by `set_main_pages`" — and page order is not part of
+    ``compute_page_hash``, so no page payload changes and none needs resending.
+
+    The reply goes out first. Everything after it is bookkeeping the panel does
+    not have to wait on, and used to add a device round trip plus a full
+    config-payload rebuild to the time a dragged thumbnail took to land.
+    """
+    await store.async_set_page_order(device_id, pages)
+    connection.send_result(msg["id"], {"success": True, "pages": pages})
+
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    conn = getattr(entry, "runtime_data", None) if entry else None
+    order_only = False
+    deliverable = (
+        _deliverable_main_pages(conn, pages)
+        if conn is not None and getattr(conn, "connected", False)
+        else None
+    )
+    if deliverable is not None and deliverable == conn._known_main_pages:
+        # Already the order the device holds. `set_main_pages` makes it rewrite
+        # its whole page setup, so sending it again is work with no effect.
+        deliverable = None
+        order_only = _device_holds_every_page(conn, pages)
+    if deliverable is not None:
+        try:
+            await conn.set_main_pages(deliverable)
+            conn._known_main_pages = list(deliverable)
+            order_only = _device_holds_every_page(conn, pages)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("set_main_pages after reorder failed: %s", err)
+            # Forgetting the order is what makes the next sync notice it is
+            # wrong and resend it; remembering a value we failed to write
+            # would make the device's real order invisible. The page contents
+            # go with it: a device that refused this is not a device we can
+            # still claim to know.
+            conn._known_pages = None
+            conn._known_main_pages = None
+
+    # Other open panels still learn about the move from this. It no longer sits
+    # between the drop and the reply, which is the part that was felt, and when
+    # the device is already in step it skips rebuilding every page payload --
+    # measured at 124 ms on a 22-page remote, growing with the page count.
+    await _fire_config_changed(hass, msg["entry_id"], order_only=order_only)
+
+
 @websocket_api.websocket_command({
     "type": "lizaip_config/set_pages",
     "entry_id": str,
@@ -1020,21 +1190,32 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
 
     store = _get_store(hass)
 
+    stored_pages = await store.async_get_pages(device_id)
+    reordered = _reordered_pages(stored_pages, pages)
+    if reordered is not None:
+        await _reorder_pages_fast(hass, connection, msg, device_id, store, reordered)
+        return
+
     reserved_ids = await _reserved_page_ids(
         store, device_id, {p["id"] for p in pages if p.get("id")}
     )
     # New pages must not inherit stored fields from a recycled id.
     is_new = [not p.get("id") for p in pages]
+    minted_ids: set[int] = set()
     for p in pages:
         if not p.get("id"):
             new_id = generate_page_id(reserved_ids)
             p["id"] = new_id
             reserved_ids.add(new_id)
+            minted_ids.add(new_id)
 
-    # Preserve page fields the client did not send (layout/default_color/etc.);
-    # async_set_pages rewrites every page file, not only the changed page.
+    # Preserve page fields the client did not send (layout/default_color/etc.):
+    # async_set_pages is handed the whole list, so a field missing here would
+    # be read as removed. The store writes only the files whose content moved,
+    # so a pure reorder touches none of them. Reuses the read the reorder check
+    # already did rather than paying for a second one.
     stored_by_id = {
-        p["id"]: p for p in await store.async_get_pages(device_id)
+        p["id"]: p for p in stored_pages
         if isinstance(p, dict) and p.get("id")
     }
     merged = []
@@ -1046,25 +1227,71 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
         merged.append(page)
     pages = merged
 
+    # A pure reorder: the same pages with the same content in new positions.
+    # Decided here, while the store still holds the previous list -- once
+    # async_set_pages runs, the old content is gone.
+    order_only = set(stored_by_id) == {p["id"] for p in pages} and all(
+        p == stored_by_id[p["id"]] for p in pages
+    )
+
     existing_assignments = await store.async_get_all_assignments(device_id)
     empty = await _empty_page_assignments(hass, msg["entry_id"])
     for p in pages:
-        if p["id"] not in existing_assignments:
+        # A freshly minted page is blanked even when the store already holds
+        # assignments under its id. Ids are recycled once nothing points at them
+        # any more, and the page that previously held this one is very often
+        # deleted by this same call — its buttons are still in
+        # `existing_assignments`, which is read before `async_set_pages` prunes
+        # them. Seeding only on "id not present" therefore handed the new page
+        # the dead page's buttons, fully configured and invisible in the panel
+        # until the user opened it.
+        if p["id"] in minted_ids or p["id"] not in existing_assignments:
             await store.async_set_assignments(device_id, p["id"], empty)
 
     await store.async_set_pages(device_id, pages)
 
     entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    order_pushed = False
+    conn = None
+    page_ids = None
     if entry and hasattr(entry, "runtime_data") and entry.runtime_data and entry.runtime_data.connected:
-        page_ids = [p["id"] for p in pages if not is_subpage(p)]
-        try:
-            await entry.runtime_data.set_main_pages(page_ids)
-            # Keep cache in sync so the next full sync does not see stale order.
-            entry.runtime_data._known_main_pages = list(page_ids)
-        except Exception as err:
-            _LOGGER.warning("set_main_pages after set_pages failed: %s", err)
+        conn = entry.runtime_data
+        # PROTOCOL.md §set_main_pages: every id must already exist on the
+        # device, and the call is all-or-nothing -- naming one page it does not
+        # hold makes it reject the whole order, which is how reordering pages
+        # 1-20 silently failed while a refused page sat in the list. So the
+        # order carries only the pages the device actually holds, and goes out
+        # under the lock the full sync holds so the two never interleave.
+        page_ids = _deliverable_main_pages(conn, pages)
+        if page_ids == conn._known_main_pages:
+            # Unchanged: `set_main_pages` makes the device rewrite its whole
+            # page setup, so it goes out only when the list actually moved --
+            # not on every edit.
+            page_ids = None
+            order_pushed = _device_holds_every_page(conn, pages)
+    if page_ids is None:
+        _LOGGER.debug(
+            "Leaving the page order to the full sync: the device does not "
+            "hold every page yet",
+        )
+    else:
+        async with conn._page_sync_lock:
+            try:
+                await conn.set_main_pages(page_ids)
+                # Keep cache in sync so the next full sync does not see stale order.
+                conn._known_main_pages = list(page_ids)
+                order_pushed = _device_holds_every_page(conn, pages)
+            except Exception as err:
+                _LOGGER.warning("set_main_pages after set_pages failed: %s", err)
+                # Both, not just the order: a half-remembered device state is
+                # what made the next sync diff against pages it no longer knew
+                # the device held.
+                conn._known_pages = None
+                conn._known_main_pages = None
 
-    await _fire_config_changed(hass, msg["entry_id"])
+    await _fire_config_changed(
+        hass, msg["entry_id"], order_only=order_only and order_pushed
+    )
 
     # Deleted pages can remove the last binding for a push subscription.
     _schedule_push_rescan(hass, msg["entry_id"])
@@ -1204,6 +1431,45 @@ async def ws_goto_page(hass: HomeAssistant, connection, msg: dict) -> None:
         connection.send_error(msg["id"], "failed", str(err))
 
 
+@websocket_api.websocket_command({
+    "type": "lizaip_config/clear_device_pages",
+    "entry_id": str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_clear_device_pages(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Wipe every page off the device, then rebuild it from the store.
+
+    This is the protocol's full re-sync (PROTOCOL.md §clear_all) and the way
+    back from a device whose page table no longer matches what it reports --
+    stale pages, a half-written setup, a firmware that has run out of room.
+    Nothing is lost: the store is the source of truth and the rebuild follows
+    immediately.
+
+    Held under the same lock as an ordinary sync, so a scheduled one cannot
+    land between the wipe and the rebuild and write pages into a device that is
+    halfway through being emptied.
+    """
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    if not entry or not getattr(entry, "runtime_data", None):
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+    conn = entry.runtime_data
+    if not conn.connected:
+        connection.send_error(msg["id"], "not_connected", "Device not connected")
+        return
+    try:
+        async with conn._page_sync_lock:
+            await conn.clear_all()
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "failed", str(err))
+        return
+
+    # Outside the lock: `sync_config_to_device` takes it itself.
+    rebuilt = await sync_config_to_device(hass, entry)
+    connection.send_result(msg["id"], {"success": True, "rebuilt": rebuilt})
+
+
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_icon_defaults"})
 @websocket_api.async_response
 async def ws_get_icon_defaults(
@@ -1259,12 +1525,16 @@ async def ws_get_settings(hass: HomeAssistant, connection, msg: dict, device_id:
 async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
     """Save the text settings and redraw the remote's pages with them."""
     fonts = await _async_list_fonts(hass)
+    store = _get_store(hass)
+    # What the remote has now, so a font that went missing since it was chosen
+    # is carried through rather than refusing the save -- see validate_settings.
+    stored = await store.async_get_settings(device_id)
     try:
-        settings = validate_settings(msg["settings"], {f["id"] for f in fonts})
+        settings = validate_settings(msg["settings"], {f["id"] for f in fonts}, stored)
     except ValueError as exc:
         connection.send_error(msg["id"], "invalid_format", str(exc))
         return
-    stored = await _get_store(hass).async_set_settings(device_id, settings)
+    stored = await store.async_set_settings(device_id, settings)
     await _fire_config_changed(hass, msg["entry_id"])
     connection.send_result(msg["id"], _settings_reply(stored, fonts))
 

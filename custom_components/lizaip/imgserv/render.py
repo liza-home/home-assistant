@@ -24,7 +24,7 @@ Shared utilities:
   - ``save_png``              — step 5: encode a PIL image as PNG bytes
   - ``finalize_png``          — steps 2–5 in order; the single exit
 
-SVG rendering (used by render_mdi, render_phu, render_logo):
+SVG rendering (used by render_mdi, render_logo, render_custom):
   - ``render_svg_icon``       — single SVG path → image (even-odd fill)
   - ``render_multi_path_svg`` — multiple paths OR-combined → image
   - ``tessellate_svg_path``   — SVG path `d` → polygon point-lists

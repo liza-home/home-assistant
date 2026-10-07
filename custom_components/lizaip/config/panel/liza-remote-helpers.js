@@ -174,6 +174,164 @@ export function firstId(value) {
 const FIELD_ERR_ID_PREFIX = "liza-field-err-";
 let fieldErrUid = 0;
 
+// The picture field's suggestion list (`_wireMediaInput`).
+const ICON_SUGGESTION_LIMIT = 50;
+let _mediaListSeq = 0;
+
+/**
+ * The icon names HA itself offers for *set*, from the lists its own icon
+ * picker reads: the frontend's `mdi` list, or the registered provider's
+ * `getIconList()`. Asked each time, not cached here: the browser caches the
+ * static file and a provider keeps its list in memory.
+ */
+export async function iconNameList(set) {
+  const toNames = (list) => (Array.isArray(list) ? list : [])
+    .map((i) => (typeof i === "string" ? i : i?.name))
+    .filter(Boolean);
+  if (set === "mdi") {
+    const res = await fetch("/static/mdi/iconList.json");
+    return res.ok ? toNames(await res.json()) : [];
+  }
+  const getIconList = customIconRegistry()[set]?.getIconList;
+  return typeof getIconList === "function" ? toNames(await getIconList()) : [];
+}
+
+/** HA's custom icon registry, as its own `custom_icons.ts` reads it. */
+function customIconRegistry() {
+  return globalThis.customIcons || globalThis.parent?.customIcons || {};
+}
+
+/**
+ * Every icon prefix HA knows: its built-in `mdi`, plus each provider a plugin
+ * registered in `window.customIcons` (`phu` from custom-brand-icons, `hue`,
+ * ...) that can list its icons.
+ */
+export function iconProviders() {
+  const custom = Object.keys(customIconRegistry())
+    .filter((k) => typeof customIconRegistry()[k]?.getIconList === "function");
+  return ["mdi", ...custom.filter((k) => k !== "mdi")];
+}
+
+/** imgserv's own source types; a browser icon set by one of these names never shadows it. */
+const NATIVE_SOURCE_TYPES = new Set(["mdi", "logo", "text", "file", "media"]);
+
+/**
+ * The extra icon set *value* is drawn from (`"hue"` for `hue:bulb`), or "".
+ * One a plugin registered in the browser that imgserv has no renderer of its
+ * own for: the panel uploads its shapes (`uploadCustomIcon`), imgserv draws
+ * them from those.
+ */
+export function customIconSet(value) {
+  const m = /^([a-z0-9_-]+):/.exec(String(value ?? "").trim());
+  if (!m || NATIVE_SOURCE_TYPES.has(m[1])) return "";
+  return typeof customIconRegistry()[m[1]]?.getIcon === "function" ? m[1] : "";
+}
+
+/** A monochrome icon (`mdi:`, `phu:` or another extra set): drawn in the tint. */
+export function isIconSource(value) {
+  const v = String(value ?? "").trim();
+  return v.startsWith("mdi:") || v.startsWith("phu:") || !!customIconSet(v);
+}
+
+/** The upload entry for one shape, as `getIcon` gives it; null when it has none. */
+async function customIconEntry(prefix, name) {
+  try {
+    const icon = await customIconRegistry()[prefix]?.getIcon?.(name);
+    if (!icon?.path) return null;
+    const entry = { prefix, name, path: String(icon.path) };
+    if (icon.secondaryPath) entry.secondary_path = String(icon.secondaryPath);
+    if (icon.viewBox) entry.view_box = String(icon.viewBox);
+    return entry;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Hand imgserv the shape behind *value* (`hue:bulb`), which only the browser
+ * can look up. A name with a template in it is made up at run time; imgserv
+ * notes it when the remote asks, and `syncCustomIcons` fills it in.
+ */
+export async function uploadCustomIcon(hass, value) {
+  const prefix = customIconSet(value);
+  if (!prefix || !hass?.callWS) return;
+  const name = String(value).trim().slice(prefix.length + 1).split("?")[0];
+  if (!name || /[{}]/.test(name)) return;
+  const entry = await customIconEntry(prefix, name);
+  if (!entry) return;
+  try {
+    await hass.callWS({ type: "lizaip_config/store_custom_icons", icons: [entry] });
+  } catch (e) { /* the remote shows the words until the next sync */ }
+}
+
+/** Shapes already handed to imgserv in this browser session. */
+const _ensured = new Set();
+
+/**
+ * Make sure imgserv can draw *value* before anything asks it to.
+ *
+ * Saving an icon uploads it, but a value saved by an older version -- or one a
+ * variable made up -- was never offered, and imgserv answers 404 for a shape it
+ * does not have. Every preview and every tile goes through here, so the panel
+ * drawing a set's icon is itself what teaches imgserv to draw it.
+ *
+ * Once per session per name: the answer cannot change while the plugin that
+ * supplies it stays loaded, and a suggestion list redraws on every keystroke.
+ * *onUploaded* runs after the shape is in place, for the images that asked for
+ * it too early and came back empty.
+ */
+export function ensureCustomIcon(hass, value, onUploaded) {
+  const key = customIconKey(value);
+  if (!key || !hass?.callWS || _ensured.has(key)) return;
+  _ensured.add(key);
+  uploadCustomIcon(hass, value).then(() => onUploaded?.(key));
+}
+
+/** `"hue:bulb"` for a drawable extra-set value, else `""` (no query, no template). */
+export function customIconKey(value) {
+  const prefix = customIconSet(value);
+  if (!prefix) return "";
+  const name = String(value).trim().slice(prefix.length + 1).split("?")[0];
+  return !name || /[{}]/.test(name) ? "" : `${prefix}:${name}`;
+}
+
+/**
+ * Tell imgserv which extra icon sets the browser has, and upload the shapes
+ * the remote asked for that it did not have yet.
+ */
+export async function syncCustomIcons(hass) {
+  if (!hass?.callWS) return;
+  const registry = customIconRegistry();
+  const prefixes = Object.keys(registry)
+    .filter((k) => !NATIVE_SOURCE_TYPES.has(k) && typeof registry[k]?.getIcon === "function");
+  try {
+    const { missing = [] } = await hass.callWS({ type: "lizaip_config/sync_custom_icons", prefixes }) || {};
+    const icons = (await Promise.all(missing.map(({ prefix, name }) => customIconEntry(prefix, name))))
+      .filter(Boolean);
+    if (icons.length) await hass.callWS({ type: "lizaip_config/store_custom_icons", icons });
+  } catch (e) { /* an older backend, or none: nothing to keep in step */ }
+}
+
+/** `{set, term}` once *value* starts with a registered icon prefix, else null. */
+export function iconQuery(value, providers = iconProviders()) {
+  const m = /^([a-z0-9_-]+):([^?]*)$/.exec(String(value ?? "").trimStart());
+  return m && providers.includes(m[1]) ? { set: m[1], term: m[2].trim().toLowerCase() } : null;
+}
+
+/** Names containing *term*, those starting with it first, at most a screenful. */
+export function matchIconNames(names, term, limit = ICON_SUGGESTION_LIMIT) {
+  if (!term) return names.slice(0, limit);
+  const starts = [];
+  const contains = [];
+  for (const n of names) {
+    const i = n.indexOf(term);
+    if (i === 0) starts.push(n);
+    else if (i > 0) contains.push(n);
+    if (starts.length >= limit) break;
+  }
+  return starts.concat(contains).slice(0, limit);
+}
+
 /** The field's own error element. A `children` scan, not `:scope > …`, which
  *  is unsupported inside a shadow root and so matched nothing here. */
 const findFieldError = (host) =>
@@ -321,14 +479,22 @@ export const HelpersMixin = {
     // Only monochrome sources take a tint; a logo or a photo must keep its own
     // colours. A value carrying its own fg= has been coloured deliberately.
     const tintable = !!color && !val.includes("fg=") && (
-      val.startsWith("mdi:") || val.startsWith("text:") || val.startsWith("phu:") || !val.includes(":")
+      isIconSource(val) || val.startsWith("text:") || !val.includes(":")
     );
 
-    // logo:, text:, file:, media: are imgserv-only source types — not valid HA icon names.
-    // phu: and mdi: with embedded params (e.g. phu:sonos?fg=green) also need imgserv.
-    const needsImgserv = val.startsWith("logo:") || val.startsWith("text:") || val.startsWith("file:") ||
-      val.startsWith("media:") ||
-      (val.includes("?") && (val.startsWith("mdi:") || val.startsWith("phu:")));
+    // Every icon this panel draws is fetched from imgserv, whatever its source
+    // type: imgserv is what the page and the remote ask, so anything drawn
+    // another way here is a preview of a picture they may not get. `ha-icon`
+    // used to draw `mdi:` and the browser's own sets from the plugins loaded in
+    // *this* tab -- a vector, tinted by CSS, that looked right while the remote
+    // showed nothing. An extra set (`phu:`, `hue:`) shows it plainest: its
+    // shapes reach imgserv only by upload.
+    //
+    // A value with no source type at all is read as `mdi:`, the same assumption
+    // `_buildTileImgUrl` makes for the face.
+    const customKey = customIconKey(val);
+    if (customKey) this._ensureCustomIcon(val);
+    const source = val.includes(":") ? val : `mdi:${val}`;
 
     // External images go through imgserv so the preview matches what the device renders
     // (same proxy, same resize); HA-relative paths and data: URIs load directly.
@@ -337,16 +503,32 @@ export const HelpersMixin = {
     let src;
     if (this._isExternalUrl(val) || this._isImageUrl(val)) {
       src = this._iconImgSrc(val, size);
-    } else if (needsImgserv) {
-      src = this._imgservUrl(val, size, this._getThemeMode()) + (tintable ? `&fg=${encodeURIComponent(color)}` : "")
-        + (size === "title" && val.startsWith("text:") ? this._titleTextStyle(val) : "");
     } else {
-      // Tinted via CSS, not imgserv: keeps the vector instead of resampling.
-      const css = tintable ? this._cssColor(color) : "";
-      const colorStyle = css ? `;color:${css}` : "";
-      return `<ha-icon icon="${this._esc(val)}" style="--mdc-icon-size:${boxH}px${colorStyle}"></ha-icon>`;
+      src = this._imgservUrl(source, size, this._getThemeMode()) + (tintable ? `&fg=${encodeURIComponent(color)}` : "")
+        + (size === "title" && val.startsWith("text:") ? this._titleTextStyle(val) : "")
+        + (size === "tooltip" && val.startsWith("text:") && !/font(_size)?=/.test(val) ? this._textStyleQuery("tooltip") : "");
     }
-    return `<img src="${this._esc(src)}" alt="" style="width:${boxW}px;height:${boxH}px;object-fit:contain;border-radius:4px" />`;
+    return `<img src="${this._esc(src)}" alt=""${customKey ? ` data-icon-key="${this._esc(customKey)}"` : ""} style="width:${boxW}px;height:${boxH}px;object-fit:contain;border-radius:4px" />`;
+  },
+
+  /** Teach imgserv this value's shape, and repaint what asked for it too early. */
+  _ensureCustomIcon(val) {
+    ensureCustomIcon(this._hass, val, (key) => this._repaintCustomIcon(key));
+  },
+
+  /**
+   * Re-request the images drawn for *key*, now that imgserv has its shape.
+   *
+   * The `src` is unchanged, so a bare reassignment would repaint the 404 the
+   * browser already has; a throwaway parameter -- which imgserv ignores, it
+   * reading only the options it knows -- makes it a request it has not made.
+   */
+  _repaintCustomIcon(key) {
+    const sel = `img[data-icon-key="${(globalThis.CSS?.escape ?? ((s) => s))(key)}"]`;
+    this.shadowRoot?.querySelectorAll?.(sel).forEach((img) => {
+      const src = img.getAttribute?.("src") || "";
+      if (src) img.setAttribute("src", `${src.replace(/&_r=\d+/, "")}&_r=${Date.now()}`);
+    });
   },
 
   // What an icon field previews.
@@ -374,91 +556,246 @@ export const HelpersMixin = {
     // what to ask imgserv for and how much room to give the answer -- because a
     // wide box holding an image requested as a square would letterbox the very
     // difference it was widened to show.
-    const icon = imageVal || autoIcon;
+    let icon = String(imageVal || autoIcon || "").trim();
     const size = shape?.size ?? 28;
     const glyph = shape?.box?.h ?? 28;
+    // Words are drawn as words, as the device draws them: `text:` is implied
+    // for anything imgserv would not take as a picture. Encoded because it
+    // lands in the URL path, where a `?` would start a query of its own.
+    if (icon && !this._isMediaSource(icon)) icon = `text:${encodeURIComponent(icon)}`;
     if (icon) return this._renderIconHtml(icon, size, color, shape?.box ?? null);
     return `<span class="cch-preview-empty"><ha-icon icon="mdi:image-off-outline" style="--mdc-icon-size:${glyph}px;"></ha-icon></span>`;
   },
 
   /**
-   * One icon field, everywhere one is offered.
+   * Whether *value* names a picture rather than words to print.
    *
-   * There were five of these — the page title, the slider, a button's Image,
-   * the per-state rows under Button icons, and the action editor's state list —
-   * and they had drifted into five different gestures for the same decision. Two
-   * carried an Icon/URL toggle revealing one of a pair of inputs; one hid its
-   * picker behind a ✎ and offered a ✕ beside it; one drew its own empty
-   * placeholder; the sizes of the previews disagreed. The question each asked is
-   * identical: *which picture goes here*. So they ask it identically now.
-   *
-   * The toggles went first and took the most code with them. `ha-icon-picker`
-   * accepts a custom value, so a URL, a `logo:` or a `text:` label can be typed
-   * straight into it — every URL box on this panel was a second input guarding
-   * what the first could already do, and every mode button was bookkeeping for
-   * that box. Clearing the picker is what ✕ was for, so ✕ went too, and with the
-   * editor no longer hidden the ✎ had nothing left to reveal.
-   *
-   * `slotAttrs` rather than a second id parameter because the state rows are a
-   * list: they are found by `data-state`, not by an id that would repeat.
-   * `label` is escaped here because one caller passes a state name, which comes
-   * from the entity and is not ours; `hint` is not, because every caller passes
-   * translated panel text and one of them embeds markup in it.
+   * Mirrors `is_media_source` in const.py, which decides what the device is
+   * sent: URL schemes case-insensitively, imgserv source types exactly.
    */
-  _htmlIconField({ label, value = "", autoIcon = "", color = "", shape = null,
-                   previewClass = "", slotId = "", slotAttrs = "", hint = "" }) {
+  _isMediaSource(value) {
+    const v = String(value ?? "").trim();
+    const low = v.toLowerCase();
+    return ["http://", "https://", "ha://", "imgserv://", "local://", "data:"].some(p => low.startsWith(p))
+      || ["mdi:", "phu:", "logo:", "text:", "file:", "media:", "/"].some(p => v.startsWith(p))
+      || !!customIconSet(v);
+  },
+
+  /**
+   * One picture field, everywhere one is offered.
+   *
+   * The page title, a button's Image, its Tooltip, the slider and the
+   * per-state rows all ask the same question -- *what goes here* -- and take
+   * the same answers: anything imgserv draws (`mdi:`, `phu:`, `logo:`,
+   * `text:`, `file:`, `media:`, a URL), or plain words, which are drawn as
+   * `text:` without the prefix being written into the field.
+   *
+   * A plain text input, because a value has to be copyable out of one field
+   * and pastable into another. HA's icon picker showed a chosen icon as a chip
+   * with no text to select. Icon names are still offered, as a list under the
+   * input once it starts with a registered icon prefix; see `_wireMediaInput`.
+   *
+   * `value` is what the preview draws, `inputValue` what the input holds; they
+   * differ only for the tooltip, whose preview reads its `${…}` tokens.
+   * `label` is escaped here because one caller passes a state name, which
+   * comes from the entity and is not ours; `hint` and `action` are not,
+   * because every caller passes panel markup.
+   */
+  _htmlIconField({ label, value = "", inputValue = value, autoIcon = "", color = "", shape = null,
+                   previewClass = "", slotId = "", slotAttrs = "", hint = "",
+                   inputClass = "", placeholder = "", disabled = false, action = "" }) {
     // A variable is previewed as what it reads now; one with no value previews
-    // the derived icon, which is what the remote falls back to as well.
-    const preview = this._configImagePreviewHtml(this._resolveImageVariables(value) || "", autoIcon, color, shape);
+    // the derived icon, which is what the remote falls back to as well. The
+    // derived icon may hold variables too (an action's own icon).
+    const preview = this._configImagePreviewHtml(
+      this._resolveImageVariables(value) || "", this._resolveImageVariables(autoIcon) || "", color, shape,
+    );
+    // Every picture field explains its variables the same way, so a per-state
+    // icon says what it reads now just like the Image field does.
+    if (!hint && this._hasEntityToken(inputValue)) hint = this._imageVariableHint(inputValue);
+    const inputId = slotId ? `${slotId}-input` : "";
     return `
         <div class="config-field">
-          <label>${this._esc(label)}</label>
+          <label${inputId ? ` for="${inputId}"` : ""}>${this._esc(label)}</label>
           <div class="icon-picker-row">
             <div class="icon-preview${previewClass ? ` ${previewClass}` : ""}">${preview}</div>
-            <div class="icon-picker-slot"${slotId ? ` id="${slotId}"` : ""}${slotAttrs ? ` ${slotAttrs}` : ""} data-label="${this._esc(label)}"></div>
+            <div class="icon-picker-slot"${slotId ? ` id="${slotId}"` : ""}${slotAttrs ? ` ${slotAttrs}` : ""} data-label="${this._esc(label)}">${this._htmlMediaInput({ id: inputId, value: inputValue, label, inputClass, placeholder, disabled })}</div>${action}
           </div>${hint ? `
           <span class="config-field-hint">${hint}</span>` : ""}
         </div>`;
   },
 
+  /** "Now reads …" plus the variable hint, for a picture field holding `${…}`. */
+  _imageVariableHint(value) {
+    const now = this._resolveImageVariables(value);
+    return `${now ? this._t("label_now_reads", { text: this._esc(now) }) : ""}${this._t("variable_hint")}`;
+  },
+
+  _htmlMediaInput({ id = "", value = "", label = "", inputClass = "", placeholder = "", disabled = false }) {
+    return `<input type="text" class="liza-media-input${inputClass ? ` ${inputClass}` : ""}"${id ? ` id="${id}"` : ""} value="${this._esc(value)}"${placeholder ? ` placeholder="${this._esc(placeholder)}"` : ""}${label ? ` aria-label="${this._esc(label)}"` : ""} autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"${disabled ? " disabled" : ""} /><ul class="liza-media-suggest" role="listbox" popover="manual"${label ? ` aria-label="${this._esc(label)}"` : ""} hidden></ul>`;
+  },
+
   /**
-   * Mount the picker `_htmlIconField` left room for.
+   * Wire the input `_htmlIconField` rendered into *slot*.
    *
-   * Assigning `value` is display only: `ha-icon-picker` fires `value-changed`
-   * on user input, never on assignment, so preselecting a *derived* icon shows
-   * the user what the device will draw without writing it down as a choice they
-   * made. That distinction is the whole reason the field can show a stand-in at
-   * full strength and still mean "nothing stored here".
-   *
-   * `stopPropagation` because the event would otherwise reach the panel's own
-   * listeners as though a different control had changed.
+   * *value* is what the field shows. For a button's Image that may be the
+   * derived icon: showing it is display only, because a commit happens only
+   * when the text differs from what the field was opened with. *onChange*
+   * receives the trimmed new value.
    */
   _mountIconPicker(slot, value, onChange) {
     if (!slot) return null;
-    const picker = document.createElement("ha-icon-picker");
-    picker.hass = this._hass;
-    // The field's <label> cannot reach the <input> inside the picker's shadow
-    // root -- `for` does not cross that boundary and neither does aria-label --
-    // so without this the control the user actually focuses has no name at all
-    // and is announced as a bare edit field. `label` is HA's own API for it.
-    //
-    // Read off the slot rather than walked up to: the same name the <label>
-    // was rendered from is put there by _htmlIconField, so the two cannot
-    // drift, and the mount does not need a live tree to find it.
-    const name = (slot.dataset?.label || "").trim();
-    if (name) picker.label = name;
-    // Nothing on the picker says which field it is -- no id, class or data --
-    // so after a render there was no selector to find it by and focus left the
-    // card for the page instead of coming back here.
-    const key = slot.id || name;
-    if (key && picker.dataset) picker.dataset.a11yPicker = key;
-    picker.value = value || "";
-    picker.addEventListener("value-changed", (ev) => {
-      ev.stopPropagation();
-      onChange(ev.detail.value || "");
+    let input = slot.querySelector?.("input.liza-media-input") || null;
+    if (!input) {
+      slot.innerHTML = this._htmlMediaInput({ label: slot.dataset?.label || "" });
+      input = slot.querySelector?.("input.liza-media-input") || null;
+      if (!input) return null;
+    }
+    // The selector focus restoration finds the field by after a render.
+    const key = slot.id || (slot.dataset?.label || "").trim();
+    if (key && input.dataset) input.dataset.a11yPicker = key;
+    input.value = value || "";
+    this._wireMediaInput(input, slot.querySelector?.(".liza-media-suggest") || null, onChange);
+    return input;
+  },
+
+  /**
+   * Commit on Enter or leaving the field; Escape puts it back.
+   *
+   * A value is committed whole, never per keystroke: a half-typed
+   * `mdi:lightb` is not an icon, and pushed to the remote it would draw as
+   * nothing between keystrokes.
+   *
+   * Once the text starts with a registered icon prefix (`mdi:`, `phu:`, ...) a list of matching names
+   * opens under it. Picking one commits at once -- the choice is complete.
+   * The list never opens for anything else, so typing words or pasting a URL
+   * is never interrupted by suggestions that cannot apply.
+   */
+  _wireMediaInput(input, list, onCommit) {
+    let pristine = input.value.trim();
+    let matches = [];
+    let active = -1;
+    // Bumped by every open and close, so a slow answer for text that has
+    // since changed is dropped rather than shown.
+    let seq = 0;
+    const listId = list ? (list.id ||= `liza-media-${++_mediaListSeq}`) : "";
+
+    // The cards clip their content (overflow: hidden), so a list hanging off
+    // the field would be cut at the card's edge and arrowing would move into
+    // options nobody can see. It is shown in the top layer instead, placed
+    // against the field, below it or above when there is no room below.
+    const place = () => {
+      const r = input.getBoundingClientRect?.();
+      if (!r || !list) return;
+      const room = (globalThis.innerHeight || 0) - r.bottom;
+      const above = room < 200 && r.top > room;
+      list.style.left = `${r.left}px`;
+      list.style.width = `${r.width}px`;
+      list.style.top = above ? "auto" : `${r.bottom + 2}px`;
+      list.style.bottom = above ? `${(globalThis.innerHeight || 0) - r.top + 2}px` : "auto";
+    };
+    const follow = () => { if (matches.length) place(); };
+    const unfollow = () => {
+      globalThis.removeEventListener?.("scroll", follow, true);
+      globalThis.removeEventListener?.("resize", follow);
+    };
+    const close = () => {
+      seq += 1;
+      matches = [];
+      active = -1;
+      unfollow();
+      if (list) {
+        try { if (list.matches?.(":popover-open")) list.hidePopover(); } catch (e) { /* not a popover here */ }
+        list.hidden = true;
+        list.innerHTML = "";
+      }
+      input.setAttribute?.("aria-expanded", "false");
+      input.removeAttribute?.("aria-activedescendant");
+    };
+    const commit = (raw) => {
+      close();
+      const val = String(raw ?? "").trim();
+      if (val === pristine) return;
+      pristine = val;
+      // An extra icon set's shape goes to imgserv first, so the preview the
+      // save repaints -- and the remote -- find it there.
+      if (customIconSet(val)) uploadCustomIcon(this._hass, val).finally(() => onCommit(val));
+      else onCommit(val);
+    };
+    const highlight = (idx) => {
+      active = idx;
+      list?.querySelectorAll?.(".liza-media-option").forEach((li, i) => {
+        const on = i === idx;
+        li.setAttribute?.("aria-selected", on ? "true" : "false");
+        // A class beside the ARIA state: the attribute is what a screen reader
+        // reads, the class is what the stylesheet selects on. Styling the
+        // attribute alone put the only visible highlight behind an attribute
+        // selector, with nothing left to show if that one rule was dropped.
+        li.classList?.toggle?.("active", on);
+        if (on) li.scrollIntoView?.({ block: "nearest" });
+      });
+      if (idx >= 0) input.setAttribute?.("aria-activedescendant", `${listId}-${idx}`);
+      else input.removeAttribute?.("aria-activedescendant");
+    };
+    const open = async () => {
+      const query = iconQuery(input.value);
+      if (!query || !list) return close();
+      const mine = ++seq;
+      let names = [];
+      try { names = await iconNameList(query.set); } catch (e) { /* no list, no suggestions */ }
+      if (mine !== seq) return;
+      matches = matchIconNames(names, query.term).map(n => `${query.set}:${n}`);
+      if (!matches.length) return close();
+      list.innerHTML = matches.map((v, i) =>
+        `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(v)}" aria-selected="false">${this._renderIconHtml(v, 20)}<span>${this._esc(v)}</span></li>`,
+      ).join("");
+      list.hidden = false;
+      place();
+      try { if (!list.matches?.(":popover-open")) list.showPopover?.(); } catch (e) { /* not a popover here */ }
+      globalThis.addEventListener?.("scroll", follow, true);
+      globalThis.addEventListener?.("resize", follow);
+      input.setAttribute?.("aria-controls", listId);
+      input.setAttribute?.("aria-expanded", "true");
+      active = -1;
+    };
+
+    input.addEventListener("input", open);
+    input.addEventListener("keydown", (e) => {
+      const isOpen = matches.length > 0;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!isOpen) {
+          open().then(() => { if (matches.length) highlight(0); });
+          return;
+        }
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        // From nothing selected, ArrowUp means the last option. Counting from
+        // -1 instead landed on the second to last and the list could never be
+        // entered from the bottom.
+        highlight(active < 0
+          ? (step > 0 ? 0 : matches.length - 1)
+          : (active + step + matches.length) % matches.length);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (isOpen && active >= 0) input.value = matches[active];
+        commit(input.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        // Two steps, like any combobox: close the list, then undo the edit.
+        if (isOpen) close();
+        else input.value = pristine;
+      }
     });
-    slot.appendChild(picker);
-    return picker;
+    input.addEventListener("blur", () => commit(input.value));
+    // Pressing a suggestion would blur the input first and commit the
+    // half-typed text before the pick arrives.
+    list?.addEventListener("mousedown", (e) => e.preventDefault());
+    list?.addEventListener("click", (e) => {
+      const li = e.target?.closest?.(".liza-media-option");
+      if (!li) return;
+      input.value = li.dataset.value;
+      commit(input.value);
+    });
   },
 
   /** Build a safe /api/imgserv URL, correctly joining params when `icon` already contains `?`.
@@ -523,9 +860,9 @@ export const HelpersMixin = {
     if (!icon) return "";
     let src;
     const mode = this._getThemeMode();
-    const tintable = !!color && !icon.includes("fg=") && /^(mdi:|phu:|text:)/.test(icon);
+    const tintable = !!color && !icon.includes("fg=") && (isIconSource(icon) || icon.startsWith("text:"));
     const fg = tintable ? `&fg=${encodeURIComponent(color)}` : "";
-    if (icon.startsWith("mdi:") || icon.startsWith("text:") || icon.startsWith("logo:") || icon.startsWith("phu:") || icon.startsWith("file:") || icon.startsWith("media:")) {
+    if (isIconSource(icon) || icon.startsWith("text:") || icon.startsWith("logo:") || icon.startsWith("file:") || icon.startsWith("media:")) {
       src = this._imgservUrl(icon, "title", mode) + fg
         + (icon.startsWith("text:") ? this._titleTextStyle(icon) : "");
     } else if (icon.startsWith("imgserv://")) {
@@ -939,10 +1276,13 @@ export const HelpersMixin = {
   // target lives on whichever button uses one. The service's own domain is the
   // honest answer here, not a guess borrowed from an arbitrary button.
   _getActionDisplayIcon(action) {
-    if (action.icon) return action.icon;
+    const own = this._resolveImageVariables(action.icon);
+    if (own) return own;
     if (action.states && action.states.length > 0) {
-      const withIcon = action.states.find(s => s.icon);
-      if (withIcon) return withIcon.icon;
+      for (const row of action.states) {
+        const icon = this._resolveImageVariables(row?.icon);
+        if (icon) return icon;
+      }
     }
     if (action.service) {
       const { attribute, states: derivedStates } = this._getStatesForAction(action);
@@ -1206,7 +1546,8 @@ export const HelpersMixin = {
     const SCHEMES = ["text:", "mdi:", "logo:", "phu:", "file:", "media:",
                      "imgserv://", "http://", "https://", "data:"];
     const low = raw.toLowerCase();
-    const scheme = SCHEMES.find(s => low.startsWith(s)) || "";
+    const scheme = SCHEMES.find(s => low.startsWith(s))
+      || (customIconSet(raw) ? `${customIconSet(raw)}:` : "");
     let value = raw.slice(scheme.length);
 
     if (scheme === "imgserv://") return this._pageTitle({ image: value });
@@ -1217,13 +1558,14 @@ export const HelpersMixin = {
     value = value.trim();
     if (!value) return "";
 
-    if (scheme === "mdi:" || scheme === "logo:" || scheme === "phu:") {
+    if (scheme === "mdi:" || scheme === "logo:" || scheme === "phu:" || (scheme && !SCHEMES.includes(scheme))) {
       return this._humanisePageSlug(value);
     }
     // A slash the user typed is part of their words ("AC/DC"), not a path.
     if (scheme === "text:") return value;
+    // Schemeless is words, as the device draws it, unless it is an HA path.
+    if (!scheme && !value.startsWith("/")) return value;
     const EXT = /\.[a-z0-9]{2,4}$/i;
-    if (!scheme && !value.startsWith("/") && !EXT.test(value)) return value;
 
     const segment = this._humanisePageSlug(
       value.replace(/\/+$/, "").split(/[/:]/).pop().replace(EXT, ""),
@@ -1484,9 +1826,10 @@ export const HelpersMixin = {
     // to whichever button created it. A generic mdi: icon carries no item
     // identity and stays usable — an unconfigured play_media is still honestly
     // "a media play", so it shows a play icon rather than a bare "?".
-    if (action?.icon
-        && !(this._isPayloadService(service) && this._isBorrowedIdentityIcon(action.icon))) {
-      return action.icon;
+    const actionIcon = this._resolveImageVariables(action?.icon);
+    if (actionIcon
+        && !(this._isPayloadService(service) && this._isBorrowedIdentityIcon(actionIcon))) {
+      return actionIcon;
     }
     if (service) {
       const eid = this._getTargetEntityFromConfig(a.config) || "";
@@ -1606,6 +1949,29 @@ export const HelpersMixin = {
   // `ENTITY_TOKEN_RE` in const.py.
   ENTITY_TOKEN_RE: /\$\{\s*([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?\s*\}/g,
 
+  // Mirror `WEATHER_CONDITION_ICONS` / `WEATHER_CONDITION_LABELS` in const.py.
+  WEATHER_CONDITION_ICONS: {
+    "clear-night": "weather-night", cloudy: "weather-cloudy", exceptional: "weather-cloudy-alert",
+    fog: "weather-fog", hail: "weather-hail", lightning: "weather-lightning",
+    "lightning-rainy": "weather-lightning-rainy", partlycloudy: "weather-partly-cloudy",
+    pouring: "weather-pouring", rainy: "weather-rainy", snowy: "weather-snowy",
+    "snowy-rainy": "weather-snowy-rainy", sunny: "weather-sunny", windy: "weather-windy",
+    "windy-variant": "weather-windy-variant",
+  },
+  WEATHER_CONDITION_LABELS: {
+    "clear-night": "Clear, night", cloudy: "Cloudy", exceptional: "Exceptional", fog: "Fog",
+    hail: "Hail", lightning: "Lightning", "lightning-rainy": "Lightning, rainy",
+    partlycloudy: "Partly cloudy", pouring: "Pouring", rainy: "Rainy", snowy: "Snowy",
+    "snowy-rainy": "Snowy, rainy", sunny: "Sunny", windy: "Windy", "windy-variant": "Windy, cloudy",
+  },
+
+  /** The icon slug for a weather entity's condition. Mirrors `weather_condition_icon`. */
+  _weatherConditionIcon(entityId) {
+    if (!entityId.startsWith("weather.")) return null;
+    const state = this._hass?.states?.[entityId]?.state;
+    return Object.hasOwn(this.WEATHER_CONDITION_ICONS, state) ? this.WEATHER_CONDITION_ICONS[state] : null;
+  },
+
   _formatEntityValue(value) {
     if (value === null || value === undefined) return "";
     if (typeof value === "boolean") return value ? "on" : "off";
@@ -1627,6 +1993,10 @@ export const HelpersMixin = {
     if (attribute) return this._formatEntityValue(st.attributes?.[attribute]);
     let value = st.state;
     if (typeof value !== "string" || ["", "unknown", "unavailable"].includes(value)) return "";
+    if (withUnit && entityId.startsWith("weather.") && Object.hasOwn(this.WEATHER_CONDITION_LABELS, value)) {
+      const label = this._hass?.formatEntityState?.(st);
+      return typeof label === "string" && label && label !== value ? label : this.WEATHER_CONDITION_LABELS[value];
+    }
     const precision = this._hass?.entities?.[entityId]?.display_precision;
     if (Number.isInteger(precision) && precision >= 0 && value.trim() !== "" && !Number.isNaN(Number(value))) {
       value = Number(value).toFixed(precision);
@@ -1653,7 +2023,16 @@ export const HelpersMixin = {
     // A unit belongs in drawn text, never in a name. Mirrors the Python.
     const prefix = image.split("${")[0];
     const withUnit = prefix.toLowerCase().startsWith("text:") || !prefix.includes(":");
-    const out = image.replace(this.ENTITY_TOKEN_RE, (_, eid, attr) => {
+    const whole = new RegExp(`^${this.ENTITY_TOKEN_RE.source}$`).test(image.trim());
+    const out = image.replace(this.ENTITY_TOKEN_RE, (_, eid, attr, offset) => {
+      const icon = attr ? null : this._weatherConditionIcon(eid.toLowerCase());
+      if (icon) {
+        // Mirrors `with_resolved_image`: a weather condition is drawn as its icon.
+        const before = image.slice(0, offset).toLowerCase();
+        if (whole) return `mdi:${icon}`;
+        if (before.endsWith("mdi:weather-")) return icon.slice("weather-".length);
+        if (before.endsWith("mdi:")) return icon;
+      }
       const v = this._entityTokenValue(eid.toLowerCase(), attr, withUnit);
       if (!v) missing = true;
       return v;

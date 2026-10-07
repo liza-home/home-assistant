@@ -16,12 +16,14 @@
  *   - liza-remote-buttons-view.js — Buttons tab HTML + wiring
  *   - liza-remote-actions-view.js — Actions tab HTML + wiring
  *   - liza-remote-styles.js    — CSS styles
+ *   - liza-remote-stylesheet.js — adopts those styles onto the shadow root
  *   - liza-remote-svg.js       — SVG rendering
  */
 
 import { STYLES } from "./liza-remote-styles.js";
+import { adoptStyles } from "./liza-remote-stylesheet.js";
 import { DataMixin } from "./liza-remote-data.js";
-import { HelpersMixin } from "./liza-remote-helpers.js";
+import { HelpersMixin, syncCustomIcons } from "./liza-remote-helpers.js";
 import { A11yMixin } from "./liza-remote-a11y.js";
 import { I18nMixin } from "./liza-remote-i18n.js";
 import { StatesMixin } from "./liza-remote-states.js";
@@ -39,6 +41,11 @@ class LizaRemotePanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    // Parsed once and carried by the root itself, so the renders below can
+    // replace the markup without the stylesheet being read again. Falsy only
+    // where constructable stylesheets are missing, and then each render
+    // inlines the `<style>` tag it always did.
+    this._stylesAdopted = adoptStyles(this.shadowRoot);
     this._hass = null;
     this._narrow = false;
     this._devices = [];
@@ -55,6 +62,20 @@ class LizaRemotePanel extends HTMLElement {
     this._currentPageIdx = 0;
     this._pageCache = {};
     this._selectedButtonIdx = -1;
+    // Which press rows are expanded, keyed `buttonKey:index`. Lives on the
+    // panel, not in the DOM, because `_refreshButtonEntitySections` rebuilds
+    // whole subtrees while the user is working -- a row they opened would
+    // otherwise shut itself the moment they typed in it.
+    //
+    // Collapsed is the default because the list grows with the cycle -- six
+    // presses is six headings and twelve fields, which buries the action list
+    // the presses actually come from. The exception is a press just added:
+    // `_applyCycle` opens it, because adding a step and then having to hunt
+    // for its row is the one moment the user certainly wants it open.
+    //
+    // Keyed by button so switching selection needs no reset: the rows of a
+    // button the user left open are still open when they come back to it.
+    this._openPresses = new Set();
     // The grid button providing context for the fixed buttons, or null for
     // "page defaults". The second half of a two-level selection:
     // `_selectedButtonIdx` says what is being edited, `_contextKey` says under
@@ -497,9 +518,11 @@ class LizaRemotePanel extends HTMLElement {
       if (this._lastThemeMode !== mode) {
         this._lastThemeMode = mode;
         this._render();
-      } else if (this._activeTab === "buttons") {
-        this._refreshButtonIcons();
       } else if (this._activeTab === "actions") {
+        // The buttons tab has no counterpart here: its icons are the SVG face
+        // tiles, refreshed below. The call that stood here walked `.button-row`,
+        // which nothing has rendered since the list view was removed -- so it
+        // ran a query per state change to find nothing, several times a second.
         this._refreshActionIcons();
       }
     }
@@ -545,6 +568,8 @@ class LizaRemotePanel extends HTMLElement {
       this._loadIconDefaults();
       this._loadPalette();
       this._loadInternalCommands();
+      // Extra icon sets live in the browser; imgserv needs their shapes.
+      syncCustomIcons(this._hass);
       // One round-trip, not three. These three fetches share no state and no
       // ordering: each writes its own field and swallows its own failure, so
       // running them in sequence bought nothing and cost two extra serialised
@@ -831,7 +856,12 @@ class LizaRemotePanel extends HTMLElement {
     if (tab === "buttons") {
       this._editingActionIdx = -1;
     } else if (tab === "actions") {
-      this._loadGlobalUsage().then(() => this._render());
+      // The unconditional render below paints the tab now, rather than leaving
+      // the user on the old one until a websocket round trip comes back. This
+      // one is for what that round trip brought — so it only runs when the
+      // round trip brought something, instead of rendering the panel twice on
+      // every visit to the tab.
+      this._loadGlobalUsage().then((changed) => { if (changed) this._render(); });
     } else if (tab === "debug") {
       this._enterDebugTab?.();
     } else if (tab === "settings") {
@@ -860,7 +890,7 @@ class LizaRemotePanel extends HTMLElement {
     // any context rather than navigating into a nested state nothing linked to.
     this._contextKey = this._mayBeContext(btn.key) ? btn.key : null;
     const assign = this._editAssign(btn.key);
-    this._sequence = assign?.config ? [...assign.config] : [];
+    this._sequence = this._cycleSequence(assign, btn.key);
     this._editorEl = null;
     this._render();
     requestAnimationFrame(() => {
@@ -906,7 +936,7 @@ class LizaRemotePanel extends HTMLElement {
       // default into the editor would show the wrong config and then overwrite
       // the override with it on the first keystroke.
       const assign = this._editAssign(btn.key);
-      this._sequence = assign?.config ? [...assign.config] : [];
+      this._sequence = this._cycleSequence(assign, btn.key);
       this._editorEl = null;
     }
     const listCard = this.shadowRoot?.querySelector(".button-list-card");
@@ -936,12 +966,37 @@ class LizaRemotePanel extends HTMLElement {
     ev.stopPropagation();
     const value = ev.detail?.value;
     if (!Array.isArray(value)) return;
-    this._sequence = value.length > 0 ? [value[0]] : [];
+    const key = this._selectedButton?.key;
+    const cycling = this._cycleEnabled(key);
+    // Cycling, every action in the list is a press and the list is kept whole.
+    // Otherwise the cap still holds: the editor shows one action because the
+    // button runs one action.
+    this._sequence = cycling
+      ? value.slice()
+      : (value.length > 0 ? [value[0]] : []);
     if (this._editorEl && this._editorEl.actions !== this._sequence) {
       this._editorEl.actions = this._sequence;
     }
     if (this._editorEl) this._enforceSingleAction(this._editorEl);
+    // What the presses looked like *before* this event, taken now because the
+    // commit below is about to overwrite part of it: `_syncToggleFirstStep`
+    // rewrites `rules[0].config` to the new press 1 while leaving its icon and
+    // tooltip alone, so by the time `_applyCycle` ran, slot 0 was the incoming
+    // action wearing the outgoing appearance -- and matching against that
+    // handed press 1's old icon to whichever press had just been dragged into
+    // its place. Deep-copied so the commit cannot reach into it afterwards.
+    const prevRules = cycling
+      ? (this._toggleRules(key) || []).map(r => JSON.parse(JSON.stringify(r)))
+      : null;
+    // Press 1's face, before anything touches it. Taken ahead of the commit
+    // because the commit is one of the things that may rewrite it.
+    const faceBefore = cycling ? this._pressOneFace(key) : "";
+    // Order matters. `_commitCurrentToAssignment` resolves press 1 into
+    // `config` and `action_id`; `_applyCycle` then copies that into `rules[0]`
+    // and writes the rest, so it has to run second or step 1 would be built
+    // from an assignment that has not been updated yet.
     this._commitCurrentToAssignment();
+    if (cycling) this._applyCycle(key, prevRules);
     this._scheduleAutoSave();
     this._refreshSVG();
 
@@ -958,11 +1013,194 @@ class LizaRemotePanel extends HTMLElement {
     // just going from none to one — so this compares values instead of testing
     // for emptiness. Losing the entity (-> "") is a change like any other, and
     // the sections disappear.
+    //
+    // The press rows refresh for a second reason: each row is titled by what
+    // its press does, and a press with no row is a press whose icon and
+    // tooltip cannot be reached.
+    //
+    // Compared by *content*, not by length. Dragging a press to a new position
+    // leaves the count alone and renames every row it passed, so a length test
+    // left the titles describing the order the list used to be in.
     const entity = this._entityOfSelectedButton();
-    if (entity !== this._lastSectionsEntity) {
+    const sig = this._cycleSignature();
+    // Press 1's face moving is the one change the partial refresh cannot
+    // carry. Its Image is inside the refreshed host, but its Tooltip is
+    // deliberately a sibling of that host -- so that an entity change cannot
+    // throw away a name typed and not yet confirmed -- and nothing else
+    // rewrites it. Reorder press 1 away and the row updated its heading, its
+    // glyph and every other press, while the Tooltip underneath went on
+    // showing the wording of the press that used to lead: a row contradicting
+    // itself, and the stale text committed back the next time the field was
+    // left.
+    //
+    // Re-rendered whole instead. The reason the card patches rather than
+    // renders is the action editor, which must not be rebuilt under someone
+    // typing in it -- but a face only moves when a press is dropped, added or
+    // deleted, and none of those happen mid-keystroke. The partial path still
+    // handles every other case, which is all of the frequent ones.
+    if (cycling && this._pressOneFace(key) !== faceBefore) {
       this._lastSectionsEntity = entity;
+      this._lastCycleSig = sig;
+      this._render();
+    } else if (entity !== this._lastSectionsEntity || (cycling && sig !== this._lastCycleSig)) {
+      this._lastSectionsEntity = entity;
+      this._lastCycleSig = sig;
       this._refreshButtonEntitySections();
     }
+  }
+
+  /**
+   * Press 1's stored appearance, as one comparable string.
+   *
+   * Image and tooltip together, because they move together: a press carries
+   * both or neither. Null-separated so a value ending where the next begins
+   * cannot read as a different pair.
+   */
+  _pressOneFace(key) {
+    const a = this._editAssign?.(key);
+    return `${a?.image || ""}\u0000${a?.label || ""}`;
+  }
+
+  /**
+   * What the press rows are drawn from, as one comparable string.
+   *
+   * Only the things a row shows: the service each press calls, in order. An
+   * edit *inside* a press -- retargeting it, changing its data -- does not
+   * rename its row, so including those would rebuild the rows on keystrokes
+   * that change nothing about them.
+   */
+  _cycleSignature() {
+    return (this._sequence || [])
+      .map(step => this._stepService([step]) || "?")
+      .join("|");
+  }
+
+  /**
+   * Write the editor's action list back out as the button's presses.
+   *
+   * `rules[0]` is press 1 and must stay equal to `config`, which
+   * `_commitCurrentToAssignment` has just resolved -- so it is copied from the
+   * assignment rather than rebuilt from the list, and carries the same
+   * `action_id`. Presses 2..N come from the rest of the list.
+   *
+   * Icons and tooltips travel with the *action*, not with the slot.
+   *
+   * They used to be carried across by index, on the argument that press 2
+   * should keep looking like press 2. That held while the only way to change
+   * the list was to retype it. Once the list could be dragged -- and once the
+   * summary drew each press's glyph and its name side by side -- it stopped
+   * holding: dragging Pause above Play left the pause glyph sitting on Play,
+   * and the chip read "1. Playing" under a pause icon. The icon is a picture
+   * *of the action*; an action that moves has to take its picture with it.
+   *
+   * Matched on the press's config, so a reorder is an exact match and every
+   * press keeps what the user gave it. Press 1 included: its face is stored on
+   * the assignment rather than on its rule, so it is lent to the matcher going
+   * in and written back coming out. A press whose config has *changed*
+   * matches nothing, and falls back to whatever was in its slot: that is the
+   * user retargeting the step they are working on, and their tooltip should
+   * survive them changing their mind about which light it points at. Slots
+   * already claimed by a match are not offered again, so an inserted press
+   * cannot inherit the appearance of one that is still on screen.
+   *
+   * Below two presses there is no cycle -- that is just the button's own
+   * action, which `config` already holds. The block is deleted rather than
+   * left at one rule, because `sanitize_toggle` reads presence as "this button
+   * toggles" and a one-rule block would claim that while doing nothing.
+   */
+  _applyCycle(key, prevRules = null) {
+    const target = this._editAssignEnsure(key);
+    if (!target) return;
+    if (this._sequence.length < 2) { delete target.toggle; return; }
+    // The caller's snapshot when there is one -- see `_onSequenceChanged`, the
+    // live block has had `rules[0].config` rewritten by then. Falling back to
+    // the live block keeps the method usable on its own.
+    const prevRaw = Array.isArray(prevRules)
+      ? prevRules
+      : (Array.isArray(target.toggle?.rules) ? target.toggle.rules : []);
+    // Press 1 wears the assignment's own `image` and `label`; `rules[0].icon`
+    // is never read. So to the matcher slot 0 looked faceless, and only half a
+    // reorder happened: dragging Stop to the top moved `mdi:stop` onto a
+    // `rules[0].icon` nothing renders, left `mdi:play` sitting on the button,
+    // and gave Play's new row nothing at all. Lending slot 0 the assignment's
+    // face lets it be matched and moved like any other press.
+    //
+    // Seeded onto a copy -- the caller's snapshot is not ours to edit.
+    const prev = prevRaw.map((r, i) => (i === 0
+      ? { ...r, icon: r.icon || target.image || "", label: r.label || target.label || "" }
+      : r));
+    const rules = this._sequence.map((step, i) => ({
+      config: i === 0
+        ? JSON.parse(JSON.stringify(target.config || [step]))
+        : [JSON.parse(JSON.stringify(step))],
+    }));
+
+    // Exact matches first, every one of them, before any slot is handed out on
+    // position. One pass would let an inserted press claim slot 0 on position
+    // and leave the press that actually belongs there to inherit its
+    // neighbour's icon -- the whole row shifted by one, which is the failure
+    // this change exists to prevent.
+    const taken = new Set();
+    const from = new Array(rules.length).fill(null);
+    rules.forEach((rule, i) => {
+      const want = JSON.stringify(rule.config);
+      const at = prev.findIndex((r, j) => !taken.has(j) && JSON.stringify(r.config) === want);
+      if (at !== -1) { taken.add(at); from[i] = prev[at]; }
+    });
+    rules.forEach((_, i) => {
+      if (from[i] || taken.has(i) || !prev[i]) return;
+      taken.add(i);
+      from[i] = prev[i];
+    });
+
+    // A press with no source after both passes is a genuinely new one: no
+    // step matched it and no slot was free to inherit from. Open its row, so
+    // a step the user has just added is a step whose Image and Tooltip are in
+    // front of them rather than one heading down a collapsed list.
+    //
+    // Retargeting a press in place does not count -- it still takes `prev[i]`
+    // on the positional pass -- so editing an existing step never springs its
+    // row open under the user.
+    from.forEach((was, i) => {
+      if (i > 0 && !was) this._openPresses?.add(`${key}:${i}`);
+    });
+
+    rules.forEach((rule, i) => {
+      const was = from[i];
+      if (was?.icon) rule.icon = was.icon;
+      if (was?.label) rule.label = was.label;
+      // Resolve-or-create, exactly as press 1 does. `action_id` is what the
+      // Actions view counts uses by, so a press without one is a press the
+      // library thinks nobody is using -- which is how an action still on a
+      // button gets reported as safe to delete. Skipped for a press that calls
+      // no service -- a delay, a condition -- which has no entry to be.
+      const id = i === 0
+        ? target.action_id
+        : (this._stepService(rule.config) ? this._resolveAction(rule.config).id : "");
+      if (id) rule.action_id = id; else delete rule.action_id;
+    });
+
+    // ...and back out again. Press 1's face is stored on the assignment, so the
+    // one it just won has to be written there; left on `rules[0].icon` it would
+    // be invisible and the row would go on showing the press that used to lead.
+    //
+    // Only when there was a cycle to reorder. A button with one action and an
+    // image gains its first cycle with `prev` empty and slot 0 never in play,
+    // and clearing on that path would wipe the image off every button the
+    // moment it got a second action. Once there is a cycle, slot 0 takes part
+    // like any other: a press inserted at the front matched nothing and starts
+    // blank, exactly as a press inserted anywhere else does.
+    if (prev.length) {
+      const lead = rules[0];
+      if (lead.icon) target.image = lead.icon; else delete target.image;
+      // A name that travelled in with a press is one the user typed, and the
+      // flag is what stops the generated name overwriting it on next render.
+      if (lead.label) { target.label = lead.label; target.label_edited = true; }
+      else { delete target.label; delete target.label_edited; }
+      delete lead.icon;
+      delete lead.label;
+    }
+    target.toggle = { mode: "cycle", rules };
   }
 
   // The entity the selected button currently resolves to, or "" for none.
@@ -1013,22 +1251,19 @@ class LizaRemotePanel extends HTMLElement {
     // Resolve/create action in library. Matching on the service alone made every
     // play_media button collapse onto the first play_media entry in the library —
     // which is how a button ends up wearing another button's name and artwork.
-    const step = this._sequence[0];
-    const service = this._stepService(this._sequence);
-    let action = this._findMatchingAction(this._sequence);
-    if (!action) {
-      const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36);
-      action = { id, name: this._deriveActionName(service), service, states: [] };
-      if (this._isPayloadService(service)) action.payload_identity = this._payloadIdentity(step.data);
-      this._actions.push(action);
-    }
+    //
+    // Press 1, not the whole cycle. While cycling, `_sequence` holds one action
+    // per press and only the first of them is what the *button* is.
+    const seq = this._clickSequence();
+    const service = this._stepService(seq);
+    const action = this._resolveAction(seq);
 
-    const entity = this._getTargetEntityFromConfig(this._sequence);
+    const entity = this._getTargetEntityFromConfig(seq);
     const prevPayload = this._getPayloadDisplay(existing.config);
-    const nextPayload = this._getPayloadDisplay(this._sequence);
+    const nextPayload = this._getPayloadDisplay(seq);
 
     existing.action_id = action.id;
-    existing.config = this._sequence;
+    existing.config = seq;
 
     // Remember what the command's target was called, while it still resolves.
     // The dropdown stores a page id, so once that page is deleted the button
@@ -1037,8 +1272,8 @@ class LizaRemotePanel extends HTMLElement {
     // the target is already broken must not overwrite a good remembered name
     // with the id-derived stand-in. A button that stops being an internal
     // command clears it, so a stale hint cannot outlive what it described.
-    if (!this._internalCommandProblem(this._sequence, service)) {
-      const targetName = this._internalCommandTargetName(this._sequence, service);
+    if (!this._internalCommandProblem(seq, service)) {
+      const targetName = this._internalCommandTargetName(seq, service);
       if (targetName) existing.internal_target_name = targetName;
       else delete existing.internal_target_name;
     }
@@ -1047,7 +1282,7 @@ class LizaRemotePanel extends HTMLElement {
     // with the payload the user just picked. An empty auto label means we have
     // nothing better to say — keep whatever the layout or the user already set
     // rather than blanking it.
-    const autoLabel = this._computeLabel(action, entity, this._sequence);
+    const autoLabel = this._computeLabel(action, entity, seq);
     existing.label = typedName || autoLabel || existing.label || "";
     if (customName) existing.label_edited = true;
 
@@ -1061,6 +1296,39 @@ class LizaRemotePanel extends HTMLElement {
     // override table rather than overwriting the page default with it.
     this._editAssignEnsure(btn.key);
     Object.assign(this._editAssign(btn.key), existing);
+    // The card renders `rules[0]` through this editor, and the executor runs
+    // `rules[position]` — so an action edited here has to reach step 1 too, or
+    // the first press would run something the user can no longer see.
+    this._syncToggleFirstStep?.(this._editAssign(btn.key));
+  }
+
+  /**
+   * The library entry for this sequence, created if the library has none.
+   *
+   * Factored out of `_commitCurrentToAssignment` so a cycle's later presses are
+   * linked exactly the way its first one is. `action_id` is what the Actions
+   * view counts uses by, so a press resolved any other way -- or not at all --
+   * is a press the library believes nobody is using, which is how an action
+   * still on a button gets reported as safe to delete.
+   *
+   * Returns an entry for any sequence, including one whose first step calls no
+   * service at all -- a delay, a condition. That is deliberately the behaviour
+   * `_commitCurrentToAssignment` has always had for a button's own action, and
+   * changing it here would change what a plain button stores. Callers that must
+   * not mint a serviceless entry (a cycle's later presses) check
+   * `_stepService` first.
+   */
+  _resolveAction(sequence) {
+    const service = this._stepService(sequence);
+    const found = this._findMatchingAction(sequence);
+    if (found) return found;
+    const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36);
+    const action = { id, name: this._deriveActionName(service), service, states: [] };
+    if (this._isPayloadService(service)) {
+      action.payload_identity = this._payloadIdentity(sequence[0]?.data);
+    }
+    this._actions.push(action);
+    return action;
   }
 
   /**
@@ -1375,8 +1643,8 @@ class LizaRemotePanel extends HTMLElement {
   _isButtonAssigned(buttonKey) {
     // Deliberately the *page slot*, not the edit slot. This is the question
     // "does this position on the page do anything", and its answers feed
-    // `filledCount` and the `pg-empty` class that makes a blank page look
-    // deletable. Reading it through the context would make a page with one
+    // `filledCount`, which decides what a thumb says it holds and whether the
+    // page is deletable. Reading it through the context would make a page with one
     // override count as filled, and a genuinely blank page undeletable.
     return this._isAssignedRecord(this._assignments[buttonKey]);
   }
@@ -2012,6 +2280,9 @@ class LizaRemotePanel extends HTMLElement {
 
   async _reorderPage(fromIdx, toIdx) {
     if (fromIdx === toIdx) return;
+    const before = this._pages.slice();
+    const beforeIdx = this._currentPageIdx;
+
     const [moved] = this._pages.splice(fromIdx, 1);
     this._pages.splice(toIdx, 0, moved);
     if (this._currentPageIdx === fromIdx) {
@@ -2021,13 +2292,27 @@ class LizaRemotePanel extends HTMLElement {
     } else if (fromIdx > this._currentPageIdx && toIdx <= this._currentPageIdx) {
       this._currentPageIdx++;
     }
+
+    // Show the move first, save it second. The card used to stay put until a
+    // websocket round trip came back -- a round trip that rewrote every page
+    // file and talked to the device before it answered -- and only then did a
+    // full re-render put it in its new place.
+    if (!this._reorderPageDom()) this._render();
+
     this._pageOpInFlight = true;
     try {
       await this._hass.callWS({ type: "lizaip_config/set_pages", entry_id: this._currentEntry, pages: this._pages });
+    } catch (err) {
+      // Nothing was persisted, so the optimistic row is now a lie. Put the old
+      // order back and render it properly rather than leaving the user looking
+      // at a move that did not happen.
+      console.error("[LIZA] page reorder failed, reverting:", err);
+      this._pages = before;
+      this._currentPageIdx = beforeIdx;
+      this._render();
     } finally {
       this._pageOpInFlight = false;
     }
-    this._render();
   }
 
   // =================== MOUNT HA EDITOR ===================
@@ -2059,6 +2344,7 @@ class LizaRemotePanel extends HTMLElement {
       editor.narrow = this._narrow;
       editor.actions = this._sequence;
       editor.addEventListener("value-changed", (ev) => this._onSequenceChanged(ev));
+      this._wireActionMoves(editor);
       container.appendChild(editor);
       this._editorEl = editor;
       this._enforceSingleAction(editor);
@@ -2075,10 +2361,171 @@ class LizaRemotePanel extends HTMLElement {
     }
   }
 
-  // Whether this remote's settings (the gear tab) have long touch on. Off
-  // until they are loaded.
+  /**
+   * Take over "Move up" / "Move down" from the action rows.
+   *
+   * These two menu items are the only way to reorder presses without a mouse.
+   * Home Assistant's drag handle needs a pointer drag, which a touch user
+   * cannot perform against a scrolling page -- so on a phone the menu *is* the
+   * reordering control, not a convenience beside it.
+   *
+   * Listened for in the *capture* phase on the editor host. The row fires
+   * `move-up` composed, so it crosses the shadow boundary and reaches us on
+   * the way down, before the list's own at-target handler runs; stopping it
+   * there means exactly one reorder happens rather than ours and theirs both
+   * landing. Taking the move over outright also makes it independent of the
+   * frontend version -- the list's internals are not API, and they are where
+   * the animation has to hook in.
+   */
+  _wireActionMoves(editor) {
+    const handle = (ev, delta) => {
+      const row = ev.target;
+      const rows = Array.from(
+        editor.shadowRoot?.querySelectorAll(".rows > ha-automation-action-row") || [],
+      );
+      const from = Number.isInteger(row?.index) ? row.index : rows.indexOf(row);
+      const to = from + delta;
+      if (from < 0 || to < 0 || to >= this._sequence.length) return;
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      this._animateRowSwap(rows[from], rows[to], () => this._moveAction(from, to));
+    };
+    editor.addEventListener("move-up", (ev) => handle(ev, -1), true);
+    editor.addEventListener("move-down", (ev) => handle(ev, 1), true);
+  }
+
+  /**
+   * Slide the two rows past each other, then apply the move.
+   *
+   * A reorder with no motion is a list that looks identical and is not: the
+   * rows are titled by what they do, so two presses swapping places reads as
+   * the text having changed rather than the order. The swap is the one thing
+   * that says *which* row moved and where it went -- and it matters most for
+   * the touch user who reached this through the menu and never saw a drag.
+   *
+   * Applied on completion rather than alongside, so the animation plays
+   * against a stable list: committing first would re-render the rows out from
+   * under the transforms. `prefers-reduced-motion` and any browser without the
+   * animation API fall straight through to the move itself; the timeout is the
+   * same guarantee for a row torn down mid-flight, since a cancelled animation
+   * never reports finishing and the reorder must not be lost with it.
+   */
+  _animateRowSwap(a, b, done) {
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (reduce || !a || !b || typeof a.animate !== "function") { done(); return; }
+    const dy = b.getBoundingClientRect().top - a.getBoundingClientRect().top;
+    const opts = { duration: 180, easing: "ease-in-out", fill: "forwards" };
+    const up = a.animate([{ transform: "translateY(0)" }, { transform: `translateY(${dy}px)` }], opts);
+    const down = b.animate([{ transform: "translateY(0)" }, { transform: `translateY(${-dy}px)` }], opts);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      done();
+      // Held until the rows have re-rendered in their new order. Dropping the
+      // transforms any earlier snaps both rows back to where they started for
+      // a frame, which is the flicker the animation exists to avoid.
+      requestAnimationFrame(() => { try { up.cancel(); down.cancel(); } catch (e) {} });
+    };
+    up.addEventListener("finish", finish);
+    setTimeout(finish, opts.duration + 80);
+  }
+
+  /**
+   * Move one action to another position and commit it.
+   *
+   * Routed through `_onSequenceChanged` rather than written straight to the
+   * assignment, because a reorder is not just a new list: the presses carry
+   * icons and tooltips that have to travel with them, and that handler is
+   * where `_applyCycle` does it. A drag already arrives this way, so the menu
+   * and the handle end in the same place.
+   *
+   * Focus returns to the row that moved. It was the menu's anchor and the
+   * menu is now gone, so without this a keyboard user is dropped at the top of
+   * the document after every single step.
+   */
+  _moveAction(from, to) {
+    const next = this._sequence.slice();
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    if (this._editorEl) this._editorEl.actions = next;
+    this._onSequenceChanged({ detail: { value: next }, stopPropagation: () => {} });
+    requestAnimationFrame(() => {
+      const rows = this._editorEl?.shadowRoot?.querySelectorAll(".rows > ha-automation-action-row");
+      rows?.[to]?.focus?.();
+    });
+  }
+
+  // Whether this remote's settings (the gear tab) have *section* on. Off until
+  // they are loaded, so a feature never flickers into view while the panel is
+  // still asking the backend what the remote is set to.
+  _featureEnabled(section) {
+    return this._textSettings?.settings?.[section]?.enabled === true;
+  }
+
   _longtouchEnabled() {
-    return this._textSettings?.settings?.longtouch?.enabled === true;
+    return this._featureEnabled("longtouch");
+  }
+
+  // Whether buttons on this remote may carry a toggle. Gates the editor section
+  // only; the backend applies the same switch to what the remote actually does,
+  // and neither side strips a stored block, so turning it off hides the
+  // configuration rather than losing it.
+  _toggleFeatureEnabled() {
+    return this._featureEnabled("toggle");
+  }
+
+  /**
+   * Whether this button's action list means "one action per press".
+   *
+   * A cycle is a list of actions run one at a time, which is the list
+   * `ha-automation-action` already draws -- so the editor *is* the cycle
+   * editor, and the second action a user adds is the second press. That
+   * reading is only on where the remote's Buttons setting asks for it; with it
+   * off the editor keeps the single-action cap and behaves as it always did.
+   *
+   * Grid buttons only: a slider is a proportional control with no press to
+   * count, so there is nothing for a cycle to advance on.
+   */
+  _cycleEnabled(key) {
+    return !!key && isGridBtn(key) && !!this._toggleFeatureEnabled?.();
+  }
+
+  /**
+   * One button's presses, flattened into the single list the editor shows.
+   *
+   * `config` is press 1 and `toggle.rules[0]` mirrors it, so the later presses
+   * are `rules[1..]`. A button with no block is a cycle of one and yields just
+   * its own action, which is what makes this safe to use everywhere `config`
+   * used to be read into `_sequence`.
+   *
+   * A button that cannot cycle yields only its own action even if a block is
+   * stored. The feature switch hides a cycle rather than deleting it, so the
+   * presses survive being turned off -- but while it is off the editor has the
+   * single-action cap on, and handing it a list it is forbidden to show would
+   * mean the card and the remote disagreed about what the button does.
+   */
+  _cycleSequence(assign, key = this._selectedButton?.key) {
+    const own = Array.isArray(assign?.config) ? assign.config : [];
+    const rules = assign?.toggle?.rules;
+    if (!this._cycleEnabled(key)) return [...own];
+    if (!Array.isArray(rules) || rules.length < 2) return [...own];
+    return [...own, ...rules.slice(1).flatMap(
+      (r) => (Array.isArray(r?.config) ? r.config : []))];
+  }
+
+  /**
+   * What the *button itself* runs: press 1, never the whole cycle.
+   *
+   * `config` is read by everything that asks what a button is -- its subject
+   * entity, its label, its library action, the face it draws -- and it is also
+   * what the remote falls back to when the toggle feature is switched off. Let
+   * the whole cycle into it and turning the feature off would make one press
+   * fire every step at once.
+   */
+  _clickSequence() {
+    if (!this._cycleEnabled(this._selectedButton?.key)) return this._sequence;
+    return this._sequence.length ? [this._sequence[0]] : [];
   }
 
   // The long-touch steps of the selected button. One shared empty list when
@@ -2185,9 +2632,6 @@ class LizaRemotePanel extends HTMLElement {
     if (!registered.length) return hass;
 
     const pages = this._pages || [];
-    // Two spellings of the same list: ids to store, names to read.
-    const byId = pages.map((page) => ({ value: String(page.id), label: this._pageLabel(page) }));
-    const byNameOptions = pages.map((page) => this._pageLabel(page));
 
     // What a step already stores decides which spelling its dropdown speaks,
     // so a button written before the dropdown moved to ids keeps showing its
@@ -2208,20 +2652,36 @@ class LizaRemotePanel extends HTMLElement {
       const idKey = params.find((p) => p.type === "page_id")?.key;
       const nameKey = params.find((p) => p.type === "page_name")?.key;
       const inUse = storedKey(cmd.service, [idKey, nameKey].filter(Boolean));
-      const picker = inUse || idKey || nameKey;
-      return { cmd, picker, options: picker === idKey ? byId : byNameOptions };
+      return { cmd, idKey, picker: inUse || idKey || nameKey };
     });
 
-    const key = JSON.stringify([
-      byId,
-      plan.map((p) => [p.cmd.service, p.picker]),
-    ]);
-    if (this._editorHassCache?.hass === hass && this._editorHassCache?.key === key) {
-      return this._editorHassCache.value;
+    // Keyed on what the dropdowns are made of, not on `hass`.
+    //
+    // Home Assistant builds a new `hass` on every state change but keeps one
+    // `services` object until a service actually changes, so this hits on the
+    // ticks that used to miss -- and `ha-service-control` memoises on
+    // `hass.services`, which therefore now holds still instead of being
+    // replaced several times a second while the user types.
+    const key = pages.map((p) => `${p.id}\u0000${this._pageLabel(p)}`).join("\u0001")
+      + "\u0002" + plan.map((p) => `${p.cmd.service}\u0000${p.picker ?? ""}`).join("\u0001");
+    const cached = this._editorHassCache;
+    if (cached?.key === key && cached?.fromServices === hass.services) {
+      // Same `hass` as well, so the whole object can be handed back -- which
+      // some callers compare by identity.
+      if (cached.hass === hass) return cached.whole;
+      // Only the services are reused: the caller wants this tick's states.
+      const whole = { ...hass, services: cached.patchedServices };
+      this._editorHassCache = { ...cached, hass, whole };
+      return whole;
     }
 
+    // Two spellings of the same list: ids to store, names to read.
+    const byId = pages.map((page) => ({ value: String(page.id), label: this._pageLabel(page) }));
+    const byNameOptions = pages.map((page) => this._pageLabel(page));
+
     const lizaip = { ...hass.services.lizaip };
-    for (const { cmd, picker, options } of plan) {
+    for (const { cmd, picker, idKey } of plan) {
+      const options = picker === idKey ? byId : byNameOptions;
       const name = cmd.service.split(".")[1];
       const svc = lizaip[name];
       // Every other way of naming the same target goes. The dropdown is the
@@ -2261,14 +2721,98 @@ class LizaRemotePanel extends HTMLElement {
       lizaip[name] = { ...rest, fields };
     }
 
-    const value = { ...hass, services: { ...hass.services, lizaip } };
-    this._editorHassCache = { hass, key, value };
-    return value;
+    const services = { ...hass.services, lizaip };
+    const whole = { ...hass, services };
+    // `fromServices` is what HA handed us and what the next call compares
+    // against; `patchedServices` is the rewritten copy handed back.
+    this._editorHassCache = { hass, fromServices: hass.services, key, patchedServices: services, whole };
+    return whole;
   }
 
+  /**
+   * Hold the click editor to one action -- unless that button cycles.
+   *
+   * The cap is one injected stylesheet hiding Home Assistant's own "add" and
+   * overflow controls, plus a proxy button of ours that clicks the hidden one.
+   * A cycle is a list of actions run one per press, which is exactly the list
+   * this editor draws, so there the proxy stays and keeps offering more; for
+   * everything else it goes away once the button has its one action.
+   *
+   * HA's own button is hidden in *every* state, cycle included, and the proxy
+   * is the only add control the card ever shows. That is a wording decision as
+   * much as a layout one: the button that adds a press should say so, and HA's
+   * lives in a shadow root we cannot translate. It also keeps the control in
+   * one place instead of moving from below the list to inside it the moment a
+   * first action appears.
+   *
+   * The proxy is still hidden for a blank non-cycling button's second action,
+   * because the first action is what makes a button a button and a second one
+   * would never run.
+   *
+   * Scoping does the rest. The stylesheet lives in this editor's shadow root,
+   * so it never reached the `ha-button-menu` inside each action *row* -- which
+   * is why a single action already has its own overflow menu, and why a cycle
+   * keeps HA's own row menus and drag handles.
+   *
+   * `.buttons` is the one selector that still matters: `ha-automation-action`
+   * renders its Add-action button as `<div class="buttons"><ha-button>` inside
+   * its `<ha-sortable>`, so hiding that div is the cap and the proxy's click
+   * target is the `ha-button` inside it -- hidden by `visibility`, which still
+   * takes a programmatic click. `.link-button-row` and `ha-button-menu` are
+   * kept beside it because they were the shape of the same control on earlier
+   * frontends, and `hacs.json` still supports back to 2026.8.
+   */
   _enforceSingleAction(editor) {
     const STYLE_ID = "liza-single-action";
+    const NUM_STYLE_ID = "liza-press-numbers";
+    const GAP_STYLE_ID = "liza-action-gaps";
+    // The action cards space themselves, inside this shadow root, on a step of
+    // their own -- so the one list on the card that is not ours was the one
+    // list with a different rhythm. Reached the same way the move buttons are
+    // (see `_wireActionMoves`): the internals are not API, but they are where
+    // the spacing is. Written as gap plus zeroed margins rather than as a
+    // margin of our own, so it lands on the same value whichever of the two
+    // the installed frontend happens to use.
+    const GAP_CSS = `
+      .rows { display: flex; flex-direction: column; gap: var(--liza-field-gap, 16px); }
+      .rows > * { margin-top: 0 !important; margin-bottom: 0 !important; }`;
     const HIDE_CSS = `.link-button-row, ha-button-menu, .buttons { visibility:hidden!important; height:0!important; overflow:hidden!important; margin:0!important; padding:0!important; }`;
+    // Number each action card with the press that runs it.
+    //
+    // Hung off `.handle` rather than the row, and that is not a preference.
+    // `ha-automation-action-row`'s shadow root contains exactly one slot --
+    // `<slot name="icons">` -- and no default slot, so a `::before` on the row
+    // host would be an unslotted light-DOM child and would never be painted.
+    // The handle is a plain `<div class="handle" slot="icons">` that Home
+    // Assistant renders into that very slot, it has no shadow root of its own,
+    // and it sits in this editor's root where our stylesheet can reach it. So
+    // it is the one node here that can carry a counter and show it.
+    //
+    // Reading the counter off the same element that increments it keeps the
+    // numbering in DOM order for free, which is the order the presses run in,
+    // which is the order HA's own drag-and-drop rewrites.
+    //
+    // The handle already means "this row has a position in a list"; putting
+    // the position on it says which one. Muted and unfilled, in the same ink
+    // as the drag glyph beside it, so it reads as part of the handle rather
+    // than as a badge stuck on the card -- a filled pill says "status" or
+    // "count", and this is neither. Tabular figures so the cards do not shift
+    // as the count passes nine.
+    const NUM_CSS = `
+      .rows { counter-reset: liza-press; }
+      .rows .handle { counter-increment: liza-press; gap: 2px; }
+      .rows .handle::before {
+        content: counter(liza-press);
+        color: var(--liza-muted-text, var(--secondary-text-color, #727272));
+        /* The size the appearance rail numbers its presses at. The two lists
+           number the same presses, so a number in one has to look like the
+           same kind of thing as the number beside it in the other. */
+        font-size: calc(13px * var(--ha-font-size-scale, 1));
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        font-family: var(--paper-font-body1_-_font-family, inherit);
+      }`;
     const inject = () => {
       const sr = editor.shadowRoot;
       if (!sr) return false;
@@ -2277,24 +2821,63 @@ class LizaRemotePanel extends HTMLElement {
         styleEl = document.createElement("style"); styleEl.id = STYLE_ID; styleEl.textContent = HIDE_CSS;
         sr.appendChild(styleEl);
       }
+      let numEl = sr.querySelector(`#${NUM_STYLE_ID}`);
+      if (!numEl) {
+        numEl = document.createElement("style"); numEl.id = NUM_STYLE_ID; numEl.textContent = NUM_CSS;
+        sr.appendChild(numEl);
+      }
+      if (!sr.querySelector(`#${GAP_STYLE_ID}`)) {
+        const gapEl = document.createElement("style");
+        gapEl.id = GAP_STYLE_ID; gapEl.textContent = GAP_CSS;
+        sr.appendChild(gapEl);
+      }
       sr.querySelector("#liza-fab-style")?.remove();
       sr.querySelector("#liza-btn-style")?.remove();
-      styleEl.disabled = false;
       const isLong = editor === this._longEditorEl;
       const sequence = isLong ? this._longtouchSequence() : this._sequence;
       const hasAction = sequence && sequence.length > 0;
+      // Long touch runs one action, always: it is a second gesture on the same
+      // button, not a second press of the first one.
+      const cycling = !isLong && hasAction && this._cycleEnabled(this._selectedButton?.key);
+      // Home Assistant's own Add-action button stays hidden in every state now,
+      // and our proxy clicks it. It used to take over once a cycle had its
+      // first action, which meant the control that adds a press was labelled
+      // "Add action" -- true of the dialog it opens, silent about what the new
+      // action becomes, and in HA's shadow root where we cannot translate it.
+      // One button in both states also means one position: below the list,
+      // where the empty-state button already sat.
+      styleEl.disabled = false;
+      // Only a cycle has presses to number. A plain button's single action is
+      // not "press 1 of 1", and a long touch is a different gesture, not a
+      // step -- numbering either would invent an order that is not there.
+      numEl.disabled = !cycling || sequence.length < 2;
       let btn = editor.parentElement?.querySelector(".liza-add-action-btn");
       if (!btn) {
         btn = document.createElement("button");
         btn.className = "liza-add-action-btn";
-        btn.textContent = `+ ${this._t(isLong ? "add_longtouch_action" : "add_click_action")}`;
         btn.addEventListener("click", () => {
           const nativeBtn = sr.querySelector(".buttons ha-button") || sr.querySelector("ha-button-menu");
           if (nativeBtn) nativeBtn.click();
         });
         editor.parentElement?.appendChild(btn);
       }
-      btn.style.display = hasAction ? "none" : "";
+      // Set on every pass, not just on creation: the same button now says two
+      // different things, and which one depends on state that changes under it.
+      //
+      // "Press", not "action". The list above is a list of presses -- that is
+      // what the card calls them, what the chips count and what the rows below
+      // are titled -- and "action" is only how one is built. "Next" because
+      // this always appends: the new press runs after every press already
+      // there, which is the one thing a user cannot tell from a button that
+      // just says "add".
+      const label = this._t(this._addActionLabelKey({ isLong, cycling }));
+      const wanted = `+ ${label}`;
+      if (btn.textContent !== wanted) btn.textContent = wanted;
+      // Shown while the button has no action at all -- the first action is what
+      // makes a button a button -- and then again only for a cycle, which is
+      // the one kind that runs more than one. For everything else the cap is
+      // the point: a second action would never run.
+      btn.style.display = this._addActionVisible({ hasAction, cycling }) ? "" : "none";
       return true;
     };
     if (!inject()) {
@@ -2304,9 +2887,44 @@ class LizaRemotePanel extends HTMLElement {
     editor.style.cssText = "";
   }
 
+  /**
+   * What the add button says.
+   *
+   * Split out of the injector because it is the whole decision and the
+   * injector around it needs a live shadow root to run at all.
+   *
+   * "Press", not "action", once the button cycles. The list above is a list of
+   * presses -- that is what the card calls them, what the chips count and what
+   * the appearance rows are titled -- and an action is only how one is built.
+   * "Next" because this always appends: the new press runs after every press
+   * already there, which is the one thing a user cannot tell from a control
+   * that just says "add". A long touch is a different gesture rather than a
+   * further press, so it never reaches the cycling wording.
+   */
+  _addActionLabelKey({ isLong, cycling }) {
+    if (cycling) return "toggle_add_press";
+    return isLong ? "add_longtouch_action" : "add_click_action";
+  }
+
+  /**
+   * Whether the add button is offered at all.
+   *
+   * Two separate reasons to show it, and they do not overlap: a button with no
+   * action needs its first one, and a cycling button can always take another
+   * press. Everything in between is the cap -- a second action on a button
+   * that runs one would never fire, so offering it would be a lie.
+   */
+  _addActionVisible({ hasAction, cycling }) {
+    return !hasAction || !!cycling;
+  }
+
   // =================== RENDERING ===================
   _render() {
     try {
+      // Every render replaces the shadow tree wholesale, so the icon pass's
+      // record of which entities are on screen describes markup that is about
+      // to stop existing.
+      this._invalidateFaceCaches();
       // 3.1.2 Language of Parts. The panel ships five languages and falls back
       // to English for the rest, while Home Assistant sets <html lang> from the
       // user's own locale -- so on a Dutch or Polish install the English text
@@ -2364,9 +2982,21 @@ class LizaRemotePanel extends HTMLElement {
     }
   }
 
+  /**
+   * The `<style>` tag a render has to carry, if any.
+   *
+   * Empty once the stylesheet has been adopted by the shadow root, which is
+   * the normal case: the root keeps it across every `innerHTML` rewrite, so
+   * repeating it in the markup would only make the browser parse the same
+   * hundred kilobytes again on every render.
+   */
+  _styleTag() {
+    return this._stylesAdopted ? "" : `<style>${STYLES}</style>`;
+  }
+
   _renderDeviceList() {
     this.shadowRoot.innerHTML = `
-      <style>${STYLES}</style>
+      ${this._styleTag()}
       <div class="toolbar"><ha-menu-button></ha-menu-button><h1 class="main-title">lizaIP</h1></div>
       <div class="view"><ha-card outlined><div class="card-content">
         ${this._devices.length === 0
@@ -2441,7 +3071,7 @@ class LizaRemotePanel extends HTMLElement {
     const titleInner = `<span class="title-text">${this._esc(title)}</span>`;
 
     this.shadowRoot.innerHTML = `
-      <style>${STYLES}</style>
+      ${this._styleTag()}
       <div class="toolbar">
         ${this._devices.length > 1
           ? `<ha-icon-button id="btn-back" label="${this._esc(this._t("back"))}"><ha-icon icon="mdi:arrow-left" aria-hidden="true"></ha-icon></ha-icon-button>`

@@ -56,6 +56,15 @@ export const STYLES = `
     --liza-font-13: calc(13px * var(--ha-font-size-scale, 1));
     --liza-font-15: calc(15px * var(--ha-font-size-scale, 1));
     --liza-font-18: calc(18px * var(--ha-font-size-scale, 1));
+    /* The gap between two stacked things in the button config card -- fields
+       of the Appearance editor, press boxes in the list, fields inside a press
+       box. One value because they are one rhythm: a press box is the same
+       editor at a different level, and when its rows sat at 14px and its
+       fields at 10px inside a card spacing its own at 16px, the nesting was
+       legible as crowding rather than as structure. Not the 4px that separates
+       a label from the control it names -- that is a part of one field, not
+       two things in a column. */
+    --liza-field-gap: 16px;
   }
 
   /* Headings are h1/h2/h3 for AT navigation (1.3.1), not for styling -- each
@@ -640,58 +649,57 @@ export const STYLES = `
     position: relative;
     transition: border-color .2s, background .2s, box-shadow .2s, transform .15s;
     overflow: hidden;
+    /* How far this thumb slides to open the gap a drag is aiming at, written
+       by _wirePageReorder. A custom property rather than an inline transform:
+       inline would outrank the three rules below and silently drop a
+       subpage's offset or the hover scale, so a subpage would jump the moment
+       a drag displaced it. Every rule that sets transform on a thumb has to
+       restate this, which the stylesheet test enforces. */
+    transform: translateX(var(--pg-shift, 0px));
   }
-  .page-thumb:hover {
-    background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
-    border-color: color-mix(in srgb, var(--primary-text-color) 20%, transparent);
-    transform: scale(1.03);
+  /* The 3% grow is a *hover* answer -- "this is the one under your pointer" --
+     and nothing to do with which page is open: that is .active's blue frame
+     alone. Behind a hover query because iOS has no hover to give and emulates
+     one instead, leaving the last-tapped thumb grown until something else is
+     tapped. A page that failed to open then still sat there enlarged, looking
+     selected, with no blue frame on it -- two cues contradicting each other.
+     On a touch screen the frame is now the only thing that claims anything. */
+  @media (hover: hover) and (pointer: fine) {
+    .page-thumb:hover {
+      background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
+      border-color: color-mix(in srgb, var(--primary-text-color) 20%, transparent);
+      transform: translateX(var(--pg-shift, 0px)) scale(1.03);
+    }
   }
-  /* A subpage is darker than a main page: it is not in the list the remote
-     pages through, so the strip has to say so without a label. Placed before
-     .active so selecting one still shows the selection colour -- the tint says
-     what the page is, the border says which page you are on, and they are
-     different questions. */
+  /* A subpage has the same background and border as a main page; it only
+     sits lower than the main pages beside it -- the cue that it is out of the
+     remote's page list. 7% of its own box, via transform rather than a
+     percentage margin: a vertical margin's percentage is of the *container's
+     width*, which would have shifted every subpage by the same amount
+     regardless of its own height. */
   .page-thumb.subpage {
-    background: color-mix(in srgb, var(--primary-text-color) 14%, transparent);
-    border-color: color-mix(in srgb, var(--primary-text-color) 18%, transparent);
-    /* Sits lower than the main pages beside it -- a second, independent cue
-       (besides the tint) that it is out of the remote's page list. 7% of its
-       own box, via transform rather than a percentage margin: a vertical
-       margin's percentage is of the *container's width*, which would have
-       shifted every subpage by the same amount regardless of its own height. */
-    transform: translateY(7%);
+    transform: translateX(var(--pg-shift, 0px)) translateY(7%);
   }
-  .page-thumb.subpage:hover {
-    background: color-mix(in srgb, var(--primary-text-color) 18%, transparent);
-    /* Same specificity as .page-thumb:hover, declared after it, so its lone
-       transform: scale(1.03) would otherwise win outright and the offset
-       would vanish exactly while hovering. Restated together with it. */
-    transform: translateY(7%) scale(1.03);
+  @media (hover: hover) and (pointer: fine) {
+    .page-thumb.subpage:hover {
+      /* Same specificity as .page-thumb:hover, declared after it, so its lone
+         transform: scale(1.03) would otherwise win outright and the offset
+         would vanish exactly while hovering. Restated together with it. */
+      transform: translateX(var(--pg-shift, 0px)) translateY(7%) scale(1.03);
+    }
+  }
+  /* The frame a drop is applied in. Removing the drag offsets would otherwise
+     animate every displaced thumb back to where the drag started -- including
+     the one that has just been moved in the DOM, so the card the user placed
+     slides back to its origin and settles again. Set by the drop handler and
+     removed on the next frame, so ordinary hovers keep their transition. */
+  .pages-list.reordering .page-thumb {
+    transition: none;
   }
   .page-thumb.active {
     border-color: var(--liza-selected);
     background: rgba(3,169,244,.04);
     box-shadow: 0 0 12px rgba(3,169,244,.2);
-  }
-  .page-thumb.subpage.active {
-    background: color-mix(in srgb, var(--primary-text-color) 14%, rgba(3,169,244,.04));
-  }
-  .page-thumb.pg-empty:not(.active) {
-  }
-  .page-drag-handle:hover {
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-  }
-  .page-drag-handle:active {
-    cursor: grabbing;
-  }
-  .page-drag-handle .drag-dots {
-    font-size: var(--liza-font-xs);
-    letter-spacing: 2px;
-    color: color-mix(in srgb, var(--primary-text-color) 40%, transparent);
-    line-height: 1;
-  }
-  .page-thumb.dragging .page-drag-handle {
-    background: rgba(3,169,244,.15);
   }
   .page-add-btn {
     display: flex;
@@ -982,11 +990,14 @@ export const STYLES = `
     color: #fff;
     transform: scale(1.1);
   }
+  /* Ghosted, not hidden: it keeps its slot in the layout so the gap stays
+     measured against a stable row, and it is transformed onto the slot it
+     would land in, so the strip reads as the order it is about to become. */
   .page-thumb.dragging { opacity: .4; }
-  .page-thumb.drag-over {
-    border-color: #03a9f4;
-    border-style: solid;
-    background: rgba(3,169,244,.1);
+  @media (prefers-reduced-motion: reduce) {
+    /* The gap itself stays -- it is the answer to the question being asked.
+       Only the slide goes. */
+    .page-thumb { transition: border-color .2s, background .2s, box-shadow .2s; }
   }
 
   /* SVG preview card */
@@ -1039,47 +1050,64 @@ export const STYLES = `
   }
   .cch-preview-empty { opacity: 0.2; }
   .cch > .config-card-key { padding: 12px 20px; }
+  /* Vertical padding is the gap, so the space after the last row of a section
+     is the space between two of them -- a card whose final item sits closer to
+     the edge than its items sit to each other reads as cut off. Horizontal
+     padding stays at 20px, matching .config-card-key above and
+     .config-card-body below: that one is not rhythm, it is the line every
+     label on the card starts from. */
   .cch-editor-inner {
-    padding: 16px 20px;
+    padding: var(--liza-field-gap) 20px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--liza-field-gap);
   }
 
-  .config-card-body { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-  #button-editor-container {
-    min-height: 52px;
-  }
-  .liza-add-action-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 8px 0;
-    border: none;
-    background: transparent;
-    color: var(--liza-accent-text);
-    font-size: var(--liza-font-13);
-    font-weight: 500;
-    cursor: pointer;
-  }
-  .liza-add-action-btn:hover {
-    text-decoration: underline;
+  .config-card-body {
+    padding: var(--liza-field-gap) 20px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--liza-field-gap);
   }
   .config-section-divider {
     height: 1px;
     background: var(--divider-color, rgba(127,127,127,.15));
     margin: 4px 0;
   }
-  /* Label row with reset button */
+  /* Label row with reset button.
+     The border belongs to the *row*, not to the input inside it, so the
+     trailing controls sit within the field the way Home Assistant's own
+     text fields carry their trailing icons.
+     Two things were wrong with putting them beside it. The input was
+     flex: 1 next to buttons that appear only once you start typing, so the
+     field physically shrank under the caret as it was used. And the box
+     stopped ~90px short of the icon picker directly above it, which is the
+     one field on this card it most obviously should line up with. Bordering
+     the row fixes both at once: the box is always the full width, and what
+     changes inside it no longer moves its edges. */
   .config-label-row {
     display: flex;
-    gap: 6px;
+    gap: 2px;
     align-items: center;
+    padding-inline-end: 6px;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    background: var(--card-background-color);
   }
-  .config-label-row input[type="text"] { flex: 1; }
-  .config-label-reset,
-  .config-label-cancel,
-  .config-label-save {
+  /* The focus ring follows the border it belongs to. Without this, focusing
+     the input lit nothing -- its own border is gone. */
+  .config-label-row:focus-within { border-color: var(--primary-color); }
+  .config-label-row input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+  }
+  .config-label-row input[type="text"]:focus { outline: none; }
+  /* Only the reset. The confirm/cancel pair this used to list with it is
+     gone: a tooltip now commits on Enter or blur, so there is nothing left
+     to confirm. */
+  .config-label-reset {
     border: none;
     background: transparent;
     font-size: var(--liza-font-l);
@@ -1092,16 +1120,25 @@ export const STYLES = `
     display: flex;
     align-items: center;
   }
-  .config-label-reset:hover,
-  .config-label-cancel:hover { background: color-mix(in srgb, var(--primary-color) 15%, transparent); color: var(--liza-accent-text); }
-  /* The confirm is the one control on this card that commits, so it is the
-     one drawn as an action rather than as a quiet icon. */
-  .config-label-save {
-    color: var(--liza-accent-text);
-    background: color-mix(in srgb, var(--primary-color) 15%, transparent);
-  }
-  .config-label-save:hover { background: color-mix(in srgb, var(--primary-color) 28%, transparent); }
+  .config-label-reset:hover { background: color-mix(in srgb, var(--primary-color) 15%, transparent); color: var(--liza-accent-text); }
   .config-field { display: flex; flex-direction: column; gap: 4px; }
+  /* The action list is a section wearing a field's wrapper. Its hint explains
+     the list rather than captioning an input, and the add button below it is a
+     further item, so both sit on the section step. The 4px a .config-field
+     normally spends is the distance from a control to its own caption, which
+     is not what either of these is. */
+  .config-field.action-field { gap: var(--liza-field-gap); }
+  /* The 4px a hint spends on the control above it, removed here for the same
+     reason the gap changed: this one has no control above it, only the
+     section's heading, which is already a step away. */
+  .config-field.action-field > .config-field-hint { margin-top: 0; }
+  #button-editor-container,
+  #button-longtouch-editor-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--liza-field-gap);
+    min-height: 52px;
+  }
   /* Sentence case, not uppercase: these sit next to HA's own components
      (ha-entity-picker, ha-icon-picker) which render Material labels in
      sentence case, and an uppercase micro-label beside them reads as a
@@ -1170,7 +1207,46 @@ export const STYLES = `
      every wordmark reads as a smudge. Height is unchanged, so the row does not
      grow and the field still lines up with the button card's. */
   .config-field .icon-picker-row .icon-preview-title { width: 120px; }
-  .config-field .icon-picker-slot { flex: 1; }
+  .config-field .icon-picker-slot { flex: 1; position: relative; min-width: 0; }
+  /* Names offered once a picture field starts with a registered icon prefix.
+     In the top layer (popover) and fixed against the field, because the
+     cards clip their content: hung off the field inside a card, the list was
+     cut at the card's edge. inset and margin undo the popover's centring. */
+  .liza-media-suggest {
+    position: fixed;
+    inset: auto;
+    z-index: 10;
+    margin: 0; padding: 4px 0;
+    list-style: none;
+    max-height: 260px;
+    overflow-y: auto;
+    box-sizing: border-box;
+    background: var(--card-background-color);
+    color: var(--primary-text-color);
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.2);
+  }
+  .liza-media-suggest[hidden] { display: none; }
+  .liza-media-option {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: var(--liza-font-m);
+    color: var(--primary-text-color);
+  }
+  .liza-media-option:hover {
+    background: color-mix(in srgb, var(--primary-color, #03a9f4) 15%, transparent);
+  }
+  /* The keyboard selection is stated twice over, with a literal fallback for
+     each colour. A theme that leaves --primary-color unset makes both the
+     color-mix tint and the bar invalid, and the whole rule is then dropped --
+     arrowing through the list looked like it did nothing at all. */
+  .liza-media-option.active,
+  .liza-media-option[aria-selected="true"] {
+    background: var(--liza-option-active-bg, rgba(3, 169, 244, 0.22));
+    box-shadow: inset 3px 0 0 var(--primary-color, #03a9f4);
+  }
   /* Foldable section. Matches the live container idiom on this panel: 8px
      radius, hairline divider border, tinted header. */
   .slider-advanced {
@@ -1218,6 +1294,230 @@ export const STYLES = `
     gap: 12px;
     padding: 6px 0 0;
   }
+  /* Virtual toggle button */
+  /* How presses 2..N look, in the Appearance card under the fields that
+     answer the same question for press 1.
+
+     A column of full-width fields, not a row of cells. The rows used to be
+     horizontal -- a cramped picker beside a bare input -- so the same two
+     questions press 1 asks at full width with labels and a preview were asked
+     again in a different shape, and the later presses read as an afterthought
+     rather than as the peers they are. Same fields, same widths, same order. */
+  /* The list's own heading and hint. It is a section, not a form field: it
+     holds a list of boxes rather than one control, so it does not take
+     .config-field's single-row spacing. */
+  /* A column like everything else in this card, so the heading stands off its
+     list by the same distance the list's boxes stand off each other. It was a
+     plain block, and the only thing holding the hint off the first press was
+     6px of padding on the list -- a second, smaller rhythm introduced at the
+     one seam where the card's own spacing should simply have continued. */
+  .press-appearance-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--liza-field-gap);
+    margin: 0;
+  }
+  /* No cycle, so nothing to number and nothing to connect. The elements stay
+     in the DOM -- see the header, gaining a second action has to be a change
+     of appearance rather than of structure -- and go out of the layout
+     entirely, so a one-action button spaces exactly as it did before the list
+     existed: the Image and Tooltip remain direct flex items of
+     .cch-editor-inner, which is where their 16px gap comes from.
+     The row is forced open: it is a <details> with its summary hidden, and a
+     shut one would take the fields with it. */
+  .press-appearance-section.press-plain,
+  .press-appearance-section.press-plain > .press-appearance-list,
+  .press-appearance-section.press-plain .press-appearance-row {
+    display: contents;
+  }
+  .press-appearance-section.press-plain > #config-card-press-head,
+  .press-appearance-section.press-plain .press-appearance-row > summary {
+    display: none;
+  }
+  /* Title and hint are two items of the section, not a label glued to its
+     field: the hint describes the whole list below it rather than one input,
+     so it sits on the section's own step instead of the 4px a field spends
+     between a control and its caption. */
+  .press-appearance-section > #config-card-press-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--liza-field-gap);
+  }
+  .press-appearance-section > #config-card-press-head > .config-field-hint {
+    margin-top: 0;
+  }
+  .press-appearance-section > #config-card-press-head > label {
+    display: block;
+    font-size: var(--liza-font-13);
+    font-weight: 500;
+    color: var(--liza-muted-text);
+  }
+  /* A rail linking the press boxes into one sequence. The boxes were numbered
+     but otherwise unconnected, so they read as separate cards that happened to
+     carry ordinals; the line is what actually says "these run in this order". */
+  .press-appearance-list {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--liza-field-gap);
+    padding: 0 0 0 18px;
+  }
+  /* Dashed, not solid. A solid rail reads as a hard connector -- the kind that
+     says "these are wired together". The cycle is softer than that: it is an
+     order, and the next press only happens if someone presses again. Dashes
+     say sequence without claiming a mechanism, and they keep the line from
+     competing with the row borders it runs beside.
+     Drawn as a border rather than a background so the dash pattern comes from
+     the renderer; a 1px gradient would have to hard-code the rhythm.
+
+     One segment per row rather than one rail down the whole list, and none on
+     the last. A single pseudo-element has no way to know where the last row
+     starts, so it was inset by a fixed amount from the bottom -- which was
+     about right while every row was shut and the same height, and ran the full
+     length of the last row the moment one was opened, trailing off below the
+     final number into nothing. A segment belongs *between* two presses, so it
+     is owned by the one it leads away from: 1 - - - 2 - - - 3, and after 3 the
+     sequence is over.
+
+     Spans number to number: down from this row's ordinal, across the gap, to
+     where the next row's ordinal sits -- the gap between two boxes plus the
+     next ordinal's 22px offset. Derived from the gap token rather than written
+     out, because the rail is the one thing in this card whose geometry depends
+     on that spacing: a hard-coded length left the dashes stopping short of the
+     next number the moment the rhythm changed. Offset back into the list's own
+     left padding, which is the gutter the rail runs in. */
+  .press-appearance-row:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: -13px;
+    top: 22px;
+    bottom: calc(-22px - var(--liza-field-gap));
+    width: 0;
+    border-inline-start: 1px dashed var(--divider-color, rgba(127,127,127,.3));
+  }
+  .press-appearance-row {
+    position: relative;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--divider-color, rgba(127,127,127,.25));
+    background: rgba(127,127,127,.04);
+  }
+  /* A <details>, so the box is the summary's height until it is opened. The
+     column that used to be the row itself moves onto the contents, which is
+     everything after the summary. */
+  .press-appearance-row[open] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--liza-field-gap);
+  }
+  /* The marker is the one piece of a native <details> that does not look like
+     Home Assistant. It is replaced below with a chevron that turns, matching
+     the action cards this list sits under. */
+  .press-appearance-row > summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  .press-appearance-row > summary::-webkit-details-marker { display: none; }
+  .press-appearance-row > summary::after {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin-inline-start: 4px;
+    border-right: 2px solid var(--liza-muted-text);
+    border-bottom: 2px solid var(--liza-muted-text);
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform .18s ease;
+  }
+  .press-appearance-row[open] > summary::after {
+    transform: translateY(2px) rotate(-135deg);
+  }
+  .press-appearance-row > summary:focus-visible {
+    outline: 2px solid var(--primary-color, #03a9f4);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  /* What the press will wear, on the heading, because a shut row has hidden
+     the field that would otherwise show it. In front of the name, not after
+     it: an icon that follows the words it illustrates reads as a status badge
+     tacked on the end, and the action cards below this list put the glyph
+     first. The title takes the slack instead, so the chevron still lands at
+     the far edge. */
+  .press-appearance-glyph {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+  }
+  .press-appearance-glyph img,
+  .press-appearance-glyph ha-icon {
+    width: 20px;
+    height: 20px;
+    --mdc-icon-size: 20px;
+  }
+  /* What this press does. The name comes from the same helper the chips use,
+     so a row and its chip and its action card are three views of one step
+     under one name. */
+  .press-appearance-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  /* The ordinal sits *on* the rail, outside the box, with the card's own
+     background behind it so it breaks the line rather than crossing it --
+     the usual way a stepper marks its stops. Out of flow, so the head is
+     free to be just the title. */
+  /* Sized with the title it labels, not a size below it. At 11px the ordinals
+     were the smallest text on the card -- the one piece of it that has to be
+     read at a glance, set smaller than everything that does not. The box is
+     widened with the text and re-centred on the rail: it has to be wide enough
+     to cover the dashes it breaks, and a two-digit press has to fit without
+     the number spilling over the line. */
+  .press-appearance-num {
+    position: absolute;
+    inset-inline-start: -21px;
+    top: 22px;
+    transform: translateY(-50%);
+    width: 16px;
+    padding: 3px 0;
+    text-align: center;
+    background: var(--card-background-color, #fff);
+    color: var(--liza-muted-text);
+    font-size: var(--liza-font-13);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .press-appearance-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--liza-font-13);
+    font-weight: 500;
+    color: var(--primary-text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* _htmlIconField and configFieldHtml each bring their own .config-field
+     wrapper carrying the spacing of a standalone form row. Inside a press box
+     they are stacked siblings, so the outer gap owns the rhythm. */
+  .press-appearance-row .config-field {
+    margin: 0;
+    min-width: 0;
+  }
+  /* Nothing here. A press's Tooltip is the same field press 1's is, so it
+     takes the same rule -- the one on a text input inside a config field. It used to
+     restate padding, radius and font size at smaller values, which is why two
+     copies of one field sat stacked at two different sizes. */
+  /* The page-title editor's icon cell. It shares no markup with the presses --
+     it is a single field in a header row -- but it wants the same "one cell,
+     not a form row" sizing. */
+  .title-icon-field { flex: 1 1 190px; max-width: 300px; }
+  .title-icon-field .config-field { margin: 0; }
+
   .btn-test-config,
   .slider-reset-control {
     padding: 6px 14px;
@@ -1232,13 +1532,25 @@ export const STYLES = `
   }
   .btn-test-config:hover,
   .slider-reset-control:hover { background: color-mix(in srgb, var(--primary-color) 10%, transparent); }
+  /* The only control that adds an action -- Home Assistant's own is hidden in
+     every state, so this one owns the wording and the position.
+     Aligned to the content start, and padded only on the inside edge it does
+     not share with the cards above it. It used to be centred on
+     an auto margin and padded 12px on both sides, which left it sitting
+     off the start of the list it appends to. This rule was also declared
+     twice; the earlier copy never applied and has been removed. */
   .liza-add-action-btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
+    align-self: flex-start;
     gap: 6px;
-    padding: 8px 12px;
-    margin: 8px auto 0;
+    padding: 8px 10px 8px 0;
+    /* The gap around this is the container's now. The 8px of padding is kept --
+       it is what makes the control big enough to hit -- and pulled back out of
+       the layout on both edges, so the words sit one step below the last card
+       and one step above the end of the card, while the target still reaches
+       into the space on either side of them. */
+    margin: -8px 0;
     background: transparent;
     border: none;
     color: var(--liza-accent-text);
@@ -1246,10 +1558,9 @@ export const STYLES = `
     font-size: var(--liza-font-m);
     font-weight: 500;
     cursor: pointer;
-    transition: background .15s;
-    align-self: center;
+    transition: color .15s;
   }
-  .liza-add-action-btn:hover { background: rgba(3,169,244,.08); }
+  .liza-add-action-btn:hover { text-decoration: underline; }
 
   /* --- Page Settings (slider_horizontal) --- */
   /* Metrics here deliberately match .config-card-header. The page
@@ -1564,6 +1875,15 @@ export const STYLES = `
     font-weight: 500;
     color: var(--liza-muted-text);
   }
+  /* A heading with something above it is starting a second section, and a
+     break between two sections cannot be the same size as the step inside
+     one: at a single step the control that ends the Click list and the
+     heading that opens Long touch read as one group, so the add button looks
+     like it belongs to the gesture named underneath it. Two steps rather than
+     a new number, so the break is still the card's own rhythm. */
+  .config-card-body > .action-editor-heading:not(:first-child) {
+    margin-top: var(--liza-field-gap);
+  }
 
   /* --- Settings tab --- */
   .settings-view {
@@ -1658,17 +1978,6 @@ export const STYLES = `
   }
   .settings-preview img {
     max-width: 100%;
-  }
-  .settings-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .settings-toggle input {
-    width: 18px;
-    height: 18px;
-    margin: 0;
-    accent-color: var(--primary-color);
   }
   .settings-fonts-hint {
     text-align: left;
@@ -2338,6 +2647,11 @@ export const STYLES = `
      so it is spaced like the Label beside it.
      NB: no backticks in this comment; it sits inside a template literal. */
   #config-card-appearance { display: contents; }
+  /* The same contract, for the same reason -- see above. This host was added
+     later and had no rule at all, so on a button with no cycle it was an empty
+     div spending one of .cch-editor-inner's 16px gaps on nothing, and with a
+     cycle it stacked that gap on top of the section's own margin. */
+  #config-card-presses { display: contents; }
   .config-field-hint code,
   .slider-warning code {
     font-family: monospace;

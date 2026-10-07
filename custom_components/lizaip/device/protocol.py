@@ -22,6 +22,11 @@ _LOGGER = logging.getLogger(__name__)
 PROTOCOL_VERSION = 1
 PING_INTERVAL = 29
 
+#: Default deadline for a request/response round trip. Fine for the small
+#: commands that make up most of the protocol; a page write carrying a dozen
+#: image URLs is slower to acknowledge and passes its own, larger value.
+DEFAULT_REQUEST_TIMEOUT = 10.0
+
 # Message types
 TYPE_REQUEST = "request"
 TYPE_RESPONSE = "response"
@@ -215,7 +220,7 @@ class LizaIPProtocol:
         return True
 
     async def send_request(
-        self, name: str, data: dict | None = None, timeout: float = 10.0
+        self, name: str, data: dict | None = None, timeout: float = DEFAULT_REQUEST_TIMEOUT
     ) -> dict:
         """Send a request and await the correlated response. Returns response data."""
         if self._ws is None or self._ws.closed:

@@ -20,6 +20,14 @@ firmware_update:
         config_entry:
           integration: lizaip
 
+clear_device_pages:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: lizaip
+
 refresh_dynamic_sources:
   fields:
     entry_id:

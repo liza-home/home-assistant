@@ -56,6 +56,7 @@ from ._state import (
     _slider_touch_state,
     _STATE_DEBOUNCE_SECONDS,
     _DEFAULT_PAGE_ID,
+    clear_cycle_state,
     clear_slider_state,
     get_current_page,
     get_selected_button,
@@ -123,6 +124,13 @@ from .icons import (
     _compute_next_state_tooltip_inner,
     _match_state_icon,
 )
+# Only what is used outside this package. The rest of `toggle`'s surface is
+# read by its own siblings and by tests, which import it from `.toggle`
+# directly -- the same way `icons.toggle_icon` is reached.
+from .toggle import (
+    TOGGLE_KEY,
+    sanitize_toggle,
+)
 from .buttons import (
     _fire_optimistic_update,
     _get_script,
@@ -158,6 +166,8 @@ __all__ = [
     "SLIDER_TARGET_LAST_TOUCHED",
     "SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY",
     "SliderControl",
+    "TOGGLE_KEY",
+    "clear_cycle_state",
     "clear_slider_state",
     "control_range",
     "controls_for_entity",
@@ -180,6 +190,7 @@ __all__ = [
     "resolve_control",
     "resolve_fixed_action",
     "sanitize_slider_override",
+    "sanitize_toggle",
     "slider_control_override",
     "slider_override",
     "slider_subject_entity",

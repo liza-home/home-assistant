@@ -292,3 +292,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     # In-flight slider gestures are otherwise never evicted for a device that no
     # longer exists. Compiled scripts went with the entry's connection above.
     action_controller.clear_slider_state(entry.entry_id)
+    # Same reasoning for toggle cycle positions: nothing else drops them, since
+    # they are deliberately kept across page changes.
+    action_controller.clear_cycle_state(entry.entry_id)

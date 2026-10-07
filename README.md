@@ -11,6 +11,10 @@ you decide what every button depicts and what it controls, all from a panel insi
 
 **This integration requires a physical lizaIP device.**
 
+📸 **New here?** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) is a screenshot-illustrated
+walkthrough: installing, adding a device, defining pages, assigning button actions, the
+`mdi:`/`phu:`/`logo:`/`text:`/`media:` image schemes, and live entity variables.
+
 ## Installation
 
 **Requires Home Assistant 2026.8.0 or newer, with [HACS](https://hacs.xyz) installed.**
@@ -75,11 +79,18 @@ The Buttons tab shows the remote face, with that remote's pages beside it.
   area there.
 - Set the **Image**. Once the action names a target,  the card offers that target's states 
   and lets you give each one its own icon as it changes. It is one or  the other: a fixed image, or icons per state.
-- Give it a **Tooltip** — the text shown when a button is touched.
+- Give it a **Tooltip** — what is shown when a button is touched: usually words, but
+  any picture the Image field takes works too.
   `${STATE}` is replaced by what pressing the button does, `${NAME}`
   by what it opens, and the hint under the field shows what it currently reads.
   A tooltip can also show a live value from Home Assistant, such as a
   temperature or a battery level — see [Live values on the remote](#live-values-on-the-remote).
+
+The Image, the Tooltip and a page's title are the same kind of field: a plain text
+box you can copy from and paste into, saved with Enter or by leaving it. Plain words
+need no `text:` in front. Typing `mdi:` — or the prefix of another icon set Home
+Assistant has, such as `phu:` or `hue:` — opens a list of matching icons; picking one
+saves it. Icons from any installed set are drawn on the remote, not just `mdi:` and `phu:`.
 
 Clicking a button on *another* page's thumbnail jumps to that page and selects that
 button in one go.
@@ -124,6 +135,7 @@ value of any Home Assistant entity. Write the entity ID in `${…}`:
 |---|---|
 | `${sensor.outdoor_temperature}` | the state with its unit, e.g. `21.5 °C` |
 | `${weather.home.temperature}` | one attribute of the entity, e.g. `18` (no unit) |
+| `${weather.home}` | the weather: its icon in an image or page title, "Partly cloudy" in a tooltip |
 
 The entity ID is the one shown under **Settings → Entities** in Home Assistant. Numbers
 are rounded the way Home Assistant displays them, so a sensor you set to one decimal
@@ -139,6 +151,7 @@ shows one decimal here too.
 | Tooltip | `${STATE} · ${sensor.desk_lamp_power}` | Off · 12 W |
 | Image | `${sensor.outdoor_temperature}` | the value drawn as the button's picture |
 | Image | `text:${weather.home.temperature}°` | 18° |
+| Image | `${weather.home}` | the current weather icon (sun, clouds, rain, …) |
 | Image | `${sensor.lizaip_battery_icon}` | an icon chosen by a helper — see below |
 | Page title | `Living room ${sensor.living_room_temperature}` | Living room 22 °C |
 
@@ -206,10 +219,9 @@ template:
           {% endif %}
 ```
 
-The same pattern works for anything with stepped icons — Wi-Fi strength
-(`mdi:wifi-strength-1` … `-4`), or the weather, whose states (`sunny`, `rainy`,
-`partlycloudy`, …) need mapping to icon names such as `mdi:weather-sunny` or
-`mdi:weather-partly-cloudy`.
+The same pattern works for anything with stepped icons, such as Wi-Fi strength
+(`mdi:wifi-strength-1` … `-4`). The weather needs no helper: `${weather.home}` alone
+is already drawn as the matching `mdi:weather-…` icon.
 
 ### The vertical slider
 

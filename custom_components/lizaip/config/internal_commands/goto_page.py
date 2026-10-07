@@ -16,6 +16,7 @@ import voluptuous as vol
 
 from homeassistant.helpers import config_validation as cv
 
+from ...const import custom_icon_scheme
 from ...device.protocol import is_valid_page_id
 from .base import InternalCommand, InternalCommandError
 
@@ -68,6 +69,8 @@ def page_title(page: dict) -> str:
         return ""
 
     scheme = next((s for s in _TITLE_SCHEMES if raw.lower().startswith(s)), "")
+    # An extra registered icon set (``hue:bulb``) names its page like mdi: does.
+    custom = "" if scheme else custom_icon_scheme(raw)
     value = raw[len(scheme):]
     # imgserv:// wraps another whole spec; read the inner scheme.
     if scheme == "imgserv://":
@@ -83,15 +86,17 @@ def page_title(page: dict) -> str:
 
     if scheme in _SLUG_SCHEMES:
         return _humanise_slug(value)
+    if custom:
+        return _humanise_slug(value[len(custom):])
 
     if scheme == "text:":
         # User text is exact; "/" may be part of a name.
         return value
 
-    # A schemeless value is a name too, unless it is plainly a path: the panel
-    # prefixes "text:" when it saves one, so these come from layouts and older
-    # configs.
-    if not scheme and not value.startswith("/") and not _EXT_RE.search(value):
+    # A schemeless value is words -- the editor stores a typed title without
+    # the "text:" it implies, and the device draws it as text -- unless it is
+    # an HA path, which is drawn as a picture.
+    if not scheme and not value.startswith("/"):
         return value
 
     # file:, media:, URLs and bare paths: the last path segment is the only

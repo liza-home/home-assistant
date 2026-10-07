@@ -16,6 +16,7 @@ from ..const import (
     PREDICTED_UPDATE_EVENT,
     catchall_state_icon,
     resolve_icon_url,
+    resolve_image_tokens,
 )
 from ..state_icon import (
     icon_style_for_entities,
@@ -34,7 +35,9 @@ from .helpers import (
     _resolve_device_id,
     resolve_target_entities,
 )
-from .icons import _compute_next_state_tooltip, _match_state_icon
+from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
+from .toggle import runtime_assign
+from ..config.text_style import toggle_enabled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +111,10 @@ async def setup_state_listener(
         # Resolved once per flush, not per button: it cannot change mid-flush,
         # and `device_sync` hoists the identical call for the same reason.
         style_options = read_icon_style_options(getattr(entry, "options", None))
+        # Read once per flush for the same reason as the options above: the
+        # remote's settings cannot change mid-flush, and the per-button filter
+        # below must not ask the store once per button.
+        toggles = toggle_enabled(await store.async_get_settings(device_id))
         for eid in entities:
             state = hass.states.get(eid)
             if not state:
@@ -121,25 +128,36 @@ async def setup_state_listener(
                 if not action_id:
                     continue
                 action_icon = _match_state_icon(action, state)
-                # A one-way service (light.turn_on / turn_off) has a fixed glyph,
-                # so `_match_state_icon` returns None and this used to skip the
-                # button -- freezing its tint at whatever the last sync computed.
-                # Keyed on "could it be tinted", not "is it tinted now".
-                if not action_icon and not is_styleable(eid):
-                    continue
+                # No early-out on a missing `action_icon` here. A one-way
+                # service (light.turn_on / turn_off) has a fixed glyph, so
+                # `_match_state_icon` returns None, and so does a toggle's
+                # derived action -- yet both can still need a repaint, one for
+                # its tint and one for its next rule. Neither is knowable until
+                # the button is in hand, so the decision moved into the button
+                # loop below.
                 for page in current_pages:
                     pid = page.get("id", _DEFAULT_PAGE_ID)
                     page_color = page.get("default_color", "")
                     for btn_key, assign in await _get_assignments(hass, device_id, pid):
                         if assign.get("action_id") != action_id:
                             continue
+                        assign = runtime_assign(assign, toggles)
                         config = assign.get("config", [])
                         step = config[0] if isinstance(config, list) and config else {}
                         targets = resolve_target_entities(step, hass)
                         if eid not in targets:
                             continue
+                        # A toggle rule outranks every other source: it is
+                        # the only one that knows the button is about to do
+                        # something other than its declared action, so letting
+                        # state_icons win would paint a lie. Rule icons are
+                        # optional, so None falls through to the usual ladder.
+                        rule_glyph = toggle_icon(
+                            assign, state, entry.entry_id, pid, btn_key,
+                            eid.split(".")[0], hass=hass,
+                        )
                         tooltip: str | None
-                        if action_icon:
+                        if rule_glyph or action_icon:
                             state_icons = assign.get("state_icons") or {}
                             override = state_icons.get(state.state) or catchall_state_icon(
                                 state_icons,
@@ -147,11 +165,22 @@ async def setup_state_listener(
                                 state.state,
                                 action.get("service", ""),
                             )
-                            icon = override if override else action_icon
+                            # A rule glyph outranks the rest and arrives
+                            # already resolved from `toggle_icon`. The other
+                            # two read their variables as the sync reads them;
+                            # one with no value falls back to the action's own
+                            # icon.
+                            icon = (
+                                rule_glyph
+                                or resolve_image_tokens(override, hass)
+                                or resolve_image_tokens(action_icon, hass)
+                            )
+                            if not icon:
+                                continue
                             tooltip = _compute_next_state_tooltip(
                                 action, assign, state, hass, entry,
                             )
-                        else:
+                        elif is_styleable(eid):
                             # Colour-only: resolve the glyph through the *same*
                             # function the sync used, so a recolour cannot
                             # become a redraw.
@@ -165,6 +194,10 @@ async def setup_state_listener(
                             # Absent, so the consumer omits img_tooltip and the
                             # device keeps the label the sync gave it.
                             tooltip = None
+                        else:
+                            # Nothing to say: no rule, no state glyph, and no
+                            # tint this entity could carry.
+                            continue
                         # Only the tile is styled; the tooltip keeps the page
                         # colour, as a tinted label is only harder to read.
                         # Resolved from the whole target, not from `state`: an

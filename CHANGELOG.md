@@ -6,6 +6,54 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.2b3] - 2026-10-07
+
+### Added
+
+- **Virtual toggle button.** A button can now be a toggle that you set up
+  entirely in the editor, with long touch and toggle settings on a switch in
+  the gear tab.
+- **A repair notice when the remote can't take everything.** If the remote
+  refuses pages or a sync keeps failing, Home Assistant now shows it under
+  Repairs instead of only writing to the log.
+
+### Changed
+
+- **Starting Home Assistant no longer re-uploads every page.** The remote is
+  compared page by page and only pages that differ are written. A reorder
+  changes only the page order, not the pages themselves.
+- **Big setups load faster.** The editor fetches all button assignments in one
+  request and skips redrawing work that nothing needs.
+- **Faster, lighter live values.** When a value shown by a variable changes,
+  the remote now redraws only the buttons that show it instead of reloading
+  whole pages, and updates that don't change what you see (say, a new
+  temperature when the button only shows the weather icon) are ignored.
+- **Variables work in every icon.** Per-state button icons and the icons of an
+  action accept `${…}` variables just like a button's image, and each field shows
+  what it reads right now. An icon whose variable has no value falls back to the
+  next icon instead of drawing a broken one.
+- **Page titles, button images and tooltips are edited the same way.** Each is a
+  plain text box you can copy from and paste into. Enter or clicking elsewhere
+  saves it, Escape undoes it. Plain words need no `text:` in front, and the
+  prefix is no longer added behind your back.
+- **Icon suggestions as you type.** Type `mdi:` (or the prefix of another icon
+  set installed in Home Assistant, such as `phu:`) and a list of matching icons
+  opens under the field; pick one with the mouse or the arrow keys and Enter,
+  and it is saved. The list is no longer cut off at the edge of the card.
+- **Any icon set installed in Home Assistant works on the remote.** Icons from
+  add-ons such as hass-hue-icons (`hue:`) used to print as text on the remote;
+  they are now drawn like `mdi:` icons.
+- **Weather variables just work.** `${weather.home}` on its own as a button
+  image or page title draws the current weather icon (sun, clouds, rain, …),
+  and in a tooltip it reads "Partly cloudy" in your language instead of
+  `partlycloudy`. No template helper needed.
+- **Tooltips can show icons and pictures.** A tooltip takes everything a
+  button image does, e.g. `mdi:lightbulb` or `logo:sonos`, not just words.
+
+- **Subpages look like main pages in the editor.** A subpage's thumbnail now
+  has the same background as the other pages; it still sits slightly lower so
+  you can tell it apart.
+
 ## [2026.10.2b2] - 2026-10-05
 
 ### Added

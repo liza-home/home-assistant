@@ -348,7 +348,7 @@ export const StatesMixin = {
     this._mountIconPicker(slot, value, (picked) => {
       onPicked(picked);
       const preview = field?.querySelector(".icon-preview");
-      if (preview) preview.innerHTML = this._configImagePreviewHtml(picked, "");
+      if (preview) preview.innerHTML = this._configImagePreviewHtml(this._resolveImageVariables(picked) || "", "");
     });
   },
 };

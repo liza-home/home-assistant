@@ -47,7 +47,7 @@ lizaip/
     render.py          # Shared rendering utilities (SVG tessellation, autocrop)
     render_mdi.py      # MDI icon rendering (SVG → PNG via Pillow)
     render_logo.py     # Brand logo rendering (native colour or monochrome)
-    render_phu.py      # Philips Hue / custom-brand-icons rendering
+    render_custom.py    # Browser-registered icon sets (phu:, hue:, ...): store, upload, draw
     render_text.py     # Text-to-image rendering (shrink-to-fit, emoji fallback)
     const.py           # Size IDs, color names, path constants
     fonts/             # Bundled font files
@@ -334,15 +334,18 @@ imgserv://mdi:home?size=tile&fg=white&bg=333333&crop=0    # padded dark tile
 #### `phu:<icon-name>` — Custom Brand Icons (Philips Hue style)
 
 Renders icons from the [custom-brand-icons](https://github.com/elax46/custom-brand-icons)
-HACS frontend integration. Requires `custom-brand-icons` to be installed via HACS — the
-renderer loads icons from its JS bundle at runtime.
+HACS frontend integration. That set is registered in the browser, like `hue:` or any
+other plugin's, so its shapes reach imgserv the same way: the config panel looks each
+one up and uploads it, and imgserv draws it from the stored shape. Nothing is read off
+disk, so it does not matter where HACS put the JS bundle.
 
 ```
 imgserv://phu:ceiling-fan?size=tile&fg=white
 imgserv://phu:hue-go?size=tile&fg=FFD700
 ```
 
-> **Note:** If `custom-brand-icons` is not installed, all `phu:` requests return 404.
+> **Note:** A name whose shape has not been uploaded yet returns 404, and is remembered
+> as missing so the panel fills it in the next time it opens.
 
 #### `logo:<name>` — Brand logos
 
@@ -576,12 +579,15 @@ The frontend panel communicates with HA via these WebSocket commands (admin-only
 | `lizaip_config/get_actions` | Get the action library for a device |
 | `lizaip_config/save_actions` | Save the action library |
 | `lizaip_config/get_assignments` | Get button→action assignments for a page |
+| `lizaip_config/get_all_assignments` | Get every page's assignments in one call (keyed by page id as a string) |
 | `lizaip_config/save_assignments` | Save assignments and push to device |
 | `lizaip_config/get_pages` | Get the pages list |
 | `lizaip_config/set_pages` | Replace the pages list |
 | `lizaip_config/update_page` | Update a page's title image and/or default colour |
 | `lizaip_config/get_settings` | Get a device's title/tooltip text settings, with the defaults, the installed fonts and the size limits |
 | `lizaip_config/set_settings` | Validate and save the text settings and push them to the device |
+| `lizaip_config/sync_custom_icons` | Report the browser's extra icon sets (`window.customIcons`); answers the names the remote asked for that imgserv has no shape for yet |
+| `lizaip_config/store_custom_icons` | Upload icon shapes from those sets (`getIcon()`), which imgserv then draws |
 | `lizaip_config/get_action_labels` | Translated action wordings for a device's language |
 
 ## Localization
@@ -1104,8 +1110,9 @@ data:
   connect to the WebSocket endpoint.
 - **No offline buffering** — Commands sent while the device is disconnected will fail
   immediately.
-- **PHU icons require custom-brand-icons** — The `phu:` source type only works if the
-  `custom-brand-icons` HACS frontend integration is installed.
+- **Browser icon sets need the panel opened once** — `phu:`, `hue:` and the like exist
+  only in the browser, so their shapes reach imgserv through the config panel. A name
+  nobody has saved or synced yet renders as 404 until the panel next opens.
 - **cairosvg optional** — Native-colour SVG logo rendering requires `cairosvg`. Without it,
   SVG logos fall back to monochrome rendering.
 - **Bundled logo assets are not uniformly pre-cropped** — Several files under
@@ -1156,7 +1163,8 @@ power/network status.
 ### Image returns 404
 
 - **MDI:** Check the icon name at [materialdesignicons.com](https://materialdesignicons.com)
-- **PHU:** Ensure `custom-brand-icons` is installed via HACS
+- **PHU and other browser sets:** Ensure the set's HACS frontend plugin is installed, then
+  open the lizaIP config panel once so it uploads the shapes
 - **Logo:** Check spelling against the available list above
 - **File:** Ensure the file exists under `/config/www/` (not `/config/`)
 - **Media:** A `404` from the upstream `media_player_proxy` (e.g. no artwork available) is forwarded as `502`; check that the media player entity is playing and has a `media_content_id`

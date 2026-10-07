@@ -24,7 +24,9 @@ from homeassistant.core import HomeAssistant
 from ..action_controller import (
     OVERRIDABLE_FIXED_BUTTONS,
     SLIDER_VERTICAL_KEY,
+    TOGGLE_KEY,
     sanitize_slider_override,
+    sanitize_toggle,
 )
 from ..const import longtouch_steps
 from .const import (
@@ -57,6 +59,11 @@ class LizaRemoteStore:
         self._data: dict[str, dict[str, Any]] = {}
         self._loaded: set[str] = set()
         self._settings: dict[str, dict[str, Any]] = {}
+        # path → digest of the payload last written there. A page file whose
+        # content has not moved is not rewritten; see `_async_write_page`.
+        # Keyed by path and only ever populated by a successful write, so an
+        # entry also means "this process wrote that file".
+        self._written_page_digests: dict[str, str] = {}
 
     def _base_dir(self) -> str:
         return self._hass.config.path(YAML_DIR)
@@ -121,7 +128,8 @@ class LizaRemoteStore:
             return None
 
     @staticmethod
-    def _write_yaml(path: str, data: Any) -> None:
+    def _write_yaml(path: str, data: Any) -> bool:
+        """Write *data* as YAML. Returns whether it reached the disk."""
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
@@ -134,6 +142,8 @@ class LizaRemoteStore:
                 )
         except OSError as exc:
             _LOGGER.error("Failed to write YAML %s: %s", path, exc)
+            return False
+        return True
 
     @staticmethod
     def _runnable_overrides(table: Any) -> dict:
@@ -207,6 +217,10 @@ class LizaRemoteStore:
         # button's own action was cleared.
         if LizaRemoteStore._runnable_overrides(btn_data.get("overrides")):
             return False
+        # A toggle block is durable behavior in its own right: its rules carry
+        # runnable steps that no other field on this button mirrors.
+        if sanitize_toggle(btn_data.get(TOGGLE_KEY)):
+            return False
         return True
 
     @staticmethod
@@ -245,6 +259,15 @@ class LizaRemoteStore:
             # already sanitises them, but layout-generated and hand-edited YAML
             # reach this last gate directly: only runnable entries survive, and
             # an empty table is absence/inherit.
+            # The toggle block takes the same route for the same reason: it is
+            # run through its own sanitiser here so hand-written YAML cannot
+            # install a block the WebSocket allowlist would have rejected. An
+            # empty result is absence.
+            if key == TOGGLE_KEY:
+                cleaned_toggle = sanitize_toggle(val)
+                if cleaned_toggle:
+                    result[key] = cleaned_toggle
+                continue
             if key == "overrides" and isinstance(val, dict):
                 cleaned = {}
                 for ov_key, ov_val in LizaRemoteStore._runnable_overrides(val).items():
@@ -278,6 +301,10 @@ class LizaRemoteStore:
     #                                     _merge_shared_binding)
     #   buttons:
     #     <button_key>: { action_id, config, label, image, state_icons, ... }
+    #       toggle: optional sibling of config, giving one button several
+    #               faces. { mode: "cycle", rules: [{icon?, label?, config:
+    #               [...]}, ...] }. Each press runs the next rule; config
+    #               mirrors rule 1 and is the fallback if the block is inert.
 
     #: Page-level key an older writer used to hold the part of a dynamic binding
     #: every bound button shared. Still read so pages already on disk keep
@@ -636,11 +663,14 @@ class LizaRemoteStore:
         return data if (pages or data.get("action_library") or assignments) else None
 
     async def _write_page_files(self, device_id: str, pages: list, assignments: dict) -> None:
-        """Rewrite page YAML files; skip malformed page entries.
+        """Write page YAML files; skip malformed page entries.
 
-        Callers rebuild every page because page files carry metadata and hashes
-        as well as button assignments. One malformed page entry must not prevent
-        the other page files from being written.
+        Callers hand over the whole page list because page files carry metadata
+        and hashes as well as button assignments, and a caller rarely knows
+        which of those a change touched. `_async_write_page` decides per page
+        whether anything moved, so handing over everything costs one payload
+        build per page rather than one disk write per page. One malformed page
+        entry must not prevent the other page files from being written.
         """
         for page_meta in pages:
             if not isinstance(page_meta, dict):
@@ -671,11 +701,61 @@ class LizaRemoteStore:
         if layout_id:
             await async_load_layout(self._hass, layout_id)
 
+    @staticmethod
+    def _page_file_digest(file_data: dict) -> str:
+        """Fingerprint of a page's file payload.
+
+        Deliberately not ``yaml.dump``: serialising is the expensive half of a
+        write (~24 ms per page on remote-grade hardware), and the whole point
+        of the digest is to decide whether that serialisation is needed at all.
+        ``repr`` of the built payload is stable — ``_build_page_file_data``
+        assembles its keys in a fixed order from plain scalars, lists and
+        dicts — and runs in C.
+        """
+        return hashlib.md5(repr(file_data).encode()).hexdigest()
+
+    def _forget_page_digests(self, pages_dir: str, keep: set[int] | None = None) -> None:
+        """Drop remembered digests for page files under *pages_dir*.
+
+        Called after files are deleted behind the cache's back: the digest says
+        "this file holds that payload", and once the file is gone the claim is
+        false — a recycled page id would otherwise inherit it and skip the
+        write that recreates the file. *keep* names the page ids that survived;
+        without it every page under the directory is forgotten, which is what
+        removing a device wants.
+        """
+        prefix = os.path.join(pages_dir, "")
+        for path in [p for p in self._written_page_digests if p.startswith(prefix)]:
+            if keep is not None:
+                name = os.path.basename(path)
+                try:
+                    if int(name[:-5]) in keep:
+                        continue
+                except ValueError:
+                    pass
+            self._written_page_digests.pop(path, None)
     async def _async_write_page(self, path: str, page_meta: dict, assignments: dict) -> None:
-        """Build one page's file payload on the loop and write it off it."""
+        """Build one page's file payload on the loop and write it off it.
+
+        Skipped when the payload matches what we last wrote to *path*. Callers
+        hand over the whole page list — a reorder, an added page, a renamed one
+        — because page order used to be the only thing they could express, so
+        every such call rewrote every page file. Only the two list files carry
+        order; the page files do not, so a reorder has nothing to say to any of
+        them and now writes none.
+        """
         await self._async_layout_ready(page_meta)
         file_data = self._build_page_file_data(page_meta, assignments)
-        await self._hass.async_add_executor_job(self._write_yaml, path, file_data)
+        digest = self._page_file_digest(file_data)
+        if self._written_page_digests.get(path) == digest:
+            return
+        written = await self._hass.async_add_executor_job(
+            self._write_yaml, path, file_data,
+        )
+        # Only remember a payload that actually reached the disk: caching a
+        # failed write would make every later attempt skip itself.
+        if written:
+            self._written_page_digests[path] = digest
 
     async def _async_read_page(self, path: str) -> tuple[dict, dict] | None:
         """Read one page file off the loop and parse it on it."""
@@ -711,6 +791,7 @@ class LizaRemoteStore:
         await self._hass.async_add_executor_job(
             self._cleanup_stale_pages, pages_dir, active_page_ids,
         )
+        self._forget_page_digests(pages_dir, keep=active_page_ids)
 
     @staticmethod
     def _cleanup_stale_pages(pages_dir: str, active_page_ids: set[int]) -> None:
@@ -751,6 +832,7 @@ class LizaRemoteStore:
         self._data.pop(device_id, None)
         self._settings.pop(device_id, None)
         self._loaded.discard(device_id)
+        self._forget_page_digests(self._pages_dir(device_id))
         device_dir = self._device_dir(device_id)
         if await self._hass.async_add_executor_job(os.path.isdir, device_dir):
             try:
@@ -772,6 +854,23 @@ class LizaRemoteStore:
         data = self._data.get(device_id, {})
         return data.get("pages", [])
 
+    async def async_set_page_order(self, device_id: str, pages: list[dict]) -> None:
+        """Persist a new page order without rewriting the page files.
+
+        Order lives entirely in ``main_pages.yaml`` and ``page_order.yaml``,
+        both of which are flat lists of page ids. A page's own file carries its
+        metadata and button assignments, none of which a reorder touches.
+
+        :meth:`async_set_pages` rewrites every page file because it also has to
+        handle edits, additions and deletions; for a pure move that is N file
+        writes to persist what is really two lists of integers, and the panel
+        waits on all of them before the thumbnail visibly lands.
+        """
+        await self._ensure_loaded(device_id)
+        entry = self._ensure_device(device_id)
+        entry["pages"] = pages
+        await self._async_write_page_lists(device_id, pages)
+
     async def async_set_pages(self, device_id: str, pages: list[dict]) -> None:
         await self._ensure_loaded(device_id)
         entry = self._ensure_device(device_id)
@@ -779,14 +878,23 @@ class LizaRemoteStore:
         entry["pages"] = pages
         page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
         await self._async_write_page_lists(device_id, pages)
-        removed_ids = old_page_ids - set(page_ids)
         assignments = entry.get("assignments", {})
-        for rid in removed_ids:
-            page_path = self._page_path(device_id, rid)
-            if await self._hass.async_add_executor_job(os.path.isfile, page_path):
-                await self._hass.async_add_executor_job(os.remove, page_path)
+        for rid in old_page_ids - set(page_ids):
             assignments.pop(rid, None)
         await self._write_page_files(device_id, pages, assignments)
+        # Sweep the directory rather than deleting only the ids this call
+        # happens to have dropped. The in-memory diff can see a page file only
+        # while the page is still listed in memory, and `_async_write_page_lists`
+        # above has already dropped the removed ids from `page_order.yaml`: if
+        # the process stops between those two points the file is left behind and
+        # becomes invisible to every later diff, so it can never be deleted.
+        # Listing the directory and removing whatever is not an active page is
+        # authoritative, costs one executor job instead of two per removal, and
+        # heals orphans left by earlier interruptions.
+        await self._hass.async_add_executor_job(
+            self._cleanup_stale_pages, self._pages_dir(device_id), set(page_ids),
+        )
+        self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
 
     @staticmethod
     def compute_page_hash(image: str, assignments: dict[str, dict]) -> int:
@@ -798,6 +906,11 @@ class LizaRemoteStore:
         excluded: PROTOCOL.md §12 fixes physical fixed-button glyphs in
         firmware, and ``device_sync`` builds the device's ``buttons[]`` from the
         top-level assignment only. Override edits change behavior, not pixels.
+
+        Toggle rule icons are the exception that proves the rule: unlike
+        overrides they are glyphs this page can display, so editing one has to
+        invalidate the device's cached copy. Rule order is part of the digest
+        because it decides which glyph comes next.
         """
         parts = [image or ""]
         for btn_key in sorted(assignments.keys()):
@@ -811,6 +924,19 @@ class LizaRemoteStore:
             if isinstance(state_icons, dict) and state_icons:
                 for state_key in sorted(state_icons.keys()):
                     parts.append(f"{btn_key}.si.{state_key}={state_icons[state_key] or ''}")
+            toggle = assign.get(TOGGLE_KEY)
+            if isinstance(toggle, dict) and toggle:
+                rules = toggle.get("rules")
+                rules = rules if isinstance(rules, list) else []
+                for pos, rule in enumerate(rules):
+                    if not isinstance(rule, dict):
+                        continue
+                    # Position and icon only: a step's position is what selects
+                    # it, and its icon is what the device draws. Its action,
+                    # label and tooltip are resolved on press and on render, so
+                    # changing them must not resync every page that has a
+                    # toggle.
+                    parts.append(f"{btn_key}.tg.{pos}={rule.get('icon') or ''}")
         raw = "\n".join(parts)
         digest = hashlib.md5(raw.encode()).hexdigest()
         return int(digest[:8], 16)

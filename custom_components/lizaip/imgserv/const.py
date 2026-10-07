@@ -15,6 +15,7 @@ would only put distance between a value and its reason.
 from __future__ import annotations
 
 import os
+import re
 from typing import Final, NamedTuple
 
 from PIL import ImageFont
@@ -217,3 +218,31 @@ def build_palette() -> list[dict[str, str]]:
 IMG_PATH: Final = "/api/imgserv"
 
 
+#: imgserv's own source types. A browser icon set registered under one of
+#: these names never shadows it. ``phu`` is deliberately not among them: the
+#: custom-brand-icons set is a browser registration like any other, and its
+#: shapes arrive through the upload path instead of a JS bundle read off disk.
+NATIVE_SOURCE_TYPES: Final = frozenset({"mdi", "logo", "text", "file", "media"})
+
+#: Icon sets the frontend has registered beyond the native ones (``phu``,
+#: ``hue``, ``fapro``, ...), as last reported by the panel. They exist only in
+#: the browser, so imgserv draws them from the shapes the panel uploaded
+#: (``render_custom.py``). Module state because the classifiers in the root
+#: ``const.py`` need it and none of them has ``hass`` to look it up with.
+_custom_icon_prefixes: set[str] = set()
+
+_ICON_PREFIX_RE: Final = re.compile(r"^[a-z0-9_-]+$")
+
+
+def set_custom_icon_prefixes(prefixes) -> None:
+    """Replace the registered extra icon sets; native and malformed names are dropped."""
+    _custom_icon_prefixes.clear()
+    _custom_icon_prefixes.update(
+        p for p in prefixes or ()
+        if isinstance(p, str) and _ICON_PREFIX_RE.match(p) and p not in NATIVE_SOURCE_TYPES
+    )
+
+
+def custom_icon_prefixes() -> frozenset[str]:
+    """The extra icon sets currently registered."""
+    return frozenset(_custom_icon_prefixes)

@@ -173,9 +173,23 @@
           "description": "The page to show."
         }
       }
+    },
+    "clear_device_pages": {
+      "name": "Borrar las páginas del dispositivo",
+      "description": "Elimina todas las páginas del mando y las reconstruye a partir de la configuración guardada. Úsalo cuando las páginas del dispositivo ya no coincidan con las de Home Assistant. No se pierde ninguna configuración.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Dispositivo",
+          "description": "Dispositivo que se va a reconstruir. Si se omite, se reconstruyen todos los dispositivos lizaIP."
+        }
+      }
     }
   },
   "issues": {
+    "pages_rejected": {
+      "title": "No se pudieron guardar páginas de lizaIP en el dispositivo",
+      "description": "El dispositivo «{device}» rechazó la(s) página(s) {pages}. Actualmente almacena {stored} página(s) y no informa de ningún límite de páginas en sus capacidades, por lo que ese límite solo puede descubrirse al alcanzarlo. Elimina las páginas indicadas en el panel de lizaIP o actualiza el firmware del dispositivo. El resto de páginas están sincronizadas y funcionan."
+    },
     "protocol_version_mismatch": {
       "title": "Versión de protocolo de lizaIP incompatible",
       "description": "El dispositivo «{device}» informa de la versión de protocolo {device_version}, pero esta integración espera la versión {ha_version}. Actualiza el firmware del dispositivo o la integración."
@@ -183,6 +197,10 @@
     "repeated_connection_failure": {
       "title": "El dispositivo lizaIP se desconecta repetidamente",
       "description": "El dispositivo «{device}» se ha desconectado {count} veces sin un protocolo de enlace correcto. Comprueba la alimentación y la conexión de red del dispositivo."
+    },
+    "page_sync_failed": {
+      "title": "No se pudieron enviar las páginas de lizaIP al dispositivo",
+      "description": "Home Assistant no ha podido escribir la configuración de páginas en \"{device}\" {count} veces seguidas. El último error fue: {error}. Es posible que las páginas del mando ya no coincidan con las que muestra el panel. Prueba «Borrar y reconstruir páginas» en los ajustes del panel de lizaIP; si no funciona, desconecta y vuelve a conectar la alimentación del mando."
     }
   },
   "exceptions": {

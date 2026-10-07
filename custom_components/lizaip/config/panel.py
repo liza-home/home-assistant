@@ -14,6 +14,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.panel_custom import async_register_panel
 
 from ..action_controller import (
+    clear_cycle_state,
     clear_slider_state,
     get_current_page,
     setup as setup_action_dispatch,
@@ -97,6 +98,22 @@ class LizaIPPanelView(HomeAssistantView):
         )
 
 
+def needs_device_sync(event_data: dict, entry_id: str) -> bool:
+    """Whether a ``config_changed`` event still has work for the device sync.
+
+    A reorder whose ``set_main_pages`` push already succeeded is marked
+    ``order_only``: the device holds the new order, so a sync would rebuild
+    every page payload only to find nothing to send. That rebuild is the one
+    part of a sync that grows with the number of pages.
+    """
+    if event_data.get("entry_id") != entry_id:
+        return False
+    if event_data.get("order_only"):
+        _LOGGER.debug("Page order already pushed, skipping the full sync")
+        return False
+    return True
+
+
 async def async_setup_panel(hass: HomeAssistant) -> None:
     """One-time setup: register the sidebar panel and WS commands."""
     if hass.data.get(DOMAIN, {}).get("_panel_registered"):
@@ -165,13 +182,9 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     # State listener → icon updates
     entry_data["state_unsub"] = await setup_state_listener(hass, entry)
-    # Entity variables in tooltips and icons → resync when their entity moves.
-    entry_data["variable_unsub"] = await async_setup_variable_listener(
-        hass, entry, _device_sync_mod.sync_config_to_device
-    )
 
     async def _on_config_changed(event: Event) -> None:
-        if event.data.get("entry_id") == entry.entry_id:
+        if needs_device_sync(event.data, entry.entry_id):
             await _device_sync_mod.sync_config_to_device(hass, entry)
 
     async def _on_device_hello(event: Event) -> None:
@@ -195,12 +208,19 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         if conn is None or not getattr(conn, "connected", False):
             return
         await conn.set_page(page_id, buttons=buttons)
+        _device_sync_mod.note_partial_page(conn, page_id, buttons)
 
     push_queue = IconPushQueue(
         _send_page,
         current_page=lambda: get_current_page(entry.entry_id),
     )
     entry_data["icon_push_queue"] = push_queue
+
+    # Entity variables in tooltips and icons → push what moved when their
+    # entity does, through the queue above.
+    entry_data["variable_unsub"] = await async_setup_variable_listener(
+        hass, entry, _device_sync_mod.async_push_variable_pages
+    )
 
     # A plain callback, so it cannot start a concurrent round-trip of its own.
     # The tooltip style therefore comes from `cached_settings`, warmed during
@@ -281,6 +301,10 @@ async def async_unload_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     # An in-flight slider gesture cannot survive the entry going away: its
     # base value was read from an entity this entry owns.
     clear_slider_state(entry.entry_id)
+    # Cycle positions outlive a page change on purpose, so unload is the only
+    # place they are dropped — and they must be, or a reload would resume a
+    # conversation with a device that is no longer configured.
+    clear_cycle_state(entry.entry_id)
 
     # Before the unsubscribes below, so a drain cannot start a fresh round-trip
     # against a connection this unload is about to drop. The task is tied to

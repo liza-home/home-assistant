@@ -5,6 +5,41 @@
  */
 
 /**
+ * How long a long-press keeps the right to swallow a click, in ms.
+ *
+ * A touch stack that delivers the click a long-press ended delivers it
+ * immediately; 700 ms is generous for that and still far short of the next
+ * deliberate tap.
+ */
+const SUPPRESS_MS = 700;
+
+/**
+ * Mark (or unmark) the click a long-press is about to leave behind.
+ *
+ * This used to be a plain boolean cleared only by the click it was waiting
+ * for -- which iOS frequently never sends. Safari swallows the click itself
+ * once a long press has turned into a text callout or a drag lift, and it
+ * sends none at all when the press ends as a scroll of the page strip. The
+ * flag then stayed set and ate the *next* tap instead, so a page or a button
+ * simply failed to open every other time it was touched.
+ *
+ * Two things stop that now: the mark expires, and the next touch clears it
+ * before it can do any harm.
+ */
+export function armSuppress(el, on) {
+  if (el) el._lizaSuppressClick = on ? Date.now() + SUPPRESS_MS : 0;
+}
+
+/** True if a click arriving now is the one a long-press just left behind.
+ *  Reading it consumes it either way: a stale mark must not outlive the
+ *  first click that looks at it. */
+export function suppressedNow(el) {
+  const until = el?._lizaSuppressClick || 0;
+  if (el) el._lizaSuppressClick = 0;
+  return until > 0 && Date.now() <= until;
+}
+
+/**
  * Draw the SVG remote with button overlays (shapes only — no icon images).
  * @param {HTMLElement} container
  * @param {Object} blueprint - {buttons, viewBox}
@@ -159,7 +194,7 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
       // click that ended it. Without this, opening the menu by long-press also
       // selected the button underneath and re-rendered the face out from under
       // the menu.
-      if (el._lizaSuppressClick) { el._lizaSuppressClick = false; return; }
+      if (suppressedNow(el)) return;
       onSelect(idx);
     });
 
@@ -177,12 +212,14 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
       const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
       el.addEventListener("touchstart", (e) => {
         cancel();
+        // A new gesture starts: anything the last one left behind is stale.
+        armSuppress(el, false);
         const t = e.touches && e.touches[0];
         const x = t ? t.clientX : 0;
         const y = t ? t.clientY : 0;
         timer = setTimeout(() => {
           timer = null;
-          el._lizaSuppressClick = true;
+          armSuppress(el, true);
           opts.onContext(idx, { clientX: x, clientY: y });
         }, 500);
       }, { passive: true });

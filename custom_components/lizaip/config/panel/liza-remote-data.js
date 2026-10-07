@@ -298,9 +298,24 @@ export const DataMixin = {
    * discard their work. `_onConfigChanged` calls `_loadAssignments` first for
    * exactly that reason, having already established there is no edit in
    * flight.
+   *
+   * Everything that has to come from the backend is fetched in one call. Page
+   * by page meant one round trip per page per config change, so a single
+   * rename on a hundred-page remote cost a hundred of them. A failed bulk
+   * read falls through to the per-page path, which has the fallbacks.
    */
   async _loadGlobalUsage(refresh = false) {
     const details = {};
+    let bulk = null;
+    const needsBackend = this._pages.some(
+      (p) => p.id !== this._currentPageId && (refresh || !this._pageCache[p.id]),
+    );
+    if (needsBackend) {
+      try {
+        const r = await this._hass.callWS({ type: "lizaip_config/get_all_assignments", entry_id: this._currentEntry });
+        bulk = r?.assignments || {};
+      } catch (e) { bulk = null; }
+    }
     for (let pi = 0; pi < this._pages.length; pi++) {
       const page = this._pages[pi];
       let assigns;
@@ -314,6 +329,11 @@ export const DataMixin = {
         this._pageCache[page.id] = JSON.parse(JSON.stringify(assigns));
       } else if (!refresh && this._pageCache[page.id]) {
         assigns = this._pageCache[page.id];
+      } else if (bulk) {
+        // A page absent from the bulk answer genuinely has no assignments
+        // stored, so `{}` is the truth here and not a failed read.
+        assigns = bulk[String(page.id)] || {};
+        this._pageCache[page.id] = JSON.parse(JSON.stringify(assigns));
       } else {
         try {
           const r = await this._hass.callWS({ type: "lizaip_config/get_assignments", entry_id: this._currentEntry, page_id: page.id });
@@ -355,9 +375,28 @@ export const DataMixin = {
         if (interactions && typeof interactions === "object") {
           for (const [name, aid] of Object.entries(interactions)) record(aid, name);
         }
+        // Toggle rules run library actions too. They are counted for the same
+        // reason interactions are: this map is what marks an action unused, and
+        // a rule step is as live a use as the button's own action.
+        const rules = assign.toggle?.rules;
+        if (Array.isArray(rules)) {
+          for (const rule of rules) record(rule?.action_id, "toggle");
+        }
       }
     }
     this._globalUsageDetails = details;
+
+    // Whether this call actually learned anything.
+    //
+    // `_switchTab` paints the actions tab immediately and then waits on this,
+    // so without an answer it repainted the whole panel a second time on every
+    // visit -- and a render re-runs the tab's full markup. The usage map is
+    // small and this runs once per tab switch or config change, not per state
+    // change, so stringifying it is cheap next to the render it saves.
+    const signature = JSON.stringify(details);
+    const changed = signature !== this._globalUsageSig;
+    this._globalUsageSig = signature;
+    return changed;
   },
 
   _globalUsageCount(actionId) {
@@ -532,6 +571,22 @@ export const DataMixin = {
         }
         if (!Object.keys(assign.interactions).length) delete assign.interactions;
       }
+      // A toggle rule pointing at the deleted action would keep running a step
+      // whose library entry no longer exists — the step is stored inline, so it
+      // does not fail, it just becomes an action nobody can find or edit. The
+      // whole block goes once its last rule does: `sanitize_toggle` drops an
+      // empty one anyway, and leaving `{mode}` behind would claim the button
+      // toggles while offering nothing to toggle between.
+      const toggleRules = assign.toggle?.rules;
+      if (Array.isArray(toggleRules)) {
+        const kept = toggleRules.filter(rule => rule?.action_id !== deletedId);
+        if (kept.length !== toggleRules.length) {
+          if (kept.length) assign.toggle.rules = kept;
+          else delete assign.toggle;
+          changed = true;
+        }
+      }
+      const hasToggle = (assign.toggle?.rules || []).length > 0;
       const hasInteractions = assign.interactions && Object.keys(assign.interactions).length > 0;
       // `mode` rather than truthiness, the same test `_hasRunnableAction` and
       // the store make: `ensureSliderActions` leaves a bare `{}` behind, which
@@ -549,7 +604,7 @@ export const DataMixin = {
       const hasUnbind = Object.hasOwn(assign, "dynamic");
       const hasOverrides = assign.overrides && Object.keys(assign.overrides).length > 0;
       if (!assign.action_id && !assign.image && !hasInteractions && !hasSlider
-          && !hasUnbind && !hasOverrides) {
+          && !hasUnbind && !hasOverrides && !hasToggle) {
         delete assigns[btnKey];
       }
     }

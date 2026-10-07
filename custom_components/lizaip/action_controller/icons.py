@@ -6,7 +6,6 @@ import logging
 from homeassistant.core import HomeAssistant, State
 
 from ..const import (
-    NEXT_STATE_MAP,
     attr_str,
     clean_label_text,
     friendly_svc,
@@ -21,17 +20,29 @@ from ..const import (
     localize_static_name,
     name_is_source_owned,
     name_is_user_written,
+    NEXT_STATE_MAP,
+    resolve_image_tokens,
     scope_action_states,
     scoped_icon_state,
     service_to_attribute,
     state_token_label,
     substitute_label_tokens,
 )
+from ._state import cycle_index
 from .helpers import (
     first_step,
     resolve_step_entity,
     service_name,
     subject_for_assign,
+)
+from .toggle import (
+    MODE_CYCLE,
+    rule_icon,
+    rule_label,
+    resolve_rule_label,
+    step_icon,
+    toggle_mode,
+    toggle_rules,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,6 +82,14 @@ def _compute_next_state_tooltip_inner(
     entry=None,
 ) -> str:
     """The ladder itself. See ``_compute_next_state_tooltip``."""
+    # Rung 0: a toggle rule speaks for the step actually about to run, which no
+    # rung below it knows about. Only cycle mode needs the button's identity to
+    # answer, and this caller repaints from a state change — which cycle mode
+    # never sees — so there is nothing to pass and nothing lost by not passing
+    # it. Labels are optional, so None is the ordinary answer.
+    rule_text = toggle_tooltip(assign, state, hass=hass, entry=entry)
+    if rule_text:
+        return rule_text
     service = action.get("service", "")
     svc = service_name(service)
     static_name = assign.get("label") or action.get("name") or ""
@@ -234,5 +253,140 @@ def _match_state_icon(action: dict, state: State) -> str | None:
         # one-way service gets no state-keyed icon at all.
         lookup = scoped_icon_state(svc, domain, state.state)
         return get_default_icon(domain, None, lookup) if lookup else None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Toggle rule icons
+# ---------------------------------------------------------------------------
+
+def toggle_icon(
+    assign: dict,
+    state: State | None,
+    entry_id: str | None = None,
+    page_id: int | None = None,
+    button_key: str | None = None,
+    entity_domain: str = "",
+    service_icons: dict | None = None,
+    hass: HomeAssistant | None = None,
+) -> str | None:
+    """The glyph a ``toggle`` block asks this button to wear right now.
+
+    ``None`` means "nothing to say" and hands the question back to the ordinary
+    ladder (``state_icons`` → the action library's ``states`` → the domain
+    defaults). That is the common case even for a configured toggle: rule icons
+    are optional in ``state`` mode precisely because the existing resolution
+    usually gets it right, so this must not shadow it with a blank.
+
+    Two different questions share one function because callers ask it at the
+    same point in their ladder:
+
+    * ``state`` mode answers "which rule does the subject's state select", and
+      needs no identity — the state is the whole input.
+    * ``cycle`` mode answers "what will the *next* press do", which is a
+      property of this button on this page, so it needs the key triple. Without
+      it there is no position to read and the answer is ``None`` rather than a
+      guess at the first step: a caller that cannot identify the button is a
+      caller that would paint the wrong one.
+    """
+    mode = toggle_mode(assign)
+    if mode is None:
+        return None
+
+    rules = toggle_rules(assign)
+    if not rules:
+        return None
+
+    if mode == MODE_CYCLE:
+        if entry_id is None or page_id is None or button_key is None:
+            return None
+        # cycle_index reads the position the *next* press will run, which is
+        # exactly what the tile should advertise. Reading never advances, so
+        # repainting an icon cannot skip a step.
+        index = cycle_index(entry_id, page_id, button_key, len(rules))
+        # Position 0 is the button's own declared action -- the editor keeps
+        # `rules[0]` a mirror of `config` -- so at rest the button wears the
+        # face it would wear with no toggle at all. Handing the question back
+        # means the Image field, `state_icons` and the domain defaults answer,
+        # which is what the card's own Image preview already shows. Answering
+        # here instead would let a cycle quietly override a pinned image.
+        if index == 0:
+            return None
+        rule = rules[index]
+        # A press icon takes the same `${sensor.x}` a button's Image does, and
+        # was reaching the device with the braces still in it -- `mdi:battery-
+        # ${sensor.foo}` is not an icon name, so the tile drew nothing. The
+        # assignment's own image has been resolved by `with_resolved_image`
+        # all along; this is the same rule, applied to the same syntax, from
+        # the one place all three callers of this function pass through.
+        #
+        # A variable that reads nothing drops the whole value, exactly as it
+        # does for a button image -- and here that is not a blank but a fall
+        # through to `step_icon`, which is a better answer than half a name.
+        icon = rule_icon(rule)
+        if icon and hass is not None:
+            icon = resolve_image_tokens(icon, hass)
+        # Derived when the user picked nothing. Falling through to the
+        # ordinary ladder here answers with the *declared* action's face — the
+        # one glyph that is certainly wrong, because the press is about to run
+        # something else and no state will ever correct it. `step_icon` names
+        # the step instead.
+        return icon or step_icon(rule, entity_domain, service_icons)
+
+    return None
+
+
+def toggle_tooltip(
+    assign: dict,
+    state: State | None,
+    entry_id: str | None = None,
+    page_id: int | None = None,
+    button_key: str | None = None,
+    hass: HomeAssistant | None = None,
+    entry=None,
+) -> str | None:
+    """The words a ``toggle`` block asks this button to print right now.
+
+    The tooltip twin of :func:`toggle_icon`, selecting by exactly the same
+    rules so a button's face and its words can never disagree about which step
+    is next — the failure the two being resolved separately would produce.
+
+    ``None`` again means "nothing to say", handing the question to the ordinary
+    tooltip ladder, which phrases "Living Room TV — pause" from the service and
+    the subject's state. A label is worth storing only when that would be
+    wrong — which on a cycle step, whose service is often a bare key code, is
+    most of the time.
+    """
+    mode = toggle_mode(assign)
+    if mode is None:
+        return None
+
+    rules = toggle_rules(assign)
+    if not rules:
+        return None
+
+    if mode == MODE_CYCLE:
+        if entry_id is None or page_id is None or button_key is None:
+            return None
+        index = cycle_index(entry_id, page_id, button_key, len(rules))
+        # The icon twin's reasoning: position 0 mirrors `config`, so the
+        # ordinary tooltip ladder already phrases it from the declared action
+        # and the subject's state, and a stored label would only shadow the
+        # Tooltip field the user can see on the card.
+        if index == 0:
+            return None
+        # Resolved, not raw. This is the *other* producer of a press tooltip --
+        # the one that answers while the page is being rendered, where
+        # `buttons.py` answers when a press actually runs -- and it handed the
+        # stored text out verbatim, so a `${STATE}` press printed its braces
+        # onto the tile until the first press rewrote it. The two must agree;
+        # see `resolve_rule_label`.
+        #
+        # Without `hass` there is nothing to resolve against, and the raw text
+        # is still better than nothing: the callers that can pass it do.
+        if hass is None:
+            return rule_label(rules[index])
+        return resolve_rule_label(rules[index], hass, entry) or None
 
     return None

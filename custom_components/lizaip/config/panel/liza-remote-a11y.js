@@ -6,8 +6,8 @@
 const NATIVE = "a[href], button, input, select, textarea";
 
 // HA's pickers are listed by tag because their real control sits in a shadow
-// root querySelectorAll cannot see -- the page-title editor is built from
-// nothing else, so without them that card has no focusable child at all.
+// root querySelectorAll cannot see -- without them a card built only from
+// them would have no focusable child at all.
 const HA_FIELDS =
   "ha-icon-picker, ha-entity-picker, ha-textfield, ha-select, ha-combo-box, ha-picker-field";
 const FOCUSABLE = `${NATIVE}, [tabindex="0"], ${HA_FIELDS}`;

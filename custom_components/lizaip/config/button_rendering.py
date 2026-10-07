@@ -29,9 +29,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.icon import async_get_icons
 
 from ..const import (
-    ENTITY_TOKEN_RE,
     entity_token_entities,
-    entity_token_value,
+    resolve_image_tokens,
     service_name,
     ATTR_ICONS,
     DOMAIN_ICONS,
@@ -76,6 +75,7 @@ from ..action_controller import (
     resolve_step_entity,
     subject_for_assign,
 )
+from ..action_controller.icons import toggle_icon, toggle_tooltip
 from .internal_commands import (
     command_label as internal_command_label,
     command_target_name as internal_command_target_name,
@@ -192,6 +192,7 @@ def _resolve_button_tooltip(
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
+    button_ref: tuple[str, int, str] | None = None,
 ) -> str:
     """Compute the text the remote prints under a button.
 
@@ -201,7 +202,9 @@ def _resolve_button_tooltip(
     shows up on the device as a silently blank tooltip.
     """
     return clean_label_text(
-        _resolve_button_tooltip_ladder(action_def, assign, hass, entry, internal_context)
+        _resolve_button_tooltip_ladder(
+            action_def, assign, hass, entry, internal_context, button_ref,
+        )
     )
 
 
@@ -211,12 +214,26 @@ def _resolve_button_tooltip_ladder(
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
+    button_ref: tuple[str, int, str] | None = None,
 ) -> str:
     """Compute a dynamic tooltip showing the next state the button will trigger.
 
     Returns a string like "Schreibtisch Aus" (entity name + translated action).
     Uses HA's configured language for translations.
     """
+    # Rung 0, mirroring `_icon_from_toggle_rule`: the toggle block is the only
+    # thing that knows the button is about to do something other than its
+    # declared action, so its words outrank every derivation below.
+    entry_id = page_id = button_key = None
+    if button_ref:
+        entry_id, page_id, button_key = button_ref
+    _, toggle_state = subject_for_assign(assign, hass)
+    rule_text = toggle_tooltip(
+        assign, toggle_state, entry_id, page_id, button_key, hass, entry,
+    )
+    if rule_text:
+        return rule_text
+
     service = action_def.get("service", "")
     svc = service_name(service)
 
@@ -418,6 +435,15 @@ class _IconSubject:
     states: list
     service_icons: dict | None
     internal_context: dict | None
+    # Identifies the button to the cycle-position store. Optional because only
+    # a `toggle` in cycle mode needs it and most callers (tests, previews) have
+    # no page to speak of; `toggle_icon` answers None rather than guessing when
+    # it is absent.
+    button_ref: tuple[str, int, str] | None = None
+    # Only so a toggle rule's icon can resolve its `${entity}` variables, the
+    # same way the assignment's own image does. Optional because the rungs that
+    # existed before all answer from the fields already on this subject.
+    hass: HomeAssistant | None = None
 
     @property
     def entity_domain(self) -> str:
@@ -469,6 +495,26 @@ def _derived_states(subject: _IconSubject, hass: HomeAssistant) -> list:
             ],
         )
     return states
+
+
+def _icon_from_toggle_rule(s: _IconSubject) -> str | None:
+    """Rung 0: the face the button's ``toggle`` block asks for right now.
+
+    Above `state_icons` because it is strictly better informed. A toggle button
+    is about to run something other than its declared action, and only the
+    toggle block knows which; a `state_icons` row keyed by the subject's state
+    would paint the declared action's face over it.
+
+    A step's own icon is optional -- `step_icon` derives one from its service --
+    so `None` simply hands the question to the rung below.
+    """
+    entry_id = page_id = button_key = None
+    if s.button_ref:
+        entry_id, page_id, button_key = s.button_ref
+    return toggle_icon(
+        s.assign, s.current_state, entry_id, page_id, button_key,
+        s.entity_domain, s.service_icons, hass=s.hass,
+    )
 
 
 def _icon_from_button_overrides(s: _IconSubject) -> str | None:
@@ -640,6 +686,7 @@ def _icon_from_service(s: _IconSubject) -> str | None:
 
 #: Tried in order; the first to answer wins. See each rung for why it sits here.
 _ICON_LADDER = (
+    _icon_from_toggle_rule,
     _icon_from_button_overrides,
     _icon_from_button_identity,
     _icon_for_unresolvable,
@@ -655,28 +702,18 @@ def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
     """*assign* with the entity variables in its image filled in.
 
     ``mdi:weather-${weather.home}`` or ``text:${sensor.outdoor}`` follow the
-    entity. An image that resolves to nothing (the entity is unavailable) is
-    dropped, so the button falls back to the icon it would derive without one.
+    entity, and a weather entity alone (``${weather.home}``) or after ``mdi:``
+    is drawn as its condition's icon. An image that resolves to nothing (the
+    entity is unavailable) is dropped, so the button falls back to the icon it
+    would derive without one.
     """
     image = assign.get("image") if isinstance(assign, dict) else None
     if not entity_token_entities(image):
         return assign
-    # All or nothing: half an icon name ("mdi:weather-") draws a broken glyph.
-    missing = False
-    # A unit belongs in drawn text, never in a name: "mdi:battery-80 %" is no
-    # icon at all. Text is a ``text:`` image or one with no scheme before the
-    # variable, which `resolve_icon_url` draws as text.
-    prefix = image.split("${", 1)[0]
-    with_unit = prefix.lower().startswith("text:") or ":" not in prefix
-
-    def _value(match) -> str:
-        nonlocal missing
-        value = entity_token_value(hass, match.group(1).lower(), match.group(2), with_unit)
-        missing = missing or not value
-        return value
-
-    resolved = ENTITY_TOKEN_RE.sub(_value, image).strip()
-    return {**assign, "image": None if missing or not resolved else resolved}
+    # The rules themselves are in `resolve_image_tokens`, shared with the
+    # toggle rule icons that accept exactly the same syntax -- weather
+    # conditions included, which is why that helper and not a copy of it.
+    return {**assign, "image": resolve_image_tokens(image, hass)}
 
 
 def _resolve_button_icon(
@@ -685,6 +722,7 @@ def _resolve_button_icon(
     hass: HomeAssistant,
     service_icons: dict | None = None,
     internal_context: dict | None = None,
+    button_ref: tuple[str, int, str] | None = None,
 ) -> str:
     """Resolve the best icon for a button, most specific rung first.
 
@@ -721,11 +759,16 @@ def _resolve_button_icon(
         states=[],
         service_icons=service_icons,
         internal_context=internal_context,
+        button_ref=button_ref,
+        hass=hass,
     )
     subject = replace(subject, states=_derived_states(subject, hass))
 
     for rung in _ICON_LADDER:
-        icon = rung(subject)
+        # Every picture a button can carry reads variables the same way --
+        # per-state icons and the action's own icons as much as the image. One
+        # with no value now falls to the next rung, as an empty image does.
+        icon = resolve_image_tokens(rung(subject), hass)
         if icon:
             return icon
     return "mdi:cog"

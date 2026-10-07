@@ -66,7 +66,17 @@ async def build_full_config_payload(hass: HomeAssistant, entry_id: str) -> dict:
     }
 
 
-async def _fire_config_changed(hass: HomeAssistant, entry_id: str) -> None:
-    """Fire a config_changed event with the full payload."""
+async def _fire_config_changed(
+    hass: HomeAssistant, entry_id: str, *, order_only: bool = False
+) -> None:
+    """Fire a config_changed event with the full payload.
+
+    ``order_only`` marks a change the device has already been told about in
+    full -- a reorder whose ``set_main_pages`` push succeeded. The event still
+    carries the whole configuration for every other listener; only the device
+    sync may use the flag to skip rebuilding payloads it would then discard.
+    """
     payload = await build_full_config_payload(hass, entry_id)
+    if order_only:
+        payload["order_only"] = True
     hass.bus.async_fire(CONFIG_CHANGED_EVENT, payload)

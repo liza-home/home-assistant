@@ -221,9 +221,23 @@
           "description": "The page to show."
         }
       }
+    },
+    "clear_device_pages": {
+      "name": "Cancella le pagine del dispositivo",
+      "description": "Rimuove tutte le pagine dal telecomando e le ricostruisce dalla configurazione salvata. Da usare quando le pagine del dispositivo non corrispondono più a quelle di Home Assistant. Non si perde alcuna configurazione.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Dispositivo",
+          "description": "Dispositivo da ricostruire. Se omesso, vengono ricostruiti tutti i dispositivi lizaIP."
+        }
+      }
     }
   },
   "issues": {
+    "pages_rejected": {
+      "title": "lizaIP pages could not be stored on the device",
+      "description": "Device \"{device}\" refused to store page(s) {pages}. It is currently holding {stored} page(s), and reports no page limit in its capabilities, so this limit can only be discovered by reaching it. Remove the listed page(s) in the lizaIP panel, or update the device firmware. Every other page is synced and working."
+    },
     "protocol_version_mismatch": {
       "title": "lizaIP protocol version mismatch",
       "description": "Device \"{device}\" reports protocol version {device_version}, but this integration expects version {ha_version}. Update the device firmware or the integration to resolve."
@@ -231,6 +245,10 @@
     "repeated_connection_failure": {
       "title": "lizaIP device repeatedly disconnecting",
       "description": "Device \"{device}\" has disconnected {count} times without a successful handshake. Check the device power and network connection."
+    },
+    "page_sync_failed": {
+      "title": "Impossibile inviare le pagine lizaIP al dispositivo",
+      "description": "Home Assistant non è riuscito a scrivere la configurazione delle pagine su \"{device}\" per {count} volte consecutive. Ultimo errore: {error}. Le pagine sul telecomando potrebbero non corrispondere più a quelle mostrate nel pannello. Prova \"Cancella e ricostruisci le pagine\" nelle impostazioni del pannello lizaIP; se non basta, scollega e ricollega l'alimentazione del telecomando."
     }
   },
   "exceptions": {
