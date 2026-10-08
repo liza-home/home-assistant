@@ -157,20 +157,31 @@ def _slider_subject_block(assignment: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _blank_fields(
-    assignment: dict[str, Any], fields: list[str], binding: dict[str, Any] | None = None
+    assignment: dict[str, Any],
+    fields: list[str],
+    binding: dict[str, Any] | None = None,
+    *,
+    keep_user_edits: bool = False,
 ) -> bool:
     """Blank resolver-owned fields and reversibly disarm a missing item.
 
     ``action_id`` and the step target are layout-owned and cannot be rebuilt by
     :data:`ASSIGNMENT_FIELD_MAP`, so they are stashed for ``_restore_action``.
     A deleted item must not stay pressable, but a recovered one must work.
+
+    ``keep_user_edits`` spares a pinned image and a typed label: on a slot that
+    was already empty they were written by the user, not left by an item.
     """
     changed = False
     for field in fields:
         if field == "label":
-            changed |= _apply_field(assignment, "label", "")
+            if not (keep_user_edits and name_is_user_written(assignment)):
+                changed |= _apply_field(assignment, "label", "")
         elif field == "icon":
+            if keep_user_edits and assignment.get("image_pinned"):
+                continue
             changed |= _apply_field(assignment, "icon", "")
+            changed |= _drop_image_pin(assignment)
 
     action_id = assignment.get("action_id")
     config = assignment.get("config")
@@ -196,6 +207,11 @@ def _blank_fields(
         subject["entity_id"] = ""
         changed = True
     return changed
+
+
+def _drop_image_pin(assignment: dict[str, Any]) -> bool:
+    """Forget a pinned image: it belonged to the item the slot no longer shows."""
+    return bool(assignment.pop("image_pinned", False))
 
 
 def _restore_action(assignment: dict[str, Any], binding: dict[str, Any]) -> bool:
@@ -255,7 +271,10 @@ def _give_up_on_the_item(
         )
         return True
 
-    changed = _blank_fields(assignment, fields, binding)
+    # An already-empty slot only holds what the user put there since.
+    changed = _blank_fields(
+        assignment, fields, binding, keep_user_edits=not binding.get("identity")
+    )
     if binding.get("identity"):
         binding["identity"] = ""
         changed = True
@@ -323,9 +342,13 @@ async def _refresh_assignment(
             continue
         if field == "label" and same_item and name_is_user_written(assignment):
             continue
+        if field == "icon" and same_item and assignment.get("image_pinned"):
+            continue
         if field == "data":
             value = _payload_without_subject(value, assignment)
         changed |= _apply_field(assignment, field, value)
+        if field == "icon" and not same_item:
+            changed |= _drop_image_pin(assignment)
 
     if binding.get("identity") != identity:
         binding["identity"] = identity

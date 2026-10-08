@@ -40,13 +40,319 @@ export function suppressedNow(el) {
 }
 
 /**
+ * Eat the click a finished drag leaves behind, on the container (which
+ * survives the drop's redraw) in the capture phase. That phase is also why a
+ * drag must not `armSuppress` as well: the shape's listener never runs.
+ */
+function swallowNextClick(container) {
+  if (!container?.addEventListener) return;
+  let timer = null;
+  const off = () => {
+    container.removeEventListener?.("click", swallow, true);
+    if (timer) clearTimeout(timer);
+  };
+  const swallow = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    off();
+  };
+  container.addEventListener("click", swallow, true);
+  timer = setTimeout(off, SUPPRESS_MS);
+}
+
+/** How far the pointer must travel before a press becomes a drag, in CSS px.
+ *  Above the tremor in an ordinary click, which must never become a drag. */
+const DRAG_THRESHOLD = 4;
+
+/**
+ * Drag a button's configuration onto another: the move `Move…` arms, in one
+ * gesture. Reports both ends through `opts.onDrop` and decides nothing else.
+ * Mouse and pen only -- touch spends a long press on the context menu.
+ *
+ * The ghosts are cloned *inside* the existing face and container, because
+ * `.page-thumb` has a `transform` and `overflow: hidden` -- a follower parked
+ * outside would be mispositioned and clipped.
+ *
+ * @param {HTMLElement} container The `.pg-svg-container`, which outlives the
+ *   redraw a drop causes -- hence the swallow and cursor class hang off it.
+ * @param {SVGElement} svg The face, used to refuse a release over another
+ *   page's face.
+ */
+function createFaceDrag(container, svg, opts) {
+  // The press, before it is known to be a drag. `live` is what separates the
+  // two: below the threshold this is still a click that has not been let go.
+  const state = { el: null, key: null, x: 0, y: 0, live: false, target: null, wasMark: null, onKey: null, onSelect: null, thumb: null, thumbWasDraggable: false, ghost: null, ghostImg: null, scale: 1, srcImg: null, backImg: null };
+
+  const root = () => container?.getRootNode?.() || (typeof document !== "undefined" ? document : null);
+
+  /**
+   * Stop the page strip's native drag of the `.page-thumb` this face sits in.
+   * `dragstart` fires on the thumb and never reaches this container, so it
+   * cannot be cancelled -- the attribute goes, and comes back in `clear()`.
+   */
+  const holdThumb = () => {
+    state.thumb = container?.closest?.(".page-thumb[draggable]") || null;
+    if (!state.thumb) return;
+    // Remembered, not assumed: restoring every thumb as `true` would grant a
+    // page reordering the strip had deliberately taken away from it.
+    state.thumbWasDraggable = state.thumb.draggable !== false;
+    state.thumb.draggable = false;
+  };
+
+  const releaseThumb = () => {
+    if (state.thumb) state.thumb.draggable = state.thumbWasDraggable;
+    state.thumb = null;
+    state.thumbWasDraggable = false;
+  };
+
+  /** The face shape under the pointer, or null. */
+  const shapeAt = (x, y) => {
+    const hit = root()?.elementFromPoint?.(x, y);
+    // The overlays are `pointer-events: none`, so the topmost hit is already
+    // the shape -- `closest` is kept for anything that may later be in the way.
+    const shape = hit?.closest?.(".button[data-key]") || null;
+    // Another page's thumbnail is not a destination: those shapes are drawn
+    // from assignments this move is not reading.
+    if (!shape || !svg?.contains?.(shape)) return null;
+    // Nor a shape that cannot hold a configuration. Refused here rather than
+    // at the release, so the ring never appears and the cursor says so on the
+    // way past.
+    if (opts.canDrop && !opts.canDrop(shape.getAttribute?.("data-key"), state.key)) return null;
+    return shape;
+  };
+
+  /**
+   * Flag the panel root for the drag. The cursor must outrank every element a
+   * drag crosses, and pointer capture redirects the events but not the cursor,
+   * so only a rule on the host can speak for all of it.
+   */
+  const flagHost = (name, on) => {
+    const host = root()?.host;
+    if (on) host?.classList?.add?.(name);
+    else host?.classList?.remove?.(name);
+  };
+
+  /**
+   * A copy of the dragged button, flying with the pointer: the shape cloned
+   * into the same `<svg>` and its icon cloned into the same container, so the
+   * thumbnail's own `transform` and clipping apply to both as to the face.
+   */
+  /** The HTML icon overlay for a face key, which is where a button's picture
+   *  lives -- the SVG holds only the shape. */
+  const iconFor = (key) => container.querySelector?.(`img.pg-btn-img[data-key="${key}"]`);
+
+  const makeGhost = () => {
+    const ghost = state.el.cloneNode?.(false);
+    if (!ghost) return;
+    // Stripped of everything that says *slot*: it is a thing in flight, and the
+    // per-key rules would otherwise out-specify the ghost styling as well.
+    for (const a of ["mark", "drop", "selected", "configured", "data-key"]) ghost.removeAttribute?.(a);
+    ghost.setAttribute?.("ghost", "");
+    svg.appendChild?.(ghost);
+    state.ghost = ghost;
+
+    // The icon moves in the container's *own* px, which an ancestor transform
+    // scales on the way to the screen -- `.page-thumb:hover` is 1.03, so an
+    // uncorrected icon drifts further than its shape the longer the drag runs.
+    const rect = container.getBoundingClientRect?.();
+    state.scale = (rect?.width && container.offsetWidth)
+      ? rect.width / container.offsetWidth : 1;
+
+    // The picture is an HTML overlay, so a shape alone would fly as an empty
+    // outline saying "a button" where this says "*this* button". Keyless like
+    // the shape, which also hides it from the overlay refresh.
+    state.srcImg = iconFor(state.key);
+    const copy = state.srcImg?.cloneNode?.(true);
+    if (!copy) return;
+    copy.removeAttribute?.("data-key");
+    copy.setAttribute?.("ghost", "");
+    container.appendChild?.(copy);
+    state.ghostImg = copy;
+    // The original stays behind otherwise, so the button would read as being in
+    // two places at once -- in hand and still in its slot.
+    state.srcImg.style?.setProperty?.("visibility", "hidden");
+  };
+
+  /**
+   * The other half of the swap: the target's icon shown in the slot the drag
+   * emptied. Without it a drop reads as overwriting the destination, which is
+   * not what a move does -- the two configurations trade places.
+   */
+  const showReturn = (shape) => {
+    state.backImg?.remove?.();
+    state.backImg = null;
+    const key = shape?.getAttribute?.("data-key");
+    // An icon overlay is not proof of a configuration: a fixed button draws a
+    // faint fallback while unassigned. Nothing comes back from an empty slot,
+    // and the absence of a preview says exactly that.
+    const filled = key && (!opts.canDrag || opts.canDrag(key));
+    const copy = filled && state.srcImg ? iconFor(key)?.cloneNode?.(true) : null;
+    if (!copy) return;
+    copy.removeAttribute?.("data-key");
+    copy.setAttribute?.("returning", "");
+    // Worn in the source's slot, so the geometry is the source's.
+    for (const p of ["left", "top", "width", "height"]) {
+      copy.style?.setProperty?.(p, state.srcImg.style?.[p]);
+    }
+    container.appendChild?.(copy);
+    state.backImg = copy;
+  };
+
+  /** Carry the ghost to the pointer. The shape travels in user units, the icon
+   *  in the client px it was positioned with. */
+  const dragGhost = (x, y) => {
+    const dx = x - state.x;
+    const dy = y - state.y;
+    const m = svg.getScreenCTM?.();
+    state.ghost?.setAttribute?.("transform",
+      `translate(${dx / (m?.a || 1)} ${dy / (m?.d || 1)})`);
+    if (state.ghostImg?.style) {
+      state.ghostImg.style.transform =
+        `translate(${dx / state.scale}px, ${dy / state.scale}px)`;
+    }
+  };
+
+  const paintTarget = (shape) => {
+    // Never the source itself: a drag that came back home is a cancel, and
+    // ringing the shape it started on would promise a move that does nothing.
+    const next = shape && shape !== state.el ? shape : null;
+    // The cursor answers across the gaps between shapes. The source is exempt
+    // from both: a refusal the instant a button is picked up reads as an error
+    // rather than as the absence of a destination.
+    flagHost("face-no-drop", !next && shape !== state.el);
+    if (state.target === next) return;
+    state.target?.removeAttribute?.("drop");
+    state.target = next;
+    next?.setAttribute?.("drop", "");
+    showReturn(next);
+  };
+
+  /** Put the face back the way the drag found it. */
+  const clear = () => {
+    if (state.onKey) {
+      window.removeEventListener?.("keydown", state.onKey);
+      state.onKey = null;
+    }
+    if (state.onSelect) {
+      window.removeEventListener?.("selectstart", state.onSelect);
+      state.onSelect = null;
+    }
+    flagHost("face-dragging", false);
+    flagHost("face-no-drop", false);
+    state.target?.removeAttribute?.("drop");
+    if (state.live && state.el) {
+      // Restored, not removed: the shape may have carried a nesting mark from
+      // `markFor` before the drag borrowed the attribute.
+      if (state.wasMark === null) state.el.removeAttribute?.("mark");
+      else state.el.setAttribute("mark", state.wasMark);
+    }
+    releaseThumb();
+    state.ghost?.remove?.();
+    state.ghostImg?.remove?.();
+    state.backImg?.remove?.();
+    state.srcImg?.style?.removeProperty?.("visibility");
+    state.ghost = null; state.ghostImg = null; state.backImg = null;
+    state.srcImg = null; state.scale = 1;
+    state.el = null; state.key = null;
+    state.live = false; state.target = null; state.wasMark = null;
+  };
+
+  const begin = () => {
+    state.live = true;
+    state.wasMark = state.el.getAttribute?.("mark") ?? null;
+    state.el.setAttribute("mark", "moving");
+    makeGhost();
+    flagHost("face-dragging", true);
+    // The press may already have anchored a selection before the threshold was
+    // crossed, and it grows with every move after. `user-select: none` cannot
+    // reach it: the pointer leaves the container constantly during a drag.
+    window.getSelection?.()?.removeAllRanges?.();
+    state.onSelect = (e) => e.preventDefault();
+    window.addEventListener?.("selectstart", state.onSelect);
+    // Escape, because the way out of a pointer gesture cannot be releasing the
+    // pointer -- that is how it is completed.
+    state.onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      finish(null);
+    };
+    window.addEventListener?.("keydown", state.onKey);
+  };
+
+  /** End the gesture, dropping on `shape` when there is one. */
+  const finish = (shape) => {
+    const wasLive = state.live;
+    const from = state.key;
+    const el = state.el;
+    const to = shape && shape !== el ? shape.getAttribute?.("data-key") : null;
+    clear();
+    if (!wasLive) return;
+    // The click the browser sends next is drag residue, not a selection. The
+    // container swallow only, never `armSuppress` too -- see `swallowNextClick`.
+    swallowNextClick(container);
+    if (to) opts.onDrop(from, to);
+  };
+
+  return {
+    /** Wire one shape as a drag source. */
+    wire(el, key) {
+      el.addEventListener("pointerdown", (e) => {
+        // Touch keeps its long-press menu; a secondary button is on its way to
+        // the context menu and must not be mistaken for a lift.
+        if (e.pointerType === "touch" || (e.button != null && e.button !== 0)) return;
+        if (!opts.canDrag(key)) return;
+        clear();
+        state.el = el; state.key = key;
+        state.x = e.clientX; state.y = e.clientY;
+        // Held from the press, not from the threshold: the browser's own drag
+        // starts at a distance it picks, which can be shorter than ours, so a
+        // thumb still draggable at that moment is already moving.
+        holdThumb();
+        // Captured at the press, not the threshold: without it the first move
+        // out of a small shape goes elsewhere and no drag ever starts.
+        el.setPointerCapture?.(e.pointerId);
+      });
+
+      el.addEventListener("pointermove", (e) => {
+        if (state.el !== el) return;
+        // A redraw landed under the gesture -- an echo of someone else's save,
+        // say. The shape being dragged is no longer on screen, so there is
+        // nothing left to drop.
+        if (el.isConnected === false) { clear(); return; }
+        if (!state.live) {
+          const dx = e.clientX - state.x;
+          const dy = e.clientY - state.y;
+          if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+          begin();
+        }
+        dragGhost(e.clientX, e.clientY);
+        paintTarget(shapeAt(e.clientX, e.clientY));
+      });
+
+      el.addEventListener("pointerup", (e) => {
+        if (state.el !== el) return;
+        // Hit-tested afresh, since moves may have been coalesced away, and
+        // finished before the capture is released: releasing fires
+        // `lostpointercapture` below, which would cancel the drop first.
+        finish(state.live ? shapeAt(e.clientX, e.clientY) : null);
+        el.releasePointerCapture?.(e.pointerId);
+      });
+
+      for (const type of ["pointercancel", "lostpointercapture"]) {
+        el.addEventListener(type, () => { if (state.el === el) finish(null); });
+      }
+    },
+  };
+}
+
+/**
  * Draw the SVG remote with button overlays (shapes only — no icon images).
  * @param {HTMLElement} container
  * @param {Object} blueprint - {buttons, viewBox}
  * @param {number} selectedIdx - Selected button index (-1 = none)
  * @param {Function} hasAction - (buttonKey) => boolean
  * @param {Function} onSelect - (idx) callback
- * @param {Object} [opts] - {markFor, onContext, interactive, nameFor, faceTitle}
+ * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor, faceTitle}
  *
  * Accessibility: with `interactive` the shapes become real controls —
  * `role="button"`, a tab stop, a name from `nameFor`, and Enter/Space/context
@@ -67,6 +373,10 @@ export function suppressedNow(el) {
  * rather than to a second listener in the caller, because the shape is the only
  * thing that knows which tile was hit — the icon overlays sit above it with
  * `pointer-events:none` for the same reason.
+ *
+ * `canDrag(key)` and `onDrop(fromKey, toKey)` wire the drag shortcut, and only
+ * when both are given. The optional `canDrop(toKey, fromKey)` narrows what may
+ * *receive* one. See `createFaceDrag`.
  */
 export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, opts) {
   if (!container || !blueprint) return;
@@ -123,6 +433,13 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
   // from the path data rather than getBBox(): it needs no layout, so it is the
   // same number in a browser and in a test.
   const stops = [];
+
+  // Shared by every shape, because the gesture runs between two of them. Built
+  // only when the caller offers both halves.
+  const faceDrag = (interactive && typeof opts?.onDrop === "function"
+    && typeof opts?.canDrag === "function")
+    ? createFaceDrag(container, svg, opts)
+    : null;
 
   // Button shape overlays (click targets)
   bp.buttons.forEach((btn, idx) => {
@@ -227,6 +544,12 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
         el.addEventListener(type, cancel, { passive: true });
       }
     }
+
+    // Wired on every shape: one that cannot be picked up is still a place one
+    // can be put down, and `canDrag` is asked at the press, not here, so
+    // clearing a button never leaves a stale listener behind.
+    faceDrag?.wire(el, btn.key);
+
     svg.appendChild(el);
   });
 

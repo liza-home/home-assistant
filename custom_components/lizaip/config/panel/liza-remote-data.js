@@ -218,6 +218,10 @@ export const DataMixin = {
     this._iconFillStep = r?.icon_fill_step ?? null;
     this._iconFillEnabled = r?.icon_fill_enabled === true;
     this._iconColorEnabled = r?.icon_color_enabled === true;
+    // On unless the backend says off, like `read_variables_enabled`.
+    const variables = r?.variables_enabled !== false;
+    if (variables !== this._variablesEnabled) this._resetVariables?.();
+    this._variablesEnabled = variables;
   },
 
   async _loadPages() {
@@ -406,7 +410,18 @@ export const DataMixin = {
   // Debounced auto-save: schedules a save ~600ms after the last change
   _scheduleAutoSave() {
     if (this._autoSaveTimer) clearTimeout(this._autoSaveTimer);
-    this._autoSaveTimer = setTimeout(() => { this._autoSaveTimer = null; this._globalSave(true); }, 600);
+    this._autoSaveTimer = setTimeout(() => { this._autoSaveTimer = null; this._runAutoSave(); }, 600);
+  },
+
+  // Start a save and remember it while it runs, so a flush can await one that
+  // is already in flight. The timer alone cannot answer that: it is cleared
+  // the moment the save starts.
+  _runAutoSave() {
+    const save = this._globalSave(true).finally(() => {
+      if (this._saveInFlight === save) this._saveInFlight = null;
+    });
+    this._saveInFlight = save;
+    return save;
   },
 
   /**
@@ -419,15 +434,19 @@ export const DataMixin = {
    * to land in between, so the edits get written to the page being switched
    * *to*, clobbering it and losing the ones they belonged to.
    *
+   * A save already running counts as pending. Several callers flush without
+   * awaiting, which clears the timer; returning only on the timer would hand a
+   * later page switch an empty promise and reopen the same window.
+   *
    * Callers that leave `_currentPageIdx` alone can keep ignoring the result.
    */
   _flushAutoSave() {
     if (this._autoSaveTimer) {
       clearTimeout(this._autoSaveTimer);
       this._autoSaveTimer = null;
-      return this._globalSave(true);
+      return this._runAutoSave();
     }
-    return Promise.resolve();
+    return this._saveInFlight || Promise.resolve();
   },
 
     async _globalSave(silent = false) {

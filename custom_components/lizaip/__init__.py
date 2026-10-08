@@ -106,7 +106,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
     # configuration rather than a troubleshooting tool.
     try:
         ha_base = get_url(hass, prefer_external=False)
-        config_url = f"{ha_base}/liza-remote?entry_id={entry.entry_id}"
+        config_url = f"{ha_base}/lizaip?entry_id={entry.entry_id}"
         dr.async_get(hass).async_update_device(
             device.id, configuration_url=config_url
         )

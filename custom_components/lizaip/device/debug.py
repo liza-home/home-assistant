@@ -30,6 +30,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..const import DOMAIN
 from .const import DEBUG_LOG_PORT
+from .traffic import TRAFFIC_LOGGER
 
 if TYPE_CHECKING:
     from .connection import LizaIPConnection
@@ -209,6 +210,33 @@ def _unfollow_stream_logger(conn: LizaIPConnection) -> None:
     if not _FOLLOWING and _PRIOR_LEVEL is not None:
         _stream_logger().setLevel(_PRIOR_LEVEL)
         _PRIOR_LEVEL = None
+
+
+#: Connections writing their traffic to the log, and the traffic logger's level
+#: before the first of them started -- the same bookkeeping as the stream's.
+_TRAFFIC_LOGGING: weakref.WeakSet[LizaIPConnection] = weakref.WeakSet()
+_TRAFFIC_PRIOR_LEVEL: int | None = None
+
+
+def set_traffic_logging(conn: LizaIPConnection, enabled: bool) -> None:
+    """Write every frame with *conn*'s remote to the HA log, or stop.
+
+    Frames go out at INFO, which a default installation drops, so the traffic
+    logger is raised while anyone is logging and put back after the last stops.
+    """
+    global _TRAFFIC_PRIOR_LEVEL
+    logger = TRAFFIC_LOGGER
+    conn._protocol.traffic.log_enabled = enabled
+    if enabled:
+        if not _TRAFFIC_LOGGING:
+            _TRAFFIC_PRIOR_LEVEL = logger.level
+            logger.setLevel(logging.INFO)
+        _TRAFFIC_LOGGING.add(conn)
+        return
+    _TRAFFIC_LOGGING.discard(conn)
+    if not _TRAFFIC_LOGGING and _TRAFFIC_PRIOR_LEVEL is not None:
+        logger.setLevel(_TRAFFIC_PRIOR_LEVEL)
+        _TRAFFIC_PRIOR_LEVEL = None
 
 
 async def async_set_debug_port(conn: LizaIPConnection, enabled: bool) -> None:

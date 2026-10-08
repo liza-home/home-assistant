@@ -207,6 +207,34 @@ export const STRINGS = {
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
   },
+  settings_variables: {
+    en: "Variables", de: "Variablen", fr: "Variables", it: "Variabili", es: "Variables",
+  },
+  settings_variables_interval: {
+    en: "Update interval", de: "Aktualisierungsintervall", fr: "Intervalle de mise à jour",
+    it: "Intervallo di aggiornamento", es: "Intervalo de actualización",
+  },
+  settings_variables_interval_hint: {
+    en: "From {min} to {max}, default {default}. A change goes out at once; a value that keeps changing, like a lamp being dimmed, is sent at most this often.",
+    de: "Von {min} bis {max}, Standard {default}. Eine Änderung wird sofort gesendet; ein Wert, der sich laufend ändert, etwa beim Dimmen, höchstens so oft.",
+    fr: "De {min} à {max}, par défaut {default}. Un changement part aussitôt ; une valeur qui change sans cesse, comme une lampe en cours de variation, est envoyée au plus à ce rythme.",
+    it: "Da {min} a {max}, predefinito {default}. Una modifica parte subito; un valore che cambia di continuo, come una luce che si regola, viene inviato al massimo con questa frequenza.",
+    es: "De {min} a {max}, por defecto {default}. Un cambio se envía al instante; un valor que cambia sin parar, como una lámpara que se regula, se envía como mucho con esta frecuencia.",
+  },
+  settings_variables_enabled: {
+    en: "Variables and calculations (${…})",
+    de: "Variablen und Berechnungen (${…})",
+    fr: "Variables et calculs (${…})",
+    it: "Variabili e calcoli (${…})",
+    es: "Variables y cálculos (${…})",
+  },
+  settings_variables_enabled_hint: {
+    en: "Fills in ${sensor.x} and calculations in tooltips, pictures and titles and keeps them up to date. Off, they are left out and a picture with one shows its normal icon.",
+    de: "Füllt ${sensor.x} und Berechnungen in Tooltips, Bildern und Titeln aus und hält sie aktuell. Aus: Sie werden weggelassen, ein Bild mit einer Variable zeigt sein normales Symbol.",
+    fr: "Remplit ${sensor.x} et les calculs dans les info-bulles, images et titres et les tient à jour. Désactivé, ils sont omis et une image qui en contient affiche son icône normale.",
+    it: "Compila ${sensor.x} e i calcoli in tooltip, immagini e titoli e li mantiene aggiornati. Disattivato, vengono omessi e un'immagine che ne contiene mostra la sua icona normale.",
+    es: "Rellena ${sensor.x} y los cálculos en descripciones, imágenes y títulos y los mantiene al día. Desactivado, se omiten y una imagen que los contenga muestra su icono normal.",
+  },
   settings_icon_color_enabled: {
     en: "Tint icons with the light's colour",
     de: "Symbole in der Lampenfarbe einfärben",
@@ -485,6 +513,89 @@ export const STRINGS = {
   debug_report_copy: {
     en: "Copy", de: "Kopieren", fr: "Copier", it: "Copia", es: "Copiar",
   },
+  debug_traffic: {
+    en: "Traffic", de: "Datenverkehr", fr: "Trafic", it: "Traffico", es: "Tráfico",
+  },
+  debug_traffic_hint: {
+    en: "Every message between Home Assistant and the remote since {since}. The round trip runs from sending a request to its answer; a late answer arrived after Home Assistant had given up; a lost request never got one.",
+    de: "Alle Nachrichten zwischen Home Assistant und der Fernbedienung seit {since}. Die Antwortzeit läuft vom Senden einer Anfrage bis zu ihrer Antwort; eine verspätete Antwort kam, nachdem Home Assistant aufgegeben hatte; eine verlorene Anfrage bekam nie eine.",
+    fr: "Tous les messages entre Home Assistant et la télécommande depuis {since}. L'aller-retour va de l'envoi d'une requête à sa réponse ; une réponse tardive est arrivée après l'abandon de Home Assistant ; une requête perdue n'en a jamais reçu.",
+    it: "Tutti i messaggi tra Home Assistant e il telecomando da {since}. Il tempo di andata e ritorno va dall'invio di una richiesta alla sua risposta; una risposta tardiva è arrivata dopo che Home Assistant aveva rinunciato; una richiesta persa non ne ha mai ricevuta una.",
+    es: "Todos los mensajes entre Home Assistant y el mando desde {since}. El tiempo de ida y vuelta va del envío de una solicitud a su respuesta; una respuesta tardía llegó después de que Home Assistant se rindiera; una solicitud perdida nunca la recibió.",
+  },
+  debug_traffic_requests: {
+    en: "Requests", de: "Anfragen", fr: "Requêtes", it: "Richieste", es: "Solicitudes",
+  },
+  debug_traffic_answered: {
+    en: "Answered", de: "Beantwortet", fr: "Répondues", it: "Con risposta", es: "Respondidas",
+  },
+  debug_traffic_timeouts: {
+    en: "Timed out", de: "Zeitüberschreitung", fr: "Expirées", it: "Scadute", es: "Agotadas",
+  },
+  debug_traffic_late: {
+    en: "Answered late", de: "Verspätet beantwortet", fr: "Réponse tardive",
+    it: "Risposta tardiva", es: "Respuesta tardía",
+  },
+  debug_traffic_lost: {
+    en: "Lost", de: "Verloren", fr: "Perdues", it: "Perse", es: "Perdidas",
+  },
+  debug_traffic_errors: {
+    en: "Error answers", de: "Fehlerantworten", fr: "Réponses d'erreur",
+    it: "Risposte di errore", es: "Respuestas de error",
+  },
+  debug_traffic_unmatched: {
+    en: "Unmatched answers", de: "Nicht zuordenbare Antworten", fr: "Réponses sans requête",
+    it: "Risposte senza richiesta", es: "Respuestas sin solicitud",
+  },
+  debug_traffic_rtt: {
+    en: "Round trip", de: "Antwortzeit", fr: "Aller-retour", it: "Andata e ritorno", es: "Ida y vuelta",
+  },
+  debug_traffic_gap: {
+    en: "Longest silence", de: "Längste Funkstille", fr: "Plus long silence",
+    it: "Silenzio più lungo", es: "Silencio más largo",
+  },
+  debug_traffic_gaps: {
+    en: "Silences of 15 s or more", de: "Funkstillen ab 15 s", fr: "Silences de 15 s ou plus",
+    it: "Silenzi di 15 s o più", es: "Silencios de 15 s o más",
+  },
+  debug_traffic_connections: {
+    en: "Connects / disconnects", de: "Verbindungen / Abbrüche", fr: "Connexions / déconnexions",
+    it: "Connessioni / disconnessioni", es: "Conexiones / desconexiones",
+  },
+  debug_traffic_volume: {
+    en: "Sent / received", de: "Gesendet / empfangen", fr: "Envoyé / reçu",
+    it: "Inviato / ricevuto", es: "Enviado / recibido",
+  },
+  debug_traffic_frames: {
+    en: "Recent messages, newest first", de: "Letzte Nachrichten, neueste zuerst",
+    fr: "Derniers messages, les plus récents d'abord", it: "Ultimi messaggi, i più recenti prima",
+    es: "Últimos mensajes, los más recientes primero",
+  },
+  debug_traffic_empty: {
+    en: "No messages recorded yet.", de: "Noch keine Nachrichten aufgezeichnet.",
+    fr: "Aucun message enregistré pour l'instant.", it: "Nessun messaggio registrato finora.",
+    es: "Aún no se ha registrado ningún mensaje.",
+  },
+  debug_traffic_refresh: {
+    en: "Refresh", de: "Aktualisieren", fr: "Actualiser", it: "Aggiorna", es: "Actualizar",
+  },
+  debug_traffic_reset: {
+    en: "Reset", de: "Zurücksetzen", fr: "Réinitialiser", it: "Azzera", es: "Restablecer",
+  },
+  debug_traffic_log: {
+    en: "Write to the log", de: "Ins Protokoll schreiben", fr: "Écrire dans le journal",
+    it: "Scrivi nel registro", es: "Escribir en el registro",
+  },
+  debug_traffic_log_live: {
+    en: "Each message is written to {link}.", de: "Jede Nachricht wird nach {link} geschrieben.",
+    fr: "Chaque message est écrit dans {link}.", it: "Ogni messaggio viene scritto in {link}.",
+    es: "Cada mensaje se escribe en {link}.",
+  },
+  debug_traffic_copied: {
+    en: "Traffic copied to the clipboard ✓", de: "Datenverkehr in die Zwischenablage kopiert ✓",
+    fr: "Trafic copié dans le presse-papiers ✓", it: "Traffico copiato negli appunti ✓",
+    es: "Tráfico copiado al portapapeles ✓",
+  },
   debug_report_copied: {
     en: "Report copied to the clipboard ✓",
     de: "Bericht in die Zwischenablage kopiert ✓",
@@ -622,6 +733,16 @@ export const STRINGS = {
     en: "Change hub…", de: "Hub ändern…", fr: "Changer de hub…",
     it: "Cambia hub…", es: "Cambiar hub…",
   },
+  layout_device: {
+    en: "Device", de: "Gerät", fr: "Appareil", it: "Dispositivo", es: "Dispositivo",
+  },
+  layout_hub: {
+    en: "Hub", de: "Hub", fr: "Hub", it: "Hub", es: "Hub",
+  },
+  layout_target_missing: {
+    en: "Device not found", de: "Gerät nicht gefunden", fr: "Appareil introuvable",
+    it: "Dispositivo non trovato", es: "Dispositivo no encontrado",
+  },
   change_device_confirm: {
     en: "Change device", de: "Gerät ändern", fr: "Changer d'appareil",
     it: "Cambia dispositivo", es: "Cambiar dispositivo",
@@ -635,21 +756,21 @@ export const STRINGS = {
     it: "Modifica in corso…", es: "Cambiando…",
   },
   device_changed: {
-    en: "Page \"{name}\" now uses the new device: {n} button(s) updated",
-    de: "Seite „{name}“ nutzt jetzt das neue Gerät: {n} Taste(n) angepasst",
-    fr: "La page « {name} » utilise le nouvel appareil : {n} bouton(s) mis à jour",
-    it: "La pagina \"{name}\" usa ora il nuovo dispositivo: {n} pulsante/i aggiornato/i",
-    es: "La página \"{name}\" usa ahora el nuevo dispositivo: {n} botón(es) actualizado(s)",
+    en: "{name} now uses the new device: {n} button(s) updated",
+    de: "{name} nutzt jetzt das neue Gerät: {n} Taste(n) angepasst",
+    fr: "{name} utilise le nouvel appareil : {n} bouton(s) mis à jour",
+    it: "{name} usa ora il nuovo dispositivo: {n} pulsante/i aggiornato/i",
+    es: "{name} usa ahora el nuevo dispositivo: {n} botón(es) actualizado(s)",
   },
   // Same shape as device_changed, but a config-entry target is a hub, not a
   // device -- a page retargeted onto one was reporting "new device" in every
   // language regardless of which kind of target it actually got.
   hub_changed: {
-    en: "Page \"{name}\" now uses the new hub: {n} button(s) updated",
-    de: "Seite „{name}“ nutzt jetzt den neuen Hub: {n} Taste(n) angepasst",
-    fr: "La page « {name} » utilise le nouveau hub : {n} bouton(s) mis à jour",
-    it: "La pagina \"{name}\" usa ora il nuovo hub: {n} pulsante/i aggiornato/i",
-    es: "La página \"{name}\" usa ahora el nuevo hub: {n} botón(es) actualizado(s)",
+    en: "{name} now uses the new hub: {n} button(s) updated",
+    de: "{name} nutzt jetzt den neuen Hub: {n} Taste(n) angepasst",
+    fr: "{name} utilise le nouveau hub : {n} bouton(s) mis à jour",
+    it: "{name} usa ora il nuovo hub: {n} pulsante/i aggiornato/i",
+    es: "{name} usa ahora el nuevo hub: {n} botón(es) actualizado(s)",
   },
   layout_gone: {
     en: "The layout \"{name}\" this page was made from is no longer available",
@@ -659,9 +780,9 @@ export const STRINGS = {
     es: "El diseño \"{name}\" del que se creó esta página ya no está disponible",
   },
   page_duplicated: {
-    en: "Page \"{name}\" duplicated", de: "Seite „{name}“ dupliziert",
-    fr: "Page « {name} » dupliquée", it: "Pagina \"{name}\" duplicata",
-    es: "Página \"{name}\" duplicada",
+    en: "{name} duplicated", de: "{name} dupliziert",
+    fr: "{name} dupliquée", it: "{name} duplicata",
+    es: "{name} duplicada",
   },
   duplicate_page_failed: {
     en: "Could not duplicate the page: {error}",
@@ -886,6 +1007,13 @@ export const STRINGS = {
     fr: "Cette touche est configurée dans une autre portée",
     it: "Quel tasto è configurato in un ambito diverso",
     es: "Ese botón está configurado en otro ámbito",
+  },
+  not_a_button_slot: {
+    en: "Only buttons can exchange configurations",
+    de: "Nur Tasten können Konfigurationen austauschen",
+    fr: "Seules les touches peuvent échanger leurs configurations",
+    it: "Solo i tasti possono scambiarsi le configurazioni",
+    es: "Solo los botones pueden intercambiar configuraciones",
   },
   no_actions_yet: {
     en: "No actions yet. Assign actions to buttons in the {tab} tab.",
@@ -1301,11 +1429,62 @@ export const STRINGS = {
     es: "Ahora muestra <b>{text}</b>. ",
   },
   label_state_hint: {
-    en: "<code>${STATE}</code> follows the entity — replace it to fix the wording.",
-    de: "<code>${STATE}</code> folgt der Entität — ersetzen Sie es, um die Formulierung zu ändern.",
-    fr: "<code>${STATE}</code> suit l'entité — remplacez-le pour corriger la formulation.",
-    it: "<code>${STATE}</code> segue l'entità — sostituiscilo per correggere la formulazione.",
-    es: "<code>${STATE}</code> sigue a la entidad — sustitúyalo para corregir la redacción.",
+    en: "<code>${_state}</code> follows the entity — replace it to fix the wording.",
+    de: "<code>${_state}</code> folgt der Entität — ersetzen Sie es, um die Formulierung zu ändern.",
+    fr: "<code>${_state}</code> suit l'entité — remplacez-le pour corriger la formulation.",
+    it: "<code>${_state}</code> segue l'entità — sostituiscilo per correggere la formulazione.",
+    es: "<code>${_state}</code> sigue a la entidad — sustitúyalo para corregir la redacción.",
+  },
+  debug_pages: {
+    en: "Debug", de: "Debug", fr: "Débogage", it: "Debug", es: "Depuración",
+  },
+  debug_pages_desc: {
+    en: "Demo and test pages", de: "Demo- und Testseiten", fr: "Pages de démo et de test",
+    it: "Pagine demo e di test", es: "Páginas de demostración y prueba",
+  },
+  random_pages: {
+    en: "Random pages", de: "Zufallsseiten", fr: "Pages aléatoires",
+    it: "Pagine casuali", es: "Páginas aleatorias",
+  },
+  random_pages_desc: {
+    en: "Test pages titled \"page &lt;id&gt;\", with random icons on every button.",
+    de: "Testseiten mit dem Titel „page &lt;id&gt;“ und zufälligen Icons auf allen Tasten.",
+    fr: "Pages de test intitulées « page &lt;id&gt; », avec des icônes aléatoires sur chaque touche.",
+    it: "Pagine di prova intitolate \"page &lt;id&gt;\", con icone casuali su ogni tasto.",
+    es: "Páginas de prueba tituladas \"page &lt;id&gt;\", con iconos aleatorios en cada botón.",
+  },
+  random_pages_count: {
+    en: "Number of pages", de: "Anzahl der Seiten", fr: "Nombre de pages",
+    it: "Numero di pagine", es: "Número de páginas",
+  },
+  random_pages_images: {
+    en: "Number of different images", de: "Anzahl verschiedener Bilder",
+    fr: "Nombre d'images différentes", it: "Numero di immagini diverse",
+    es: "Número de imágenes distintas",
+  },
+  random_pages_tooltip: {
+    en: "Tooltip (same on every button)", de: "Tooltip (auf allen Tasten gleich)",
+    fr: "Infobulle (identique sur chaque touche)", it: "Tooltip (uguale su ogni tasto)",
+    es: "Tooltip (igual en cada botón)",
+  },
+  random_pages_create: {
+    en: "Create", de: "Erstellen", fr: "Créer", it: "Crea", es: "Crear",
+  },
+  random_pages_added: {
+    en: "{count} pages added", de: "{count} Seiten hinzugefügt", fr: "{count} pages ajoutées",
+    it: "{count} pagine aggiunte", es: "{count} páginas añadidas",
+  },
+  random_pages_failed: {
+    en: "Could not add the pages: {error}", de: "Seiten konnten nicht hinzugefügt werden: {error}",
+    fr: "Impossible d'ajouter les pages : {error}", it: "Impossibile aggiungere le pagine: {error}",
+    es: "No se pudieron añadir las páginas: {error}",
+  },
+  title_device_hint: {
+    en: "<code>${_device}</code> shows the name of this page's device, <code>${_device.…}</code> one of its attributes (e.g. <code>${_device.volume_level}</code>).",
+    de: "<code>${_device}</code> zeigt den Namen des Geräts dieser Seite, <code>${_device.…}</code> eines seiner Attribute (z. B. <code>${_device.volume_level}</code>).",
+    fr: "<code>${_device}</code> affiche le nom de l'appareil de cette page, <code>${_device.…}</code> l'un de ses attributs (p. ex. <code>${_device.volume_level}</code>).",
+    it: "<code>${_device}</code> mostra il nome del dispositivo di questa pagina, <code>${_device.…}</code> uno dei suoi attributi (ad es. <code>${_device.volume_level}</code>).",
+    es: "<code>${_device}</code> muestra el nombre del dispositivo de esta página, <code>${_device.…}</code> uno de sus atributos (p. ej. <code>${_device.volume_level}</code>).",
   },
   variable_hint: {
     en: "<code>${sensor.…}</code> shows that entity's current value, <code>${sensor.….attribute}</code> one of its attributes.",
@@ -1315,11 +1494,11 @@ export const STRINGS = {
     es: "<code>${sensor.…}</code> muestra el valor actual de esa entidad, <code>${sensor.….atributo}</code> uno de sus atributos.",
   },
   label_name_hint: {
-    en: "<code>${NAME}</code> is replaced by what the button opens.",
-    de: "<code>${NAME}</code> wird durch das ersetzt, was die Taste öffnet.",
-    fr: "<code>${NAME}</code> est remplacé par ce que la touche ouvre.",
-    it: "<code>${NAME}</code> viene sostituito da ciò che il tasto apre.",
-    es: "<code>${NAME}</code> se sustituye por lo que abre el botón.",
+    en: "<code>${_name}</code> is replaced by what the button opens.",
+    de: "<code>${_name}</code> wird durch das ersetzt, was die Taste öffnet.",
+    fr: "<code>${_name}</code> est remplacé par ce que la touche ouvre.",
+    it: "<code>${_name}</code> viene sostituito da ciò che il tasto apre.",
+    es: "<code>${_name}</code> se sustituye por lo que abre el botón.",
   },
   tooltip_needs_action: {
     en: "Add an action first — a tooltip on its own is not stored.",
@@ -1448,11 +1627,11 @@ export const STRINGS = {
   // the body is left to say only what is lost, which is the part WCAG 3.3.4
   // actually cares about.
   delete_page_title: {
-    en: 'Delete "{name}"?',
-    de: "„{name}“ löschen?",
-    fr: "Supprimer « {name} » ?",
-    it: "Eliminare \"{name}\"?",
-    es: "¿Eliminar «{name}»?",
+    en: "Delete {name}?",
+    de: "{name} löschen?",
+    fr: "Supprimer {name} ?",
+    it: "Eliminare {name}?",
+    es: "¿Eliminar {name}?",
   },
   // Two messages rather than one with a count of zero: "and its 0 configured
   // buttons" reads as a bug, and 3.3.4 asks that the user be told what they
@@ -1529,11 +1708,11 @@ export const STRINGS = {
   // while it was "just a tooltip"; naming the control with it made that a
   // real barrier rather than an inconsistency.
   page_fill: {
-    en: "{name} — {filled} of {total} buttons assigned, page {n} of {m}",
-    de: "{name} — {filled} von {total} Tasten belegt, Seite {n} von {m}",
-    fr: "{name} — {filled} touches sur {total} attribuées, page {n} sur {m}",
-    it: "{name} — {filled} di {total} tasti assegnati, pagina {n} di {m}",
-    es: "{name} — {filled} de {total} botones asignados, página {n} de {m}",
+    en: "{name}\n{filled} of {total} buttons assigned",
+    de: "{name}\n{filled} von {total} Tasten belegt",
+    fr: "{name}\n{filled} touches sur {total} attribuées",
+    it: "{name}\n{filled} di {total} tasti assegnati",
+    es: "{name}\n{filled} de {total} botones asignados",
   },
   // The name a reader hears: which page, and where it sits. The fill count is
   // deliberately NOT here -- it is supplementary, so it rides on
@@ -1554,12 +1733,11 @@ export const STRINGS = {
     it: "{filled} di {total} tasti assegnati",
     es: "{filled} de {total} botones asignados",
   },
-  // The page counter under the title strip. Trivial-looking, but "of" is not
-  // the same word in five languages and it sits inside a `lang`-scoped tree,
-  // so leaving it English had it announced as German on a German install.
-  page_n_of_m: {
-    en: "{n} of {m}", de: "{n} von {m}", fr: "{n} sur {m}",
-    it: "{n} di {m}", es: "{n} de {m}",
+  // How a page is named wherever it is shown: its place in the run and its
+  // id, with the title on a line of its own (see `_pagePosition`).
+  page_position: {
+    en: "Page {n}/{m} ({id})", de: "Seite {n}/{m} ({id})", fr: "Page {n}/{m} ({id})",
+    it: "Pagina {n}/{m} ({id})", es: "Página {n}/{m} ({id})",
   },
   // "Open {name}", not "Open page {name}": the name already carries the word
   // when it falls back to page_fallback, and said "Open page Page 1".

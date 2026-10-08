@@ -22,15 +22,18 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from pathlib import Path
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlencode
 
 import yaml
 
-from .imgserv.const import (  # noqa: F401 -- the registry is re-exported
+from .imgserv import media_refs
+from .imgserv.const import (
     NATIVE_SOURCE_TYPES,
     SIZE_IDS,
     _custom_icon_prefixes,
@@ -38,6 +41,15 @@ from .imgserv.const import (  # noqa: F401 -- the registry is re-exported
     set_custom_icon_prefixes,
 )
 from .imgserv.fonts import DEFAULT_FONT_ID
+from .variables_calc import (  # re-exported for the callers of const
+    _EXPR_ENTITY_RE,
+    CONF_VARIABLES_ENABLED,
+    FUNCTION_TOKEN_RE,
+    function_token_value,
+    read_variables_enabled,
+    variables_enabled,
+    variables_scope,
+)
 
 if TYPE_CHECKING:
     # Type-only: this module stays importable without Home Assistant, which is
@@ -156,6 +168,66 @@ def get_default_icon(domain: str, attribute: str | None, state_val: str) -> str 
     return icons.get(state_val)
 
 
+#: imgserv options a picture may carry after a ``|``: ``media:<url>|size=200x200``.
+MEDIA_OPTION_KEYS: Final = ("size", "mode", "fg", "bg", "crop", "alpha")
+
+#: A numeric ``size=`` in the URL's own query, which is read as imgserv's.
+_QUERY_SIZE_RE: Final = re.compile(r"([?&])size=(\d+(?:x\d+)?)(?=&|#|$)", re.IGNORECASE)
+
+
+def split_media_options(value: str) -> tuple[str, dict[str, str]]:
+    """``(url, options)`` for ``<url>|key=value&key=value``.
+
+    The options are imgserv's own, which the URL's query cannot carry: the URL
+    is sent encoded, so its query would only reach the image's host. ``|``
+    never occurs in a URL unencoded. Unknown keys are dropped; a tail without a
+    single known key is not options at all and stays part of the URL.
+
+    A numeric ``size=200x200`` (or ``size=200``) in the URL's own query is taken
+    out of it and read as imgserv's size too, as that is where it gets typed;
+    a ``|size=`` wins over it. Any other ``size=`` (``size=large``) is the
+    host's and stays.
+    """
+    url, sep, tail = value.rpartition("|")
+    options: dict[str, str] = {}
+    if sep:
+        for part in tail.split("&"):
+            key, eq, val = part.partition("=")
+            key = key.strip().lower()
+            if eq and key in MEDIA_OPTION_KEYS and val.strip():
+                options[key] = val.strip()
+    if options:
+        url = url.strip()
+    else:
+        url = value
+    m = _QUERY_SIZE_RE.search(url)
+    if m:
+        options.setdefault("size", m.group(2).lower())
+        start, end = m.span()
+        rest = url[end:]
+        if m.group(1) == "?":
+            # The first parameter goes; the next one, if any, takes its `?`.
+            url = url[:start] + ("?" + rest[1:] if rest.startswith("&") else rest)
+        else:
+            url = url[:start] + rest
+    return url, options
+
+
+def _media_url(url: str, size: str, pct: str) -> str:
+    """``imgserv://media:…`` for *url*, its ``|`` options over the defaults."""
+    url, options = split_media_options(url)
+    query = urlencode({"size": size, "mode": "dark", **options}, safe=",")
+    source = encode_media_source(url)
+    result = f"imgserv://{source}?{query}{pct}"
+    if len(result) > media_refs.MAX_URL_LENGTH:
+        # The remote fails on long URLs; imgserv gets the source by reference,
+        # exactly as it would have received it (decoded once, like the path).
+        # TEMPORARY: remove once LZIP-8 is implemented (see imgserv/media_refs).
+        key = media_refs.remember(unquote(source.removeprefix("media:")))
+        result = f"imgserv://ref:{key}?{query}{pct}"
+    return result
+
+
 def encode_media_source(url: str) -> str:
     """Build the ``media:<value>`` imgserv source for an image *url*.
 
@@ -230,14 +302,14 @@ def resolve_icon_url(
 
     - MDI strings (mdi:lightbulb) → imgserv://mdi:lightbulb?size={size}&fg={color|FFFFFF}
     - imgserv source types (logo:hue, text:foo, phu:bar, file:img.png) → imgserv://{icon}?size={size}&mode=dark[&fg={color}]
-    - External URLs (http://, https://) → imgserv://media:{encoded}?size={size}&mode=dark
+    - External URLs (http://, https://) and HA paths (/…) → imgserv://media:{encoded}?size={size}&mode=dark
     - imgserv:// / ha:// / local:// / data: → passed through unchanged
 
     External images are routed through imgserv's ``media:`` proxy rather than handed
     to the device: HA fetches them, resizes to the requested size, and re-encodes to
     PNG, so the device never has to reach a third-party host or decode an arbitrary
-    image format.  HA-relative paths keep going out as ``ha://`` — the device already
-    has an authenticated, cert-pinned route to HA itself.
+    image format.  HA-relative paths (``/api/media_player_proxy/…``) take the same
+    route: the firmware does not resolve ``ha://`` (it requests ``/ha://…``).
 
     The device display always has a dark background, so mode=dark ensures
     monochrome icons (logo/phu without explicit color) render white.
@@ -288,16 +360,19 @@ def resolve_icon_url(
         # byte, so an already percent-encoded URL is untouched.
         return _ascii_safe_path(icon)
     if low.startswith(("http://", "https://")):
-        return f"imgserv://{encode_media_source(icon)}?size={size}&mode=dark{pct}"
+        return _media_url(icon, size, pct)
     if icon.startswith("/"):
-        return f"ha://{_ascii_safe_path(icon.lstrip('/'))}"
+        # An HA path (a player's `entity_picture`, `/local/…`) is fetched by
+        # imgserv too: the remote's firmware does not resolve `ha://` and would
+        # ask HA for `/ha://api/…`.
+        return _media_url(icon, size, pct)
     fg = color.lstrip("#") if color else ""
     if icon.startswith("mdi:"):
         mdi_fg = fg or "FFFFFF"
         return f"imgserv://mdi:{icon[4:]}?size={size}&fg={mdi_fg}{pct}"
     if icon.startswith("media:"):
         # The value is a URL in its own right — encode it so its query survives.
-        return f"imgserv://{encode_media_source(icon[6:])}?size={size}&mode=dark{pct}"
+        return _media_url(icon[6:], size, pct)
     # imgserv source types: logo:, text:, phu:, file:, and the extra icon
     # sets the frontend registered (drawn from their uploaded shapes).
     custom = custom_icon_scheme(icon)
@@ -1065,7 +1140,7 @@ def name_is_user_written(assign) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# ``${STATE}`` placeholders in user-typed button labels
+# ``${_state}`` placeholders in user-typed button labels
 # ---------------------------------------------------------------------------
 
 # ``\w*`` and not ``\w+``: an empty or blank token (``${}``, ``${ }``) must also
@@ -1074,13 +1149,39 @@ def name_is_user_written(assign) -> bool:
 LABEL_TOKEN_RE = re.compile(r"\$\{\s*(\w*)\s*\}")
 
 # The spelling the panel writes into a label it fills in for the user.
-STATE_TOKEN: Final = "${STATE}"
+STATE_TOKEN: Final = "${_state}"
 
 # The target of a device-local command, named in the user's label. Scoped to
 # those commands on purpose: a plain HA action has no "target" distinct from
 # its entity, so the token resolves to nothing there and collapses away, the
 # same as any name this substituter does not know.
-NAME_TOKEN: Final = "${NAME}"
+NAME_TOKEN: Final = "${_name}"
+
+# The built-in tokens before they took a leading underscore. Stored configs are
+# rewritten on load (`migrate_legacy_label_tokens`); nothing resolves them.
+_LEGACY_LABEL_TOKENS: Final = {"state": "${_state}", "name": "${_name}", "command": "${_cmd}"}
+_LEGACY_LABEL_TOKEN_RE = re.compile(r"\$\{\s*(state|name|command)\s*\}", re.IGNORECASE)
+
+
+def migrate_legacy_label_tokens(value: Any) -> Any:
+    """Rewrite ``${STATE}``/``${NAME}``/``${COMMAND}`` to their new spellings.
+
+    Walks dicts and lists in place and returns *value* (a new string for a
+    string), so a whole stored assignment or action library can be passed.
+    """
+    if isinstance(value, str):
+        if "${" not in value:
+            return value
+        return _LEGACY_LABEL_TOKEN_RE.sub(
+            lambda m: _LEGACY_LABEL_TOKENS[m.group(1).lower()], value
+        )
+    if isinstance(value, dict):
+        for key, item in value.items():
+            value[key] = migrate_legacy_label_tokens(item)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            value[index] = migrate_legacy_label_tokens(item)
+    return value
 
 
 def is_two_way_service(svc: str) -> bool:
@@ -1090,7 +1191,7 @@ def is_two_way_service(svc: str) -> bool:
     in ``TOGGLE_SERVICES`` names its own direction via ``SERVICE_ACTION_MAP``
     (``turn_on`` always means "On"). These are the buttons whose label has to
     move with the entity, so these are the ones the panel labels with a
-    ``${STATE}`` template rather than a fixed word.
+    ``${_state}`` template rather than a fixed word.
     """
     return svc in TOGGLE_SERVICES and svc not in SERVICE_ACTION_MAP
 
@@ -1119,7 +1220,7 @@ def is_attribute_state_service(svc: str) -> bool:
 def is_state_labelled_service(svc: str) -> bool:
     """True when a button's label has to move with the entity.
 
-    The set that gets a ``${STATE}`` template rather than a fixed word, and the
+    The set that gets a ``${_state}`` template rather than a fixed word, and the
     union of the two ways a button can fail to name its own direction:
 
     * genuinely two-way services (``toggle``, ``media_play_pause``), whose
@@ -1140,18 +1241,18 @@ def is_state_labelled_service(svc: str) -> bool:
 def is_token_only_label(text: str) -> bool:
     """True when *text* is nothing but placeholders — no words of its own.
 
-    Such a label is a shape, not a name: ``"${STATE}"`` says "print the state
+    Such a label is a shape, not a name: ``"${_state}"`` says "print the state
     here" and leaves the button unnamed. The tooltip ladder therefore treats it
     like a short static name (``"Next"``) and puts the entity in front of it,
     rather than like a label the user typed, which is returned verbatim.
 
     That is what keeps a two-way button's stored label the same shape as its
-    neighbours: ``Previous`` / ``${STATE}`` / ``Next``, all three of which the
+    neighbours: ``Previous`` / ``${_state}`` / ``Next``, all three of which the
     device renders behind the room name.
     """
     if not text or "${" not in text:
         return False
-    # Leftover braces are wreckage, not words: "${STATE}}" is still a shape, and
+    # Leftover braces are wreckage, not words: "${_state}}" is still a shape, and
     # counting the stray brace as a name cost the label its entity prefix -- the
     # tooltip read "Off" instead of "Schreibtischlampe Off".
     return not LABEL_TOKEN_RE.sub("", text).replace("{", "").replace("}", "").strip()
@@ -1163,7 +1264,7 @@ def auto_button_label(entity_name: str, svc: str, action_name: str) -> str:
     Mirrored in ``panel/liza-remote-helpers.js`` (``_computeLabel``); the pair
     is pinned against this one by ``tests/label_auto_cases.json``.
 
-    A two-way service gets the bare ``${STATE}`` *template* — never a resolved
+    A two-way service gets the bare ``${_state}`` *template* — never a resolved
     state, and without the entity name. The panel persists this string into the
     stored name, so resolving it here would freeze whatever the entity happened
     to be doing at the moment the button was configured; and baking the entity
@@ -1254,10 +1355,21 @@ _DANGLING_SEPARATOR_RE = re.compile(r"^[\s:;,/\-–—]+|[\s:;,/\-–—]+$")
 # ---------------------------------------------------------------------------
 
 #: ``${domain.object_id}`` or ``${domain.object_id.attribute}``. Told apart from
-#: ``${STATE}`` by the dot, so the two never claim the same text.
+#: ``${_state}`` by the dot, so the two never claim the same text.
 ENTITY_TOKEN_RE = re.compile(
     r"\$\{\s*([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?\s*\}"
 )
+
+#: ``${_device}`` in a layout page's title: the device (or hub) the page is
+#: bound to, by the name Home Assistant shows for it. ``_device`` is accepted
+#: as well.
+DEVICE_TOKEN_RE = re.compile(r"\$\{\s*_device\s*\}")
+
+#: ``_device.attribute`` inside a ``${…}``: the page's own entity standing in
+#: for its id, so a title reads ``${_device.volume_level}`` -- or a calculation
+#: such as ``${_device.volume_level * 100}`` -- without naming ``media_player.…``.
+DEVICE_ATTRIBUTE_RE = re.compile(r"(?<![\w.])_device\.([A-Za-z0-9_]+)")
+_VARIABLE_BODY_RE = re.compile(r"\$\{([^{}]*)\}")
 
 #: States that say the entity has nothing to report. A variable reading one of
 #: them resolves to nothing rather than printing "unavailable" on the remote.
@@ -1313,7 +1425,7 @@ def _weather_condition_label(hass: HomeAssistant, condition: str) -> str:
         cached = async_get_cached_translations(
             hass, get_ui_language(hass), "entity_component", "weather",
         )
-    except Exception:  # noqa: BLE001 - no cache (tests, early start)
+    except Exception:
         cached = {}
     label = cached.get(f"component.weather.entity_component._.state.{condition}")
     return label if isinstance(label, str) and label else WEATHER_CONDITION_LABELS[condition]
@@ -1331,7 +1443,10 @@ def entity_token_entities(text: Any) -> set[str]:
     """Entity ids named by ``${domain.object_id[.attribute]}`` in *text*."""
     if not isinstance(text, str) or "${" not in text:
         return set()
-    return {m.group(1).lower() for m in ENTITY_TOKEN_RE.finditer(text)}
+    found = {m.group(1).lower() for m in ENTITY_TOKEN_RE.finditer(text)}
+    for m in FUNCTION_TOKEN_RE.finditer(text):
+        found.update(e.group(1).lower() for e in _EXPR_ENTITY_RE.finditer(m.group(1)))
+    return found
 
 
 def _display_precision(hass: HomeAssistant, entity_id: str) -> int | None:
@@ -1339,7 +1454,7 @@ def _display_precision(hass: HomeAssistant, entity_id: str) -> int | None:
     try:
         from homeassistant.helpers import entity_registry as er
         entry = er.async_get(hass).async_get(entity_id)
-    except Exception:  # noqa: BLE001 - no registry (tests, early start)
+    except Exception:
         return None
     if entry is None:
         return None
@@ -1397,6 +1512,10 @@ def entity_token_value(
     return f"{value} {unit}" if with_unit and isinstance(unit, str) and unit else value
 
 
+def _function_value(hass: HomeAssistant | None, match) -> str:
+    return function_token_value(hass.states.get if hass is not None else None, match.group(1))
+
+
 def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
     """Replace every ``${domain.object_id[.attribute]}`` in *text* with its value.
 
@@ -1404,9 +1523,114 @@ def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
     """
     if not isinstance(text, str) or "${" not in text:
         return text
+    text = _with_page_device(text, hass)
+    if not variables_enabled():
+        # Switched off for this remote: a variable is not read, it is gone.
+        return ENTITY_TOKEN_RE.sub("", FUNCTION_TOKEN_RE.sub("", text))
+    text = FUNCTION_TOKEN_RE.sub(lambda m: _function_value(hass, m), text)
     return ENTITY_TOKEN_RE.sub(
         lambda m: entity_token_value(hass, m.group(1).lower(), m.group(2)), text,
     )
+
+
+def layout_target_name(hass: HomeAssistant | None, layout: Any) -> str:
+    """The name of the device or hub a layout page is bound to, "" if none.
+
+    The name the user gave it first, then the integration's; a hub is named by
+    its config entry's title. A target that cannot be found falls back to its
+    entity's friendly name, and then to nothing.
+    """
+    if hass is None or not isinstance(layout, dict):
+        return ""
+    target = layout.get("target")
+    if not isinstance(target, dict):
+        return ""
+    entry_id = target.get("config_entry")
+    if entry_id:
+        target_entry = hass.config_entries.async_get_entry(entry_id)
+        if target_entry is not None and target_entry.title:
+            return target_entry.title
+    device_id = target.get("device")
+    if device_id:
+        from homeassistant.helpers import device_registry as dr
+        device = dr.async_get(hass).async_get(device_id)
+        name = device and (device.name_by_user or device.name)
+        if name:
+            return name
+    entity_id = target.get("entity_id")
+    state = hass.states.get(entity_id) if entity_id else None
+    return _format_value((state.attributes or {}).get("friendly_name")) if state else ""
+
+
+def expand_device_alias(text: Any, layout: Any) -> Any:
+    """*text* with ``${_device.attribute}`` spelled out as the page's entity.
+
+    ``${_device.volume_level}`` becomes ``${media_player.tv.volume_level}``, an
+    ordinary entity variable from then on -- read, formatted and watched like
+    one; inside a calculation (``${_device.volume_level * 100}``) likewise. A
+    page with no entity (a hub, or no layout) reads nothing there.
+    """
+    if not isinstance(text, str) or "${" not in text:
+        return text
+    target = layout.get("target") if isinstance(layout, dict) else None
+    entity_id = target.get("entity_id") if isinstance(target, dict) else ""
+
+    def _expand(match: re.Match) -> str:
+        body = match.group(1)
+        if not DEVICE_ATTRIBUTE_RE.search(body):
+            return match.group(0)
+        if not entity_id:
+            return ""
+        body = DEVICE_ATTRIBUTE_RE.sub(lambda m: f"{entity_id}.{m.group(1)}", body)
+        return f"${{{body.strip()}}}"
+
+    return _VARIABLE_BODY_RE.sub(_expand, text)
+
+
+#: The layout of the page being drawn, for ``${_device…}`` in its tiles and
+#: tooltips. ``_NO_PAGE`` outside any :func:`page_scope`: the variable is then
+#: left for whoever knows the page (the panel expands it before asking).
+_NO_PAGE: Final = object()
+_PAGE_LAYOUT: ContextVar[Any] = ContextVar("lizaip_page_layout", default=_NO_PAGE)
+
+
+@contextmanager
+def page_scope(layout: Any) -> Iterator[None]:
+    """Read ``${_device…}`` as the page with *layout* has it, inside the block."""
+    token = _PAGE_LAYOUT.set(layout if isinstance(layout, dict) else None)
+    try:
+        yield
+    finally:
+        _PAGE_LAYOUT.reset(token)
+
+
+def current_page_layout() -> Any:
+    """The layout :func:`page_scope` set, None for a plain page or no scope."""
+    layout = _PAGE_LAYOUT.get()
+    return None if layout is _NO_PAGE else layout
+
+
+def _with_page_device(text: Any, hass: HomeAssistant | None) -> Any:
+    """*text* with ``${_device…}`` filled in for the page in scope, if any."""
+    if not isinstance(text, str) or "_device" not in text:
+        return text
+    layout = _PAGE_LAYOUT.get()
+    if layout is _NO_PAGE:
+        return text
+    return substitute_device_token(text, hass, layout)
+
+
+def substitute_device_token(text: Any, hass: HomeAssistant | None, layout: Any) -> Any:
+    """*text* with the ``${_device}`` variables of a layout page filled in.
+
+    ``${_device.attribute}`` is left as the entity variable it stands for, for
+    the entity pass that follows; ``${_device}`` becomes the device's name.
+    """
+    text = expand_device_alias(text, layout)
+    if not isinstance(text, str) or not DEVICE_TOKEN_RE.search(text):
+        return text
+    name = layout_target_name(hass, layout)
+    return DEVICE_TOKEN_RE.sub(lambda _m: name, text).strip()
 
 
 def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
@@ -1425,8 +1649,11 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
     device unresolved. ``config.button_rendering`` imports *from* that module,
     so the shared piece cannot live in either.
     """
+    image = _with_page_device(image, hass)
     if not entity_token_entities(image):
         return image
+    if not variables_enabled():
+        return None
     # All or nothing: half an icon name ("mdi:weather-") draws a broken glyph.
     missing = False
     # A unit belongs in drawn text, never in a name: "mdi:battery-80 %" is no
@@ -1454,7 +1681,13 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
         missing = missing or not value
         return value
 
-    resolved = ENTITY_TOKEN_RE.sub(_value, image).strip()
+    def _function(match) -> str:
+        nonlocal missing
+        value = _function_value(hass, match)
+        missing = missing or not value
+        return value
+
+    resolved = ENTITY_TOKEN_RE.sub(_value, FUNCTION_TOKEN_RE.sub(_function, image)).strip()
     return None if missing or not resolved else resolved
 
 
@@ -1466,7 +1699,7 @@ def substitute_label_tokens(
     With *hass*, entity variables (``${sensor.x}``) are filled in first.
 
     Token matching is case-insensitive and tolerates inner whitespace, so
-    ``${STATE}``, ``${state}`` and ``${ State }`` are the same token. A token
+    ``${_state}``, ``${_STATE}`` and ``${ _state }`` are the same token. A token
     with no value — unknown name, or a state the button cannot predict —
     collapses to nothing, and the whitespace it leaves behind is collapsed with
     it so the result never has a doubled or trailing space.
@@ -1493,6 +1726,9 @@ def substitute_label_tokens(
 # Bounded to a token-shaped run, not to the next brace: a greedy match would
 # eat the rest of the label, turning "Vor ${STATE nach" into "Vor".
 _BROKEN_TOKEN_RE = re.compile(r"\$\{\s*[\w.]*\s*\}?")
+# A whole variable that was never filled in, calculation included: removed as
+# one, or the broken-token pass would strip only "${floor" and print the rest.
+_WHOLE_TOKEN_RE = re.compile(r"\$\{[^{}$]*\}")
 
 def clean_label_text(text: str) -> str:
     """Make *text* safe to put in an imgserv URL and tidy to read.
@@ -1506,7 +1742,7 @@ def clean_label_text(text: str) -> str:
         return text
     had_token = "${" in text
     if had_token:
-        text = _BROKEN_TOKEN_RE.sub("", text)
+        text = _BROKEN_TOKEN_RE.sub("", _WHOLE_TOKEN_RE.sub("", text))
     # Anything still holding a brace cannot be parsed as a URL by the device.
     if "{" in text or "}" in text:
         text = text.replace("{", "").replace("}", "")

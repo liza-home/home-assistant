@@ -11,12 +11,15 @@ from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, callback
 
 from .. import optimistic
+from ..config.text_style import toggle_enabled
 from ..const import (
     ICON_UPDATE_EVENT,
     PREDICTED_UPDATE_EVENT,
     catchall_state_icon,
+    page_scope,
     resolve_icon_url,
     resolve_image_tokens,
+    variables_scope,
 )
 from ..state_icon import (
     icon_style_for_entities,
@@ -37,7 +40,6 @@ from .helpers import (
 )
 from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
 from .toggle import runtime_assign
-from ..config.text_style import toggle_enabled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,6 +97,10 @@ async def setup_state_listener(
         hass.async_create_task(_async_flush(entities))
 
     async def _async_flush(entities: list[str]):
+        with variables_scope(getattr(entry, "options", None)):
+            await _async_flush_locked(entities)
+
+    async def _async_flush_locked(entities: list[str]):
         # Inline: device_sync -> action_controller -> this module, so a top-level
         # import re-enters a half-built package (and `lizaip.reload` re-executes
         # both in its own order). Reusing its resolver is what keeps the live
@@ -138,89 +144,91 @@ async def setup_state_listener(
                 for page in current_pages:
                     pid = page.get("id", _DEFAULT_PAGE_ID)
                     page_color = page.get("default_color", "")
-                    for btn_key, assign in await _get_assignments(hass, device_id, pid):
-                        if assign.get("action_id") != action_id:
-                            continue
-                        assign = runtime_assign(assign, toggles)
-                        config = assign.get("config", [])
-                        step = config[0] if isinstance(config, list) and config else {}
-                        targets = resolve_target_entities(step, hass)
-                        if eid not in targets:
-                            continue
-                        # A toggle rule outranks every other source: it is
-                        # the only one that knows the button is about to do
-                        # something other than its declared action, so letting
-                        # state_icons win would paint a lie. Rule icons are
-                        # optional, so None falls through to the usual ladder.
-                        rule_glyph = toggle_icon(
-                            assign, state, entry.entry_id, pid, btn_key,
-                            eid.split(".")[0], hass=hass,
-                        )
-                        tooltip: str | None
-                        if rule_glyph or action_icon:
-                            state_icons = assign.get("state_icons") or {}
-                            override = state_icons.get(state.state) or catchall_state_icon(
-                                state_icons,
-                                eid.split(".")[0],
-                                state.state,
-                                action.get("service", ""),
-                            )
-                            # A rule glyph outranks the rest and arrives
-                            # already resolved from `toggle_icon`. The other
-                            # two read their variables as the sync reads them;
-                            # one with no value falls back to the action's own
-                            # icon.
-                            icon = (
-                                rule_glyph
-                                or resolve_image_tokens(override, hass)
-                                or resolve_image_tokens(action_icon, hass)
-                            )
-                            if not icon:
+                    # `${_device}` in a tile or tooltip is this page's device.
+                    with page_scope(page.get("layout")):
+                        for btn_key, assign in await _get_assignments(hass, device_id, pid):
+                            if assign.get("action_id") != action_id:
                                 continue
-                            tooltip = _compute_next_state_tooltip(
-                                action, assign, state, hass, entry,
-                            )
-                        elif is_styleable(eid):
-                            # Colour-only: resolve the glyph through the *same*
-                            # function the sync used, so a recolour cannot
-                            # become a redraw.
-                            if service_icons is None:
-                                service_icons = await _get_service_icons(hass)
-                            icon = _resolve_button_icon(
-                                action, assign, hass, service_icons,
-                            )
-                            if not icon:
+                            assign = runtime_assign(assign, toggles)
+                            config = assign.get("config", [])
+                            step = config[0] if isinstance(config, list) and config else {}
+                            targets = resolve_target_entities(step, hass)
+                            if eid not in targets:
                                 continue
-                            # Absent, so the consumer omits img_tooltip and the
-                            # device keeps the label the sync gave it.
-                            tooltip = None
-                        else:
-                            # Nothing to say: no rule, no state glyph, and no
-                            # tint this entity could carry.
-                            continue
-                        # Only the tile is styled; the tooltip keeps the page
-                        # colour, as a tinted label is only harder to read.
-                        # Resolved from the whole target, not from `state`: an
-                        # area- or device-targeted button has several entities,
-                        # and taking the style of whichever one happened to
-                        # change lets an off lamp wipe a lit one's, with the
-                        # winner decided by set-iteration order.
-                        tile_style = icon_style_for_entities(
-                            hass, targets, page_color, step=style_options.step,
-                            fill=style_options.fill, tint=style_options.tint,
-                        )
-                        resolved = resolve_icon_url(
-                            icon,
-                            color=tile_style.color,
-                            percent=tile_style.percent,
-                        )
-                        updates.append({
-                            "page_id": pid,
-                            "button_key": btn_key,
-                            "icon": resolved,
-                            "tooltip": tooltip,
-                            "page_color": page_color,
-                        })
+                            # A toggle rule outranks every other source: it is
+                            # the only one that knows the button is about to do
+                            # something other than its declared action, so letting
+                            # state_icons win would paint a lie. Rule icons are
+                            # optional, so None falls through to the usual ladder.
+                            rule_glyph = toggle_icon(
+                                assign, state, entry.entry_id, pid, btn_key,
+                                eid.split(".")[0], hass=hass,
+                            )
+                            tooltip: str | None
+                            if rule_glyph or action_icon:
+                                state_icons = assign.get("state_icons") or {}
+                                override = state_icons.get(state.state) or catchall_state_icon(
+                                    state_icons,
+                                    eid.split(".")[0],
+                                    state.state,
+                                    action.get("service", ""),
+                                )
+                                # A rule glyph outranks the rest and arrives
+                                # already resolved from `toggle_icon`. The other
+                                # two read their variables as the sync reads them;
+                                # one with no value falls back to the action's own
+                                # icon.
+                                icon = (
+                                    rule_glyph
+                                    or resolve_image_tokens(override, hass)
+                                    or resolve_image_tokens(action_icon, hass)
+                                )
+                                if not icon:
+                                    continue
+                                tooltip = _compute_next_state_tooltip(
+                                    action, assign, state, hass, entry,
+                                )
+                            elif is_styleable(eid):
+                                # Colour-only: resolve the glyph through the *same*
+                                # function the sync used, so a recolour cannot
+                                # become a redraw.
+                                if service_icons is None:
+                                    service_icons = await _get_service_icons(hass)
+                                icon = _resolve_button_icon(
+                                    action, assign, hass, service_icons,
+                                )
+                                if not icon:
+                                    continue
+                                # Absent, so the consumer omits img_tooltip and the
+                                # device keeps the label the sync gave it.
+                                tooltip = None
+                            else:
+                                # Nothing to say: no rule, no state glyph, and no
+                                # tint this entity could carry.
+                                continue
+                            # Only the tile is styled; the tooltip keeps the page
+                            # colour, as a tinted label is only harder to read.
+                            # Resolved from the whole target, not from `state`: an
+                            # area- or device-targeted button has several entities,
+                            # and taking the style of whichever one happened to
+                            # change lets an off lamp wipe a lit one's, with the
+                            # winner decided by set-iteration order.
+                            tile_style = icon_style_for_entities(
+                                hass, targets, page_color, step=style_options.step,
+                                fill=style_options.fill, tint=style_options.tint,
+                            )
+                            resolved = resolve_icon_url(
+                                icon,
+                                color=tile_style.color,
+                                percent=tile_style.percent,
+                            )
+                            updates.append({
+                                "page_id": pid,
+                                "button_key": btn_key,
+                                "icon": resolved,
+                                "tooltip": tooltip,
+                                "page_color": page_color,
+                            })
 
         if not updates:
             return

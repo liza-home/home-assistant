@@ -93,7 +93,7 @@ def _compute_next_state_tooltip_inner(
     service = action.get("service", "")
     svc = service_name(service)
     static_name = assign.get("label") or action.get("name") or ""
-    # "${STATE}" is a shape, not a name — never hand it out as a fallback, or a
+    # "${_state}" is a shape, not a name — never hand it out as a fallback, or a
     # brace reaches the imgserv URL.
     if is_token_only_label(static_name):
         static_name = action.get("name") or ""
@@ -105,7 +105,7 @@ def _compute_next_state_tooltip_inner(
     if not svc:
         return static_name
 
-    # What a setter's `${STATE}` reads: the entity's attributes, and the step's
+    # What a setter's `${_state}` reads: the entity's attributes, and the step's
     # own service data when it names a literal value. Both producers of this
     # tooltip must pass the same pair or the label flickers the first time the
     # entity changes -- `device_sync._fill_label_tokens` is the other one.
@@ -118,7 +118,7 @@ def _compute_next_state_tooltip_inner(
     subject_name, state = subject_for_assign(assign, hass, state)
 
     attrs = dict(state.attributes or {}) if state else None
-    # What `${STATE}` resolves to for this button. Computed once: all three
+    # What `${_state}` resolves to for this button. Computed once: all three
     # rungs below that answer from the entity ask exactly the same question,
     # and three copies of the call is three places to forget an argument --
     # `step_data` was already missing from one of them once.
@@ -127,7 +127,7 @@ def _compute_next_state_tooltip_inner(
     # A label the user typed wins here exactly as it does in `device_sync`'s
     # tooltip ladder. Without this the two producers disagree: the initial sync
     # would send the custom label and the first state change would overwrite it
-    # with an entity-derived one, so a `${STATE}` label lost its prefix.
+    # with an entity-derived one, so a `${_state}` label lost its prefix.
     stored_name = (assign.get("label") or "").strip()
     token_only = is_token_only_label(stored_name)
     # See `device_sync`'s ladder: a recorded edit outranks the guess below it,
@@ -140,7 +140,7 @@ def _compute_next_state_tooltip_inner(
         not user_named and name_is_source_owned(assign) and is_two_way_service(svc)
     )
     # A token-only name is a shape rather than words *unless the user wrote it*.
-    # Deleting the entity prefix in front of "${STATE}" is the one way to ask
+    # Deleting the entity prefix in front of "${_state}" is the one way to ask
     # for the bare state word, and treating that edit as a shape put the prefix
     # straight back -- the label could not be changed at all.
     if (
@@ -154,7 +154,7 @@ def _compute_next_state_tooltip_inner(
         resolved = clean_label_text(
             substitute_label_tokens(
                 stored_name,
-                {"state": token_state},
+                {"_state": token_state},
                 hass,
             )
         )
@@ -172,19 +172,19 @@ def _compute_next_state_tooltip_inner(
         if eid:
             entity_name = eid.split(".")[-1].replace("_", " ").title()
 
-    # `not token_only`: "${STATE}" is a shape, not a subject, and taking it as
+    # `not token_only`: "${_state}" is a shape, not a subject, and taking it as
     # the entity name would drop the lamp from the front of the label.
     if bound_toggle and stored_name and not token_only:
         entity_name = stored_name
         if not state:
             return stored_name
 
-    # "${STATE}" names nothing by itself, so the entity goes in front of it —
+    # "${_state}" names nothing by itself, so the entity goes in front of it —
     # the same shape `device_sync` produces for the very same stored label.
     if token_only:
         resolved = substitute_label_tokens(
             stored_name,
-            {"state": token_state},
+            {"_state": token_state},
             hass,
         )
         if resolved:
@@ -379,7 +379,7 @@ def toggle_tooltip(
         # Resolved, not raw. This is the *other* producer of a press tooltip --
         # the one that answers while the page is being rendered, where
         # `buttons.py` answers when a press actually runs -- and it handed the
-        # stored text out verbatim, so a `${STATE}` press printed its braces
+        # stored text out verbatim, so a `${_state}` press printed its braces
         # onto the tile until the first press rewrote it. The two must agree;
         # see `resolve_rule_label`.
         #

@@ -50,10 +50,10 @@ class InternalCommand:
             so an entity-less command still reads as something. Returns the
             target alone; ``label_template`` decides the wording.
         label_template: Token string auto-labelling a button carrying this
-            command. ``${NAME}`` is what ``build_label`` returned, ``${COMMAND}``
+            command. ``${_name}`` is what ``build_label`` returned, ``${_cmd}``
             is this entry's ``name``, so renaming the command renames its
             buttons. Declared here so the wording belongs to the command.
-            ``${NAME}`` is offered in the user's own label field too, and only
+            ``${_name}`` is offered in the user's own label field too, and only
             for commands that have a ``build_label`` to fill it.
         is_available: ``(params, context) -> bool`` — False when the target no
             longer exists, disarming the button instead of sending the remote
@@ -73,7 +73,7 @@ class InternalCommand:
     run: Callable[[Any, dict], Awaitable[Any]]
     schema: Any
     build_label: Callable[[dict, dict], str] | None = None
-    label_template: str = "${COMMAND}: ${NAME}"
+    label_template: str = "${_cmd}: ${_name}"
     is_available: Callable[[dict, dict], bool] | None = None
     target_params: tuple[dict, ...] = ()
     enabled: bool = True

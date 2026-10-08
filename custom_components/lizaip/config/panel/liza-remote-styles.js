@@ -731,6 +731,10 @@ export const STYLES = `
     align-items: center;
     position: relative;
     color: var(--primary-text-color);
+    /* A press on the face starts a click or a drag, never a selection sweep.
+       Nothing is lost: the labels live in the imgserv PNGs, not in the DOM. */
+    user-select: none;
+    -webkit-user-select: none;
   }
   .pg-svg-container svg {
     display: block;
@@ -909,6 +913,84 @@ export const STYLES = `
     stroke-width: 1.4;
     stroke-dasharray: 4,3;
   }
+  /* The slot a drag is about to land on: the filled counterpart of the dashed
+     "moving" mark, drawn more strongly than the hover it replaces. No
+     ":not([selected])" for the same reason the moving mark has none. */
+  .pg-svg-container .button[drop],
+  .pg-svg-container .button[drop]:hover {
+    fill: color-mix(in srgb, var(--primary-color, #03a9f4) 28%, transparent);
+    stroke: var(--primary-color, #03a9f4);
+    stroke-width: 1.6;
+    stroke-dasharray: none;
+  }
+  /* The dragged button in flight, cloned into the same <svg> so the thumbnail's
+     transform and clipping apply to it exactly as they do to the face. Carries
+     no "data-key", so nothing per-key out-specifies it. "pointer-events: none"
+     is load-bearing: the ghost sits under the pointer for the whole drag, and
+     a hit test that found it would never report the slot it is covering. */
+  .pg-svg-container .button[ghost] {
+    pointer-events: none;
+    /* Translucent because the ghost paints last, directly over the slot being
+       aimed at. An opaque body would hide the drop ring the drag exists to
+       read -- the fill is the part that occludes, so it gives way. */
+    fill: color-mix(in srgb, var(--card-background-color, #fff) 55%, transparent);
+    /* Thin and neutral, so it never reads as a second ring beside the accent
+       one. Accent means "lands here", and nothing else may use it mid-drag. */
+    stroke: color-mix(in srgb, var(--primary-text-color) 30%, transparent);
+    stroke-width: 1;
+    stroke-dasharray: none;
+  }
+  /* The icon stays legible: it is the only thing saying *which* button is in
+     hand, and far too small to hide a ring drawn at the slot's edge. */
+  .pg-svg-container .pg-btn-img[ghost] {
+    opacity: 0.9;
+  }
+  /* The far half of the swap, previewed in the slot the drag emptied. Dimmed
+     because it is a prediction: "and this comes back here", not "this is
+     here now". */
+  .pg-svg-container .pg-btn-img[returning] {
+    opacity: 0.45;
+    animation: liza-swap-in .12s ease-out;
+  }
+  /* A fresh element every time the pointer crosses a slot, so the entrance is
+     a keyframe rather than a transition -- there is no previous value to move
+     from. No "to": it ends on whatever the rule above says. */
+  @keyframes liza-swap-in {
+    from { opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* The preview stays -- it is the answer to the question being asked. Only
+       the fade goes. */
+    .pg-svg-container .pg-btn-img[returning] { animation: none; }
+  }
+  /* What sells the lift. Soft and low-contrast so it shades the face rather
+     than drawing an outline of its own around the ghost. */
+  .pg-svg-container .button[ghost],
+  .pg-svg-container .pg-btn-img[ghost] {
+    filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.3));
+  }
+  /* Advertises the gesture, which otherwise hides inside a menu. The title bar
+     and vertical slider are excluded because neither holds a button config
+     (see "isMovableSlot"). Pointer-gated like the thumbnail grow. */
+  @media (hover: hover) and (pointer: fine) {
+    .pg-svg-container .button[configured]:not([data-key="slider_horizontal"]):not([data-key="slider_vertical"]) {
+      cursor: grab;
+    }
+  }
+  /* A live drag spends most of its life between shapes, and pointer capture
+     redirects events but not the cursor, so it is stated on the host.
+     "!important" to outrank every cursor the drag passes over. */
+  :host(.face-dragging),
+  :host(.face-dragging) * {
+    cursor: grabbing !important;
+  }
+  /* Over no tile at all, where there is nothing to put a ring on. The source
+     tile is excluded in "paintTarget": a refusal shown the instant a button is
+     picked up reads as an error, not as the absence of a destination. */
+  :host(.face-dragging.face-no-drop),
+  :host(.face-dragging.face-no-drop) * {
+    cursor: no-drop !important;
+  }
   /* The vertical slider takes the mark as fill only: it keeps its ordinary
      outline, and the mark adds no *highlight* ring on top. (The stroke below is
      that ordinary outline, copied from the [configured] rule above — not a mark
@@ -937,15 +1019,30 @@ export const STYLES = `
     stroke: var(--divider-color, rgba(127,127,127,.3));
     stroke-width: 0.6;
   }
-  /* Same treatment for the armed mark, and for the same reason the two above
-     get one: the dashed ring the generic rule draws survives on this pill only
-     as two scratches. A move onto or off the slider is rare but reachable, and
-     a mark that renders as damage is worse than the plain one it replaces. */
-  .pg-svg-container .button[data-key="slider_vertical"][mark="moving"],
-  .pg-svg-container .button[data-key="slider_vertical"][mark="moving"]:hover {
-    fill: color-mix(in srgb, var(--primary-color, #03a9f4) 20%, transparent);
-    stroke: var(--divider-color, rgba(127,127,127,.3));
-    stroke-width: 0.6;
+  /* No "mark=moving" or "[drop]" rule here on purpose: the slider exchanges no
+     button configurations at all (see "isMovableSlot"), so it takes neither.
+     Restore both from git if it is ever let back in. */
+
+  /* The caps do take part, but their per-key rules above score four against
+     the generic marks' three, so restate both here at matching specificity.
+     The ":hover" twins are load-bearing -- the caps' own hover rules reach
+     five. Keep the values in sync with the generic blocks above. */
+  .pg-svg-container .button[data-key="button_volume_up"][mark="moving"],
+  .pg-svg-container .button[data-key="button_volume_down"][mark="moving"],
+  .pg-svg-container .button[data-key="button_volume_up"][mark="moving"]:hover,
+  .pg-svg-container .button[data-key="button_volume_down"][mark="moving"]:hover {
+    fill: none;
+    stroke: var(--primary-color, #03a9f4);
+    stroke-width: 1.4;
+    stroke-dasharray: 4,3;
+  }
+  .pg-svg-container .button[data-key="button_volume_up"][drop],
+  .pg-svg-container .button[data-key="button_volume_down"][drop],
+  .pg-svg-container .button[data-key="button_volume_up"][drop]:hover,
+  .pg-svg-container .button[data-key="button_volume_down"][drop]:hover {
+    fill: color-mix(in srgb, var(--primary-color, #03a9f4) 28%, transparent);
+    stroke: var(--primary-color, #03a9f4);
+    stroke-width: 1.6;
     stroke-dasharray: none;
   }
   /* Inactive pages: dimmed, but still aimable. The face is fully hit-testable
@@ -1237,6 +1334,13 @@ export const STYLES = `
   }
   .liza-media-option:hover {
     background: color-mix(in srgb, var(--primary-color, #03a9f4) 15%, transparent);
+  }
+  /* The friendly name beside an entity id, quieter than the id itself. */
+  .liza-media-note {
+    margin-left: auto; padding-left: 12px;
+    color: var(--liza-muted-text);
+    font-size: var(--liza-font-s, 12px);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* The keyboard selection is stated twice over, with a literal fallback for
      each colour. A theme that leaves --primary-color unset makes both the
@@ -1580,6 +1684,20 @@ export const STYLES = `
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
   }
+  .ps-page-meta .ps-title-subtitle {
+    display: block;
+  }
+  .ps-page-name {
+    display: block;
+    font-size: var(--liza-font-m);
+    color: var(--primary-text-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ps-page-meta-text {
+    min-width: 0;
+  }
   /* Half the banner: the "which page, of how many" line, beside the reorder
      arrows. Both are about the page rather than about any one item on it, so
      the banner stands down entirely while the title is open. The 40px floor is
@@ -1636,6 +1754,29 @@ export const STYLES = `
   }
   .ps-reorder-btn:hover:not(:disabled) { background: var(--secondary-background-color); }
   .ps-reorder-btn:disabled { opacity: .3; cursor: default; }
+  .ps-layout-target-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: 8px;
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .ps-layout-target-btn:hover { background: var(--secondary-background-color); }
+  .ps-layout-target-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
 
   /* --- Page Settings: Color Picker --- */
@@ -1962,6 +2103,8 @@ export const STYLES = `
      sits beside it rather than in the hint, where it has to be hunted for. */
   .settings-step-input { display: flex; align-items: center; gap: 8px; }
   .settings-step-input input { flex: none; }
+  .settings-range-input input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: var(--primary-color); }
+  .settings-range-value { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; }
   .settings-step-unit {
     color: var(--liza-muted-text);
     font-size: var(--liza-font-m);
@@ -2110,6 +2253,24 @@ export const STYLES = `
   /* Where the stream's output actually goes. A shadow root does not inherit
      the document's link colour, so the anchor has to be told -- the same
      reason .empty-state a exists. */
+  .debug-traffic-subtitle {
+    margin: 14px 0 6px;
+    font-size: var(--liza-font-13);
+    font-weight: 600;
+  }
+  .debug-traffic-frames {
+    max-height: 360px;
+    overflow: auto;
+    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: 8px;
+    font-family: var(--code-font-family, monospace);
+    font-size: var(--liza-font-s);
+  }
+  .debug-traffic-frames table { border-collapse: collapse; width: 100%; }
+  .debug-traffic-frames td { padding: 2px 8px; white-space: nowrap; vertical-align: top; }
+  .debug-traffic-frames td:last-child { white-space: normal; overflow-wrap: anywhere; width: 100%; }
+  .debug-traffic-frames tr.bad td { color: var(--error-color, #f44336); }
+  .debug-traffic-frames tr.warn td { color: var(--warning-color, #ff9800); }
   .debug-live { margin: 10px 0 0; font-size: var(--liza-font-s); color: var(--liza-muted-text); }
   .debug-live a { color: var(--liza-accent-text); text-decoration: none; font-weight: 500; }
   .debug-live a:hover, .debug-live a:focus-visible { text-decoration: underline; }
@@ -2486,6 +2647,20 @@ export const STYLES = `
      clear of WCAG 1.4.3's 4.5:1, which raw #db4437 is not. The message is a
      normal paragraph in the theme's own body colour, so nothing here depends
      on red to be read -- the red is emphasis, not information (1.4.1). */
+  /* The title row is a flex row (icon + text) in other dialogs; a title that
+     carries a subtitle stacks it underneath instead. */
+  .add-page-dialog-title:has(.confirm-dialog-subtitle) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .confirm-dialog-subtitle {
+    display: block;
+    font-size: var(--liza-font-m);
+    font-weight: normal;
+    color: var(--liza-muted-text);
+    overflow-wrap: anywhere;
+  }
   .confirm-dialog-message {
     font-size: var(--liza-font-m);
     line-height: 1.5;

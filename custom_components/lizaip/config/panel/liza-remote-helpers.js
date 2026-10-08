@@ -26,6 +26,39 @@ export function mediaSource(url) {
   return `media:${alreadyEncoded ? val : encodeURIComponent(val)}`;
 }
 
+/** imgserv options a picture may carry after a `|`. Mirrors `MEDIA_OPTION_KEYS`. */
+export const MEDIA_OPTION_KEYS = ["size", "mode", "fg", "bg", "crop", "alpha"];
+
+/**
+ * `[url, options]` for `<url>|key=value&key=value`; mirrors `split_media_options`.
+ * A tail without a single known key is part of the URL. A numeric `size=` in
+ * the URL's own query is taken out of it and read as imgserv's too; `|size=`
+ * wins over it.
+ */
+export function splitMediaOptions(value) {
+  const val = String(value ?? "");
+  const at = val.lastIndexOf("|");
+  const options = {};
+  if (at >= 0) {
+    for (const part of val.slice(at + 1).split("&")) {
+      const eq = part.indexOf("=");
+      if (eq < 0) continue;
+      const key = part.slice(0, eq).trim().toLowerCase();
+      const v = part.slice(eq + 1).trim();
+      if (MEDIA_OPTION_KEYS.includes(key) && v) options[key] = v;
+    }
+  }
+  let url = Object.keys(options).length ? val.slice(0, at).trim() : val;
+  const m = /([?&])size=(\d+(?:x\d+)?)(?=&|#|$)/i.exec(url);
+  if (m) {
+    if (!("size" in options)) options.size = m[2].toLowerCase();
+    const rest = url.slice(m.index + m[0].length);
+    url = url.slice(0, m.index)
+      + (m[1] === "?" ? (rest.startsWith("&") ? `?${rest.slice(1)}` : rest) : rest);
+  }
+  return [url, options];
+}
+
 /** True for URLs the device cannot fetch itself — these go through imgserv's media: proxy. */
 export function isExternalUrl(val) {
   const low = String(val ?? "").trim().toLowerCase();
@@ -37,8 +70,24 @@ export function isExternalUrl(val) {
  * services that get one. Mirrors `STATE_TOKEN` / `is_two_way_service` in
  * `const.py`; `tests/label_auto_cases.json` pins the two together.
  */
-export const STATE_TOKEN = "${STATE}";
+export const STATE_TOKEN = "${_state}";
 export const TWO_WAY_SERVICES = ["toggle", "media_play_pause"];
+
+/**
+ * The two face keys drawn like buttons that hold no button record:
+ * `slider_horizontal` is the page's title bar, and `slider_vertical` stores
+ * mechanics (`slider_actions`) where a button stores `action_id` and `image`.
+ */
+export const NON_BUTTON_KEYS = new Set(["slider_horizontal", "slider_vertical"]);
+
+/**
+ * Whether `key` names a slot that exchanges *button* configurations. Asked of
+ * both ends of a move, because a kind mismatch has no direction. A plain
+ * function because both the view and the panel ask it.
+ */
+export function isMovableSlot(key) {
+  return !!key && !NON_BUTTON_KEYS.has(key);
+}
 
 /**
  * The target of a device-local command, named in the user's label. Mirrors
@@ -46,14 +95,14 @@ export const TWO_WAY_SERVICES = ["toggle", "media_play_pause"];
  * command: a plain HA action has no target apart from its entity, so the
  * token resolves to nothing there and collapses away like any unknown one.
  */
-export const NAME_TOKEN = "${NAME}";
+export const NAME_TOKEN = "${_name}";
 
 /**
  * The wording used when the backend serves a command without a template — an
  * older backend, or one mid-upgrade. Mirrors the `label_template` default on
  * `InternalCommand`; the served value always wins.
  */
-export const DEFAULT_COMMAND_LABEL_TEMPLATE = "${COMMAND}: ${NAME}";
+export const DEFAULT_COMMAND_LABEL_TEMPLATE = "${_cmd}: ${_name}";
 
 /**
  * The attribute a press moves, and where it moves it to. Mirrors
@@ -332,6 +381,127 @@ export function matchIconNames(names, term, limit = ICON_SUGGESTION_LIMIT) {
   return starts.concat(contains).slice(0, limit);
 }
 
+/**
+ * The `${…` the caret sits inside, or null.
+ *
+ * A variable is `${domain.object_id}` or `${domain.object_id.attribute}`, so
+ * what is typed so far is either an entity id (`stage: "entity"`, `term` the
+ * text since the `${`) or, once a second dot has been typed, an attribute of
+ * the entity before it (`stage: "attribute"`). `start` is where the `${` begins
+ * and `end` the caret, the span a pick replaces. Anything that cannot become a
+ * variable -- a closed `${…}`, a space-separated phrase, `${_state}` -- gives null.
+ */
+export function variableQuery(value, caret) {
+  const text = String(value ?? "");
+  const end = Number.isInteger(caret) ? caret : text.length;
+  const before = text.slice(0, end);
+  const start = before.lastIndexOf("${");
+  if (start < 0) return null;
+  let inside = before.slice(start + 2).trimStart();
+  // In a calculation (`${round(`, `${sensor.a * `, `${(sensor.a + `) the variable
+  // is what follows the last operator, bracket or comma. `entityStart` says
+  // where it begins so a pick can leave the rest standing, and `func` names
+  // the function the calculation opens with.
+  let func;
+  let entityStart;
+  if (/[-+*/%(,]/.test(inside)) {
+    if (!/^[\w\s.+\-*/%(),]*$/.test(inside)) return null;
+    const wrapped = /^([A-Za-z_]\w*)\s*\(/.exec(inside);
+    if (wrapped && VARIABLE_FUNCTIONS.includes(wrapped[1].toLowerCase())) func = wrapped[1].toLowerCase();
+    const raw = inside.slice(Math.max(...[..."-+*/%(,"].map((c) => inside.lastIndexOf(c))) + 1).trimStart();
+    entityStart = end - raw.length;
+    inside = raw;
+  }
+  if (!/^[A-Za-z0-9_.]*$/.test(inside)) return null;
+  const parts = inside.split(".");
+  if (parts.length > 3) return null;
+  const query = parts.length === 3
+    ? { stage: "attribute", entity: `${parts[0]}.${parts[1]}`.toLowerCase(), term: parts[2].toLowerCase(), start, end }
+    : { stage: "entity", entity: "", term: inside.toLowerCase(), start, end };
+  if (entityStart !== undefined) Object.assign(query, func ? { func, entityStart } : { entityStart });
+  return query;
+}
+
+/** The functions a variable can be wrapped in, in the order they are offered. */
+export const VARIABLE_FUNCTIONS = ["round", "min", "max", "abs"];
+
+/** Function names starting with *term*, as list entries ending in `(`. */
+export function matchFunctions(term) {
+  return VARIABLE_FUNCTIONS.filter((f) => f.startsWith(term)).map((f) => ({ id: `${f}(`, name: "function" }));
+}
+
+/**
+ * Entities matching *term*, best first: id starts with it, id contains it,
+ * then friendly name contains it. `states` is `hass.states`.
+ */
+export function matchEntities(states, term, limit = ICON_SUGGESTION_LIMIT) {
+  const ids = Object.keys(states || {}).sort();
+  if (!term) return ids.slice(0, limit).map((id) => ({ id, name: states[id]?.attributes?.friendly_name || "" }));
+  const starts = [];
+  const contains = [];
+  const byName = [];
+  for (const id of ids) {
+    const name = states[id]?.attributes?.friendly_name || "";
+    const i = id.indexOf(term);
+    if (i === 0) starts.push({ id, name });
+    else if (i > 0) contains.push({ id, name });
+    else if (String(name).toLowerCase().includes(term)) byName.push({ id, name });
+  }
+  return starts.concat(contains, byName).slice(0, limit);
+}
+
+/** Names of *entity*'s attributes that hold a plain value and match *term*. */
+export function matchAttributes(states, entity, term, limit = ICON_SUGGESTION_LIMIT) {
+  const attrs = states?.[entity]?.attributes || {};
+  const names = Object.keys(attrs).filter((k) => {
+    const v = attrs[k];
+    return v !== null && typeof v !== "object";
+  }).sort();
+  return matchIconNames(names, term, limit);
+}
+
+/**
+ * `${_device}` and `${_device.attribute}` matching *term*, for a field that
+ * knows its page's device (*device*: `{entity, name}`); else nothing. The
+ * attributes are the page entity's, under the alias.
+ */
+export function matchDeviceAlias(states, device, term, limit = ICON_SUGGESTION_LIMIT) {
+  if (!device) return [];
+  const alias = "_device";
+  if (term.startsWith(`${alias}.`)) {
+    if (!device.entity) return [];
+    return matchAttributes(states, device.entity, term.slice(alias.length + 1), limit)
+      .map((attr) => ({ id: `${alias}.${attr}`, name: "" }));
+  }
+  return alias.startsWith(term) ? [{ id: alias, name: device.name || device.entity || "" }] : [];
+}
+
+/**
+ * *value* with the `${…` described by *query* completed to `${pick}`.
+ * What is left of the word after the caret and a closing brace already there are replaced, not doubled. Returns the new text
+ * and where the caret goes: just before the `}`, so `.attribute` can follow.
+ */
+export function applyVariablePick(value, query, pick) {
+  const text = String(value ?? "");
+  const isFunction = pick.endsWith("(");
+  const key = query.stage === "attribute" ? `${query.entity}.${pick}` : pick;
+  const calculation = query.entityStart !== undefined;
+  const head = calculation ? text.slice(0, query.entityStart) : `${text.slice(0, query.start)}\${`;
+  const before = head + key;
+  const opened = before.slice(before.lastIndexOf("${"));
+  const open = (opened.match(/\(/g) || []).length - (opened.match(/\)/g) || []).length;
+  const tail = text.slice(query.end).replace(/^[A-Za-z0-9_.]*/, "");
+  // In a calculation what follows the caret up to the variable's own `}`
+  // (`, 2)`, ` + 1`) stays as typed; only brackets and the brace still missing
+  // are supplied. Elsewhere that stretch is dropped.
+  const m = /^([^{}$]*)\}/.exec(tail);
+  const inside = m && (calculation || /^\s*$/.test(m[1])) ? m[1] : "";
+  const rest = m && (calculation || /^\s*$/.test(m[1])) ? tail.slice(m[0].length) : tail;
+  const kept = calculation ? inside : "";
+  const missing = Math.max(open - (inside.match(/\)/g) || []).length, 0);
+  return { value: `${before}${kept}${")".repeat(missing)}}${rest}`, caret: before.length, isFunction };
+}
+
 /** The field's own error element. A `children` scan, not `:scope > …`, which
  *  is unsupported inside a shadow root and so matched nothing here. */
 const findFieldError = (host) =>
@@ -428,7 +598,7 @@ export const HelpersMixin = {
    */
   _iconImgSrc(val, size = 20) {
     if (this._isExternalUrl(val)) {
-      return this._imgservUrl(this._mediaSource(val), size, this._getThemeMode());
+      return this._imgservUrl(`media:${val}`, size, this._getThemeMode());
     }
     return val;
   },
@@ -643,7 +813,7 @@ export const HelpersMixin = {
    * when the text differs from what the field was opened with. *onChange*
    * receives the trimmed new value.
    */
-  _mountIconPicker(slot, value, onChange) {
+  _mountIconPicker(slot, value, onChange, options = {}) {
     if (!slot) return null;
     let input = slot.querySelector?.("input.liza-media-input") || null;
     if (!input) {
@@ -655,7 +825,7 @@ export const HelpersMixin = {
     const key = slot.id || (slot.dataset?.label || "").trim();
     if (key && input.dataset) input.dataset.a11yPicker = key;
     input.value = value || "";
-    this._wireMediaInput(input, slot.querySelector?.(".liza-media-suggest") || null, onChange);
+    this._wireMediaInput(input, slot.querySelector?.(".liza-media-suggest") || null, onChange, options);
     return input;
   },
 
@@ -668,13 +838,22 @@ export const HelpersMixin = {
    *
    * Once the text starts with a registered icon prefix (`mdi:`, `phu:`, ...) a list of matching names
    * opens under it. Picking one commits at once -- the choice is complete.
+   * The one other time it opens is inside an unclosed `${`: entities while the
+   * id is typed (or a function name such as `round(`), then the entity's attributes
+   * after a second dot; the same inside `${round(…)}`. A field given a
+   * *device* (a layout page's title) also offers `${_device}` and, after its
+   * dot, the page entity's attributes. That pick
+   * completes the variable in place and keeps editing; see `variableQuery`.
    * The list never opens for anything else, so typing words or pasting a URL
    * is never interrupted by suggestions that cannot apply.
    */
-  _wireMediaInput(input, list, onCommit) {
+  _wireMediaInput(input, list, onCommit, { device = null } = {}) {
     let pristine = input.value.trim();
     let matches = [];
     let active = -1;
+    // The `${…` being completed while the list shows entities or attributes;
+    // null while it shows icon names.
+    let variable = null;
     // Bumped by every open and close, so a slow answer for text that has
     // since changed is dropped rather than shown.
     let seq = 0;
@@ -703,6 +882,7 @@ export const HelpersMixin = {
       seq += 1;
       matches = [];
       active = -1;
+      variable = null;
       unfollow();
       if (list) {
         try { if (list.matches?.(":popover-open")) list.hidePopover(); } catch (e) { /* not a popover here */ }
@@ -737,18 +917,7 @@ export const HelpersMixin = {
       if (idx >= 0) input.setAttribute?.("aria-activedescendant", `${listId}-${idx}`);
       else input.removeAttribute?.("aria-activedescendant");
     };
-    const open = async () => {
-      const query = iconQuery(input.value);
-      if (!query || !list) return close();
-      const mine = ++seq;
-      let names = [];
-      try { names = await iconNameList(query.set); } catch (e) { /* no list, no suggestions */ }
-      if (mine !== seq) return;
-      matches = matchIconNames(names, query.term).map(n => `${query.set}:${n}`);
-      if (!matches.length) return close();
-      list.innerHTML = matches.map((v, i) =>
-        `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(v)}" aria-selected="false">${this._renderIconHtml(v, 20)}<span>${this._esc(v)}</span></li>`,
-      ).join("");
+    const show = () => {
       list.hidden = false;
       place();
       try { if (!list.matches?.(":popover-open")) list.showPopover?.(); } catch (e) { /* not a popover here */ }
@@ -757,6 +926,55 @@ export const HelpersMixin = {
       input.setAttribute?.("aria-controls", listId);
       input.setAttribute?.("aria-expanded", "true");
       active = -1;
+    };
+    // A variable is not a finished value: picking completes the `${…}` in the
+    // text and leaves the field being edited, with the caret before the `}`
+    // so `.attribute` can follow. Nothing is committed until the user is done.
+    const openVariables = (query) => {
+      const states = this._hass?.states || {};
+      seq += 1;
+      // Offered inside a calculation too, where `_device.attribute` is a variable.
+      const alias = query.stage === "entity" ? matchDeviceAlias(states, device, query.term) : [];
+      const found = query.stage === "attribute"
+        ? matchAttributes(states, query.entity, query.term).map((id) => ({ id, name: "" }))
+        : [
+          ...alias,
+          ...(query.term.startsWith("_device.") ? [] : [
+            ...matchFunctions(query.term),
+            ...matchEntities(states, query.term),
+          ]),
+        ];
+      if (!found.length || !list) return close();
+      matches = found.map((f) => f.id);
+      variable = query;
+      list.innerHTML = found.map((f, i) =>
+        `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(f.id)}" aria-selected="false"><span>${this._esc(f.id)}</span>${f.name ? `<span class="liza-media-note">${this._esc(f.name)}</span>` : ""}</li>`,
+      ).join("");
+      show();
+    };
+    const pickVariable = (pick) => {
+      const q = variable;
+      close();
+      const done = applyVariablePick(input.value, q, pick);
+      input.value = done.value;
+      try { input.setSelectionRange?.(done.caret, done.caret); } catch (e) { /* not a text input here */ }
+    };
+    const open = async () => {
+      const typing = this._variablesEnabled === false ? null : variableQuery(input.value, input.selectionStart);
+      if (typing) return openVariables(typing);
+      const query = iconQuery(input.value);
+      if (!query || !list) return close();
+      const mine = ++seq;
+      let names = [];
+      try { names = await iconNameList(query.set); } catch (e) { /* no list, no suggestions */ }
+      if (mine !== seq) return;
+      matches = matchIconNames(names, query.term).map(n => `${query.set}:${n}`);
+      variable = null;
+      if (!matches.length) return close();
+      list.innerHTML = matches.map((v, i) =>
+        `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(v)}" aria-selected="false">${this._renderIconHtml(v, 20)}<span>${this._esc(v)}</span></li>`,
+      ).join("");
+      show();
     };
 
     input.addEventListener("input", open);
@@ -777,6 +995,7 @@ export const HelpersMixin = {
           : (active + step + matches.length) % matches.length);
       } else if (e.key === "Enter") {
         e.preventDefault();
+        if (isOpen && active >= 0 && variable) return pickVariable(matches[active]);
         if (isOpen && active >= 0) input.value = matches[active];
         commit(input.value);
       } else if (e.key === "Escape") {
@@ -793,6 +1012,7 @@ export const HelpersMixin = {
     list?.addEventListener("click", (e) => {
       const li = e.target?.closest?.(".liza-media-option");
       if (!li) return;
+      if (variable) return pickVariable(li.dataset.value);
       input.value = li.dataset.value;
       commit(input.value);
     });
@@ -808,10 +1028,18 @@ export const HelpersMixin = {
     icon = String(icon ?? "").trim();
     // A raw media: value is a URL of its own — encode it so its query string does
     // not collide with imgserv's.
-    if (icon.startsWith("media:")) icon = this._mediaSource(icon.slice(6));
+    let extra = "";
+    if (icon.startsWith("media:")) {
+      // `|size=200x200` and friends are imgserv's, over the field's defaults.
+      const [url, { size: ownSize, mode: ownMode, alpha: _alpha, ...rest }] = splitMediaOptions(icon.slice(6));
+      icon = this._mediaSource(url);
+      if (ownSize) size = encodeURIComponent(ownSize);
+      if (ownMode) mode = encodeURIComponent(ownMode);
+      extra = Object.entries(rest).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
+    }
     const sep = icon.includes("?") ? "&" : "?";
     const modeStr = mode ? `&mode=${mode}` : "";
-    return `/api/imgserv/${icon}${sep}size=${size}${modeStr}&alpha=1`;
+    return `/api/imgserv/${icon}${sep}size=${size}${modeStr}${extra}&alpha=1`;
   },
 
   /**
@@ -868,7 +1096,7 @@ export const HelpersMixin = {
     } else if (icon.startsWith("imgserv://")) {
       src = `/api/imgserv/${icon.slice(10)}${icon.includes("?") ? "&" : "?"}alpha=1`;
     } else if (this._isExternalUrl(icon)) {
-      src = this._imgservUrl(this._mediaSource(icon), "title", mode);
+      src = this._imgservUrl(`media:${icon}`, "title", mode);
     } else if (this._isImageUrl(icon)) {
       src = icon;
     } else {
@@ -1309,7 +1537,7 @@ export const HelpersMixin = {
    * library entry and flows straight into the button label, so the transform
    * reached the device as "play:5 Media play media_player" (and, worse,
    * "play:5 Open cover cover") sitting beside neighbours that said
-   * "play:5 Next". A one-way service like `media_play` has no `${STATE}` to
+   * "play:5 Next". A one-way service like `media_play` has no `${_state}` to
    * resolve, so this default name IS the label the user ends up with.
    *
    * The domain is not lost by dropping it here: `_getActionSubtitle` renders
@@ -1433,8 +1661,8 @@ export const HelpersMixin = {
    * What an internal command's button points *at*, in words. "" when nothing.
    *
    * Mirrors `command_target_name()` in `internal_commands/registry.py`: this is the
-   * value of `${NAME}`, both in the auto label and in one the user typed, so
-   * a hand-written "Go to ${NAME}" cannot name a different page than the
+   * value of `${_name}`, both in the auto label and in one the user typed, so
+   * a hand-written "Go to ${_name}" cannot name a different page than the
    * default label does.
    *
    * `fallback` is the name the target had when the button was saved. The
@@ -1513,19 +1741,19 @@ export const HelpersMixin = {
     const cmd = this._internalCommandFor(config, fallbackService);
     if (!cmd) return "";
     // Nothing to point at yet: store the bare command name. A template whose
-    // `${NAME}` will never fill in cleans away to a dangling "Go to page:".
+    // `${_name}` will never fill in cleans away to a dangling "Go to page:".
     if (!this._internalCommandTargetName(config, fallbackService)) return cmd.name;
     const template = cmd.label_template || DEFAULT_COMMAND_LABEL_TEMPLATE;
-    // `${COMMAND}` is resolved now and `${NAME}` deliberately is not. This
+    // `${_cmd}` is resolved now and `${_name}` deliberately is not. This
     // return value is persisted into `assign.label`, and the page a button
     // points at can be renamed long after the button was stored -- baking the
     // name in here would freeze "Go to page: Android" onto a page since called
     // something else. The command's own wording cannot drift that way, so it
     // is filled in and the user sees words rather than a second placeholder.
-    // Exactly how a two-way service stores a bare `${STATE}`.
+    // Exactly how a two-way service stores a bare `${_state}`.
     return this._substituteLabelTokens(template, {
-      command: cmd.name,
-      name: NAME_TOKEN,
+      _cmd: cmd.name,
+      _name: NAME_TOKEN,
     }) || cmd.name;
   },
 
@@ -1605,6 +1833,31 @@ export const HelpersMixin = {
   _pageLabel(page) {
     return this._pageTitle(page)
       || (this._t ? this._t("page_fallback", { n: page?.id }) : `Page ${page?.id}`);
+  },
+
+  /**
+   * Which page this is, as the user sees it shown anywhere a page is named:
+   * "Page 3/9 (24)" -- its place in the run and the id the backend and the
+   * debug tools know it by. The title is deliberately left out; it goes on a
+   * line of its own (`_pageTitle`), or after a separator where only one line
+   * fits (`_pageDisplayLine`). Not for matching: names are resolved by
+   * `_pageLabel`.
+   */
+  _pagePosition(page) {
+    const pages = this._pages || [];
+    const i = pages.findIndex((p) => String(p?.id) === String(page?.id));
+    const t = (key, vars, fallback) => (this._t ? this._t(key, vars) : fallback);
+    if (i < 0) return t("page_fallback", { n: page?.id }, `Page ${page?.id}`);
+    return t("page_position", { n: i + 1, m: pages.length, id: page?.id },
+      `Page ${i + 1}/${pages.length} (${page?.id})`);
+  },
+
+  /** `_pagePosition` and the title on one line, for places that have only one
+   *  (an HA dropdown option, a toast, a tooltip line). */
+  _pageDisplayLine(page) {
+    const pos = this._pagePosition(page);
+    const title = this._pageTitle(page);
+    return title ? `${pos} · ${title}` : pos;
   },
 
   /** Payload keys that carry a button's own identity (what it plays/selects/sends). */
@@ -1873,7 +2126,7 @@ export const HelpersMixin = {
     // A two-way service gets a *template*, not a resolved state. The caller
     // persists this string into `assign.label`, so returning "Lampe Aus" here
     // would freeze whatever the entity happened to be doing when the button
-    // was configured. `${STATE}` is resolved per render, on the device side.
+    // was configured. `${_state}` is resolved per render, on the device side.
     // The bare template, without the entity name: the device puts the entity in
     // front of it, exactly as it does for a short static name like "Next", so
     // the stored labels on a page stay the same shape as each other.
@@ -1945,105 +2198,13 @@ export const HelpersMixin = {
     return this._isTwoWayService(svc) || this._isAttributeStateService(svc);
   },
 
-  // `${sensor.outdoor}` / `${sensor.outdoor.attribute}`. Mirrors
-  // `ENTITY_TOKEN_RE` in const.py.
-  ENTITY_TOKEN_RE: /\$\{\s*([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?\s*\}/g,
-
-  // Mirror `WEATHER_CONDITION_ICONS` / `WEATHER_CONDITION_LABELS` in const.py.
-  WEATHER_CONDITION_ICONS: {
-    "clear-night": "weather-night", cloudy: "weather-cloudy", exceptional: "weather-cloudy-alert",
-    fog: "weather-fog", hail: "weather-hail", lightning: "weather-lightning",
-    "lightning-rainy": "weather-lightning-rainy", partlycloudy: "weather-partly-cloudy",
-    pouring: "weather-pouring", rainy: "weather-rainy", snowy: "weather-snowy",
-    "snowy-rainy": "weather-snowy-rainy", sunny: "weather-sunny", windy: "weather-windy",
-    "windy-variant": "weather-windy-variant",
-  },
-  WEATHER_CONDITION_LABELS: {
-    "clear-night": "Clear, night", cloudy: "Cloudy", exceptional: "Exceptional", fog: "Fog",
-    hail: "Hail", lightning: "Lightning", "lightning-rainy": "Lightning, rainy",
-    partlycloudy: "Partly cloudy", pouring: "Pouring", rainy: "Rainy", snowy: "Snowy",
-    "snowy-rainy": "Snowy, rainy", sunny: "Sunny", windy: "Windy", "windy-variant": "Windy, cloudy",
-  },
-
-  /** The icon slug for a weather entity's condition. Mirrors `weather_condition_icon`. */
-  _weatherConditionIcon(entityId) {
-    if (!entityId.startsWith("weather.")) return null;
-    const state = this._hass?.states?.[entityId]?.state;
-    return Object.hasOwn(this.WEATHER_CONDITION_ICONS, state) ? this.WEATHER_CONDITION_ICONS[state] : null;
-  },
-
-  _formatEntityValue(value) {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "boolean") return value ? "on" : "off";
-    if (Array.isArray(value)) {
-      return value.filter((v) => v !== null && v !== undefined).map((v) => this._formatEntityValue(v)).join(", ");
-    }
-    return String(value);
-  },
-
-  /**
-   * What `${entity_id}` (or `${entity_id.attribute}`) reads right now. Mirrors
-   * `entity_token_value`: the state rounded to its display precision and
-   * followed by its unit, an attribute as stored, and nothing at all for a
-   * missing, unknown or unavailable entity.
-   */
-  _entityTokenValue(entityId, attribute, withUnit = true) {
-    const st = this._hass?.states?.[entityId];
-    if (!st) return "";
-    if (attribute) return this._formatEntityValue(st.attributes?.[attribute]);
-    let value = st.state;
-    if (typeof value !== "string" || ["", "unknown", "unavailable"].includes(value)) return "";
-    if (withUnit && entityId.startsWith("weather.") && Object.hasOwn(this.WEATHER_CONDITION_LABELS, value)) {
-      const label = this._hass?.formatEntityState?.(st);
-      return typeof label === "string" && label && label !== value ? label : this.WEATHER_CONDITION_LABELS[value];
-    }
-    const precision = this._hass?.entities?.[entityId]?.display_precision;
-    if (Number.isInteger(precision) && precision >= 0 && value.trim() !== "" && !Number.isNaN(Number(value))) {
-      value = Number(value).toFixed(precision);
-    }
-    const unit = st.attributes?.unit_of_measurement;
-    return withUnit && typeof unit === "string" && unit ? `${value} ${unit}` : value;
-  },
-
-  /** Every entity variable in *text* replaced by its current value. */
-  _substituteEntityTokens(text) {
-    if (typeof text !== "string" || !text.includes("${")) return text;
-    return text.replace(this.ENTITY_TOKEN_RE, (_, eid, attr) => this._entityTokenValue(eid.toLowerCase(), attr));
-  },
-
-  /**
-   * A button image with its entity variables filled in, or null when one of
-   * them has no value -- half an icon name ("mdi:weather-") is a broken glyph,
-   * so the button falls back to the icon it derives. Mirrors
-   * `with_resolved_image`.
-   */
-  _resolveImageVariables(image) {
-    if (typeof image !== "string" || !image.includes("${")) return image;
-    let missing = false;
-    // A unit belongs in drawn text, never in a name. Mirrors the Python.
-    const prefix = image.split("${")[0];
-    const withUnit = prefix.toLowerCase().startsWith("text:") || !prefix.includes(":");
-    const whole = new RegExp(`^${this.ENTITY_TOKEN_RE.source}$`).test(image.trim());
-    const out = image.replace(this.ENTITY_TOKEN_RE, (_, eid, attr, offset) => {
-      const icon = attr ? null : this._weatherConditionIcon(eid.toLowerCase());
-      if (icon) {
-        // Mirrors `with_resolved_image`: a weather condition is drawn as its icon.
-        const before = image.slice(0, offset).toLowerCase();
-        if (whole) return `mdi:${icon}`;
-        if (before.endsWith("mdi:weather-")) return icon.slice("weather-".length);
-        if (before.endsWith("mdi:")) return icon;
-      }
-      const v = this._entityTokenValue(eid.toLowerCase(), attr, withUnit);
-      if (!v) missing = true;
-      return v;
-    }).trim();
-    return missing || !out ? null : out;
-  },
-
   /** Resolve `${TOKEN}` placeholders for *display only* — never for storage. */
   _substituteLabelTokens(text, values) {
     if (!text || !text.includes("${")) return text;
-    text = this._substituteEntityTokens(text);
+    text = this._expandPageDevice?.(text) ?? text;
+    // Entity variables are the backend's (liza-remote-variables.js); ${_state} and
+    // friends are filled in below.
+    if (this._hasEntityToken?.(text)) text = this._substituteEntityTokens(text);
     const lookup = {};
     for (const [k, v] of Object.entries(values)) lookup[k.toLowerCase()] = v;
     // `\w*`, not `\w+`: `${}` and `${ }` must be consumed too, or a brace
@@ -2127,7 +2288,7 @@ export const HelpersMixin = {
     // light.toggle whose step runs light.turn_on -- step-first said "On" while
     // the device said "Off".
     const svc = ((action?.service || "").split(".")[1]) || "";
-    // The target's state, not one member's: `${STATE}` has to resolve to what
+    // The target's state, not one member's: `${_state}` has to resolve to what
     // the label says, and a room whose first lamp is unavailable collapsed the
     // token while the label itself read "On". `_fill_label_tokens` in
     // device_sync.py reads the same pair.
@@ -2141,15 +2302,15 @@ export const HelpersMixin = {
     const data = step.data || {};
     const lang = this._labelLang();
     const values = {
-      state: this._stateTokenLabel(svc, stateVal, lang, attributes, data),
+      _state: this._stateTokenLabel(svc, stateVal, lang, attributes, data),
     };
-    // `${NAME}` belongs to device-local commands and nobody else. The key is
+    // `${_name}` belongs to device-local commands and nobody else. The key is
     // only added when the button carries one, so on a plain HA action the
     // token stays unknown and collapses -- rather than resolving to a blank
     // that reads as supported. Mirrors `_fill_label_tokens` in device_sync.py,
     // which keys off the step's service for the same reason.
     if (this._internalCommandFor(config, action?.service)) {
-      values.name = this._internalCommandTargetName(
+      values._name = this._internalCommandTargetName(
         config, action?.service, this._internalTargetHint(assign),
       );
     }
@@ -2188,13 +2349,13 @@ export const HelpersMixin = {
    *
    * A name a dynamic source wrote is auto-filled too, whatever it says. Twelve
    * lamps on a Hue bridge share one library entry, so the name comparison holds
-   * for exactly one of them — and only that one was offered the `${STATE}` the
+   * for exactly one of them — and only that one was offered the `${_state}` the
    * other eleven equally deserve.
    */
   _labelIsAutoFilled(stored, action, autoLabel, assign = null) {
     if (!stored || !this._isTokenOnlyLabel(autoLabel)) return false;
     // A name the user typed is never auto-filled, whatever it happens to equal.
-    // Without this the field would offer the derived `${STATE}` back to someone
+    // Without this the field would offer the derived `${_state}` back to someone
     // who had just replaced it, and the ladder — which honours the edit —
     // would print something the field never showed.
     if (assign?.label_edited) return false;
@@ -2203,13 +2364,13 @@ export const HelpersMixin = {
   },
 
   /**
-   * Does this text contain a `${STATE}` placeholder specifically? The hint
+   * Does this text contain a `${_state}` placeholder specifically? The hint
    * under the field names that one token, so a label holding some other token
    * shape (`${NOPE}`, `${}`) must not trigger it — nothing would be replaced.
    * Whitespace and case are tolerated, matching `_substituteLabelTokens`.
    */
   _labelHasStateToken(text) {
-    return !!text && /\$\{\s*state\s*\}/i.test(text);
+    return !!text && /\$\{\s*_state\s*\}/i.test(text);
   },
 
   /**
@@ -2218,17 +2379,72 @@ export const HelpersMixin = {
    * as `device_sync` sends it.
    */
   _pageTitleImage(page) {
-    return String(this._resolveImageVariables(page?.image) || "").trim();
+    return String(this._resolveImageVariables(this._expandPageDevice(page?.image, page)) || "").trim();
   },
 
-  /** Does this text name an entity variable (`${sensor.outdoor}`)? */
-  _hasEntityToken(text) {
-    return typeof text === "string" && new RegExp(this.ENTITY_TOKEN_RE.source).test(text);
+  /**
+   * *text* with `${_device…}` read as *page* has it (by default the page being
+   * edited), as `device_sync` does before anything else. `${_device.attr}` is
+   * the page's entity under another name, so it becomes that entity's
+   * variable; `${_device}` is the device's name, which holds no variable of its
+   * own. A page with no layout has no device, so both read as nothing.
+   */
+  _expandPageDevice(text, page = this._pages?.[this._currentPageIdx]) {
+    if (typeof text !== "string" || !/\$\{[^{}]*(?<![\w.])_device\b/.test(text)) return text;
+    const entity = page?.layout?.target?.entity_id || "";
+    // Inside a calculation as well: `${_device.volume_level * 100}`.
+    let out = text.replace(/\$\{([^{}]*)\}/g, (whole, body) => {
+      if (!/(?<![\w.])_device\.[A-Za-z0-9_]/.test(body)) return whole;
+      if (!entity) return "";
+      return `\${${body.replace(/(?<![\w.])_device\.([A-Za-z0-9_]+)/g, (_, attr) => `${entity}.${attr}`).trim()}}`;
+    });
+    if (/\$\{\s*_device\s*\}/.test(out)) {
+      const name = this._layoutDeviceName(page) || "";
+      out = out.replace(/\$\{\s*_device\s*\}/g, () => name);
+    }
+    return out.trim();
   },
 
-  /** The same test for `${NAME}`, which only device-local commands resolve. */
+  /** The `device` option for a picker or input on *page*: `{}` off a layout page. */
+  _pageDeviceOption(page = this._pages?.[this._currentPageIdx]) {
+    if (!page?.layout?.type) return {};
+    return {
+      device: {
+        entity: page.layout.target?.entity_id || "",
+        name: this._layoutDeviceName(page) || "",
+      },
+    };
+  },
+
+  /**
+   * The name of the device or hub a layout page is bound to; "" when it has
+   * none, or while a hub's title is still being fetched. Mirrors
+   * `layout_target_name`.
+   */
+  _layoutDeviceName(page) {
+    const target = page?.layout?.target || {};
+    if (target.config_entry) {
+      const id = target.config_entry;
+      const titles = (this._layoutEntryTitles ||= {});
+      if (!(id in titles)) {
+        titles[id] = null;
+        Promise.resolve(this._hass?.callWS?.({ type: "config_entries/get_single", entry_id: id }))
+          .then((r) => { titles[id] = r?.config_entry?.title || ""; })
+          .catch(() => { titles[id] = ""; })
+          .then(() => this._render?.());
+      }
+      if (titles[id]) return titles[id];
+    }
+    const dev = target.device ? this._hass?.devices?.[target.device] : null;
+    const devName = dev?.name_by_user || dev?.name;
+    if (devName) return devName;
+    const ent = target.entity_id;
+    return (ent && this._hass?.states?.[ent]?.attributes?.friendly_name) || "";
+  },
+
+  /** The same test for `${_name}`, which only device-local commands resolve. */
   _labelHasNameToken(text) {
-    return !!text && /\$\{\s*name\s*\}/i.test(text);
+    return !!text && /\$\{\s*_name\s*\}/i.test(text);
   },
 
   /** True when a label is nothing but placeholders. Mirrors `is_token_only_label`. */
@@ -2322,7 +2538,9 @@ export const HelpersMixin = {
     if (!text) return text;
     let out = text;
     const hadToken = out.includes("${");
-    if (hadToken) out = out.replace(/\$\{\s*[\w.]*\s*\}?/g, "");
+    // A whole unfilled variable goes first, calculation and all, as in
+    // `_WHOLE_TOKEN_RE`; otherwise only "${floor" would be stripped.
+    if (hadToken) out = out.replace(/\$\{[^{}$]*\}/g, "").replace(/\$\{\s*[\w.]*\s*\}?/g, "");
     // Anything still holding a brace cannot be parsed as a URL by the device.
     if (out.includes("{") || out.includes("}")) out = out.replace(/[{}]/g, "");
     // A separator left joining nothing once a placeholder resolved away --
@@ -2358,12 +2576,12 @@ export const HelpersMixin = {
       !userNamed && this._nameIsSourceOwned(assign) && this._isTwoWayService(svc);
     // The source's own title for the subject. Read from the binding rather than
     // from `storedName`, because `_labelPrefix` probes the ladder with a bare
-    // "${STATE}" to find what the remote draws in front — and answering that
+    // "${_state}" to find what the remote draws in front — and answering that
     // with the registry's friendly name put the wrong lamp in the field
     // whenever a source titled an item differently from the entity registry.
     const boundSubject = boundToggle ? (assign?.label || storedName || "").trim() : "";
     // A token-only label is a shape rather than words *unless the user wrote
-    // it*. Deleting the entity prefix in front of "${STATE}" is the one way to
+    // it*. Deleting the entity prefix in front of "${_state}" is the one way to
     // ask for the bare state word, and treating that edit as a shape put the
     // prefix straight back — the label could not be changed at all.
     if (stored && (userNamed || !tokenOnly) && !boundToggle && (userNamed || stored !== (action?.name || ""))) {
@@ -2414,7 +2632,7 @@ export const HelpersMixin = {
     // An unrenamed attribute button announces its next action, exactly as an
     // unrenamed toggle announces its next state below. Mirrors the rung of the
     // same name in `device_sync._resolve_button_tooltip_ladder`; without it the
-    // panel would print `${STATE}` while the device printed a frozen "Mute".
+    // panel would print `${_state}` while the device printed a frozen "Mute".
     if (this._isAttributeStateService(svc)) {
       const attrLabel = this._displayLabel(STATE_TOKEN, action, entityId, config);
       if (attrLabel) return entityName ? `${entityName} ${attrLabel}` : attrLabel;
@@ -2580,11 +2798,16 @@ export const HelpersMixin = {
    *  focus trap, Escape and focus-return are the platform's. Cancel takes
    *  initial focus so a dialog appearing under a finger on Enter cannot
    *  confirm itself, and every path that is not Confirm resolves false. */
-  _confirmDestructive({ title, message, confirmText }) {
+  _confirmDestructive({ title, subtitle = "", message, confirmText }) {
     return new Promise((resolve) => {
+      // The subtitle is part of the heading (it names what the title asks
+      // about), so it sits inside the labelled element and is read with it.
+      const subtitleHtml = subtitle
+        ? `<span class="confirm-dialog-subtitle">${this._esc(subtitle)}</span>`
+        : "";
       const { dlg, close } = this._openModal(`
         <div class="add-page-dialog confirm-dialog" role="document">
-          <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(title)}</h2>
+          <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(title)}${subtitleHtml}</h2>
           <p class="confirm-dialog-message" id="liza-dlg-message">${this._esc(message)}</p>
           <div class="layout-dialog-actions">
             <button type="button" class="confirm-cancel-btn">${this._esc(this._t("cancel"))}</button>

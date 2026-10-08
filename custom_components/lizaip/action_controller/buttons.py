@@ -6,12 +6,12 @@ import logging
 from collections.abc import Mapping
 
 import voluptuous as vol
-
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.script import SCRIPT_MODE_PARALLEL, Script
 
-from ..const import longtouch_steps, normalise_payload
+from ..config.internal_commands import get_internal_command
+from ..config.text_style import longtouch_enabled, toggle_enabled
 from ..const import (
     CONF_OPTIMISTIC_UPDATES,
     DOMAIN,
@@ -24,21 +24,25 @@ from ..const import (
     build_launch_verification,
     catchall_state_icon,
     clean_label_text,
-    resolve_image_tokens,
     get_action_label,
-    substitute_label_tokens,
     get_ui_language,
     is_state_toggle_service,
+    longtouch_steps,
+    normalise_payload,
+    page_scope,
     resolve_icon_url,
+    resolve_image_tokens,
     scope_action_states,
+    substitute_label_tokens,
+    variables_scope,
 )
+from ..state_icon import entity_icon_style, read_icon_style_options
 from ._state import (
     _DEFAULT_PAGE_ID,
     advance_cycle,
     cycle_index,
     get_selected_button,
 )
-from ..state_icon import entity_icon_style, read_icon_style_options
 from .helpers import (
     _get_store,
     _resolve_device_id,
@@ -46,10 +50,8 @@ from .helpers import (
     resolve_step_entity,
     service_name,
 )
-from .overrides import resolve_fixed_action
-from ..config.internal_commands import get_internal_command
-from ..config.text_style import longtouch_enabled, toggle_enabled
 from .icons import toggle_icon
+from .overrides import resolve_fixed_action
 from .toggle import (
     MODE_CYCLE,
     TOGGLE_KEY,
@@ -342,6 +344,26 @@ async def _fire_cycle_update(
     assign: Mapping,
     entry_id: str,
 ) -> None:
+    """:func:`_fire_cycle_update_in_scope`, reading ``${_device}`` as the page has it."""
+    layout = None
+    for page in await _get_store(hass).async_get_pages(device_id):
+        if page.get("id", _DEFAULT_PAGE_ID) == page_id:
+            layout = page.get("layout")
+            break
+    with page_scope(layout):
+        await _fire_cycle_update_in_scope(
+            hass, device_id, page_id, button_key, assign, entry_id,
+        )
+
+
+async def _fire_cycle_update_in_scope(
+    hass: HomeAssistant,
+    device_id: str,
+    page_id: int,
+    button_key: str,
+    assign: Mapping,
+    entry_id: str,
+) -> None:
     """Repaint a cycle button with the step its *next* press will run.
 
     Cycle mode exists for devices that report nothing back, so no
@@ -396,12 +418,12 @@ async def _fire_cycle_update(
     # 87 %". One field, two behaviours, and the panel offered the same syntax
     # in both.
     #
-    # `${STATE}` and `${NAME}` used to be the surviving half of that same
+    # `${_state}` and `${_name}` used to be the surviving half of that same
     # split: an empty value map here collapsed them, so the one syntax the
     # Tooltip field advertises most prominently was the one a press could not
     # use. `resolve_rule_label` fills them from the press's own target, which
     # is the subject a cycle step actually speaks about.
-    # The device's own language option, so a press resolving `${STATE}` reads
+    # The device's own language option, so a press resolving `${_state}` reads
     # the same word the rest of its tile does. Only `entry_id` reaches here.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
     tooltip = clean_label_text(
@@ -529,17 +551,20 @@ async def _fire_optimistic_update(
 
     # Variables read as the sync reads them; one with no value falls back to
     # the action's own icon, and with neither there is nothing to predict.
-    icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
-    if not icon:
-        _LOGGER.debug("Optimistic: predicted icon has no value — skipping")
-        return
-
     pages = await store.async_get_pages(device_id)
     page_color = ""
+    layout = None
     for p in pages:
         if p.get("id", _DEFAULT_PAGE_ID) == page_id:
             page_color = p.get("default_color", "")
+            layout = p.get("layout")
             break
+
+    with page_scope(layout):
+        icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
+    if not icon:
+        _LOGGER.debug("Optimistic: predicted icon has no value — skipping")
+        return
 
     # Resolved here rather than below with the language, because the style call
     # needs it: the fill quantum has to match the one the sync and the listener
@@ -816,15 +841,17 @@ async def execute_action(
 
     # A cycle button has no state listener to correct it, so its repaint is
     # unconditional and comes first: see _fire_cycle_update.
-    if toggle_mode(assign) == MODE_CYCLE:
-        await _fire_cycle_update(
-            hass, device_id, page_id, button_key, assign, entry_id,
-        )
-    # Optimistic icon updates are corrected by the real state listener.
-    elif _is_optimistic(hass, entry_id):
-        await _fire_optimistic_update(
-            hass, device_id, page_id, button_key, assign, own_actions, entry_id,
-        )
+    entry = hass.config_entries.async_get_entry(entry_id)
+    with variables_scope(getattr(entry, "options", None)):
+        if toggle_mode(assign) == MODE_CYCLE:
+            await _fire_cycle_update(
+                hass, device_id, page_id, button_key, assign, entry_id,
+            )
+        # Optimistic icon updates are corrected by the real state listener.
+        elif _is_optimistic(hass, entry_id):
+            await _fire_optimistic_update(
+                hass, device_id, page_id, button_key, assign, own_actions, entry_id,
+            )
     try:
         # Context lets HA trace resulting service calls back to this press.
         await script.async_run(context=Context())

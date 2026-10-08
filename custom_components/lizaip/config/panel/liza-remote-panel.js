@@ -12,6 +12,7 @@
  * Module split:
  *   - liza-remote-data.js      — backend communication (load/auto-save)
  *   - liza-remote-helpers.js   — utilities, icon resolution, labeling
+ *   - liza-remote-variables.js — ${…} variables in the previews, answered by the backend
  *   - liza-remote-states.js    — state derivation & states editor
  *   - liza-remote-buttons-view.js — Buttons tab HTML + wiring
  *   - liza-remote-actions-view.js — Actions tab HTML + wiring
@@ -23,7 +24,8 @@
 import { STYLES } from "./liza-remote-styles.js";
 import { adoptStyles } from "./liza-remote-stylesheet.js";
 import { DataMixin } from "./liza-remote-data.js";
-import { HelpersMixin, syncCustomIcons } from "./liza-remote-helpers.js";
+import { HelpersMixin, syncCustomIcons, isMovableSlot } from "./liza-remote-helpers.js";
+import { VariablesMixin } from "./liza-remote-variables.js";
 import { A11yMixin } from "./liza-remote-a11y.js";
 import { I18nMixin } from "./liza-remote-i18n.js";
 import { StatesMixin } from "./liza-remote-states.js";
@@ -151,9 +153,12 @@ class LizaRemotePanel extends HTMLElement {
     this._debugProbeBusy = false;
     this._debugReportBusy = false;
     this._debugPortBusy = false;
+    this._debugTrafficBusy = false;
     this._debugProbeError = null;
     this._debugReportError = null;
     this._debugPortError = null;
+    this._debugTraffic = null;
+    this._debugTrafficError = null;
     this._globalUsageDetails = {};
     this._actionFilter = "";
     this._initialized = false;
@@ -190,6 +195,12 @@ class LizaRemotePanel extends HTMLElement {
   connectedCallback() {
     console.log("[LIZA] connectedCallback, initialized:", this._initialized, "hass:", !!this._hass);
     this._a11yInit();
+    // On window, not the shadow root: after a click on a page thumb focus sits
+    // on <body>, outside the panel, and the shadow root never hears the key.
+    if (!this._pageDeleteKey) {
+      this._pageDeleteKey = (e) => this._onPageDeleteKey(e);
+      window.addEventListener?.("keydown", this._pageDeleteKey);
+    }
     // Re-init when HA re-attaches the panel after navigation
     if (this._initialized && this._hass) {
       this._initialized = false;
@@ -199,6 +210,10 @@ class LizaRemotePanel extends HTMLElement {
 
   disconnectedCallback() {
     this._a11yStop();
+    if (this._pageDeleteKey) {
+      window.removeEventListener?.("keydown", this._pageDeleteKey);
+      this._pageDeleteKey = null;
+    }
     // The subscription outlives the element otherwise, and its callback would
     // keep re-rendering a panel that is no longer in the document.
     if (this._configChangedUnsub) {
@@ -526,7 +541,10 @@ class LizaRemotePanel extends HTMLElement {
         this._refreshActionIcons();
       }
     }
-    if (!this._loading) this._refreshSVGIcons();
+    if (!this._loading) {
+      this._refreshVariables?.();
+      this._refreshSVGIcons();
+    }
   }
   set narrow(n) { this._narrow = n; }
   set panel(p) { this._panel = p; }
@@ -816,6 +834,8 @@ class LizaRemotePanel extends HTMLElement {
     this._debugProbeError = null;
     this._debugReportError = null;
     this._debugPortError = null;
+    this._debugTraffic = null;
+    this._debugTrafficError = null;
     // Both belong to the device being left: the window marks a save *we* made
     // on it, and the deferral a change to it. Neither says anything about the
     // device being selected, and keeping them would suppress or misapply its
@@ -1500,6 +1520,24 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   /**
+   * A move in one gesture: dragged from `fromKey`, released on `toKey`.
+   * `_moveButtonTo` decides what it means. Arms the state without
+   * `_beginMove`'s render, which would rebuild the face under the gesture.
+   */
+  _dropButtonOn(fromKey, toKey) {
+    const hadArmed = !!this._moveSourceKey;
+    this._disarmMove();
+    if (!fromKey || !toKey || fromKey === toKey) {
+      // Only when something was showing: with nothing armed there is nothing to
+      // unpaint, and the drag cleared its own marks as it ended.
+      if (hadArmed) this._render();
+      return;
+    }
+    this._moveSourceKey = fromKey;
+    this._moveButtonTo(toKey);
+  }
+
+  /**
    * Land the armed button's configuration on `targetKey`, and `targetKey`'s
    * back on it.
    *
@@ -1518,6 +1556,15 @@ class LizaRemotePanel extends HTMLElement {
     const sourceKey = this._moveSourceKey;
     this._disarmMove();
     if (!sourceKey || !targetKey || sourceKey === targetKey) { this._render(); return; }
+
+    // Neither end may be a slot that holds no button record -- see
+    // `isMovableSlot`. Stated here, the only place that sees both ends of a
+    // move, rather than once per gesture.
+    if (!isMovableSlot(sourceKey) || !isMovableSlot(targetKey)) {
+      this._toast(this._t("not_a_button_slot"));
+      this._render();
+      return;
+    }
 
     // Both ends must live in the same container, and the comparison says so
     // directly rather than restating the scoping rules. Under a live context an
@@ -1784,8 +1831,9 @@ class LizaRemotePanel extends HTMLElement {
 
     const newPageId = this._pages[idx]?.id;
 
+    // Disabled: clicking a page in the editor no longer moves the remote.
     // Fire goto_page immediately — before any await/render so it's not delayed by DOM changes
-    this._gotoPageOnDevice(newPageId);
+    // this._gotoPageOnDevice(newPageId);
 
     if (this._pageCache[newPageId]) {
       this._assignments = JSON.parse(JSON.stringify(this._pageCache[newPageId]));
@@ -1826,6 +1874,12 @@ class LizaRemotePanel extends HTMLElement {
             <span>${this._t("layout")}</span>
             <span class="add-page-option-desc">${this._t("preconfigured_remote")}</span>
           </button>
+          ${this._debugTools ? `
+          <button class="add-page-option" data-type="debug">
+            <ha-icon icon="mdi:bug-outline" style="--mdc-icon-size:32px;" aria-hidden="true"></ha-icon>
+            <span>${this._t("debug_pages")}</span>
+            <span class="add-page-option-desc">${this._t("debug_pages_desc")}</span>
+          </button>` : ""}
         </div>
         <button class="add-page-cancel">${this._t("cancel")}</button>
       </div>
@@ -1838,6 +1892,10 @@ class LizaRemotePanel extends HTMLElement {
     overlay.querySelector('[data-type="layout"]').addEventListener("click", () => {
       close();
       this._showLayoutPicker();
+    });
+    overlay.querySelector('[data-type="debug"]')?.addEventListener("click", () => {
+      close();
+      this._showLayoutPicker({ debug: true });
     });
     overlay.querySelector(".add-page-cancel").addEventListener("click", close);
   }
@@ -1873,9 +1931,14 @@ class LizaRemotePanel extends HTMLElement {
     }
   }
 
-  async _showLayoutPicker() {
-    const layouts = await this._loadLayouts();
-    if (!layouts.length) {
+  /**
+   * The layouts to add a page from. `debug` picks the test and demo pages,
+   * which only a beta release ships (and only with the debug tools loaded).
+   */
+  async _showLayoutPicker({ debug = false } = {}) {
+    const layouts = (await this._loadLayouts()).filter(l => !!l.debug === debug);
+    const withRandom = debug && this._debugTools && this._showRandomPagesDialog;
+    if (!layouts.length && !withRandom) {
       this._toast(this._t("no_layouts"));
       return;
     }
@@ -1896,17 +1959,30 @@ class LizaRemotePanel extends HTMLElement {
           <span class="layout-card-desc">${this._esc(l.description || '')}</span>
         </button>
       `).join("");
+    // A test generator, not a layout: it lives with the debug tools and is
+    // gone with them from a stable release.
+    const randomCard = withRandom ? `
+        <button class="layout-card" data-random-pages>
+          ${this._renderIconHtml("mdi:dice-multiple", 36)}
+          <span class="layout-card-name">${this._t("random_pages")}</span>
+          <span class="layout-card-desc">${this._t("random_pages_desc")}</span>
+        </button>` : "";
 
     const { dlg: overlay, close } = this._openModal(`
       <div class="add-page-dialog layout-dialog">
-        <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._t("choose_layout")}</h2>
-        <div class="layout-grid">${cards}</div>
+        <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._t(debug ? "debug_pages" : "choose_layout")}</h2>
+        <div class="layout-grid">${cards}${randomCard}</div>
         <button class="add-page-cancel">${this._t("cancel")}</button>
       </div>
     `, { labelledBy: "liza-dlg-title" });
 
     overlay.querySelectorAll(".layout-card").forEach(card => {
       card.addEventListener("click", () => {
+        if (card.hasAttribute("data-random-pages")) {
+          close();
+          this._showRandomPagesDialog();
+          return;
+        }
         const layoutId = card.dataset.layoutId;
         const layout = layouts.find(l => l.id === layoutId);
         close();
@@ -2193,13 +2269,39 @@ class LizaRemotePanel extends HTMLElement {
     overlay.querySelector(".add-page-cancel").addEventListener("click", close);
   }
 
+  /**
+   * Delete (or Backspace, the key a Mac labels "delete") removes the open page,
+   * through the same confirmation as its ✕. Only where the key means nothing
+   * else: not while typing, not over a dialog or menu, and not from focus that
+   * belongs to the rest of Home Assistant.
+   */
+  _onPageDeleteKey(e) {
+    if (!(e.key === "Delete" || e.key === "Backspace")) return;
+    if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (this._activeTab !== "buttons" || this._pageOpInFlight || this._moveSourceKey) return;
+    if (!this._pages?.[this._currentPageIdx]) return;
+    if (this._faceMenuEl || this.shadowRoot?.querySelector("dialog.add-page-overlay")) return;
+    const path = e.composedPath?.() || [];
+    const typing = path.some((n) => n?.isContentEditable
+      || /^(INPUT|TEXTAREA|SELECT)$/.test(n?.tagName || "")
+      || n?.getAttribute?.("role") === "textbox");
+    if (typing) return;
+    const target = path[0];
+    const unfocused = target === document.body || target === document.documentElement;
+    if (!unfocused && !path.includes(this)) return;
+    e.preventDefault();
+    this._deletePage(this._currentPageIdx);
+  }
+
   async _deletePage(pageIdx) {
     const idx = pageIdx !== undefined ? pageIdx : this._currentPageIdx;
     const page = this._pages[idx];
-    // `_pageLabel`, not `page.image`: `image` is a title-*image* spec and
-    // reads back as "mdi:sofa" rather than as a name. The helper strips the
-    // scheme, humanises the slug and supplies its own fallback.
-    const pageName = this._pageLabel(page);
+    // Which page by position and id in the title, its name on the line under
+    // it: two pages can share a title, and "Page 3/9 (24)" cannot be confused.
+    // `_pageTitle`, not `page.image`: `image` is a title-*image* spec and
+    // reads back as "mdi:sofa" rather than as a name.
+    const pageName = this._pagePosition(page);
+    const pageSubtitle = this._pageTitle(page);
     const pageId = page.id;
     // WCAG 3.3.4: this destroys the page and every button on it, and a
     // delete the backend accepts cannot be rolled back. Counted from
@@ -2228,6 +2330,7 @@ class LizaRemotePanel extends HTMLElement {
     // was deleted with all of them and no warning.
     const confirmed = await this._confirmDestructive({
       title: this._t("delete_page_title", { name: pageName }),
+      subtitle: pageSubtitle,
       message: configured > 0
         ? this._t("delete_page_confirm", { n: configured })
         : this._t("delete_page_confirm_empty"),
@@ -2662,7 +2765,7 @@ class LizaRemotePanel extends HTMLElement {
     // ticks that used to miss -- and `ha-service-control` memoises on
     // `hass.services`, which therefore now holds still instead of being
     // replaced several times a second while the user types.
-    const key = pages.map((p) => `${p.id}\u0000${this._pageLabel(p)}`).join("\u0001")
+    const key = pages.map((p) => `${p.id}\u0000${this._pageLabel(p)}\u0000${this._pageDisplayLine(p)}`).join("\u0001")
       + "\u0002" + plan.map((p) => `${p.cmd.service}\u0000${p.picker ?? ""}`).join("\u0001");
     const cached = this._editorHassCache;
     if (cached?.key === key && cached?.fromServices === hass.services) {
@@ -2675,9 +2778,12 @@ class LizaRemotePanel extends HTMLElement {
       return whole;
     }
 
-    // Two spellings of the same list: ids to store, names to read.
-    const byId = pages.map((page) => ({ value: String(page.id), label: this._pageLabel(page) }));
-    const byNameOptions = pages.map((page) => this._pageLabel(page));
+    // Two spellings of the same list: ids to store, names to read. Both show
+    // "Page 3/9 (24) · Title" -- an HA dropdown option is one line, so the
+    // title follows the position rather than sitting under it. The by-name
+    // value stays the bare name: that is what gets stored and resolved.
+    const byId = pages.map((page) => ({ value: String(page.id), label: this._pageDisplayLine(page) }));
+    const byNameOptions = pages.map((page) => ({ value: this._pageLabel(page), label: this._pageDisplayLine(page) }));
 
     const lizaip = { ...hass.services.lizaip };
     for (const { cmd, picker, idKey } of plan) {
@@ -3141,6 +3247,7 @@ class LizaRemotePanel extends HTMLElement {
 Object.assign(LizaRemotePanel.prototype, I18nMixin);
 Object.assign(LizaRemotePanel.prototype, DataMixin);
 Object.assign(LizaRemotePanel.prototype, HelpersMixin);
+Object.assign(LizaRemotePanel.prototype, VariablesMixin);
 Object.assign(LizaRemotePanel.prototype, StatesMixin);
 Object.assign(LizaRemotePanel.prototype, ButtonsViewMixin);
 Object.assign(LizaRemotePanel.prototype, ActionsViewMixin);

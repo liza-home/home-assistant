@@ -34,12 +34,12 @@ from functools import partial
 from pathlib import Path
 
 from aiohttp import web
-from PIL import Image
-
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from PIL import Image
 
+from . import media_refs
 from .const import (
     COLOR_NAMES,
     DEFAULT_BG_COLOR,
@@ -51,11 +51,11 @@ from .const import (
     SIZE_IDS,
     custom_icon_prefixes,
 )
+from .fonts import user_fonts_dir
 from .render import finalize_png
 from .render_logo import render_logo
 from .render_mdi import render_mdi_icon
 from .render_static import load_static_image
-from .fonts import user_fonts_dir
 from .render_text import render_text
 
 _LOGGER = logging.getLogger(__name__)
@@ -362,17 +362,19 @@ async def _handle_mdi(hass, value, options: _Options):
 
 
 async def _handle_custom(hass, value, options: _Options, *, source_type: str):
-    """An icon set registered in the browser, drawn from the shape it uploaded.
+    """An icon set registered in the browser, drawn from its file or an upload.
 
-    A name it has not uploaded yet is noted, so the panel can fetch it the next
-    time it opens -- the only way a name made up by a template gets here.
+    A name in neither (after a fresh look at the files) is noted, so the panel
+    can fetch it the next time it opens.
     """
     from .render_custom import get_custom_icons  # needs the root const; see __init__
 
     icons = get_custom_icons(hass)
     if icons is None:
         raise _ImgservError(404, f"{source_type} icon '{value}' not found")
-    if f"{source_type}:{value}" not in icons.icons:
+    if not icons.has(source_type, value):
+        await icons.async_scan_if_stale()
+    if not icons.has(source_type, value):
         icons.note_missing(source_type, value)
     return await _render_icon(
         hass, partial(icons.render, source_type), value, f"{source_type} icon", options,
@@ -477,10 +479,22 @@ class _Source:
     croppable: bool = True
 
 
+async def _handle_ref(hass, value, options: _Options):
+    """A long ``media:`` source sent by reference (see ``media_refs``).
+
+    TEMPORARY: remove once LZIP-8 is implemented.
+    """
+    source = media_refs.lookup(value)
+    if source is None:
+        raise _ImgservError(404, f"Unknown reference '{value}'")
+    return await _handle_media(hass, source, options)
+
+
 _SOURCES: dict[str, _Source] = {
     "mdi": _Source(_handle_mdi),
     "logo": _Source(_handle_logo),
     "text": _Source(_handle_text, croppable=False),
     "file": _Source(_handle_file),
     "media": _Source(_handle_media),
+    "ref": _Source(_handle_ref),
 }

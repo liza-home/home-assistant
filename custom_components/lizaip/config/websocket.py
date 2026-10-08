@@ -5,7 +5,6 @@ responses preserve the JSON shapes those views consume.
 """
 from __future__ import annotations
 
-
 import copy
 import importlib.util
 import logging
@@ -16,7 +15,6 @@ from typing import Any, Final
 
 import voluptuous as vol
 import yaml
-
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -26,30 +24,34 @@ from ..action_controller import (
     OVERRIDABLE_FIXED_BUTTONS,
     SLIDER_FACTOR_MAX,
     SLIDER_FACTOR_MIN,
-    SLIDER_VERTICAL_KEY,
     SLIDER_TARGET_ENTITY,
     SLIDER_TARGET_LAST_TOUCHED,
     SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY,
+    SLIDER_VERTICAL_KEY,
     TOGGLE_KEY,
     follows_selection_only,
     is_grid_button,
     last_touched_slider_actions,
     sanitize_slider_override,
     sanitize_toggle,
+    serialized_controls,
+    setup_state_listener,
     targets_entity,
     targets_last_touched,
     targets_last_touched_or_entity,
-    serialized_controls,
-    setup_state_listener,
 )
 from ..const import (
     ASSIGNMENT_LONGTOUCH_KEY,
     DOMAIN,
     ICON_DEFAULTS,
     async_preload_action_labels,
+    entity_token_entities,
     get_ui_language,
     load_action_labels,
     longtouch_steps,
+    resolve_image_tokens,
+    substitute_entity_tokens,
+    variables_scope,
 )
 from ..imgserv.const import build_palette
 from ..imgserv.fonts import list_fonts, user_fonts_dir
@@ -68,14 +70,17 @@ from ..state_color import (
     DEFAULT_ICON_COLOR_ENABLED,
     read_color_enabled,
 )
-from .text_style import (
-    TEXT_KINDS,
-    default_settings,
-    font_size_limits,
-    validate_settings,
+from ..variables_calc import (
+    CONF_VARIABLES_ENABLED,
+    CONF_VARIABLES_INTERVAL,
+    DEFAULT_VARIABLES_ENABLED,
+    DEFAULT_VARIABLES_INTERVAL,
+    VARIABLES_INTERVAL_MAX,
+    VARIABLES_INTERVAL_MIN,
+    VARIABLES_INTERVAL_STEP,
+    read_variables_enabled,
+    read_variables_interval,
 )
-from .internal_commands import get_internal_command, panel_descriptors, pinned_page_ids
-from .device_sync import step_targets_entry, sync_config_to_device
 from .const import (
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
@@ -88,26 +93,38 @@ from .const import (
     payload_display,
     step_service,
 )
-from .snapshot import (  # noqa: F401  (re-exported; see test_config_imports)
-    _fire_config_changed,
-    _get_store,
-    _resolve_device_id,
-    build_full_config_payload,
+from .device_entities import (
+    _resolve_device_domain_entities,  # noqa: F401  (re-exported)
 )
-from .device_entities import _resolve_device_domain_entities  # noqa: F401  (re-exported)
+from .device_sync import step_targets_entry, sync_config_to_device
+from .internal_commands import get_internal_command, panel_descriptors, pinned_page_ids
 from .layouts import (
     DEFAULT_MAX_ITEMS,
     DEFAULT_TRACKED_FIELDS,
     SOURCES,
     async_resolve_source,
-    generate_assignments as layout_generate_assignments,
     get_source,
     list_layouts,
     load_layout,
     resolve_layout_variables,
     validate_spec,
 )
+from .layouts import (
+    generate_assignments as layout_generate_assignments,
+)
 from .layouts import refresh as layout_refresh
+from .snapshot import (  # noqa: F401  (re-exported; see test_config_imports)
+    _fire_config_changed,
+    _get_store,
+    _resolve_device_id,
+    build_full_config_payload,
+)
+from .text_style import (
+    TEXT_KINDS,
+    default_settings,
+    font_size_limits,
+    validate_settings,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,6 +151,46 @@ async def ws_get_features(hass: HomeAssistant, connection, msg: dict) -> None:
     tab that would only produce "unknown command".
     """
     connection.send_result(msg["id"], {"debug_tools": debug_available()})
+
+
+#: A page holds at most a few hundred texts; the cap only stops a runaway caller.
+_MAX_VARIABLE_ITEMS: Final = 500
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/resolve_variables",
+    vol.Optional("texts", default=list): [vol.All(str, vol.Length(max=2000))],
+    vol.Optional("images", default=list): [vol.All(str, vol.Length(max=2000))],
+    vol.Optional("entry_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_resolve_variables(hass: HomeAssistant, connection, msg: dict) -> None:
+    """What ``${…}`` variables read right now, as the remote will print them.
+
+    The panel shows a preview of tooltips, pictures and titles and must not carry
+    a second implementation of the rules, so it asks. *texts* are tooltips and
+    titles (:func:`substitute_entity_tokens`), *images* are pictures
+    (:func:`resolve_image_tokens`, None when a variable has no value). *entities*
+    lists every entity the answers read, so the panel knows when to ask again.
+    With *entry_id*, that remote's Variables switch applies: off, nothing is read.
+    """
+    entry = hass.config_entries.async_get_entry(msg["entry_id"]) if msg.get("entry_id") else None
+    with variables_scope(getattr(entry, "options", None)):
+        _reply_variables(hass, connection, msg)
+
+
+def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
+    texts = msg["texts"][:_MAX_VARIABLE_ITEMS]
+    images = msg["images"][:_MAX_VARIABLE_ITEMS]
+    entities: set[str] = set()
+    for item in (*texts, *images):
+        entities |= entity_token_entities(item)
+    connection.send_result(msg["id"], {
+        "texts": {t: substitute_entity_tokens(t, hass) for t in texts},
+        "images": {i: resolve_image_tokens(i, hass) for i in images},
+        "entities": sorted(entities),
+    })
 
 
 def _schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
@@ -523,6 +580,7 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_refresh_dynamic,
         ws_set_dynamic_binding,
         ws_get_features,
+        ws_resolve_variables,
         ws_get_icon_options,
         ws_set_icon_options,
     ):
@@ -535,7 +593,13 @@ def register_commands(hass: HomeAssistant) -> None:
     if debug_available():
         from .debug_websocket import register_debug_commands
 
-        register_debug_commands(hass)
+        # Handed over rather than imported: debug_websocket importing this
+        # module back would be a cycle.
+        register_debug_commands(hass, page_tools={
+            "blueprint": _async_blueprint,
+            "reserved_page_ids": _reserved_page_ids,
+            "refresh_state_listener": _refresh_state_listener,
+        })
 
 
 def _requires_device(handler):
@@ -909,12 +973,23 @@ def _icon_options_reply(options: object) -> dict:
         "icon_fill_step": read_fill_step(options),
         "icon_fill_enabled": read_fill_enabled(options),
         "icon_color_enabled": read_color_enabled(options),
+        "variables_enabled": read_variables_enabled(options),
+        "variables_interval_ms": read_variables_interval(options),
         "defaults": {
             "icon_fill_step": DEFAULT_ICON_FILL_STEP,
             "icon_fill_enabled": DEFAULT_ICON_FILL_ENABLED,
             "icon_color_enabled": DEFAULT_ICON_COLOR_ENABLED,
+            "variables_enabled": DEFAULT_VARIABLES_ENABLED,
+            "variables_interval_ms": DEFAULT_VARIABLES_INTERVAL,
         },
-        "limits": {"icon_fill_step": {"min": ICON_FILL_STEP_MIN, "max": ICON_FILL_STEP_MAX}},
+        "limits": {
+            "icon_fill_step": {"min": ICON_FILL_STEP_MIN, "max": ICON_FILL_STEP_MAX},
+            "variables_interval_ms": {
+                "min": VARIABLES_INTERVAL_MIN,
+                "max": VARIABLES_INTERVAL_MAX,
+                "step": VARIABLES_INTERVAL_STEP,
+            },
+        },
     }
 
 
@@ -951,7 +1026,20 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
             )
         updates[CONF_ICON_FILL_STEP] = fill_step
 
-    for key in (CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED):
+    if CONF_VARIABLES_INTERVAL in changes:
+        interval = changes[CONF_VARIABLES_INTERVAL]
+        if (
+            isinstance(interval, bool)
+            or not isinstance(interval, int)
+            or not VARIABLES_INTERVAL_MIN <= interval <= VARIABLES_INTERVAL_MAX
+        ):
+            raise ValueError(
+                f"{CONF_VARIABLES_INTERVAL} must be a whole number of ms from "
+                f"{VARIABLES_INTERVAL_MIN} to {VARIABLES_INTERVAL_MAX}"
+            )
+        updates[CONF_VARIABLES_INTERVAL] = interval
+
+    for key in (CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED, CONF_VARIABLES_ENABLED):
         if key in changes:
             value = changes[key]
             if not isinstance(value, bool):
@@ -993,6 +1081,8 @@ async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     vol.Optional("icon_fill_step"): object,
     vol.Optional("icon_fill_enabled"): object,
     vol.Optional("icon_color_enabled"): object,
+    vol.Optional("variables_enabled"): object,
+    vol.Optional("variables_interval_ms"): object,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -1000,7 +1090,8 @@ async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     """Save the icon-rendering settings edited in the gear tab."""
     changes = {
         key: msg[key]
-        for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled")
+        for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled", "variables_enabled",
+                    "variables_interval_ms")
         if key in msg
     }
     try:
@@ -1250,7 +1341,26 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
 
     await store.async_set_pages(device_id, pages)
 
-    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    # The list is on disk, which is all the panel asked about. Answered now,
+    # before the device is touched: `set_main_pages` waits for the page-sync
+    # lock -- held for the whole of any running sync -- and then for a remote
+    # that may be asleep, and a deleted page used to sit on screen for all of
+    # that. The same split `_reorder_pages_fast` makes.
+    connection.send_result(msg["id"], {"success": True, "pages": pages})
+    # Deleted pages can remove the last binding for a push subscription. Only
+    # scheduled, so it stays here rather than behind the device round trip.
+    _schedule_push_rescan(hass, msg["entry_id"])
+    try:
+        await _push_page_list(hass, msg["entry_id"], pages, order_only)
+    except Exception:  # noqa: BLE001 - the reply has gone; a raise would send a second one
+        _LOGGER.exception("Pushing the page list after set_pages failed")
+
+
+async def _push_page_list(
+    hass: HomeAssistant, entry_id: str, pages: list, order_only: bool
+) -> None:
+    """Tell the device and the other panels about a page list already stored."""
+    entry = hass.config_entries.async_get_entry(entry_id)
     order_pushed = False
     conn = None
     page_ids = None
@@ -1290,13 +1400,8 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
                 conn._known_main_pages = None
 
     await _fire_config_changed(
-        hass, msg["entry_id"], order_only=order_only and order_pushed
+        hass, entry_id, order_only=order_only and order_pushed
     )
-
-    # Deleted pages can remove the last binding for a push subscription.
-    _schedule_push_rescan(hass, msg["entry_id"])
-
-    connection.send_result(msg["id"], {"success": True, "pages": pages})
 
 
 @websocket_api.websocket_command({
@@ -1635,7 +1740,8 @@ async def ws_list_layout_devices(hass: HomeAssistant, connection, msg: dict) -> 
     Server-side filtering keeps the panel from reimplementing device/entity
     registry joins and guarantees the later add-page validation matches it.
     """
-    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
 
     layout_id = msg["layout_id"]
     layout = await hass.async_add_executor_job(load_layout, layout_id)
@@ -1857,7 +1963,12 @@ async def ws_add_layout_page(hass: HomeAssistant, connection, msg: dict, device_
             layout_meta = lt
             break
 
-    page_icon = layout_meta["icon"] if layout_meta else "mdi:remote"
+    # `page_image` may hold `${…}` variables, which the picker cannot draw, so
+    # it is kept apart from the `icon` the picker shows.
+    page_icon = (
+        (layout_meta.get("page_image") or layout_meta["icon"])
+        if layout_meta else "mdi:remote"
+    )
 
     pages = await store.async_get_pages(device_id)
     existing_ids = {p["id"] for p in pages if isinstance(p, dict)}
@@ -2150,8 +2261,10 @@ async def ws_browse_media(hass: HomeAssistant, connection, msg: dict) -> None:
 
     try:
         from homeassistant.components.media_player import (
-            async_browse_media as mp_browse,
             BrowseMedia,
+        )
+        from homeassistant.components.media_player import (
+            async_browse_media as mp_browse,
         )
     except ImportError:
         try:

@@ -6,6 +6,55 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.2b4] - 2026-10-08
+
+### Added
+
+- **Drag a button onto another.** With a mouse or pen, drag a button to swap
+  its configuration with another one, the same move the tile menu's "Move…"
+  makes, in one gesture.
+- **Delete a page from the keyboard.** With a page open, **Delete** (or
+  **Backspace**, the key a Mac labels *delete*) asks to delete it, with the same
+  confirmation as its ✕. Ignored while typing in a field or with a dialog or
+  menu open.
+- **`${_device}` on layout pages.** A layout page's title, button images, icons
+  and tooltips can read the device the page is bound to: `${_device}` is its
+  name, `${_device.attribute}` one of its attributes, e.g.
+  `Vol ${round(_device.volume_level * 100)}%`. It follows a change of device
+  and a rename, and the fields suggest it as you type.
+- **Scaling a `media:` picture.** `size=200x200` in a picture's URL, or after a
+  `|` (`media:${_device.entity_picture}|size=200x200&bg=black`), scales it to
+  that size. `mode`, `fg`, `bg`, `crop` and `alpha` work the same way.
+- **A Debug section for adding pages (beta releases only).** Add page offers
+  Blank page, Layout and Debug. The demo layout, the random-pages generator and
+  a new "Sonos example", whose tiles follow the speaker, live under Debug.
+
+### Changed
+
+- **Pages are named by position and id.** The delete confirmation, the page
+  card, the page tooltips, toasts and the "go to page" dropdowns show a page as
+  "Page 3/9 (24)" with its title under it (or after it, "Page 3/9 (24) ·
+  Sonos", where only one line fits), so two pages with the same title can no
+  longer be mixed up.
+- **Deleting a page is quick again.** The editor no longer waits for the
+  remote, which may be asleep, before showing the page gone.
+- **The panel lives at `/lizaip`** instead of `/liza-remote`. Bookmarks to the
+  old path need updating.
+- **The built-in label tokens take a leading underscore:** `${_state}`,
+  `${_name}` and `${_cmd}` instead of `${STATE}`, `${NAME}` and `${COMMAND}`.
+  Existing labels, tooltips and action names are converted automatically.
+- **Clicking a page in the editor no longer moves the remote to it.** Adding a
+  page still does.
+
+### Fixed
+
+- **Pictures given as an HA path show on the remote**, e.g.
+  `${_device.entity_picture}` as a page title, which used to stay blank.
+- **Very long picture URLs no longer fail on the remote**, e.g. Spotify mosaic
+  covers.
+- **A picture or name put on a favorites slot survives the next refresh**
+  instead of being blanked after a restart or a page change.
+
 ## [2026.10.2b3] - 2026-10-07
 
 ### Added

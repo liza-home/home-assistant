@@ -35,6 +35,63 @@
  */
 
 export const DebugViewMixin = {
+  /**
+   * Ask for the numbers behind a batch of random test pages, then add them.
+   *
+   * Offered from the layout picker. Every button gets one icon from a pool of
+   * the chosen size and the one tooltip, so how many images the remote has to
+   * hold is set here rather than by the page count.
+   */
+  _showRandomPagesDialog() {
+    const { dlg, close } = this._openModal(`
+      <div class="add-page-dialog layout-dialog">
+        <h2 class="add-page-dialog-title" id="liza-dlg-title">
+          ${this._renderIconHtml("mdi:dice-multiple", 24)} ${this._t("random_pages")}
+        </h2>
+        <p class="layout-dialog-desc">${this._t("random_pages_desc")}</p>
+        <div class="config-field">
+          <label for="liza-random-count">${this._t("random_pages_count")}</label>
+          <input type="number" id="liza-random-count" min="1" max="500" value="10" />
+        </div>
+        <div class="config-field">
+          <label for="liza-random-images">${this._t("random_pages_images")}</label>
+          <input type="number" id="liza-random-images" min="1" max="5000" value="12" />
+        </div>
+        <div class="config-field">
+          <label for="liza-random-tooltip">${this._t("random_pages_tooltip")}</label>
+          <input type="text" id="liza-random-tooltip" value="Test" />
+        </div>
+        <div class="layout-dialog-actions">
+          <button class="add-page-cancel">${this._t("cancel")}</button>
+          <button class="layout-confirm-btn">${this._t("random_pages_create")}</button>
+        </div>
+      </div>
+    `, { labelledBy: "liza-dlg-title" });
+
+    const num = (id, def, max) => {
+      const v = parseInt(dlg.querySelector(id).value, 10);
+      return Number.isFinite(v) ? Math.min(max, Math.max(1, v)) : def;
+    };
+    dlg.querySelector(".add-page-cancel").addEventListener("click", close);
+    dlg.querySelector(".layout-confirm-btn").addEventListener("click", async () => {
+      const count = num("#liza-random-count", 10, 500);
+      const images = num("#liza-random-images", 12, 5000);
+      const tooltip = dlg.querySelector("#liza-random-tooltip").value.trim();
+      const entry = this._currentEntry;
+      close();
+      try {
+        await this._createPage(() => this._hass.callWS({
+          type: "lizaip_config/debug_random_pages",
+          entry_id: entry, count, images, tooltip,
+        }));
+        this._toast(this._t("random_pages_added", { count }));
+      } catch (e) {
+        console.error("[LIZA] Random pages failed:", e);
+        this._toast(this._t("random_pages_failed", { error: e.message || e }));
+      }
+    });
+  },
+
   _htmlDebugView() {
     return `
       <div class="debug-view">
@@ -52,6 +109,12 @@ export const DebugViewMixin = {
             </div>
           </div>
         </ha-card>
+
+        <!-- Second: how the WebSocket link behaves once it is up -- round
+             trips, answers that came late or never. Read-only, like the
+             probe above it.
+             NB: no backticks in this comment; it sits in a template. -->
+        ${this._htmlDebugTrafficCard()}
 
         <ha-card outlined class="debug-card">
           <div class="actions-card-header">
@@ -323,6 +386,9 @@ export const DebugViewMixin = {
     // The rest of the report's state -- what was expanded, what was formatted
     // -- is reset there, where the new list is built.
     this._debugReport = null;
+    this._debugTraffic = null;
+    this._debugTrafficError = null;
+    this._loadDebugTraffic();
     this._loadDebugLogging();
     this._loadDebugPortState();
     this._fetchDebugReport();
@@ -787,7 +853,10 @@ export const DebugViewMixin = {
   },
 
   async _copyDebugReport() {
-    const text = this._debugReportText();
+    await this._copyDebugText(this._debugReportText(), "debug_report_copied");
+  },
+
+  async _copyDebugText(text, doneKey) {
     if (!text) return;
     try {
       // `navigator.clipboard` exists only in a secure context, and Home
@@ -807,7 +876,7 @@ export const DebugViewMixin = {
         ta.remove();
         if (!ok) throw new Error("execCommand refused");
       }
-      this._toast(this._t("debug_report_copied"));
+      this._toast(this._t(doneKey));
     } catch (e) {
       this._toast(this._t("debug_report_copy_failed", { error: e?.message || e }));
     }
@@ -820,6 +889,14 @@ export const DebugViewMixin = {
         ?.addEventListener("click", () => this._setDebugPort(!this._debugPortOn));
     root.querySelector(".debug-report-copy")?.addEventListener("click", () => this._copyDebugReport());
     root.querySelector(".debug-logging-reset")?.addEventListener("click", () => this._resetDebugLogging());
+    root.querySelector(".debug-traffic-refresh")?.addEventListener("click", () => this._loadDebugTraffic());
+    root.querySelector(".debug-traffic-reset")
+        ?.addEventListener("click", () => this._loadDebugTraffic({ reset: true }));
+    root.querySelector(".debug-traffic-copy")
+        ?.addEventListener("click", () => this._copyDebugText(this._debugTrafficText(), "debug_traffic_copied"));
+    root.querySelector(".debug-traffic-log")
+        ?.addEventListener("click", () =>
+          this._loadDebugTraffic({ log_enabled: !this._debugTraffic?.log_enabled }));
     root.querySelectorAll(".debug-pretty-btn").forEach((el) =>
       el.addEventListener("click", (e) => {
         // The button lives inside the `<summary>`, where a click is the
@@ -848,6 +925,160 @@ export const DebugViewMixin = {
     // report do not each start a fetch, and so a failure is not retried
     // forever -- the reload button is how a failed read is tried again.
 
+  },
+
+  /**
+   * The Traffic card: how the WebSocket link with the remote behaves.
+   *
+   * Numbers first -- they answer "is it slow, is it losing things" at a
+   * glance -- then the messages themselves, newest first, so the one that just
+   * went wrong is at the top. Read on demand rather than polled: a re-render
+   * every second would close an open select elsewhere on the tab.
+   */
+  _htmlDebugTrafficCard() {
+    const tr = this._debugTraffic;
+    const logOn = !!tr?.log_enabled;
+    const busy = !!this._debugTrafficBusy;
+    return `
+        <ha-card outlined class="debug-card debug-traffic">
+          <div class="actions-card-header">
+            <h2 class="actions-card-title">${this._t("debug_traffic")}</h2>
+            ${!tr ? "" : `
+            <button type="button" class="debug-btn debug-traffic-copy"
+                    title="${this._esc(this._t("debug_report_copy"))}"
+                    aria-label="${this._esc(this._t("debug_report_copy"))}">
+              <ha-icon icon="mdi:content-copy" style="--mdc-icon-size:18px" aria-hidden="true"></ha-icon>
+              ${this._esc(this._t("debug_report_copy"))}
+            </button>`}
+          </div>
+          <div class="debug-body">
+            ${tr ? `<p class="hint-text">${this._esc(this._t("debug_traffic_hint", {
+              since: this._debugTime(tr.stats.since * 1000, false),
+            }))}</p>` : ""}
+            ${this._htmlDebugTrafficStats()}
+            ${this._debugTrafficError ? `<p class="debug-error">${this._esc(this._debugTrafficError)}</p>` : ""}
+            <div class="debug-actions">
+              <button type="button" class="debug-btn primary debug-traffic-refresh" ${busy ? "disabled" : ""}>
+                ${this._esc(this._t("debug_traffic_refresh"))}
+              </button>
+              <button type="button" class="debug-btn debug-traffic-reset" ${busy || !tr ? "disabled" : ""}>
+                ${this._esc(this._t("debug_traffic_reset"))}
+              </button>
+              <button type="button" role="switch" class="debug-switch debug-traffic-log"
+                      aria-checked="${logOn ? "true" : "false"}"
+                      ${busy || !tr ? "disabled" : ""}>
+                <span class="debug-switch-track" aria-hidden="true"><span class="debug-switch-thumb"></span></span>
+                <span>${this._esc(this._t("debug_traffic_log"))}</span>
+              </button>
+            </div>
+            ${!logOn ? "" : `<p class="debug-live">${this._t("debug_traffic_log_live", {
+              link: `<a href="/config/logs?filter=lizaip.device.traffic">${this._esc(this._t("debug_stream_live_link"))}</a>`,
+            })}</p>`}
+            ${this._htmlDebugTrafficFrames()}
+          </div>
+        </ha-card>`;
+  },
+
+  _htmlDebugTrafficStats() {
+    const st = this._debugTraffic?.stats;
+    if (!st) return "";
+    const r = st.rtt_ms || {};
+    const ms = (v) => (typeof v === "number" ? `${v} ms` : "–");
+    const kb = (v) => `${(v / 1024).toFixed(1)} KB`;
+    const rows = [
+      [this._t("debug_websocket"), this._t(this._debugTraffic.connected ? "debug_connected" : "debug_disconnected")],
+      [this._t("debug_traffic_requests"), String(st.requests)],
+      [this._t("debug_traffic_answered"), String(st.answered)],
+      [this._t("debug_traffic_timeouts"), String(st.timeouts)],
+      [this._t("debug_traffic_late"), String(st.late)],
+      [this._t("debug_traffic_lost"), `${st.lost} (${st.lost_pct} %)`],
+      [this._t("debug_traffic_errors"), String(st.errors)],
+      [this._t("debug_traffic_unmatched"), String(st.unmatched)],
+      [this._t("debug_traffic_rtt"), r.n
+        ? `min ${ms(r.min)} · ⌀ ${ms(r.avg)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · max ${ms(r.max)} (n=${r.n})`
+        : "–"],
+      [this._t("debug_traffic_gap"), ms(st.max_gap_ms)],
+      [this._t("debug_traffic_gaps"), String(st.gaps)],
+      [this._t("debug_traffic_connections"), `${st.connects} / ${st.disconnects}`],
+      [this._t("debug_traffic_volume"), `${kb(st.tx_bytes)} (${st.tx}) / ${kb(st.rx_bytes)} (${st.rx})`],
+    ];
+    const bad = st.lost > 0 || st.timeouts > 0;
+    return `
+      <dl class="debug-facts${bad ? " debug-traffic-bad" : ""}">
+        ${rows.map(([k, v]) => `<dt>${this._esc(k)}</dt><dd>${this._esc(String(v))}</dd>`).join("")}
+      </dl>`;
+  },
+
+  _htmlDebugTrafficFrames() {
+    const frames = this._debugTraffic?.frames;
+    if (!frames) return "";
+    if (!frames.length) return `<p class="hint-text">${this._esc(this._t("debug_traffic_empty"))}</p>`;
+    const rows = frames.slice().reverse().map((f) => {
+      const cls = f.type === "timeout" || f.type === "disconnected" || f.late || f.error != null
+        ? "bad" : (f.gap_ms != null ? "warn" : "");
+      return `<tr class="${cls}">
+          <td>${this._esc(this._debugTime(f.t * 1000, true))}</td>
+          <td>${f.dir === "tx" ? "→" : f.dir === "rx" ? "←" : "•"}</td>
+          <td>${this._esc(this._debugTrafficNote(f))}</td>
+        </tr>`;
+    }).join("");
+    return `
+      <h3 class="debug-traffic-subtitle">${this._esc(this._t("debug_traffic_frames"))}</h3>
+      <div class="debug-traffic-frames">
+        <table><tbody>${rows}</tbody></table>
+      </div>`;
+  },
+
+  // One message, as a line: what it was, and what came of it.
+  _debugTrafficNote(f) {
+    const parts = [f.type, f.name];
+    if (f.seq != null) parts.push(`#${f.seq}`);
+    if (f.size != null) parts.push(`${f.size} B`);
+    if (f.rtt_ms != null) parts.push(`${f.late ? "late, " : ""}${f.rtt_ms} ms`);
+    if (f.error != null) parts.push(`error ${f.error}`);
+    if (f.gap_ms != null) parts.push(`after ${(f.gap_ms / 1000).toFixed(1)} s silence`);
+    return parts.filter(Boolean).join(" ");
+  },
+
+  _debugTime(ms, withMillis) {
+    const d = new Date(ms);
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    return withMillis ? `${t}.${pad(d.getMilliseconds(), 3)}` : t;
+  },
+
+  _debugTrafficText() {
+    const tr = this._debugTraffic;
+    if (!tr) return "";
+    const out = [JSON.stringify(tr.stats, null, 2), ""];
+    for (const f of tr.frames || []) {
+      const dir = f.dir === "tx" ? "HA → remote" : f.dir === "rx" ? "remote → HA" : "--";
+      out.push(`${this._debugTime(f.t * 1000, true)}  ${dir}  ${this._debugTrafficNote(f)}`);
+    }
+    return out.join("\n");
+  },
+
+  async _loadDebugTraffic(opts = {}) {
+    if (!this._currentEntry || this._debugTrafficBusy) return;
+    const entry = this._currentEntry;
+    this._debugTrafficBusy = true;
+    this._debugTrafficError = null;
+    this._render();
+    try {
+      const tr = await this._hass.callWS({
+        type: "lizaip_config/debug_traffic",
+        entry_id: entry,
+        ...opts,
+      });
+      if (this._currentEntry !== entry) return;
+      this._debugTraffic = tr;
+    } catch (e) {
+      if (this._currentEntry !== entry) return;
+      this._debugTrafficError = e?.message || String(e);
+    } finally {
+      this._debugTrafficBusy = false;
+      this._render();
+    }
   },
 
   async _runDebugProbe() {

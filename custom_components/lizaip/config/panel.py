@@ -38,7 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PANEL_DIR = os.path.join(os.path.dirname(__file__), "panel")
 PANEL_URL_BASE = "/lizaip_config_panel"
-FRONTEND_URL_PATH = "liza-remote"
+FRONTEND_URL_PATH = "lizaip"
 
 
 def _panel_version() -> str:
@@ -197,7 +197,9 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             await _layout_refresh.async_handle_hello(hass, entry)
             await _device_sync_mod.sync_config_to_device(hass, entry)
 
-    async def _send_page(page_id: int, buttons: list[dict]) -> None:
+    async def _send_page(
+        page_id: int, buttons: list[dict], img_title: str | None = None,
+    ) -> None:
         """One `set_page` round-trip, resolving the connection at send time.
 
         Looked up per send rather than captured: the queue coalesces across the
@@ -207,8 +209,11 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         conn = entry.runtime_data if hasattr(entry, "runtime_data") else None
         if conn is None or not getattr(conn, "connected", False):
             return
-        await conn.set_page(page_id, buttons=buttons)
-        _device_sync_mod.note_partial_page(conn, page_id, buttons)
+        fields: dict = {"buttons": buttons} if buttons else {}
+        if img_title is not None:
+            fields["img_title"] = img_title
+        await conn.set_page(page_id, **fields)
+        _device_sync_mod.note_partial_page(conn, page_id, buttons, img_title)
 
     push_queue = IconPushQueue(
         _send_page,

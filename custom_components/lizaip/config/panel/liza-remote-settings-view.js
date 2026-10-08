@@ -142,6 +142,53 @@ export const SettingsViewMixin = {
       </div>`;
   },
 
+  /** Seconds as the slider shows them: "0.5 s", "2 s". */
+  _formatInterval(ms) {
+    return `${Number((ms / 1000).toFixed(1))} s`;
+  },
+
+  /**
+   * The Variables card: the switch, and under it how often a value that keeps
+   * changing is sent. Empty when the backend sends no limits for the interval.
+   */
+  _htmlSettingsVariablesCard() {
+    const opts = this._iconOptions;
+    const limits = opts?.limits?.variables_interval_ms;
+    if (!limits) return "";
+    const id = "liza-settings-variables-interval";
+    const hintId = `${id}-hint`;
+    const on = opts.variables_enabled !== false;
+    const value = opts.variables_interval_ms ?? opts.defaults?.variables_interval_ms;
+    return `
+      <ha-card outlined>
+        <div class="actions-card-header">
+          <h2 class="actions-card-title">${this._esc(this._t("settings_variables"))}</h2>
+        </div>
+        <div class="settings-body">
+          <div class="settings-switch-list">
+            ${this._htmlIconSwitch("variables_enabled", "settings_variables_enabled", "settings_variables_enabled_hint")}
+            <div class="settings-switch-detail${on ? "" : " is-off"}">
+              <div class="config-field">
+                <label for="${id}">${this._esc(this._t("settings_variables_interval"))}</label>
+                <div class="settings-step-input settings-range-input">
+                  <input type="range" id="${id}" class="settings-variables-interval"
+                         min="${limits.min}" max="${limits.max}" step="${limits.step || 100}"
+                         value="${this._esc(value)}" aria-describedby="${hintId}"
+                         aria-valuetext="${this._esc(this._formatInterval(value))}"
+                         ${this._iconOptionsBusy || !on ? "disabled" : ""}>
+                  <output class="settings-step-unit settings-range-value" for="${id}">${this._esc(this._formatInterval(value))}</output>
+                </div>
+                <span class="config-field-hint" id="${hintId}">${this._esc(this._t("settings_variables_interval_hint", {
+                  min: this._formatInterval(limits.min), max: this._formatInterval(limits.max),
+                  default: this._formatInterval(opts.defaults?.variables_interval_ms ?? 500),
+                }))}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </ha-card>`;
+  },
+
   /** Empty when the backend sends no limits, i.e. cannot save the step. */
   _htmlSettingsIconCard() {
     const opts = this._iconOptions;
@@ -229,6 +276,7 @@ export const SettingsViewMixin = {
           </button>
         </div>
         ${this._htmlSettingsIconCard()}
+        ${this._htmlSettingsVariablesCard()}
         ${this._htmlSettingsButtonsCard()}
         ${this._htmlSettingsDeviceCard()}
       </div>`;
@@ -371,6 +419,20 @@ export const SettingsViewMixin = {
       }
       if (value === this._iconOptions?.icon_fill_step) return;
       this._saveIconOptions({ icon_fill_step: value });
+    });
+    const interval = root.querySelector(".settings-variables-interval");
+    // Dragging only moves the number beside it; letting go saves.
+    interval?.addEventListener("input", (ev) => {
+      const el = ev.currentTarget;
+      const text = this._formatInterval(Number(el.value));
+      el.setAttribute("aria-valuetext", text);
+      const out = el.parentElement?.querySelector(".settings-range-value");
+      if (out) out.textContent = text;
+    });
+    interval?.addEventListener("change", (ev) => {
+      const value = Number(ev.currentTarget.value);
+      if (!Number.isInteger(value) || value === this._iconOptions?.variables_interval_ms) return;
+      this._saveIconOptions({ variables_interval_ms: value });
     });
     root.querySelectorAll(".settings-icon-switch").forEach((el) =>
       el.addEventListener("change", () =>

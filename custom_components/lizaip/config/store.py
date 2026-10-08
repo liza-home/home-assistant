@@ -28,7 +28,7 @@ from ..action_controller import (
     sanitize_slider_override,
     sanitize_toggle,
 )
-from ..const import longtouch_steps
+from ..const import longtouch_steps, migrate_legacy_label_tokens
 from .const import (
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_LABEL_EDITED_KEY,
@@ -495,6 +495,7 @@ class LizaRemoteStore:
         for assign in buttons.values():
             self._migrate_slider_control(assign)
             self._drop_unread_binding_keys(assign)
+            migrate_legacy_label_tokens(assign)
         return meta, buttons
 
     #: Binding keys written by an older resolver that nothing has ever read.
@@ -605,7 +606,9 @@ class LizaRemoteStore:
         lib_path = self._action_library_path(device_id)
         if await self._hass.async_add_executor_job(os.path.isfile, lib_path):
             lib = await self._hass.async_add_executor_job(self._read_yaml, lib_path)
-            data["action_library"] = lib if isinstance(lib, list) else []
+            data["action_library"] = (
+                migrate_legacy_label_tokens(lib) if isinstance(lib, list) else []
+            )
         else:
             data["action_library"] = []
 

@@ -39,7 +39,8 @@ _PageButtons = dict[str, dict]
 class IconPushQueue:
     """Pushes button icons to one device, one request at a time.
 
-    *send* is awaited as ``send(page_id, buttons)``. *current_page* is
+    *send* is awaited as ``send(page_id, buttons)``, with ``img_title=`` as
+    well when a page title is waiting. *current_page* is
     consulted for the page the user is actually looking at, and may return
     ``None`` when that is not known -- after a restart or reconnect, before the
     device has reported where it is.
@@ -53,6 +54,8 @@ class IconPushQueue:
         self._send = send
         self._current_page = current_page
         self._pending: dict[int, _PageButtons] = {}
+        # A page title waiting to go out with its page's buttons, if any.
+        self._titles: dict[int, str] = {}
         self._task: asyncio.Task | None = None
         # Whether a drain is running, tracked separately from the task handle.
         # Home Assistant starts background tasks eagerly, so `create_task` runs
@@ -68,7 +71,9 @@ class IconPushQueue:
         """How many pages are waiting. Diagnostics and tests only."""
         return len(self._pending)
 
-    def submit(self, page_id: int, buttons: Iterable[dict]) -> None:
+    def submit(
+        self, page_id: int, buttons: Iterable[dict], *, img_title: str | None = None,
+    ) -> None:
         """Merge *buttons* into the pending set for *page_id*.
 
         Merged per button rather than replaced wholesale. A newer update for a
@@ -77,10 +82,14 @@ class IconPushQueue:
         so replacing would discard a tooltip that was submitted but not yet
         sent, and the listener, which already recorded it as sent, would never
         offer it again.
+
+        *img_title*, when given, replaces any title still waiting for the page.
         """
         if self._closed:
             return
         page = self._pending.setdefault(page_id, {})
+        if img_title is not None:
+            self._titles[page_id] = img_title
         for btn in buttons:
             name = btn.get("name")
             if not name:
@@ -135,8 +144,12 @@ class IconPushQueue:
                 # the flight is recorded as still-pending and goes out in the
                 # next pass rather than being lost.
                 buttons = self._pending.pop(page_id)
+                title = self._titles.pop(page_id, None)
                 try:
-                    await self._send(page_id, list(buttons.values()))
+                    if title is None:
+                        await self._send(page_id, list(buttons.values()))
+                    else:
+                        await self._send(page_id, list(buttons.values()), img_title=title)
                 except asyncio.CancelledError:
                     raise
                 except Exception as err:  # noqa: BLE001
@@ -158,6 +171,7 @@ class IconPushQueue:
         """Drop pending work and stop draining. Safe to call twice."""
         self._closed = True
         self._pending.clear()
+        self._titles.clear()
         self._draining = False
         task, self._task = self._task, None
         if task is not None and not task.done():

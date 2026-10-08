@@ -141,7 +141,7 @@ def command_target_name(
     context: dict | None = None,
     fallback: str = "",
 ) -> str:
-    """What a command points at, for auto labels and user ``${NAME}`` labels.
+    """What a command points at, for auto labels and user ``${_name}`` labels.
 
     One resolution path keeps custom and default labels from naming different
     pages. Missing targets echo the stored name or saved fallback so broken
@@ -186,13 +186,13 @@ def _prefixed(cmd: InternalCommand, target: str) -> str:
     """The command's label template, filled in; ``""`` without a target.
 
     Wording lives on the registry entry so command-specific labels stay with
-    the command. ``${COMMAND}`` means renaming the registry entry renames its
+    the command. ``${_cmd}`` means renaming the registry entry renames its
     buttons too.
     """
     if not target:
         return ""
     return substitute_label_tokens(
-        cmd.label_template, {"command": cmd.name, "name": target}
+        cmd.label_template, {"_cmd": cmd.name, "_name": target}
     )
 
 

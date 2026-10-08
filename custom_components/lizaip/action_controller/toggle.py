@@ -311,14 +311,14 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
     mean the same thing. It did not: the two producers of a cycle tooltip
     handed this text to ``substitute_label_tokens`` with an *empty* value map
     (``buttons.py``) or did not substitute at all (:func:`toggle_tooltip`), so
-    ``${STATE}`` and ``${NAME}`` collapsed to nothing on a press while reading
+    ``${_state}`` and ``${_name}`` collapsed to nothing on a press while reading
     "Schreibtisch Off" on the button above it -- one field, one syntax, two
     behaviours, and the one that silently printed less was the one the panel
     offered no warning about.
 
     The subject is the *press's own* target, not the button's. A cycle exists
     precisely because its steps do different things, and often to different
-    entities; reading every press's ``${STATE}`` off the button's declared
+    entities; reading every press's ``${_state}`` off the button's declared
     action would phrase step three in terms of step one. ``state_token_label``
     is then asked about this press's service, which is what makes a
     ``turn_on`` press read "On" and the ``turn_off`` press under it "Off"
@@ -344,7 +344,7 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
     attrs = dict(state_obj.attributes or {}) if state_obj else None
 
     values = {
-        "state": state_token_label(
+        "_state": state_token_label(
             svc,
             state_obj.state if state_obj else "",
             get_ui_language(hass, entry) if hass else "en",

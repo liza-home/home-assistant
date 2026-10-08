@@ -144,6 +144,17 @@ def _slider_assignment(btn_def: dict, slider_actions: dict) -> dict:
 #: reads live under one roof — ``presets`` is what a layout *is* here, and the
 #: package around it is already called ``layouts``.
 LAYOUTS_DIR = os.path.join(os.path.dirname(__file__), "presets")
+#: Test and demo layouts, offered under "Debug" when adding a page. A stable
+#: release does not ship the directory (``scripts/release.sh``).
+DEBUG_LAYOUTS_DIR = os.path.join(LAYOUTS_DIR, "debug")
+
+
+def _layout_dirs() -> list[tuple[str, bool]]:
+    """``(directory, is_debug)`` for every directory layouts are read from."""
+    dirs = [(LAYOUTS_DIR, False)]
+    if os.path.isdir(DEBUG_LAYOUTS_DIR):
+        dirs.append((DEBUG_LAYOUTS_DIR, True))
+    return dirs
 
 # Generic service domains do not require a same-domain sibling on the bound
 # device. Data-addressed domains either carry the subject in data
@@ -283,28 +294,33 @@ def _button_prelude(btn_def: dict, button_key: str) -> list[dict] | None:
 
 def list_layouts() -> list[dict[str, Any]]:
     layouts: list[dict[str, Any]] = []
-    if not os.path.isdir(LAYOUTS_DIR):
-        return layouts
-
-    for fname in sorted(os.listdir(LAYOUTS_DIR)):
-        if not fname.endswith(".yaml"):
+    for directory, debug in _layout_dirs():
+        if not os.path.isdir(directory):
             continue
-        layout_id = fname[:-5]
-        path = os.path.join(LAYOUTS_DIR, fname)
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = yaml.safe_load(fh) or {}
-        except (OSError, yaml.YAMLError) as exc:
-            _LOGGER.warning("Failed to read layout %s: %s", fname, exc)
-            continue
+        for fname in sorted(os.listdir(directory)):
+            if not fname.endswith(".yaml"):
+                continue
+            layout_id = fname[:-5]
+            path = os.path.join(directory, fname)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = yaml.safe_load(fh) or {}
+            except (OSError, yaml.YAMLError) as exc:
+                _LOGGER.warning("Failed to read layout %s: %s", fname, exc)
+                continue
 
-        layouts.append({
-            "id": layout_id,
-            "name": data.get("name", layout_id),
-            "icon": data.get("icon", "mdi:remote"),
-            "description": data.get("description", ""),
-            "target_selector": data.get("target_selector", {}),
-        })
+            entry = {
+                "id": layout_id,
+                "name": data.get("name", layout_id),
+                "icon": data.get("icon", "mdi:remote"),
+                "description": data.get("description", ""),
+                "target_selector": data.get("target_selector", {}),
+            }
+            if data.get("page_image"):
+                entry["page_image"] = data["page_image"]
+            if debug:
+                entry["debug"] = True
+            layouts.append(entry)
 
     return layouts
 
@@ -345,8 +361,14 @@ async def async_load_layout(hass: HomeAssistant, layout_id: str) -> dict[str, An
 
 
 def _read_layout(layout_id: str) -> dict[str, Any] | None:
-    path = os.path.join(LAYOUTS_DIR, f"{layout_id}.yaml")
-    if not os.path.isfile(path):
+    path = next(
+        (
+            p for d, _ in _layout_dirs()
+            if os.path.isfile(p := os.path.join(d, f"{layout_id}.yaml"))
+        ),
+        None,
+    )
+    if path is None:
         _LOGGER.error("Layout not found: %s", layout_id)
         return None
 

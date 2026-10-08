@@ -81,7 +81,7 @@ The Buttons tab shows the remote face, with that remote's pages beside it.
   and lets you give each one its own icon as it changes. It is one or  the other: a fixed image, or icons per state.
 - Give it a **Tooltip** — what is shown when a button is touched: usually words, but
   any picture the Image field takes works too.
-  `${STATE}` is replaced by what pressing the button does, `${NAME}`
+  `${_state}` is replaced by what pressing the button does, `${_name}`
   by what it opens, and the hint under the field shows what it currently reads.
   A tooltip can also show a live value from Home Assistant, such as a
   temperature or a battery level — see [Live values on the remote](#live-values-on-the-remote).
@@ -94,6 +94,19 @@ saves it. Icons from any installed set are drawn on the remote, not just `mdi:` 
 
 Clicking a button on *another* page's thumbnail jumps to that page and selects that
 button in one go.
+
+**Moving a button's configuration.** Drag a configured button onto another one and the
+two change places: the action, the image, the tooltip and any overrides travel together,
+and whatever was already on the destination goes back to the slot you just emptied, so
+nothing is lost. Dropping it anywhere else, or pressing **Escape** mid-drag, calls it
+off. A right-click or long-press on the button offers **Move…** for the same thing in
+two steps — arm it, then click the destination — which is the route to use on a touch
+screen, where dragging a button is not offered.
+
+Every button takes part, the fixed ones included — the volume caps hold an ordinary
+button configuration like any other. The two exceptions are the page title bar and the
+vertical slider: the title bar has no action behind it, and the slider stores a value
+range rather than an action, so neither can trade places with a button.
 
 Configuring a button adds its action to the Action Library automatically — you never
 create library entries by hand, and a matching action is reused rather than duplicated.
@@ -141,6 +154,12 @@ The entity ID is the one shown under **Settings → Entities** in Home Assistant
 are rounded the way Home Assistant displays them, so a sensor you set to one decimal
 shows one decimal here too.
 
+Home Assistant fills the values in and pushes every change to the remote itself, at once
+-- no browser has to be open. Each remote can switch this off under
+**Settings** (the gear tab) **→ Variables → Variables and calculations**: off, every `${…}` variable
+and calculation is left out, a picture that uses one shows its normal icon, and the
+editor stops suggesting them.
+
 **Examples**
 
 | Field | You write | The remote shows |
@@ -148,15 +167,56 @@ shows one decimal here too.
 | Tooltip | `Outside ${sensor.outdoor_temperature}` | Outside 21.5 °C |
 | Tooltip | `Battery ${sensor.lizaip_1c63499a7193_battery}` | Battery 85 % |
 | Tooltip | `${media_player.living_room.media_title}` | the song that is playing |
-| Tooltip | `${STATE} · ${sensor.desk_lamp_power}` | Off · 12 W |
+| Tooltip | `${_state} · ${sensor.desk_lamp_power}` | Off · 12 W |
 | Image | `${sensor.outdoor_temperature}` | the value drawn as the button's picture |
 | Image | `text:${weather.home.temperature}°` | 18° |
 | Image | `${weather.home}` | the current weather icon (sun, clouds, rain, …) |
 | Image | `${sensor.lizaip_battery_icon}` | an icon chosen by a helper — see below |
 | Page title | `Living room ${sensor.living_room_temperature}` | Living room 22 °C |
+| Page title (layout page) | `${_device}` | the name of the page's device, e.g. `Living Room TV` |
+| Page title (layout page) | `Vol ${_device.volume_level}` | an attribute of the page's own entity |
+| Page title (layout page) | `Vol ${round(_device.volume_level * 100)}%` | Vol 12% |
+| Tooltip (layout page) | `${_device} ${round(_device.volume_level * 100)}%` | Living Room TV 12% |
+| Tooltip | `Brightness ${round(light.desk.brightness * 100 / 255)}%` | Brightness 50% |
+| Tooltip | `${round(sensor.outdoor_temperature)} °C` | 22 °C |
 
-- **It stays current.** When the value changes, the remote is updated within about two
-  seconds. A sensor that changes every second is still sent at most every two seconds.
+`${_device}` works the same in a layout page's tiles, state icons and tooltips, and in the
+icons of the actions its buttons run. Typing `${` in a layout page's title, image or tooltip field also suggests `_device`, and after `${_device.`
+the attributes of the page's entity.
+
+**Calculations.** Inside `${…}` you can calculate with numbers, variables, the operators
+`+ - * / %` (`%` is the remainder), brackets and the functions below. The result is a plain number,
+without the unit.
+
+| You write | The remote shows (sensor at 85) |
+|---|---|
+| `${sensor.battery * 2}` | 170 |
+| `${(sensor.battery + 5) / 10}` | 9 |
+| `${sensor.battery % 10}` | 5 |
+| `mdi:battery-${round(sensor.battery / 10) * 10}` | `mdi:battery-90` |
+| `${sensor.battery - sensor.battery % 10}` | 80 (rounded down to tens) |
+| `mdi:battery-${max(10, min(90, round(sensor.battery / 10) * 10))}` | `mdi:battery-90`, always between 10 and 90 |
+
+| Function | Result |
+|---|---|
+| `round(X)` | to the nearest whole number; a half rounds away from zero (2.5 → 3, −2.5 → −3) |
+| `round(X, N)` | to `N` decimals, 0–6 (`round(21.75, 1)` → 21.8) |
+| `min(A, B, …)` / `max(A, B, …)` | the smallest / largest of two or more values |
+| `abs(X)` | without its sign (−3.5 → 3.5) |
+
+`X` is a variable, a number or another calculation, so `${round(sensor.power / 1000, 1)}` works.
+A value that is not a number, a mistake in the formula, or a division by zero shows nothing,
+like a missing value.
+
+**Completion.** In the panel's picture, tooltip and title fields, typing `${` opens a list.
+Entities and function names are offered as you type, also after an operator or inside brackets; after a second dot (`${light.desk.`)
+the entity's attributes are listed. Picking `round(` writes `${round()}` with the cursor between
+the brackets, and the entities and attributes are completed inside them the same way.
+Arrow keys and Enter, or a click, pick an entry; nothing is saved until you leave the field.
+
+- **It stays current.** When the value changes, the remote is updated at once. A value
+  that keeps changing -- a lamp being dimmed -- is sent at most every 0.5 s. Each remote
+  can change that under **Settings → Variables → Update interval** (0.1 s to 5 s).
 - **Missing values disappear.** If the entity is `unavailable`, `unknown` or does not
   exist, the variable is left out: "Battery ${…}" then reads just "Battery". An image
   whose variable has no value falls back to the icon the button would show anyway; a
@@ -283,6 +343,7 @@ it off.
 | An open configuration card | **Escape** closes it and returns focus to the button that opened it. |
 | Page order | The **Move left** and **Move right** arrows beside the page name do what dragging a page thumbnail does. |
 | A page thumbnail | **Shift+F10**, or the **Context Menu** key, opens that page's menu — the same one a right-click or long-press gives — where a page is duplicated, moved to another device (layout pages), deleted, or turned into a subpage, or back. A thumbnail is a tab stop only while its page is not the open one, so to mark the page you are on, step to another page first. |
+| The open page | **Delete**, or **Backspace** (the key a Mac labels *delete*), deletes it after the same confirmation as its ✕ — unless you are typing in a field, or a dialog or menu is open. |
 | Dialogs | **Tab** stays inside the dialog, **Escape** cancels. |
 
 ### What else is covered
@@ -298,8 +359,9 @@ The panel is available in English, German, French, Italian and Spanish, and foll
 language set on your Home Assistant profile.
 
 Two things worth knowing. Because the colours are inherited, a theme with poor contrast
-of its own carries that into the panel. And dragging page thumbnails needs a pointer —
-the arrows beside the page name are there to do the same job without one.
+of its own carries that into the panel. And two gestures need a pointer — dragging page
+thumbnails, for which the arrows beside the page name do the same job, and dragging a
+button's configuration onto another button, for which the face menu's **Move** does.
 
 If something here does not work with your assistive technology, we would like to know:
 see **Support** below.

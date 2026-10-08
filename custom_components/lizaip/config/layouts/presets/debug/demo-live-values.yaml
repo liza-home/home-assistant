@@ -1,0 +1,47 @@
+# Demo: live values on a remote — a battery tile and a light's brightness
+#
+# Binds to one lamp. Button 1 toggles it and shows its brightness (0-255 turned into
+# a percentage: `* 100 / 255`, rounded) as the tile text; `@target` becomes that lamp's entity id before the `${…}` variable is
+# read, so the picture follows whichever lamp the page was created for.
+#
+# Button 2 is the battery tile. Its icon and tooltip follow the remote's own
+# battery level through two template helpers. Create them once under
+# Settings > Devices & services > Helpers > Template > Sensor, replacing
+# `sensor.lizaip_XXXX_battery` with the remote's battery sensor. Leave the unit
+# of measurement empty on both — a unit would print as "85 %" in the tooltip,
+# and the tooltip below adds its own "%".
+#
+#   sensor.lizaip_battery_level — state template:
+#     {{ states('sensor.lizaip_XXXX_battery') }}
+#
+#   sensor.lizaip_battery_icon — state template (mdi:battery-NN only exists in
+#   steps of ten, so the level is rounded to the nearest step):
+#     {% set b = states('sensor.lizaip_XXXX_battery') | int(-1) %}
+#     {% if b < 0 %}unavailable
+#     {% elif b >= 95 %}mdi:battery
+#     {% elif b < 5 %}mdi:battery-outline
+#     {% else %}mdi:battery-{{ [[(b + 5) // 10 * 10, 10] | max, 90] | min }}
+#     {% endif %}
+#
+# A variable that is empty, unknown or unavailable collapses away, and an image
+# whose variable is empty falls back to the derived icon.
+
+name: Demo — live values
+icon: mdi:battery-heart-variant
+description: A battery tile with a live level, and a lamp's brightness as text
+
+target_selector:
+  device:
+    integration: hue
+    primary_domain: light
+
+buttons:
+  button_1:
+    label: "Brightness: ${round(@target.brightness * 100 / 255)}%"
+    image: "text:${round(@target.brightness * 100 / 255)}%"
+    config:
+      - action: light.toggle
+
+  button_2:
+    label: "Battery: ${sensor.lizaip_battery_level}%"
+    image: "${sensor.lizaip_battery_icon}"

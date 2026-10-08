@@ -4,7 +4,7 @@
  */
 
 import { drawSVG, getPathBounds, armSuppress, suppressedNow } from "./liza-remote-svg.js";
-import { badNumber, isIconSource } from "./liza-remote-helpers.js";
+import { badNumber, isIconSource, isMovableSlot } from "./liza-remote-helpers.js";
 
 const capitalize = (s) => s.replace(/\b\w/g, c => c.toUpperCase());
 
@@ -930,10 +930,14 @@ export const ButtonsViewMixin = {
     //
     // The whole banner goes, not just its contents. An empty one is a band of
     // padding above the field, which reads as the card having lost something.
+    const pageTitleText = this._pageTitle(this._pages[this._currentPageIdx]);
     const bannerHtml = this._pageTitleSelected ? '' : `
         <div class="ps-title-banner">
           <div class="ps-page-meta">
-            <span class="ps-title-subtitle">${this._t("page_n_of_m", { n: this._currentPageIdx + 1, m: pageCount })}</span>
+            <div class="ps-page-meta-text">
+              <span class="ps-title-subtitle">${this._esc(this._pagePosition(this._pages[this._currentPageIdx]))}</span>
+              ${pageTitleText ? `<span class="ps-page-name">${this._esc(pageTitleText)}</span>` : ''}
+            </div>
           </div>
           <div class="ps-title-reorder">
             <button class="ps-reorder-btn ps-move-up" ${canMoveUp ? '' : 'disabled'} title="${this._esc(this._t("move_left"))}" aria-label="${this._esc(this._t("move_left"))}">
@@ -952,7 +956,11 @@ export const ButtonsViewMixin = {
           <div class="ps-title-editor" id="pageTitleEditor">
             <span class="title-icon-field">${this._htmlIconField({
               label: this._t("image"),
-              value: pageImgTitle,
+              // Previewed as the remote draws it, `${_device}` included; the
+              // field itself keeps what the user typed.
+              value: this._pageTitleImage(page),
+              inputValue: pageImgTitle,
+              hint: this._pageTitleHint(page, pageImgTitle),
               color: pageDefaultColor,
               shape: { size: "title", box: { w: TITLE_PREVIEW_W, h: TITLE_PREVIEW_H } },
               previewClass: "icon-preview-title",
@@ -983,12 +991,32 @@ export const ButtonsViewMixin = {
             </div>
           </div>`;
 
+    // A page made from a layout drives one device (or hub); naming it here, as
+    // the button that changes it, answers "what does this page control" without
+    // a trip through the page strip's context menu.
+    const layoutTargetHtml = this._pageTitleSelected || !page.layout?.type ? '' : (() => {
+      const hub = !!page.layout.target?.config_entry;
+      const name = this._layoutTargetName(page);
+      const changeLabel = this._t(hub ? "change_hub" : "change_device");
+      return `
+          <div class="ps-section ps-layout-target" style="margin-top:0;padding-top:0;border-top:none;">
+            <h2 class="ps-section-title">
+              <ha-icon icon="${hub ? "mdi:hub" : "mdi:devices"}" style="--mdc-icon-size:16px;" aria-hidden="true"></ha-icon> ${this._t(hub ? "layout_hub" : "layout_device")}
+            </h2>
+            <button class="ps-layout-target-btn" id="psLayoutTarget" title="${this._esc(changeLabel)}" aria-label="${this._esc(`${changeLabel} ${name}`)}">
+              <span class="ps-layout-target-name">${this._esc(name)}</span>
+              <ha-icon icon="mdi:pencil" style="--mdc-icon-size:16px;" aria-hidden="true"></ha-icon>
+            </button>
+          </div>`;
+    })();
+
     return `
       <ha-card outlined class="config-card">
         <h2 class="liza-sr-only">${this._esc(this._t("a11y_page_region"))}</h2>
         ${bannerHtml}
         <div class="config-card-body ps-body">
           ${titleEditorHtml}
+          ${layoutTargetHtml}
           ${colorSectionHtml}
 
           </div>
@@ -1932,22 +1960,22 @@ export const ButtonsViewMixin = {
     // name and has nothing to explain.
     const labelShowsState =
       this._labelHasStateToken(labelFieldValue) &&
-      !!this._displayLabel("${STATE}", selAction, selEntity, selAssign.config);
-    // `${NAME}` is only a token on a device-local command, so the hint is
+      !!this._displayLabel("${_state}", selAction, selEntity, selAssign.config);
+    // `${_name}` is only a token on a device-local command, so the hint is
     // gated on the button carrying one *and* on that command naming a target
     // -- a goto pointed at a page that no longer exists resolves to nothing,
     // and promising a replacement that never comes is worse than staying quiet.
     const labelShowsName =
       this._labelHasNameToken(labelFieldValue) &&
-      !!this._displayLabel("${NAME}", selAction, selEntity, selAssign.config);
+      !!this._displayLabel("${_name}", selAction, selEntity, selAssign.config);
     // What the remote prints for this button *right now*.
     //
     // The field cannot show it. It holds the stored text verbatim, tokens and
     // all, because committing the resolved words would freeze them: a mute
     // button reading "Mute" would keep saying "Mute" after the speaker was
-    // muted, which is the contradiction `${STATE}` exists to avoid.
+    // muted, which is the contradiction `${_state}` exists to avoid.
     //
-    // But "Unnamed Room ${STATE}" is not a tooltip anyone recognises, and the
+    // But "Unnamed Room ${_state}" is not a tooltip anyone recognises, and the
     // hint only said the token "is replaced by what pressing the button does"
     // -- true, and no help at all in telling whether it is working. Naming the
     // current answer is the difference between a field that looks broken and
@@ -2109,7 +2137,7 @@ export const ButtonsViewMixin = {
             );
             // The subject this press speaks about, which is its *own* target
             // and not the button's. A cycle exists because its steps differ,
-            // often in what they point at, so reading every press's `${STATE}`
+            // often in what they point at, so reading every press's `${_state}`
             // off the button's declared action would phrase press 3 in terms
             // of press 1. `resolve_rule_label` in `toggle.py` answers the same
             // question the same way, and a synthetic action carrying the step's
@@ -2131,9 +2159,9 @@ export const ButtonsViewMixin = {
             // an empty value map, which is now fixed, so withholding the hint
             // would be hiding a feature that works.
             const pressShowsState = this._labelHasStateToken(rule.label || "")
-              && !!this._displayLabel("${STATE}", pressAction, pressEntity, rule.config);
+              && !!this._displayLabel("${_state}", pressAction, pressEntity, rule.config);
             const pressShowsName = this._labelHasNameToken(rule.label || "")
-              && !!this._displayLabel("${NAME}", pressAction, pressEntity, rule.config);
+              && !!this._displayLabel("${_name}", pressAction, pressEntity, rule.config);
             const pressShowsVariable = this._hasEntityToken(rule.label || "");
             const pressNowReads = (pressShowsState || pressShowsName || pressShowsVariable)
               ? pressResolved
@@ -2621,11 +2649,12 @@ export const ButtonsViewMixin = {
       ? this._assignments
       : (this._pageCache[page.id] || {});
     const allBtnKeys = bp.buttons.map(b => b.key);
+    // One tooltip, three lines: which page, its title, what is on it.
+    const title = this._pageTitle(page);
     return this._t("page_fill", {
-      name: this._pageLabel(page),
+      name: title ? `${this._pagePosition(page)}\n${title}` : this._pagePosition(page),
       filled: allBtnKeys.filter(k => isConfigured(pageAssigns[k])).length,
       total: allBtnKeys.length,
-      n: i + 1, m: this._pages.length,
     });
   },
 
@@ -2851,7 +2880,7 @@ export const ButtonsViewMixin = {
         const sep = inner.includes("?") ? "&" : "?";
         sliderImageUrl = `/api/imgserv/${inner}${sep}size=title&mode=${mode}&alpha=1`;
       } else if (this._isExternalUrl(rawTitle)) {
-        sliderImageUrl = this._imgservUrl(this._mediaSource(rawTitle), "title", mode);
+        sliderImageUrl = this._imgservUrl(`media:${rawTitle}`, "title", mode);
       } else if (rawTitle.startsWith("file:")) {
         sliderImageUrl = this._imgservUrl(rawTitle, "title", mode);
       } else if (rawTitle.startsWith("/")) {
@@ -2900,6 +2929,11 @@ export const ButtonsViewMixin = {
         // page, and clearing a button on a page the user is not editing is not
         // a gesture anyone reaches for by accident.
         onContext: isActive ? (idx, ev) => this._showFaceMenu(bp.buttons[idx], ev) : null,
+        // Only the open page, for the reason `onContext` is: a move reads the
+        // open page's assignments, and a thumbnail is a picture of another.
+        canDrag: isActive ? (key) => this._canMoveButton(key) : null,
+        canDrop: isActive ? (key, fromKey) => this._canDropButtonOn(fromKey, key) : null,
+        onDrop: isActive ? (from, to) => this._dropButtonOn(from, to) : null,
       });
 
       // Crop to the main button area
@@ -3177,7 +3211,7 @@ export const ButtonsViewMixin = {
     const pct = percent === null || percent === undefined ? '' : `&percent=${percent}`;
     if (this._isExternalUrl(icon) || icon.startsWith('media:')) {
       const target = this._isExternalUrl(icon) ? icon : icon.slice(6);
-      return this._imgservUrl(this._mediaSource(target), 'tile', mode) + pct;
+      return this._imgservUrl(`media:${target}`, 'tile', mode) + pct;
     }
     if (icon.startsWith('/') || icon.startsWith('data:')) return icon;
     const tintable = isIconSource(icon) || icon.startsWith('text:') || !icon.includes(':');
@@ -3540,11 +3574,18 @@ export const ButtonsViewMixin = {
 
     // The stored title verbatim, whatever shape it has, so it can be copied
     // out and pasted into another field as is.
+    const titlePage = this._pages[this._currentPageIdx];
     this._mountIconPicker(
       this.shadowRoot.querySelector("#ps-icon-picker-slot"),
-      this._pages[this._currentPageIdx]?.image || "",
+      titlePage?.image || "",
       (picked) => saveTitle(picked),
+      this._pageDeviceOption(titlePage),
     );
+
+    this.shadowRoot.querySelector("#psLayoutTarget")?.addEventListener("click", () => {
+      const page = this._pages[this._currentPageIdx];
+      if (page?.layout?.type) this._changeLayoutTarget(page);
+    });
 
     // --- Color picker wiring ---
     const colorInput = this.shadowRoot.querySelector("#psColorInput");
@@ -3680,6 +3721,7 @@ export const ButtonsViewMixin = {
         labelInput,
         labelInput.parentElement?.querySelector?.(".liza-media-suggest") || null,
         commit,
+        this._pageDeviceOption(),
       );
     }
     this.shadowRoot.querySelector(".config-label-reset")?.addEventListener("click", () => {
@@ -4125,12 +4167,35 @@ export const ButtonsViewMixin = {
    * Offered only where there is something to act on: an empty tile gets no
    * menu at all rather than a menu with two dead items in it.
    */
+  /**
+   * Is there a configuration here a move could pick up? The one predicate
+   * behind both routes to a move, so the menu item and the drag cannot
+   * disagree. The title bar is not a button and has no assignment.
+   */
+  _canMoveButton(key) {
+    if (!isMovableSlot(key)) return false;
+    return this._isAssignedRecord(this._editAssign(key) || {});
+  },
+
+  /**
+   * Could a move from `fromKey` land on `toKey`? The drag asks this per slot
+   * to keep the ring honest: `_moveButtonTo` refuses ends that resolve to
+   * different containers, and a ring that promised otherwise would lie.
+   */
+  _canDropButtonOn(fromKey, toKey) {
+    if (!isMovableSlot(toKey)) return false;
+    // Mirrors `_editContainer`'s branching without its `create`, so merely
+    // hovering a fixed button cannot leave an override table behind.
+    const contextKey = this._liveContextKey();
+    if (!contextKey) return true;
+    const scoped = OVERRIDABLE_FIXED_BUTTONS.has(toKey);
+    if (scoped !== OVERRIDABLE_FIXED_BUTTONS.has(fromKey)) return false;
+    return !scoped || !!this._assignments?.[contextKey];
+  },
+
   _showFaceMenu(btn, ev) {
     this._closeFaceMenu();
-    // `slider_horizontal` is the page's title bar, not a button — there is no
-    // assignment on it, and Page Settings is where its picture is changed.
-    if (!btn || btn.key === "slider_horizontal") return;
-    if (!this._isAssignedRecord(this._editAssign(btn.key) || {})) return;
+    if (!this._canMoveButton(btn?.key)) return;
     const root = this.shadowRoot;
     if (!root) return;
     // Where focus came from, so closing can put it back. Captured after the
@@ -4208,6 +4273,39 @@ export const ButtonsViewMixin = {
     }]);
   },
 
+  /**
+   * The hint under a page's title field. A layout page learns about
+   * `${_device}`; what any variable reads now is said as on every picture field.
+   */
+  _pageTitleHint(page, raw) {
+    const usesDevice = /\$\{[^{}]*(?<![\w.])_device\b/.test(raw || "");
+    const parts = [];
+    if (usesDevice || this._hasEntityToken(raw)) {
+      const now = this._pageTitleImage(page);
+      if (now) parts.push(this._t("label_now_reads", { text: this._esc(now) }));
+    }
+    if (page?.layout?.type) parts.push(this._t("title_device_hint"));
+    // `${_device.attr}` reads like an entity variable but is explained above.
+    if (this._hasEntityToken((raw || "").replace(/\$\{\s*_device\.\w+\s*\}/g, ""))) {
+      parts.push(this._t("variable_hint"));
+    }
+    return parts.join(" ");
+  },
+
+  /** What a layout page's device or hub is called, for the page card.
+   *
+   * A device is named from `hass.devices` the way HA names it (the user's
+   * rename first); a hub is a config entry, whose title the frontend does not
+   * carry, so it is asked for once and the card redrawn when it arrives.
+   */
+  _layoutTargetName(page) {
+    const target = page?.layout?.target || {};
+    const name = this._layoutDeviceName(page);
+    if (name) return name;
+    if (target.config_entry && this._layoutEntryTitles?.[target.config_entry] === null) return "…";
+    return target.entity_id || this._t("layout_target_missing");
+  },
+
   /** Ask for the new device of a layout page and move the page to it.
    *
    * The same dialog that picked the device when the page was added, so the
@@ -4229,7 +4327,7 @@ export const ButtonsViewMixin = {
         onConfirm: async (target, kind) => {
           const result = await this._retargetLayoutPage(page, target, kind);
           return this._t(hub ? "hub_changed" : "device_changed", {
-            name: this._pageLabel(page),
+            name: this._pageDisplayLine(page),
             n: result?.buttons_changed ?? 0,
           });
         },
@@ -4256,7 +4354,7 @@ export const ButtonsViewMixin = {
       }));
       // The copy looks exactly like the page it came from; without a word the
       // only sign anything happened is one more thumbnail.
-      if (result?.pages) this._toast(this._t("page_duplicated", { name: this._pageLabel(page) }));
+      if (result?.pages) this._toast(this._t("page_duplicated", { name: this._pageDisplayLine(page) }));
     } catch (e) {
       console.error("[LIZA] duplicate page failed:", e);
       this._toast(this._t("duplicate_page_failed", { error: e?.message || e }));
@@ -4441,12 +4539,13 @@ export const ButtonsViewMixin = {
     // only completed on some routes would be a move that sometimes selected
     // instead. Clicking the armed button itself calls it off — the same "click
     // it again to put it away" every other control has.
+    //
+    // Everything else goes to `_moveButtonTo`, which already turns down every
+    // slot that cannot hold a button record and says why. Naming one of them
+    // here too was a second copy of that rule, and the two had drifted.
     if (this._moveSourceKey) {
-      if (key === this._moveSourceKey || key === "slider_horizontal") {
-        this._cancelMove();
-      } else {
-        this._moveButtonTo(key);
-      }
+      if (key === this._moveSourceKey) this._cancelMove();
+      else this._moveButtonTo(key);
       return true;
     }
     if (key === "slider_horizontal") {
@@ -4680,6 +4779,7 @@ export const ButtonsViewMixin = {
         this._scheduleAutoSave();
         this._render();
       },
+      this._pageDeviceOption(),
     );
 
     // State icon fields
@@ -4835,8 +4935,8 @@ export const ButtonsViewMixin = {
       const raw = rule?.label || "";
       // Through the same resolver the field below the heading uses, against
       // the press's own target. An empty value map was passed here, which
-      // *stripped* a stored `${STATE}` instead of reading it -- so a press
-      // captioned "Schreibtisch ${STATE}" was headed by the bare word
+      // *stripped* a stored `${_state}` instead of reading it -- so a press
+      // captioned "Schreibtisch ${_state}" was headed by the bare word
       // "Schreibtisch" while the field under it, and the remote, said
       // "Schreibtisch On".
       const tip = this._isMediaSource?.(raw)
@@ -4865,9 +4965,9 @@ export const ButtonsViewMixin = {
    * Falls back to the row's heading, which is what it used to show outright.
    *
    * `_computeLabel` returns a *template* for a two-way service -- a bare
-   * `${STATE}`, which the caller persists and the device resolves per press.
+   * `${_state}`, which the caller persists and the device resolves per press.
    * Correct to store, unreadable to show: a press duplicated from a
-   * `light.toggle` was headed `${STATE}` and offered it as its placeholder,
+   * `light.toggle` was headed `${_state}` and offered it as its placeholder,
    * next to a sibling reading "Schreibtisch Apagado".
    *
    * So the template is resolved the way the device resolves it, through the
@@ -4970,6 +5070,7 @@ export const ButtonsViewMixin = {
             if (text) rule.label = text; else delete rule.label;
           });
         },
+        this._pageDeviceOption(),
       );
     });
 
@@ -4993,6 +5094,7 @@ export const ButtonsViewMixin = {
           if (picked) row.icon = picked; else delete row.icon;
           });
         },
+        this._pageDeviceOption(),
       );
     });
 
@@ -5102,7 +5204,7 @@ export const ButtonsViewMixin = {
         this._scheduleAutoSave();
         this._refreshSVG();
         this._render();
-      });
+      }, this._pageDeviceOption());
     });
   },
 };

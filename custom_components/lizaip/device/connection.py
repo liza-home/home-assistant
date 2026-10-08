@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import aiohttp
 from aiohttp import ClientTimeout, WSCloseCode, web
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -180,6 +179,11 @@ class LizaIPConnection:
         # every later sync from spending four doomed round-trips per page.
         # Cleared on disconnect, so a firmware update or reset gets a fresh try.
         self._rejected_pages: set[int] = set()
+        # Pages an `add_page` or `set_page` was sent for without an answer that
+        # settles whether the device now holds them. They are out of
+        # `_known_pages`, so a page in here that leaves the config still gets a
+        # `del_page` -- otherwise it would stay on the device, merely unlisted.
+        self._unsure_pages: set[int] = set()
 
         # Wire up protocol event/request handlers
         self._protocol.on_event("button", self._on_button_event)
@@ -346,6 +350,7 @@ class LizaIPConnection:
                 self._known_pages = None
                 self._known_main_pages = None
                 self._rejected_pages = set()
+                self._unsure_pages = set()
                 _LOGGER.warning(
                     "Device %s is unavailable (WebSocket disconnected)",
                     self._entry.title,
@@ -757,9 +762,11 @@ class LizaIPConnection:
 
     async def _send_hello(self) -> None:
         try:
+            # The remote has just opened this socket, so it is awake: a hello
+            # that goes unanswered is a failure, not a doze.
             result = await self._protocol.send_request("hello", {
                 "protocol_version": PROTOCOL_VERSION,
-            })
+            }, wait_while_silent=False)
             self._device_protocol_version = result.get("protocol_version")
             self._device_mac = result.get("device_id")
             self._device_version = result.get("version")

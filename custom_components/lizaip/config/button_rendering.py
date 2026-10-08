@@ -146,7 +146,7 @@ def _fill_label_tokens(
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
 ) -> str:
-    """Resolve ``${STATE}``/``${NAME}`` (and any future token) in a typed label.
+    """Resolve ``${_state}``/``${_name}`` (and any future token) in a typed label.
 
     *entry* carries the device's own language option; without it the label is
     built in Home Assistant's language, which is what every caller got before
@@ -169,9 +169,9 @@ def _fill_label_tokens(
     step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
     data = step.get("data") or {}
 
-    values = {"state": state_token_label(svc, current_state, lang, attributes, data)}
+    values = {"_state": state_token_label(svc, current_state, lang, attributes, data)}
 
-    # `${NAME}` is a device-local command's token and nobody else's. The key is
+    # `${_name}` is a device-local command's token and nobody else's. The key is
     # only added when the button actually carries one, so on a plain HA action
     # the token stays unknown and collapses to nothing — rather than resolving
     # to an empty string that reads as a supported-but-blank token. The step's
@@ -179,7 +179,7 @@ def _fill_label_tokens(
     # command lives on the step.
     internal_service = step_service(config) or service
     if get_internal_command(internal_service) is not None:
-        values["name"] = internal_command_target_name(
+        values["_name"] = internal_command_target_name(
             internal_service, data, internal_context, _internal_target_hint(assign)
         )
 
@@ -253,10 +253,10 @@ def _resolve_button_tooltip_ladder(
     # deleting the room name in the panel stored what was already stored, so
     # nothing moved. A recorded edit is not a guess, and outranks all of it.
     user_named = name_is_user_written(assign)
-    # A label made only of placeholders ("${STATE}") names nothing on its own,
+    # A label made only of placeholders ("${_state}") names nothing on its own,
     # so it is a shape rather than the user's words: it is resolved below and
     # given the entity prefix, exactly as a short static name like "Next" is.
-    # True of a typed one too — typing "${STATE}" asks for the derived label.
+    # True of a typed one too — typing "${_state}" asks for the derived label.
     token_only = is_token_only_label(stored_name)
     # …and a name a dynamic source wrote is not the user's words either. On a
     # page of toggles — every lamp on a Hue bridge — the name is the lamp, and
@@ -268,7 +268,7 @@ def _resolve_button_tooltip_ladder(
         not user_named and name_is_source_owned(assign) and is_two_way_service(svc)
     )
     # A token-only name is a shape rather than words *unless the user wrote it*.
-    # Deleting the entity prefix in front of "${STATE}" is the one way to ask
+    # Deleting the entity prefix in front of "${_state}" is the one way to ask
     # for the bare state word, and treating that edit as a shape put the prefix
     # straight back -- the label could not be changed at all.
     if (
@@ -336,9 +336,9 @@ def _resolve_button_tooltip_ladder(
     if not entity_name:
         entity_name = entity_id.split(".")[-1] if entity_id else ""
 
-    # `not token_only`: "${STATE}" is a shape, not a subject. The panel asks for
+    # `not token_only`: "${_state}" is a shape, not a subject. The panel asks for
     # the prefix by resolving the token alone, and taking it as the entity name
-    # left the field reading a bare "${STATE}" with no lamp in front of it.
+    # left the field reading a bare "${_state}" with no lamp in front of it.
     if bound_toggle and stored_name and not token_only:
         # The source picked the subject's name; the registry's friendly name is
         # the same string in the ordinary case and the wrong one when it is not
@@ -350,7 +350,7 @@ def _resolve_button_tooltip_ladder(
             return stored_name
 
     # A token-only label resolves to the state alone; the entity goes in front,
-    # so "${STATE}" reads "Unnamed Room Pause" just as "Next" reads
+    # so "${_state}" reads "Unnamed Room Pause" just as "Next" reads
     # "Unnamed Room Next". When the token cannot resolve (a state absent from
     # NEXT_STATE_MAP) it collapses to nothing and the ladder carries on below.
     if token_only:

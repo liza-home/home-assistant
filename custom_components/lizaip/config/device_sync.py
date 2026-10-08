@@ -25,17 +25,24 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
+from ..action_controller.toggle import runtime_assign
 from ..const import (
     DOMAIN,
     longtouch_steps,
+    page_scope,
     resolve_icon_url,
     resolve_title_url,
     resolve_tooltip_url,
+    substitute_device_token,
+    variables_scope,
 )
-from .const import (
-    is_subpage,
-    is_valid_page_id,
-    step_service,
+from ..device.protocol import DEFAULT_REQUEST_TIMEOUT
+from ..device.services import _selected_entry_ids
+from ..state_icon import (
+    IconStyle,
+    IconStyleOptions,
+    icon_style_for,
+    read_icon_style_options,
 )
 from .button_rendering import (
     _get_service_icons,
@@ -43,20 +50,18 @@ from .button_rendering import (
     _resolve_button_tooltip,
     with_resolved_image,
 )
-from ..device.protocol import DEFAULT_REQUEST_TIMEOUT
-from ..device.services import _selected_entry_ids
-from ..action_controller.toggle import runtime_assign
-from .text_style import longtouch_enabled, toggle_enabled
+from .const import (
+    is_subpage,
+    is_valid_page_id,
+    step_service,
+)
 from .internal_commands import (
     build_page_context,
+)
+from .internal_commands import (
     resolve_action as resolve_internal_action,
 )
-from ..state_icon import (
-    IconStyle,
-    IconStyleOptions,
-    icon_style_for,
-    read_icon_style_options,
-)
+from .text_style import longtouch_enabled, toggle_enabled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -296,6 +301,23 @@ async def _build_page_payload(
     *,
     ctx: dict | None = None,
 ) -> dict:
+    """Build a set_page data payload, its tiles reading ``${_device}`` as the page has it."""
+    layout = page_config.get("layout") if isinstance(page_config, dict) else None
+    with page_scope(layout):
+        return await _build_page_payload_in_scope(
+            hass, entry, page_id, page_config, all_pages, ctx=ctx,
+        )
+
+
+async def _build_page_payload_in_scope(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    page_id: int,
+    page_config: dict,
+    all_pages: list[dict] | None = None,
+    *,
+    ctx: dict | None = None,
+) -> dict:
     """Build a set_page data payload from the store.
 
     Returns a dict matching the protocol's set_page.data shape:
@@ -479,8 +501,11 @@ async def _build_page_payload(
     # Page-level properties — img_title is always a URL to a PNG image
     # Entity variables resolve as they do on a button; one with no value leaves
     # the title strip blank rather than drawing half a name.
+    # `${_device}` first: what it names can itself hold no variable.
     page_img_title = with_resolved_image(
-        {"image": page_config.get("image", "")}, hass,
+        {"image": substitute_device_token(
+            page_config.get("image", ""), hass, page_config.get("layout"),
+        )}, hass,
     ).get("image") or ""
     img_title = resolve_title_url(page_img_title, page_color, text_settings["title"])
 
@@ -581,7 +606,8 @@ async def _sync_locked(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Device not connected, skipping sync for %s", entry.title)
         return False
     async with conn._page_sync_lock:
-        return await _sync_config_to_device(hass, entry, conn)
+        with variables_scope(getattr(entry, "options", None)):
+            return await _sync_config_to_device(hass, entry, conn)
 
 
 async def _sync_config_to_device(
@@ -680,8 +706,19 @@ async def _sync_config_to_device(
         if desired_hash_map[pid] != device_hash_map.get(pid)
     }
     order_changed = device_main_pages != main_page_ids
+    # A page whose write went unanswered may be on the device although it is
+    # not in the cache; once it leaves the config it is removed all the same.
+    unsure = getattr(conn, "_unsure_pages", None)
+    if unsure is None:
+        unsure = set()
+        conn._unsure_pages = unsure
+    unsure.difference_update(device_page_ids)
+    stray_pages = sorted(unsure - desired_page_ids)
 
-    if not pages_to_add and not pages_to_remove and not pages_to_update and not order_changed:
+    if (
+        not pages_to_add and not pages_to_remove and not pages_to_update
+        and not order_changed and not stray_pages
+    ):
         # Populate the cache so subsequent syncs skip the device query. Nothing
         # differed, so what was just built is what the device holds.
         conn._known_pages = {p["page_id"]: p for p in desired_pages}
@@ -692,7 +729,7 @@ async def _sync_config_to_device(
 
     _LOGGER.info(
         "Syncing pages: add=%s, remove=%s, update=%s, order_changed=%s",
-        pages_to_add, pages_to_remove, pages_to_update, order_changed,
+        pages_to_add, pages_to_remove | set(stray_pages), pages_to_update, order_changed,
     )
 
     # Sets have no order, and the device applies these in the order they
@@ -744,6 +781,17 @@ async def _sync_config_to_device(
         else:
             failed.append(pid)
 
+    # One try each: the device may never have stored the page, and then it
+    # refuses the delete -- which is the outcome wanted anyway.
+    for pid in stray_pages:
+        unsure.discard(pid)
+        try:
+            await conn.del_page(pid)
+        except Exception as err:  # noqa: BLE001 -- most likely never stored
+            _LOGGER.debug("del_page for page %s, which may never have landed: %s", pid, err)
+        else:
+            _LOGGER.info("Removed page %s, which the device held without having confirmed it", pid)
+
     # A failed `add_page` no longer takes its `set_page` down with it. The
     # device answers `[-4] "data"."page_id"` both for an ID it will not accept
     # and for one it already holds, and `get_pages` is the only thing telling
@@ -759,6 +807,7 @@ async def _sync_config_to_device(
             partial(_add_page_if_missing, conn, pid), "add_page", pid,
         ):
             add_failed.add(pid)
+            unsure.add(pid)
 
     total = len(writes)
     for n, page_data in enumerate(writes, 1):
@@ -785,11 +834,14 @@ async def _sync_config_to_device(
                     pid,
                 )
             known_pages[pid] = page_data
+            unsure.discard(pid)
         else:
             # Forgetting the page keeps the next sync honest: it is in an
             # unknown state, so it has to be rewritten rather than skipped as
-            # unchanged.
+            # unchanged. It may still be on the device, so it is remembered as
+            # one to delete should it leave the config.
             known_pages.pop(pid, None)
+            unsure.add(pid)
             failed.append(pid)
             if pid in add_failed:
                 # Refused both ways: the device will not store this page at
@@ -990,9 +1042,11 @@ _LIVE_BUTTON_FIELDS = ("img_tile", "img_tooltip")
 
 
 def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
-    """The tile and tooltip changes from *sent* to *built*, or None if more moved."""
-    if sent.get("img_title") != built.get("img_title"):
-        return None
+    """The tile and tooltip changes from *sent* to *built*, or None if more moved.
+
+    The page title is not compared: a variable can move it, and it is pushed
+    on its own (see `_push_variable_pages`).
+    """
     before = {b.get("name"): b for b in sent.get("buttons", ())}
     if set(before) != {b.get("name") for b in built.get("buttons", ())}:
         return None
@@ -1010,7 +1064,9 @@ def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
     return changes
 
 
-def note_partial_page(conn, page_id: int, buttons: list[dict]) -> None:
+def note_partial_page(
+    conn, page_id: int, buttons: list[dict], img_title: str | None = None,
+) -> None:
     """Record a partial ``set_page`` the device acknowledged in its known copy.
 
     Without this, the copy keeps the tile the last full sync drew while the
@@ -1028,6 +1084,8 @@ def note_partial_page(conn, page_id: int, buttons: list[dict]) -> None:
     if not moved.keys() <= {b.get("name") for b in copy.get("buttons", ())}:
         return
     patched = {k: v for k, v in copy.items() if k != "hash"}
+    if img_title is not None:
+        patched["img_title"] = img_title
     patched["buttons"] = [{**b, **moved.get(b.get("name"), {})} for b in copy["buttons"]]
     patched["hash"] = _compute_page_hash(patched)
     known[page_id] = patched
@@ -1036,13 +1094,21 @@ def note_partial_page(conn, page_id: int, buttons: list[dict]) -> None:
 async def async_push_variable_pages(
     hass: HomeAssistant, entry: ConfigEntry, page_ids: set[int],
 ) -> None:
+    """:func:`_push_variable_pages` with *entry*'s variables setting in force."""
+    with variables_scope(getattr(entry, "options", None)):
+        await _push_variable_pages(hass, entry, page_ids)
+
+
+async def _push_variable_pages(
+    hass: HomeAssistant, entry: ConfigEntry, page_ids: set[int],
+) -> None:
     """Bring the pages whose variables moved up to date, sending only what changed.
 
     Each page is rebuilt and compared, button by button, with what the device
     was last given; only the tiles and tooltips that came out different go out,
-    through the same queue as live light icons. A page the device's copy of is
-    not known, or that changed more than a variable can (its title included),
-    falls back to the full sync.
+    through the same queue as live light icons, and a title that moved goes with
+    them. A page the device's copy of is not known, or that changed more than a
+    variable can, falls back to the full sync.
     """
     conn = _get_device_connection(hass, entry)
     if conn is None or not conn.connected:
@@ -1073,9 +1139,14 @@ async def async_push_variable_pages(
             await sync_config_to_device(hass, entry)
             return
         known[page_id] = built
-        if changes:
-            _LOGGER.debug("Variables moved on page %s: %s", page_id, [c["name"] for c in changes])
-            queue.submit(page_id, changes)
+        title = built.get("img_title")
+        title = title if title != sent.get("img_title") else None
+        if changes or title is not None:
+            _LOGGER.debug(
+                "Variables moved on page %s: %s%s", page_id,
+                [c["name"] for c in changes], " and its title" if title is not None else "",
+            )
+            queue.submit(page_id, changes, img_title=title)
             pushed = True
     if pushed:
         queue.schedule(

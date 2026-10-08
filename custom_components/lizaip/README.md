@@ -511,8 +511,8 @@ helper for battery icons: [README.public.md → Live values on the remote](../..
   `on`/`off`, whole floats without `.0`). `unknown`, `unavailable` or a missing entity
   yields `""`, and the token collapses together with a dangling separator.
 - **Tooltips**: `substitute_label_tokens(text, values, hass)` fills entity tokens before
-  `${STATE}`/`${NAME}`, in both the sync ladder (`button_rendering`) and the live ladder
-  (`action_controller/icons.py`). `${STATE}`/`${NAME}` never match the entity pattern
+  `${_state}`/`${_name}`, in both the sync ladder (`button_rendering`) and the live ladder
+  (`action_controller/icons.py`). `${_state}`/`${_name}` never match the entity pattern
   (no dot), and a label of only an entity token counts as the user's own words.
 - **Images and titles** (`button_rendering.with_resolved_image`): all or nothing — if
   any token is empty the image is dropped and the derived icon is used (a title is

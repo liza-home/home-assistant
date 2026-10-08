@@ -16,16 +16,36 @@ from typing import Any
 
 from aiohttp import web
 
+try:
+    from .traffic import TrafficLog
+except ImportError:  # stable builds ship without the traffic recorder
+    TrafficLog = None
+
 _LOGGER = logging.getLogger(__name__)
+
+
+class _NoTraffic:
+    """Stands in for the recorder where a stable build left it out."""
+
+    def __getattr__(self, _name: str) -> Any:
+        return lambda *_args, **_kwargs: None
 
 # Protocol constants
 PROTOCOL_VERSION = 1
 PING_INTERVAL = 29
 
-#: Default deadline for a request/response round trip. Fine for the small
-#: commands that make up most of the protocol; a page write carrying a dozen
-#: image URLs is slower to acknowledge and passes its own, larger value.
-DEFAULT_REQUEST_TIMEOUT = 10.0
+#: Default deadline for a request/response round trip, counted while the remote
+#: is awake. The remote can take up to 15 s to answer even a small command, so
+#: this leaves a margin over that; a page write passes its own, larger value.
+DEFAULT_REQUEST_TIMEOUT = 20.0
+
+#: How long a request may wait on a remote that has said nothing since it was
+#: sent. A remote in Wi-Fi power save can doze for tens of seconds; what we
+#: sent stays buffered and is answered on waking, so silence is not failure.
+#: Matches the WebSocket heartbeat's own patience (58 s heartbeat + 29 s for
+#: the pong, see device/websocket.py): past that the connection is closed
+#: anyway, and every pending request fails with it.
+MAX_SILENT_WAIT = PING_INTERVAL * 3
 
 # Message types
 TYPE_REQUEST = "request"
@@ -196,10 +216,31 @@ class LizaIPProtocol:
         self._event_handlers: dict[str, Callable[[dict[str, Any]], None]] = {}
         self._request_handlers: dict[str, Callable[[int, dict[str, Any]], Any]] = {}
         self._ws: web.WebSocketResponse | None = None
+        # When the remote last sent anything, and a signal set on every
+        # message, so a request waiting out a silent remote wakes when it talks.
+        self._last_rx: float = float("-inf")
+        self._rx_signal = asyncio.Event()
+        self.max_silent_wait: float = MAX_SILENT_WAIT
+        self.traffic = TrafficLog() if TrafficLog else _NoTraffic()
 
     def set_ws(self, ws: web.WebSocketResponse | None) -> None:
-        """Attach the WebSocket transport."""
+        """Attach the WebSocket transport.
+
+        Requests sent on the previous socket can never be answered on another
+        one, so they fail now rather than waiting out their deadline.
+        """
+        if ws is not self._ws:
+            self._fail_pending("Connection lost")
+            if self._ws is not None:
+                self.traffic.connection(False)
+            if ws is not None:
+                self.traffic.connection(True)
         self._ws = ws
+
+    def _fail_pending(self, reason: str) -> None:
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(ProtocolError(ERR_INTERNAL, reason))
 
     def on_event(self, name: str, handler: Callable[[dict], None]) -> None:
         """Register a handler for device events."""
@@ -211,18 +252,31 @@ class LizaIPProtocol:
 
     # ── Sending ───────────────────────────────────────────────────────────
 
-    async def _send(self, msg: str) -> bool:
+    async def _send(
+        self, msg: str, msg_type: str = "", name: str = "", seq_id: int | None = None
+    ) -> bool:
         """Write a pre-encoded message; returns False if the transport is gone."""
         if self._ws is None or self._ws.closed:
             return False
         _LOGGER.debug("TX: %s", msg)
         await self._ws.send_str(msg)
+        self.traffic.tx(msg_type, name, seq_id, len(msg))
         return True
 
     async def send_request(
-        self, name: str, data: dict | None = None, timeout: float = DEFAULT_REQUEST_TIMEOUT
+        self,
+        name: str,
+        data: dict | None = None,
+        timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        *,
+        wait_while_silent: bool = True,
     ) -> dict:
-        """Send a request and await the correlated response. Returns response data."""
+        """Send a request and await the correlated response. Returns response data.
+
+        *wait_while_silent* lets the request outlast *timeout* while the remote
+        says nothing at all (see `_await_response`). Off where silence cannot be
+        sleep, such as the handshake of a socket the remote has just opened.
+        """
         if self._ws is None or self._ws.closed:
             raise ProtocolError(ERR_INTERNAL, "Not connected")
 
@@ -232,26 +286,69 @@ class LizaIPProtocol:
         )
         self._pending[seq_id] = future
         try:
-            await self._send(build_request(name, seq_id, data))
-            return await asyncio.wait_for(future, timeout=timeout)
+            sent_at = asyncio.get_running_loop().time()
+            await self._send(build_request(name, seq_id, data), TYPE_REQUEST, name, seq_id)
+            if not wait_while_silent:
+                return await asyncio.wait_for(future, timeout=timeout)
+            return await self._await_response(future, sent_at, timeout)
         except asyncio.TimeoutError:
+            self.traffic.timeout(seq_id)
             raise ProtocolError(
                 ERR_INTERNAL, f"Timeout waiting for response to '{name}' seq_id={seq_id}"
             ) from None
         finally:
             self._pending.pop(seq_id, None)
+            self.traffic.abandoned(seq_id)
+
+    async def _await_response(
+        self, future: asyncio.Future[dict[str, Any]], sent_at: float, timeout: float
+    ) -> dict[str, Any]:
+        """Wait for *future*, counting *timeout* only while the remote is awake.
+
+        A remote that has said nothing since the request went out is taken to
+        be asleep: the request keeps waiting, up to `max_silent_wait`, for it to
+        speak. Once it has, the usual *timeout* runs from that moment, so a
+        remote that is awake and simply not answering still fails fast.
+        """
+        loop = asyncio.get_running_loop()
+        give_up = sent_at + max(timeout, self.max_silent_wait)
+        deadline = sent_at + timeout
+        while True:
+            now = loop.time()
+            if now < deadline:
+                try:
+                    return await asyncio.wait_for(asyncio.shield(future), deadline - now)
+                except asyncio.TimeoutError:
+                    continue
+            if self._last_rx >= sent_at or now >= give_up:
+                raise asyncio.TimeoutError
+            woke = asyncio.ensure_future(self._rx_signal.wait())
+            try:
+                await asyncio.wait(
+                    {future, woke}, timeout=give_up - now,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                woke.cancel()
+            if future.done():
+                return future.result()
+            if not woke.done() or woke.cancelled():
+                raise asyncio.TimeoutError
+            deadline = self._last_rx + timeout
 
     async def send_response(self, name: str, seq_id: int, data: dict | None = None) -> None:
         """Send a successful response."""
-        await self._send(build_response(name, seq_id, data))
+        await self._send(build_response(name, seq_id, data), TYPE_RESPONSE, name, seq_id)
 
     async def send_error(self, name: str, seq_id: int, code: int, message: str) -> None:
         """Send an error response."""
-        await self._send(build_error_response(name, seq_id, code, message))
+        await self._send(
+            build_error_response(name, seq_id, code, message), TYPE_RESPONSE, name, seq_id
+        )
 
     async def send_event(self, name: str, data: dict) -> None:
         """Send a fire-and-forget event."""
-        await self._send(build_event(name, data))
+        await self._send(build_event(name, data), TYPE_EVENT, name)
 
     # ── Receiving ─────────────────────────────────────────────────────────
 
@@ -259,10 +356,18 @@ class LizaIPProtocol:
         """Process an incoming raw message. Dispatches to appropriate handler."""
         _LOGGER.debug("RX: %s", raw)
         try:
+            self._last_rx = asyncio.get_running_loop().time()
+        except RuntimeError:
+            pass
+        signal, self._rx_signal = self._rx_signal, asyncio.Event()
+        signal.set()
+        try:
             msg = parse_message(raw)
         except (json.JSONDecodeError, ValueError) as err:
+            self.traffic.rx(None, len(raw), f"{err}: {raw[:200]}")
             _LOGGER.warning("Invalid message: %s — %s", raw[:200], err)
             return
+        self.traffic.rx(msg, len(raw))
 
         msg_type = msg["type"]
 
