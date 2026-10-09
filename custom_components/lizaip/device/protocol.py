@@ -60,6 +60,15 @@ ERR_TOO_LARGE = 413
 ERR_RATE_LIMITED = 429
 ERR_INTERNAL = 500
 
+#: The error codes PROTOCOL.md §9 allows a remote to answer with.
+SPEC_ERROR_CODES = frozenset({
+    ERR_BAD_REQUEST, ERR_NOT_FOUND, ERR_CONFLICT, ERR_TOO_LARGE,
+    ERR_RATE_LIMITED, ERR_INTERNAL,
+})
+#: Events a remote may send (PROTOCOL.md §8) and requests it may make (§4).
+SPEC_EVENTS = frozenset({"button", "slider", "goto_page", "diag"})
+SPEC_DEVICE_REQUESTS = frozenset({"hello"})
+
 # `page_id` bounds — see PROTOCOL.md §3 "Rules". A page_id is a 32-bit UNSIGNED
 # integer; 0 is reserved to mean "no page" and is never a valid identifier.
 MIN_PAGE_ID = 1
@@ -213,6 +222,8 @@ class LizaIPProtocol:
     def __init__(self) -> None:
         self._seq = SeqIdGenerator()
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        # The name each pending request went out with; its reply must match.
+        self._pending_names: dict[int, str] = {}
         self._event_handlers: dict[str, Callable[[dict[str, Any]], None]] = {}
         self._request_handlers: dict[str, Callable[[int, dict[str, Any]], Any]] = {}
         self._ws: web.WebSocketResponse | None = None
@@ -260,7 +271,7 @@ class LizaIPProtocol:
             return False
         _LOGGER.debug("TX: %s", msg)
         await self._ws.send_str(msg)
-        self.traffic.tx(msg_type, name, seq_id, len(msg))
+        self.traffic.tx(msg_type, name, seq_id, len(msg), msg)
         return True
 
     async def send_request(
@@ -285,6 +296,7 @@ class LizaIPProtocol:
             asyncio.get_running_loop().create_future()
         )
         self._pending[seq_id] = future
+        self._pending_names[seq_id] = name
         try:
             sent_at = asyncio.get_running_loop().time()
             await self._send(build_request(name, seq_id, data), TYPE_REQUEST, name, seq_id)
@@ -298,6 +310,7 @@ class LizaIPProtocol:
             ) from None
         finally:
             self._pending.pop(seq_id, None)
+            self._pending_names.pop(seq_id, None)
             self.traffic.abandoned(seq_id)
 
     async def _await_response(
@@ -316,10 +329,15 @@ class LizaIPProtocol:
         while True:
             now = loop.time()
             if now < deadline:
-                try:
-                    return await asyncio.wait_for(asyncio.shield(future), deadline - now)
-                except asyncio.TimeoutError:
-                    continue
+                # `asyncio.wait`, not `wait_for(shield(future))`: a timed-out
+                # shield leaves a callback on *future* that reports its later
+                # exception as "exception in shielded future" -- even though
+                # the branch below retrieves it -- so every request still
+                # outstanding when the socket dropped logged an ERROR.
+                await asyncio.wait({future}, timeout=deadline - now)
+                if future.done():
+                    return future.result()
+                continue
             if self._last_rx >= sent_at or now >= give_up:
                 raise asyncio.TimeoutError
             woke = asyncio.ensure_future(self._rx_signal.wait())
@@ -352,6 +370,12 @@ class LizaIPProtocol:
 
     # ── Receiving ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _protocol_error(problem: str, raw: Any) -> None:
+        """Log, at once and every time, that the remote broke PROTOCOL.md."""
+        text = raw if isinstance(raw, str) else json.dumps(raw, separators=(",", ":"))
+        _LOGGER.error("PROTOCOL_ERROR: %s: %s", problem, text[:300])
+
     def handle_raw(self, raw: str) -> None:
         """Process an incoming raw message. Dispatches to appropriate handler."""
         _LOGGER.debug("RX: %s", raw)
@@ -364,10 +388,17 @@ class LizaIPProtocol:
         try:
             msg = parse_message(raw)
         except (json.JSONDecodeError, ValueError) as err:
-            self.traffic.rx(None, len(raw), f"{err}: {raw[:200]}")
-            _LOGGER.warning("Invalid message: %s — %s", raw[:200], err)
+            self.traffic.rx(None, len(raw), f"{err}: {raw[:200]}", raw)
+            if self._fail_unnumbered_rejection(raw):
+                self._protocol_error(
+                    "error response without seq_id (§3: a response carries its "
+                    "request's seq_id); taken as the answer to the oldest pending request",
+                    raw,
+                )
+                return
+            self._protocol_error(f"invalid message ({err})", raw)
             return
-        self.traffic.rx(msg, len(raw))
+        self.traffic.rx(msg, len(raw), raw=raw)
 
         msg_type = msg["type"]
 
@@ -378,11 +409,86 @@ class LizaIPProtocol:
         elif msg_type == TYPE_REQUEST:
             self._handle_request(msg)
 
+    def _fail_unnumbered_rejection(self, raw: str) -> bool:
+        """Fail the request an error reply without a `seq_id` belongs to.
+
+        A remote that cannot read a request -- in the field, mostly for lack of
+        memory to parse it -- answers `{"type":"response","success":false,
+        "error":{...}}` with no `seq_id`, since it never got that far. The
+        request then sat out its whole 20-30 s timeout. The remote handles
+        requests one at a time, in order, so the reply is for the oldest one
+        still waiting.
+        """
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            return False
+        if not (
+            isinstance(msg, dict) and msg.get("type") == TYPE_RESPONSE
+            and "seq_id" not in msg and msg.get("success") is False
+        ):
+            return False
+        # In send order (the dict's), not by number: seq_id wraps at 2**32.
+        waiting = [(seq, fut) for seq, fut in self._pending.items() if not fut.done()]
+        if not waiting:
+            return False
+        seq_id, future = waiting[0]
+        error = msg.get("error") if isinstance(msg.get("error"), dict) else {}
+        message = error.get("message", "Unknown error")
+        _LOGGER.debug(
+            "Error reply without seq_id taken as the answer to seq_id=%s: %s",
+            seq_id, raw[:200],
+        )
+        future.set_exception(ProtocolError(
+            error.get("code", ERR_INTERNAL), f"{message} (reply carried no seq_id)",
+        ))
+        return True
+
+    def _check_response(self, msg: dict, request_name: str | None) -> None:
+        """Log every way *msg* breaks PROTOCOL.md §3 / §9; it is still used."""
+        name = msg.get("name")
+        if name is None:
+            self._protocol_error(
+                f"response to '{request_name}' has no name (§3)", msg,
+            )
+        elif request_name is not None and name != request_name:
+            self._protocol_error(
+                f"response to '{request_name}' is named '{name}' (§3: same name "
+                "as the request)", msg,
+            )
+        label = request_name or name
+        success = msg.get("success")
+        if not isinstance(success, bool):
+            self._protocol_error(
+                f"response to '{label}' has success={success!r}, not true/false (§3)",
+                msg,
+            )
+        if success is not False:
+            return
+        error = msg.get("error")
+        if (
+            not isinstance(error, dict)
+            or not isinstance(error.get("code"), int)
+            or isinstance(error.get("code"), bool)
+            or not isinstance(error.get("message"), str)
+        ):
+            self._protocol_error(
+                f"error response to '{label}' lacks error.code (int) and "
+                "error.message (string) (§3)", msg,
+            )
+        elif error["code"] not in SPEC_ERROR_CODES:
+            self._protocol_error(
+                f"error response to '{label}' uses code {error['code']}, not one "
+                f"of {sorted(SPEC_ERROR_CODES)} (§9)", msg,
+            )
+
     def _handle_response(self, msg: dict) -> None:
         """Match response to pending request."""
         seq_id = msg.get("seq_id")
         future = self._pending.get(seq_id)
+        self._check_response(msg, self._pending_names.get(seq_id))
         if future is None:
+            # Not a violation: a reply that arrives after its request timed out.
             _LOGGER.warning("Response with unknown seq_id=%s", seq_id)
             return
         if future.done():
@@ -390,7 +496,9 @@ class LizaIPProtocol:
         if msg.get("success"):
             future.set_result(msg.get("data", {}))
         else:
-            error = msg.get("error", {})
+            error = msg.get("error")
+            if not isinstance(error, dict):
+                error = {}
             future.set_exception(
                 ProtocolError(
                     error.get("code", ERR_INTERNAL),
@@ -401,19 +509,33 @@ class LizaIPProtocol:
     def _handle_event(self, msg: dict) -> None:
         """Dispatch event to registered handler."""
         name = msg.get("name", "")
+        if "seq_id" in msg:
+            self._protocol_error(
+                f"event '{name}' carries a seq_id (§3)", msg,
+            )
+        if name not in SPEC_EVENTS:
+            self._protocol_error(
+                f"event '{name}' is not one of {sorted(SPEC_EVENTS)} (§8)", msg,
+            )
         if handler := self._event_handlers.get(name):
             handler(msg.get("data", {}))
-        else:
+        elif name in SPEC_EVENTS:
             _LOGGER.warning("Unhandled device event: %s (data=%s)", name, msg.get("data", {}))
 
     def _handle_request(self, msg: dict) -> None:
         """Dispatch device-initiated request to registered handler."""
         name = msg.get("name", "")
         seq_id = msg.get("seq_id", 0)
+        if name not in SPEC_DEVICE_REQUESTS:
+            self._protocol_error(
+                f"request '{name}' is not one a remote may send "
+                f"({sorted(SPEC_DEVICE_REQUESTS)})", msg,
+            )
         if handler := self._request_handlers.get(name):
             handler(seq_id, msg.get("data", {}))
         else:
-            _LOGGER.warning("Unhandled device request: %s (seq_id=%s, data=%s)", name, seq_id, msg.get("data", {}))
+            if name in SPEC_DEVICE_REQUESTS:
+                _LOGGER.warning("Unhandled device request: %s (seq_id=%s)", name, seq_id)
             # Send error for unrecognized commands
             fire_and_forget(
                 self.send_error(name, seq_id, ERR_BAD_REQUEST, f"Unknown command: {name}")

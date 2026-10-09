@@ -12,7 +12,11 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, Platform
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    issue_registry as ir,
+)
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.network import get_url
 from homeassistant.helpers.typing import ConfigType
@@ -35,6 +39,7 @@ from .const import (
 )
 from .config.panel import async_setup_panel, async_setup_config_entry, async_unload_config_entry
 from .config.store import LizaRemoteStore
+from .diagnostics_bundle import async_setup_diagnostics_bundle
 from .imgserv import async_setup_imgserv
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,10 +70,29 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Config panel (sidebar + WS commands)
     await async_setup_panel(hass)
 
+    # Where a built support bundle is collected from by the browser.
+    async_setup_diagnostics_bundle(hass)
+
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
 
+    _clear_repair_issues(hass)
+
     return True
+
+
+@callback
+def _clear_repair_issues(hass: HomeAssistant) -> None:
+    """Take down every Repairs notice an earlier version raised.
+
+    The integration no longer raises any -- what they reported is logged as an
+    error instead -- and the registry keeps an issue across restarts, so
+    without this one would stay on screen for good.
+    """
+    registry = ir.async_get(hass)
+    for domain, issue_id in list(registry.issues):
+        if domain == DOMAIN:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bool:

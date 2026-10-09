@@ -233,24 +233,6 @@
       }
     }
   },
-  "issues": {
-    "pages_rejected": {
-      "title": "lizaIP pages could not be stored on the device",
-      "description": "Device \"{device}\" refused to store page(s) {pages}. It is currently holding {stored} page(s), and reports no page limit in its capabilities, so this limit can only be discovered by reaching it. Remove the listed page(s) in the lizaIP panel, or update the device firmware. Every other page is synced and working."
-    },
-    "protocol_version_mismatch": {
-      "title": "lizaIP protocol version mismatch",
-      "description": "Device \"{device}\" reports protocol version {device_version}, but this integration expects version {ha_version}. Update the device firmware or the integration to resolve."
-    },
-    "repeated_connection_failure": {
-      "title": "lizaIP device repeatedly disconnecting",
-      "description": "Device \"{device}\" has disconnected {count} times without a successful handshake. Check the device power and network connection."
-    },
-    "page_sync_failed": {
-      "title": "Les pages lizaIP n'ont pas pu être envoyées à l'appareil",
-      "description": "Home Assistant n'a pas réussi à écrire la configuration des pages sur \"{device}\" {count} fois de suite. Dernière erreur : {error}. Les pages de la télécommande peuvent ne plus correspondre à celles affichées dans le panneau. Essayez « Effacer et reconstruire les pages » dans les paramètres du panneau lizaIP ; si cela ne suffit pas, redémarrez la télécommande en coupant son alimentation."
-    }
-  },
   "exceptions": {
     "not_connected": {
       "message": "The lizaIP device is not connected."

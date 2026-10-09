@@ -31,6 +31,14 @@ TRAFFIC_LOGGER = logging.getLogger(f"{__package__}.traffic")
 
 #: Frames kept for the panel. At a frame a second that is a quarter of an hour.
 MAX_FRAMES = 1000
+#: Frames whose *body* is kept as well. Far fewer than `MAX_FRAMES`: a frame
+#: header is a handful of ints, a body is the page being written. Two hundred
+#: covers the exchange around a failure, which is the whole reason to keep any.
+MAX_BODIES = 200
+#: How much of one body is kept. A `set_page` carrying twelve icons runs to
+#: tens of kilobytes and the part that answers a question -- which command,
+#: which button, which entity, what the remote said back -- is at the front.
+MAX_BODY_CHARS = 2048
 #: Round trips kept for the percentiles.
 MAX_RTTS = 500
 #: Requests that timed out, kept so a late answer can be matched to them.
@@ -57,6 +65,7 @@ class TrafficLog:
 
     def reset(self) -> None:
         self.frames: deque[dict[str, Any]] = deque(maxlen=MAX_FRAMES)
+        self.bodies: deque[dict[str, Any]] = deque(maxlen=MAX_BODIES)
         self.rtts: deque[float] = deque(maxlen=MAX_RTTS)
         self._in_flight: dict[int, tuple[str, float]] = {}
         self._expired: dict[int, tuple[str, float]] = {}
@@ -78,19 +87,62 @@ class TrafficLog:
         if self.log_enabled:
             TRAFFIC_LOGGER.info("%s", self.format_frame(frame))
 
-    def tx(self, msg_type: str, name: str, seq_id: int | None, size: int) -> None:
+    def _keep_body(self, frame: dict[str, Any], raw: str | None) -> None:
+        """Keep the message text beside the frame that describes it.
+
+        A second, shorter ring rather than a field on the frame: the counters
+        and round trips are worth a quarter of an hour of history, and bodies
+        at that depth would be megabytes held for the life of the connection.
+
+        This is what makes a bundle answer "the button did nothing". The frame
+        header says a `set_page` was sent and answered; only the body says what
+        was on the page and what the remote objected to.
+        """
+        if not raw:
+            return
+        body = raw[:MAX_BODY_CHARS]
+        self.bodies.append({
+            "t": frame["t"],
+            "dir": frame.get("dir"),
+            "type": frame.get("type"),
+            "name": frame.get("name"),
+            "seq": frame.get("seq"),
+            "size": frame.get("size"),
+            "body": body,
+            **({"truncated": True} if len(raw) > MAX_BODY_CHARS else {}),
+        })
+
+    def tx(
+        self,
+        msg_type: str,
+        name: str,
+        seq_id: int | None,
+        size: int,
+        raw: str | None = None,
+    ) -> None:
         now = time.monotonic()
         self.counts["tx"] += 1
         self.counts["tx_bytes"] += size
         if msg_type == "request" and seq_id is not None:
             self.counts["requests"] += 1
             self._in_flight[seq_id] = (name, now)
-        self._add({"dir": "tx", "type": msg_type, "name": name, "seq": seq_id, "size": size})
+        frame = {"dir": "tx", "type": msg_type, "name": name, "seq": seq_id, "size": size}
+        self._add(frame)
+        self._keep_body(frame, raw)
 
-    def rx(self, msg: dict[str, Any] | None, size: int, error: str | None = None) -> None:
+    def rx(
+        self,
+        msg: dict[str, Any] | None,
+        size: int,
+        error: str | None = None,
+        raw: str | None = None,
+    ) -> None:
         """Record a frame from the remote; *msg* is None if it did not parse.
 
         *error* says why it did not, shown with the frame in the debug window.
+        *raw* is the message as it arrived, kept so the bundle can show what
+        the remote actually said -- including, for a frame that did not parse,
+        the text that defeated the parser.
         """
         now = time.monotonic()
         self.counts["rx"] += 1
@@ -109,6 +161,7 @@ class TrafficLog:
             if error:
                 frame["error"] = error
             self._add(frame)
+            self._keep_body(frame, raw)
             return
         msg_type = msg.get("type", "")
         seq_id = msg.get("seq_id")
@@ -116,7 +169,8 @@ class TrafficLog:
         if msg_type == "response":
             if not msg.get("success", True):
                 self.counts["errors"] += 1
-                frame["error"] = (msg.get("error") or {}).get("code")
+                error = msg.get("error")
+                frame["error"] = error.get("code") if isinstance(error, dict) else None
             if seq_id in self._in_flight:
                 name, sent = self._in_flight.pop(seq_id)
                 rtt = now - sent
@@ -131,6 +185,7 @@ class TrafficLog:
             else:
                 self.counts["unmatched"] += 1
         self._add(frame)
+        self._keep_body(frame, raw)
 
     def timeout(self, seq_id: int) -> None:
         """A request was given up on; an answer may still arrive later."""
@@ -194,6 +249,17 @@ class TrafficLog:
             },
         }
 
-    def snapshot(self, limit: int = 200) -> dict[str, Any]:
-        frames = list(self.frames)[-limit:] if limit > 0 else []
-        return {"stats": self.stats(), "frames": frames, "log_enabled": self.log_enabled}
+    def snapshot(self, limit: int = 200, *, bodies: bool = False) -> dict[str, Any]:
+        """The counters and the recent frames; the message text only if asked.
+
+        `bodies` is off by default because the debug tab polls this over the
+        WebSocket several times a minute and does not render them -- sending a
+        few hundred kilobytes of page payloads to redraw a table of counters
+        would be the one expensive thing on that screen. The diagnostics
+        bundle, which is built once and asks precisely for them, passes True.
+        """
+        snap = {"stats": self.stats(), "frames": list(self.frames)[-limit:] if limit > 0 else [],
+                "log_enabled": self.log_enabled}
+        if bodies:
+            snap["bodies"] = list(self.bodies)
+        return snap

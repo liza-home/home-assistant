@@ -7,15 +7,20 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import io
+import json
 import logging
 import math
 import os
 import re
+import zipfile
+from datetime import timedelta
 from typing import Any, Final
 
 import voluptuous as vol
 import yaml
 from homeassistant.components import websocket_api
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -52,6 +57,16 @@ from ..const import (
     resolve_image_tokens,
     substitute_entity_tokens,
     variables_scope,
+)
+from ..diagnostics_bundle import (
+    BUNDLE_URL_BASE,
+    BundleAbandoned,
+    SCOPE_CONFIG,
+    SCOPE_STANDARD,
+    SCOPES,
+    async_build_zip,
+    async_store_bundle,
+    steps_for_scope,
 )
 from ..imgserv.const import build_palette
 from ..imgserv.fonts import list_fonts, user_fonts_dir
@@ -96,7 +111,7 @@ from .const import (
 from .device_entities import (
     _resolve_device_domain_entities,  # noqa: F401  (re-exported)
 )
-from .device_sync import step_targets_entry, sync_config_to_device
+from .device_sync import is_ready, step_targets_entry, sync_config_to_device
 from .internal_commands import get_internal_command, panel_descriptors, pinned_page_ids
 from .layouts import (
     DEFAULT_MAX_ITEMS,
@@ -151,6 +166,157 @@ async def ws_get_features(hass: HomeAssistant, connection, msg: dict) -> None:
     tab that would only produce "unknown command".
     """
     connection.send_result(msg["id"], {"debug_tools": debug_available()})
+
+
+#: How long the signed download URL stays valid. It is followed by the click
+#: that produced it, so this only has to survive the hop from the answer to the
+#: browser; the bundle behind it expires on its own and is gone once fetched.
+_DOWNLOAD_SIGNATURE_SECONDS: Final = 120
+
+#: Which builds are running, as ``(entry id, kind)``. A configuration bundle
+#: reads files and the store; every other scope spends its time on the remote's
+#: endpoints. So the two may run side by side, but never two of a kind: a second
+#: pass over the same endpoints would halve the speed of both and tell us
+#: nothing the first one does not already carry.
+_BUILDS_IN_FLIGHT: Final[set[tuple[str, str]]] = set()
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/build_diagnostics_bundle",
+    vol.Required("entry_id"): str,
+    vol.Optional("scope", default=SCOPE_STANDARD): vol.In(SCOPES),
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_build_diagnostics_bundle(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Assemble the support bundle and say where the browser can fetch it.
+
+    A subscription rather than a single answer: the build takes the better part
+    of ten seconds, almost all of it waiting on the remote's eight HTTP
+    endpoints, and the panel has nothing to show in the meantime but a spinner
+    that could equally mean the button is broken. Each section announces itself
+    as it starts, and the final message carries the download.
+
+    The ZIP is not sent over this socket. It carries the device's log and the
+    whole stored configuration, which is megabytes of base64 through a channel
+    that also drives the panel's live updates — so it is parked under a one-shot
+    token and downloaded over HTTP like any other file.
+
+    `skipped` travels with the answer rather than only inside the bundle: a user
+    whose remote was offline should be told that at the moment they press the
+    button, not when support opens the ZIP.
+
+    `scope` chooses between the three builds. The step list is answered per
+    scope rather than as one fixed list, because the panel draws its progress
+    rows from it and a config bundle that showed eight rows and ran four would
+    look stuck at the fifth.
+    """
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+
+    scope = msg.get("scope", SCOPE_STANDARD)
+    # Refused rather than queued. The panel already keeps one build of each kind
+    # on screen, so a second request is a second tab or a stale one -- and the
+    # honest answer to it is that the first is still running.
+    lane = (entry.entry_id, scope)
+    if lane in _BUILDS_IN_FLIGHT:
+        connection.send_error(msg["id"], "busy", "A bundle of this kind is already being built")
+        return
+
+    # Accepted before the work starts, so the panel can show its progress list
+    # at once. Unsubscribing is what a reloaded or closed panel does, and the
+    # build stops at the next section: nobody will ever see a bundle whose
+    # browser has gone, and the remote has better uses for the rest of it.
+    abandoned = False
+
+    def _abandon() -> None:
+        nonlocal abandoned
+        abandoned = True
+
+    connection.subscriptions[msg["id"]] = _abandon
+    steps = [key for key, _ in steps_for_scope(scope)]
+    connection.send_result(msg["id"], {"scope": scope, "steps": steps})
+    # And again as an event: a subscription's result is consumed by the
+    # frontend as its acknowledgement and never reaches the caller, and the
+    # panel needs the step table to draw a row per step.
+    connection.send_message({
+        "id": msg["id"],
+        "type": "event",
+        "event": {"event": "steps", "scope": scope, "steps": steps},
+    })
+
+    def progress(step: str, index: int, total: int) -> None:
+        connection.send_message({
+            "id": msg["id"],
+            "type": "event",
+            "event": {"event": "progress", "step": step, "index": index, "total": total},
+        })
+
+    _BUILDS_IN_FLIGHT.add(lane)
+    try:
+        filename, data = await async_build_zip(
+            hass, entry, scope=scope, progress=progress, should_stop=lambda: abandoned,
+        )
+    except BundleAbandoned:
+        _LOGGER.debug("Stopped building a diagnostics bundle for %s: nobody is waiting", entry.title)
+        return
+    except Exception as err:  # noqa: BLE001 — the panel is waiting on an event
+        _LOGGER.exception("Building a diagnostics bundle for %s failed", entry.title)
+        connection.send_message({
+            "id": msg["id"],
+            "type": "event",
+            "event": {"event": "error", "message": f"{err.__class__.__name__}: {err}"},
+        })
+        return
+    finally:
+        _BUILDS_IN_FLIGHT.discard(lane)
+
+    token = async_store_bundle(hass, filename, data)
+    skipped = _bundle_skipped(data, filename)
+
+    # Signed here rather than by the panel's own `auth/sign_path` call: a
+    # browser following a link sends no Authorization header, so an unsigned
+    # URL would be refused. The signature outlives only the click.
+    url = async_sign_path(
+        hass, f"{BUNDLE_URL_BASE}/{token}", timedelta(seconds=_DOWNLOAD_SIGNATURE_SECONDS),
+    )
+
+    _LOGGER.info(
+        "Built a %s diagnostics bundle for %s: %s (%d bytes, %d section(s) skipped)",
+        scope, entry.title, filename, len(data), len(skipped),
+    )
+    connection.send_message({
+        "id": msg["id"],
+        "type": "event",
+        "event": {
+            "event": "done",
+            "scope": scope,
+            "url": url,
+            "filename": filename,
+            "size": len(data),
+            "skipped": skipped,
+        },
+    })
+
+
+def _bundle_skipped(data: bytes, filename: str) -> list[dict[str, str]]:
+    """Read the manifest back out of the ZIP that was just built.
+
+    Read rather than returned alongside: the manifest inside the bundle is what
+    support will go by, so the panel showing anything else would be a second
+    answer that can disagree with the first. Unreadable is reported as nothing
+    skipped — the bundle itself is already built, and a warning that the warning
+    list could not be read helps nobody.
+    """
+    root = filename.removesuffix(".zip")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            manifest = json.loads(archive.read(f"{root}/manifest.json"))
+        return list(manifest.get("skipped") or [])
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+        return []
 
 
 #: A page holds at most a few hundred texts; the cap only stops a runaway caller.
@@ -580,6 +746,7 @@ def register_commands(hass: HomeAssistant) -> None:
         ws_refresh_dynamic,
         ws_set_dynamic_binding,
         ws_get_features,
+        ws_build_diagnostics_bundle,
         ws_resolve_variables,
         ws_get_icon_options,
         ws_set_icon_options,
@@ -1230,7 +1397,7 @@ async def _reorder_pages_fast(
     order_only = False
     deliverable = (
         _deliverable_main_pages(conn, pages)
-        if conn is not None and getattr(conn, "connected", False)
+        if is_ready(conn)
         else None
     )
     if deliverable is not None and deliverable == conn._known_main_pages:

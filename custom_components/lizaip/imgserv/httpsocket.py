@@ -32,6 +32,7 @@ import logging
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -424,6 +425,23 @@ async def _handle_file(hass, value, options: _Options):
     return img
 
 
+_upstream_failures_logged: set[str] = set()
+
+
+def _warn_upstream_once(value: str, status: int) -> None:
+    """Say why a remote got a 502 for a cover -- once per URL.
+
+    The remote shows only "HTTP Get Error: -502" and retries the same cover on
+    every page view, so without this the cause never reaches the HA log.
+    """
+    if value in _upstream_failures_logged:
+        return
+    if len(_upstream_failures_logged) >= 100:
+        _upstream_failures_logged.clear()
+    _upstream_failures_logged.add(value)
+    _LOGGER.warning("media: %s answered HTTP %s for %s", urlsplit(value).netloc or "HA", status, value)
+
+
 async def _handle_media(hass, value, options: _Options):
     """Proxy and resize a media thumbnail HA can reach.
 
@@ -448,6 +466,7 @@ async def _handle_media(hass, value, options: _Options):
     try:
         async with session.get(url, timeout=10) as resp:
             if resp.status != 200:
+                _warn_upstream_once(value, resp.status)
                 raise _ImgservError(502, f"Upstream returned {resp.status}")
             img_bytes = await resp.read()
     except _ImgservError:

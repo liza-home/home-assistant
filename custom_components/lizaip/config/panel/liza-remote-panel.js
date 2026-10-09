@@ -123,6 +123,13 @@ class LizaRemotePanel extends HTMLElement {
     // from a stable release, so the panel has to ask rather than assume:
     // its own files are served from disk either way.
     this._debugTools = false;
+    // The running diagnostics build and its window. One at a time: the build
+    // spends its time on the remote, and a second would only queue behind it.
+    this._diagJob = null;
+    this._diagDialog = null;
+    // A configuration download in flight. No window -- it copies local files
+    // and is over at once -- so this is only here to swallow a double click.
+    this._configBusy = false;
     this._debugProbe = null;
     this._debugReport = null;
     // Loaded by the debug tab itself when it is opened, rather than on demand:
@@ -282,6 +289,8 @@ class LizaRemotePanel extends HTMLElement {
   async _onDeviceHello(ev) {
     if (!this._currentEntry || ev?.data?.entry_id !== this._currentEntry) return;
     if (this._loading) return;
+    // A reconnect is often a reboot, which closes the log port.
+    this._recheckDebugPort?.();
     // Re-rendered only on a real change: every reconnect lands here, and the
     // usual case is a device whose model the backend already knew. Safe to run
     // mid-edit, unlike `_reloadFromBackend` — nothing the user has typed lives
@@ -387,7 +396,9 @@ class LizaRemotePanel extends HTMLElement {
   _watchForMissedEdges() {
     if (this._missedEdgeUnwatch) return;
     const catchUp = () => {
-      if (document.visibilityState !== "hidden") this._refreshAvailability();
+      if (document.visibilityState === "hidden") return;
+      this._refreshAvailability();
+      this._recheckDebugPort?.();
     };
     document.addEventListener("visibilitychange", catchUp);
 
@@ -641,9 +652,14 @@ class LizaRemotePanel extends HTMLElement {
       if (this._currentEntry && (requestedTab === "actions" || requestedTab === "settings"
           || (requestedTab === "debug" && this._debugTools))) {
         this._activeTab = requestedTab;
-        // Opening straight onto the debug tab from a link is an entry too, and
-        // `_switchTab` never runs for it.
-        if (requestedTab === "debug") this._enterDebugTab?.();
+      }
+      // Opening onto the debug tab is an entry too, and `_switchTab` never
+      // runs for it: from a link, or by coming back to the panel with the tab
+      // still selected -- HA re-attaches the element and this runs again, and
+      // the log-stream switch would otherwise show what it read last time.
+      if (this._currentEntry && this._activeTab === "debug") {
+        if (this._debugTools) this._enterDebugTab?.();
+        else this._activeTab = "buttons";
       }
       console.log("[LIZA] _init done, currentEntry:", this._currentEntry, "pages:", this._pages?.length);
       this._render();
@@ -852,6 +868,9 @@ class LizaRemotePanel extends HTMLElement {
     this._loading = true;
     this._loadAll().then(() => {
       this._loading = false;
+      // The debug readings were cleared above; on the debug tab, read them
+      // for the remote now shown, or its log-stream switch stays at "off".
+      if (this._activeTab === "debug" && this._currentEntry === entryId) this._enterDebugTab?.();
       this._render();
       // `_loadAll` fetches the selected remote's config, not the device list,
       // so an edge that arrived during the switch is still unapplied here.
@@ -3069,8 +3088,16 @@ class LizaRemotePanel extends HTMLElement {
         // trap and the inertness of the panel with it: it looks unchanged
         // while Tab walks out into a page the user cannot see.
         if (overlay.showModal) {
-          if (overlay.open) overlay.close();
-          overlay.showModal();
+          // `close()` fires `close`, which a dialog listening for its own
+          // dismissal cannot tell from Escape. The flag says this one is ours,
+          // so it does not tear itself down and leave its buttons dead.
+          this._reattachingOverlays = true;
+          try {
+            if (overlay.open) overlay.close();
+            overlay.showModal();
+          } finally {
+            this._reattachingOverlays = false;
+          }
         }
       }
       this._a11yRestoreFocusSoon(focus);
@@ -3128,13 +3155,17 @@ class LizaRemotePanel extends HTMLElement {
                 ${meta ? `<div class="device-meta">${this._esc(meta)}</div>` : ''}
               </div>
               <div class="status-badge ${d.available ? 'online' : 'offline'}"><span class="dot" aria-hidden="true"></span>${this._t(d.available ? 'device_online' : 'device_offline')}</div>
+              ${this._htmlDiagnosticsMenuButton(d.entry_id, "device-item-menu")}
             </div>`;
             }).join("")}</div>`}
-      </div></ha-card></div>`;
+      </div></ha-card></div>
+      ${this._htmlDiagnosticsPill?.() || ""}
+      <div class="toast" role="status" aria-live="polite"></div>`;
     const mb = this.shadowRoot.querySelector("ha-menu-button");
     if (mb) { mb.hass = this._hass; mb.narrow = this._narrow; }
     this.shadowRoot.querySelectorAll(".device-item").forEach(el =>
       el.addEventListener("click", () => this._selectDevice(el.dataset.entry)));
+    this._wireDiagnosticsMenus?.();
   }
 
   /**
@@ -3215,6 +3246,9 @@ class LizaRemotePanel extends HTMLElement {
                   aria-selected="${this._activeTab === 'settings' ? 'true' : 'false'}"
                   tabindex="${this._activeTab === 'settings' ? '0' : '-1'}"><ha-icon icon="mdi:cog" aria-hidden="true"></ha-icon></button>
         </div>
+        <!-- Outside the tablist: it is not a tab, and a reader walking the
+             tabs with the arrow keys must not land on it. -->
+        ${this._htmlDiagnosticsMenuButton(this._currentEntry, "toolbar-menu")}
       </div>
       <!-- tabindex="-1", not "0": a tabpanel earns a tab stop only when it has
            no focusable content, and this one wraps the entire view. -->
@@ -3224,6 +3258,7 @@ class LizaRemotePanel extends HTMLElement {
           : this._activeTab === "settings" ? this._htmlSettingsView()
           : this._htmlActionsView()}
       </div>
+      ${this._htmlDiagnosticsPill?.() || ""}
       <div class="toast" role="status" aria-live="polite"></div>`;
 
     const mb = this.shadowRoot.querySelector("ha-menu-button");
@@ -3239,6 +3274,9 @@ class LizaRemotePanel extends HTMLElement {
     else if (this._activeTab === "debug") this._wireDebugView?.();
     else if (this._activeTab === "settings") this._wireSettingsView();
     else this._wireActionsView();
+    // After the tabs' own wiring: the toolbar menu and the pill sit outside
+    // every view, and a view that threw would otherwise take them with it.
+    this._wireDiagnosticsMenus?.();
   }
 
 }

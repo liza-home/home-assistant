@@ -204,10 +204,12 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
         Looked up per send rather than captured: the queue coalesces across the
         await, so a drain that began while the device was connected can reach
-        this line after it dropped.
+        this line after it dropped. Nothing goes out mid-handshake either: the
+        remote answers -4 until its hello is done, and the sync that follows
+        the hello sends the current icons anyway.
         """
         conn = entry.runtime_data if hasattr(entry, "runtime_data") else None
-        if conn is None or not getattr(conn, "connected", False):
+        if not _device_sync_mod.is_ready(conn):
             return
         fields: dict = {"buttons": buttons} if buttons else {}
         if img_title is not None:

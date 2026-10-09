@@ -127,10 +127,11 @@ rules:
     status: done
     comment: async_step_reconfigure allows renaming the device.
   repair-issues:
-    status: done
+    status: exempt
     comment: >
-      Protocol version mismatch and repeated connection failures (≥3 consecutive)
-      are surfaced as HA repair issues via homeassistant.helpers.issue_registry.
+      Nothing the integration reports can be fixed by the user from Repairs
+      (firmware refusing pages, a remote dropping its connection, a protocol
+      version mismatch), so these are logged as errors instead.
   stale-devices:
     status: exempt
     comment: One device per config entry — no sub-devices that can go stale.

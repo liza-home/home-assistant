@@ -44,6 +44,7 @@ export const STRINGS = {
   // button's caption, and "Control", which for us names the quantity a slider
   // writes rather than the widget HA means by it.
   cancel: { ha: "ui.common.cancel", en: "Cancel" },
+  close: { ha: "ui.common.close", en: "Close" },
   delete: { ha: "ui.common.delete", en: "Delete" },
   name: { ha: "ui.common.name", en: "Name" },
   icon: { ha: "ui.dialogs.label-detail.icon", en: "Icon" },
@@ -180,6 +181,235 @@ export const STRINGS = {
     fr: "Impossible de reconstruire les pages : {error}",
     it: "Impossibile ricostruire le pagine: {error}",
     es: "No se han podido reconstruir las páginas: {error}",
+  },
+  // The privacy line, in the progress window. It used to sit on a card in the
+  // gear tab; the downloads live in the overflow menu now, and a warning about
+  // what a file contains is only useful where the file is being made.
+  diagnostics_privacy: {
+    en: "The ZIP names the entities your buttons act on, and carries the messages exchanged with the remote. Send it to support rather than posting it publicly.",
+    de: "Die ZIP-Datei nennt die Entitäten, die Ihre Tasten schalten, und enthält die mit der Fernbedienung ausgetauschten Nachrichten. Schicken Sie sie an den Support, statt sie öffentlich zu posten.",
+    fr: "Le ZIP nomme les entités commandées par vos boutons et contient les messages échangés avec la télécommande. Envoyez-le au support plutôt que de le publier.",
+    it: "Lo ZIP nomina le entità comandate dai tuoi pulsanti e contiene i messaggi scambiati con il telecomando. Invialo all'assistenza invece di pubblicarlo.",
+    es: "El ZIP nombra las entidades que accionan sus botones y contiene los mensajes intercambiados con el mando. Envíelo al soporte en lugar de publicarlo.",
+  },
+  // Said beside a menu item whose lane is already building, and in the pill
+  // that lane leaves behind.
+  diagnostics_menu_running: {
+    en: "collecting, {percent}%", de: "wird gesammelt, {percent}%",
+    fr: "collecte, {percent}%", it: "raccolta, {percent}%",
+    es: "recopilando, {percent}%",
+  },
+  // The configuration download has no window to report into, so the menu item
+  // it was started from is where it says it is working.
+  diagnostics_menu_busy: {
+    en: "preparing…", de: "wird vorbereitet…", fr: "préparation…",
+    it: "in preparazione…", es: "preparando…",
+  },
+  diagnostics_config_done: {
+    en: "Configuration downloaded: {filename}",
+    de: "Konfiguration heruntergeladen: {filename}",
+    fr: "Configuration téléchargée : {filename}",
+    it: "Configurazione scaricata: {filename}",
+    es: "Configuración descargada: {filename}",
+  },
+  diagnostics_done: {
+    en: "Diagnostics downloaded: {filename}",
+    de: "Diagnose heruntergeladen: {filename}",
+    fr: "Diagnostic téléchargé : {filename}",
+    it: "Diagnostica scaricata: {filename}",
+    es: "Diagnóstico descargado: {filename}",
+  },
+  diagnostics_done_partial: {
+    en: "Diagnostics downloaded: {filename} ({count} part(s) unavailable)",
+    de: "Diagnose heruntergeladen: {filename} ({count} Teil(e) nicht verfügbar)",
+    fr: "Diagnostic téléchargé : {filename} ({count} partie(s) indisponible(s))",
+    it: "Diagnostica scaricata: {filename} ({count} parte/i non disponibile/i)",
+    es: "Diagnóstico descargado: {filename} ({count} parte(s) no disponible(s))",
+  },
+  diagnostics_failed: {
+    en: "Could not collect the diagnostics: {error}",
+    de: "Diagnose konnte nicht gesammelt werden: {error}",
+    fr: "Impossible de collecter le diagnostic : {error}",
+    it: "Impossibile raccogliere la diagnostica: {error}",
+    es: "No se ha podido recopilar el diagnóstico: {error}",
+  },
+  // One line per section of the bundle, under the heading it belongs to. The
+  // remote alone is most of the wait, so each of its requests is named rather
+  // than hidden behind one row that looks stuck.
+  diagnostics_group_configuration: {
+    en: "Configuration", de: "Konfiguration", fr: "Configuration",
+    it: "Configurazione", es: "Configuración",
+  },
+  diagnostics_group_remote: {
+    en: "The remote", de: "Die Fernbedienung", fr: "La télécommande",
+    it: "Il telecomando", es: "El mando",
+  },
+  diagnostics_group_homeassistant: {
+    en: "Home Assistant", de: "Home Assistant", fr: "Home Assistant",
+    it: "Home Assistant", es: "Home Assistant",
+  },
+  diagnostics_group_logs: {
+    en: "Logs", de: "Protokolle", fr: "Journaux", it: "Log", es: "Registros",
+  },
+  diagnostics_step_config: {
+    en: "Pages and buttons", de: "Seiten und Tasten", fr: "Pages et boutons",
+    it: "Pagine e pulsanti", es: "Páginas y botones",
+  },
+  diagnostics_step_settings: {
+    en: "Settings, fonts and icons", de: "Einstellungen, Schriften und Symbole",
+    fr: "Réglages, polices et icônes", it: "Impostazioni, caratteri e icone",
+    es: "Ajustes, fuentes e iconos",
+  },
+  diagnostics_step_config_files: {
+    en: "Files on disk", de: "Dateien auf der Festplatte",
+    fr: "Fichiers sur le disque", it: "File su disco",
+    es: "Archivos en disco",
+  },
+  diagnostics_step_reachability: {
+    en: "Checking it answers", de: "Erreichbarkeit wird geprüft",
+    fr: "Vérification de la réponse", it: "Verifica della risposta",
+    es: "Comprobando si responde",
+  },
+  diagnostics_step_remote_info: {
+    en: "Device info", de: "Geräteinfo", fr: "Infos appareil",
+    it: "Info dispositivo", es: "Información del dispositivo",
+  },
+  diagnostics_step_remote_config_ha: {
+    en: "Home Assistant settings", de: "Home-Assistant-Einstellungen",
+    fr: "Réglages Home Assistant", it: "Impostazioni Home Assistant",
+    es: "Ajustes de Home Assistant",
+  },
+  diagnostics_step_remote_wifi: {
+    en: "Wi-Fi", de: "WLAN", fr: "Wi-Fi", it: "Wi-Fi", es: "Wi-Fi",
+  },
+  diagnostics_step_remote_status: {
+    en: "Status", de: "Status", fr: "État", it: "Stato", es: "Estado",
+  },
+  diagnostics_step_remote_metrics: {
+    en: "Metrics", de: "Messwerte", fr: "Mesures", it: "Metriche", es: "Métricas",
+  },
+  diagnostics_step_remote_nvm: {
+    en: "Memory metrics", de: "Speicherwerte", fr: "Mesures mémoire",
+    it: "Metriche di memoria", es: "Métricas de memoria",
+  },
+  diagnostics_step_remote_logging: {
+    en: "Logging setup", de: "Log-Einstellungen",
+    fr: "Configuration des journaux", it: "Configurazione dei log",
+    es: "Configuración de registro",
+  },
+  diagnostics_step_remote_logs: {
+    en: "Device log", de: "Geräteprotokoll", fr: "Journal de l'appareil",
+    it: "Log del dispositivo", es: "Registro del dispositivo",
+  },
+  diagnostics_step_device: {
+    en: "Putting the report together", de: "Bericht wird zusammengestellt",
+    fr: "Assemblage du rapport", it: "Composizione del report",
+    es: "Componiendo el informe",
+  },
+  diagnostics_step_diagnostics: {
+    en: "Home Assistant's own report", de: "Bericht von Home Assistant",
+    fr: "Rapport de Home Assistant", it: "Report di Home Assistant",
+    es: "Informe de Home Assistant",
+  },
+  diagnostics_step_entities: {
+    en: "Entities", de: "Entitäten", fr: "Entités", it: "Entità", es: "Entidades",
+  },
+  diagnostics_step_environment: {
+    en: "Versions", de: "Versionen", fr: "Versions", it: "Versioni", es: "Versiones",
+  },
+  diagnostics_step_ha_log: {
+    en: "Home Assistant log", de: "Home-Assistant-Log",
+    fr: "Journal Home Assistant", it: "Log di Home Assistant",
+    es: "Registro de Home Assistant",
+  },
+  diagnostics_step_system_log: {
+    en: "Errors and warnings", de: "Fehler und Warnungen",
+    fr: "Erreurs et avertissements", it: "Errori e avvisi",
+    es: "Errores y advertencias",
+  },
+  diagnostics_step_traffic: {
+    en: "Recent messages", de: "Letzte Nachrichten", fr: "Messages récents",
+    it: "Messaggi recenti", es: "Mensajes recientes",
+  },
+  diagnostics_step_packing: {
+    en: "Packing the ZIP", de: "ZIP wird gepackt", fr: "Création du ZIP",
+    it: "Creazione dello ZIP", es: "Creando el ZIP",
+  },
+  diagnostics_step_debug: {
+    en: "Debug tooling", de: "Debug-Werkzeuge", fr: "Outils de débogage",
+    it: "Strumenti di debug", es: "Herramientas de depuración",
+  },
+  // The overflow menu. Two things can be downloaded, and the difference
+  // between them is what they contain -- so each item carries a line saying
+  // so rather than leaving the user to find out by opening the ZIP.
+  diagnostics_menu: {
+    en: "Download…", de: "Herunterladen…", fr: "Télécharger…",
+    it: "Scarica…", es: "Descargar…",
+  },
+  diagnostics_scope_standard: {
+    en: "Download diagnostics", de: "Diagnose herunterladen",
+    fr: "Télécharger le diagnostic", it: "Scarica la diagnostica",
+    es: "Descargar diagnóstico",
+  },
+  diagnostics_scope_standard_hint: {
+    en: "Everything support needs: the configuration, the remote's report and the related log lines.",
+    de: "Alles, was der Support braucht: die Konfiguration, den Bericht der Fernbedienung und die zugehörigen Logzeilen.",
+    fr: "Tout ce dont le support a besoin : la configuration, le rapport de la télécommande et les lignes de journal associées.",
+    it: "Tutto ciò che serve all'assistenza: la configurazione, il report del telecomando e le righe di log correlate.",
+    es: "Todo lo que necesita el soporte: la configuración, el informe del mando y las líneas de registro relacionadas.",
+  },
+  diagnostics_scope_config: {
+    en: "Download configuration", de: "Konfiguration herunterladen",
+    fr: "Télécharger la configuration", it: "Scarica la configurazione",
+    es: "Descargar configuración",
+  },
+  diagnostics_scope_config_hint: {
+    en: "A copy of your pages, buttons and settings, exactly as they are stored. Unpack it into the lizaip folder to put them back.",
+    de: "Eine Kopie Ihrer Seiten, Tasten und Einstellungen, genau so gespeichert. Zum Zurückspielen in den Ordner „lizaip“ entpacken.",
+    fr: "Une copie de vos pages, boutons et réglages, tels qu'ils sont stockés. Décompressez-la dans le dossier lizaip pour les restaurer.",
+    it: "Una copia delle tue pagine, dei pulsanti e delle impostazioni, esattamente come sono salvate. Scompattala nella cartella lizaip per ripristinarle.",
+    es: "Una copia de sus páginas, botones y ajustes, tal y como están guardados. Descomprímala en la carpeta lizaip para restaurarlos.",
+  },
+  // The progress dialog. It can be put away and brought back, so it says what
+  // is happening in the title as well as in the list.
+  diagnostics_dialog_running: {
+    en: "Collecting diagnostics", de: "Diagnose wird gesammelt",
+    fr: "Collecte du diagnostic", it: "Raccolta della diagnostica",
+    es: "Recopilando diagnóstico",
+  },
+  diagnostics_dialog_failed: {
+    en: "Collection failed", de: "Sammeln fehlgeschlagen",
+    fr: "Échec de la collecte", it: "Raccolta non riuscita",
+    es: "Error al recopilar",
+  },
+  diagnostics_dialog_hint: {
+    en: "You can close this window; collecting continues and the download starts on its own.",
+    de: "Sie können dieses Fenster schließen; das Sammeln läuft weiter und der Download startet von selbst.",
+    fr: "Vous pouvez fermer cette fenêtre ; la collecte continue et le téléchargement démarre tout seul.",
+    it: "Puoi chiudere questa finestra; la raccolta continua e il download parte da solo.",
+    es: "Puede cerrar esta ventana; la recopilación continúa y la descarga empieza sola.",
+  },
+  diagnostics_hide: {
+    en: "Run in background", de: "Im Hintergrund weiterlaufen",
+    fr: "Continuer en arrière-plan", it: "Continua in secondo piano",
+    es: "Seguir en segundo plano",
+  },
+  diagnostics_retry: {
+    en: "Try again", de: "Erneut versuchen", fr: "Réessayer",
+    it: "Riprova", es: "Reintentar",
+  },
+  diagnostics_reopen: {
+    en: "Show progress", de: "Fortschritt anzeigen", fr: "Afficher la progression",
+    it: "Mostra avanzamento", es: "Mostrar progreso",
+  },
+  diagnostics_step_waiting: {
+    en: "Waiting", de: "Wartet", fr: "En attente", it: "In attesa", es: "En espera",
+  },
+  diagnostics_step_running: {
+    en: "In progress", de: "Läuft", fr: "En cours", it: "In corso", es: "En curso",
+  },
+  diagnostics_step_done: {
+    en: "Done", de: "Fertig", fr: "Terminé", it: "Fatto", es: "Hecho",
   },
   settings_buttons: {
     en: "Buttons", de: "Tasten", fr: "Boutons", it: "Pulsanti", es: "Botones",

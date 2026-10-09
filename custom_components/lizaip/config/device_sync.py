@@ -23,7 +23,6 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
 
 from ..action_controller.toggle import runtime_assign
 from ..const import (
@@ -36,7 +35,7 @@ from ..const import (
     substitute_device_token,
     variables_scope,
 )
-from ..device.protocol import DEFAULT_REQUEST_TIMEOUT
+from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError
 from ..device.services import _selected_entry_ids
 from ..state_icon import (
     IconStyle,
@@ -77,6 +76,12 @@ PAGE_WRITE_ATTEMPTS = 2
 #: Pause before retrying a page operation.
 PAGE_RETRY_DELAY = 0.5
 
+#: Page operations in a row that may fail before the rest of that phase of the
+#: sync is skipped. A remote that refused three pages running is refusing the
+#: next one too; asking anyway turned one bad state into a quarter of an hour
+#: of timeouts per sync. The skipped pages are retried by the next sync.
+GIVE_UP_AFTER_FAILURES = 3
+
 #: Breather between consecutive page writes, so a 20-page sync reaches the
 #: device as a stream rather than one burst.
 PAGE_WRITE_PACING = 0.05
@@ -109,7 +114,9 @@ async def _send_page_op(
         try:
             await factory()
         except Exception as err:  # noqa: BLE001 — one page must not stop the rest
-            last = attempt == PAGE_WRITE_ATTEMPTS
+            # A retry is for a remote that stalled. One that answered with an
+            # error has decided, and says the same again.
+            last = attempt == PAGE_WRITE_ATTEMPTS or _is_refusal(err)
             _LOGGER.log(
                 logging.ERROR if last else logging.WARNING,
                 "%s failed for %s%s (attempt %d/%d): %s",
@@ -124,6 +131,46 @@ async def _send_page_op(
             _LOGGER.debug("%s ok for %s%s", op, where, progress)
             return True
     return False
+
+
+def _is_refusal(err: Exception) -> bool:
+    """True when the remote answered *err* itself, rather than going quiet."""
+    if not isinstance(err, ProtocolError):
+        return False
+    message = err.message or ""
+    return not (
+        message.startswith("Timeout waiting for response")
+        or message in _DISCONNECT_MESSAGES
+    )
+
+
+class _GiveUp:
+    """Counts page operations failing in a row, and says when to stop asking."""
+
+    def __init__(self, entry: ConfigEntry, phase: str) -> None:
+        self._entry = entry
+        self._phase = phase
+        self._in_a_row = 0
+        self.skipped: list[int] = []
+
+    @property
+    def tripped(self) -> bool:
+        return self._in_a_row >= GIVE_UP_AFTER_FAILURES
+
+    def note(self, ok: bool) -> None:
+        self._in_a_row = 0 if ok else self._in_a_row + 1
+
+    def skip(self, page_id: int) -> None:
+        self.skipped.append(page_id)
+
+    def report(self) -> None:
+        if self.skipped:
+            _LOGGER.error(
+                "%s failed %d %s in a row; skipped the remaining %d (pages %s) "
+                "for this sync instead of waiting on each",
+                self._entry.title, GIVE_UP_AFTER_FAILURES, self._phase,
+                len(self.skipped), ", ".join(str(p) for p in self.skipped),
+            )
 
 
 async def _add_page_if_missing(conn, page_id: int) -> None:
@@ -206,6 +253,19 @@ def _button_icon_style(
         hass, step, page_color,
         fill_step=opts.step, fill=opts.fill, tint=opts.tint,
     )
+
+
+def is_ready(conn) -> bool:
+    """Whether *conn* can take page requests: connected, hello answered.
+
+    A remote mid-handshake rejects `set_page` with -4, or -- short on memory --
+    leaves it unanswered until the socket drops. The hello event starts a full
+    sync anyway, so anything skipped here goes out then.
+    """
+    if conn is None or not conn.connected:
+        return False
+    ready = getattr(conn, "ready", True)
+    return ready if isinstance(ready, bool) else True
 
 
 def _get_device_connection(hass: HomeAssistant, entry: ConfigEntry):
@@ -602,7 +662,7 @@ async def _sync_locked(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Returns True if sync was performed, False if device not available.
     """
     conn = _get_device_connection(hass, entry)
-    if conn is None or not conn.connected:
+    if not is_ready(conn):
         _LOGGER.debug("Device not connected, skipping sync for %s", entry.title)
         return False
     async with conn._page_sync_lock:
@@ -774,6 +834,7 @@ async def _sync_config_to_device(
     if rejected is None:
         rejected = set()
         conn._rejected_pages = rejected
+    rejected_before = set(rejected)
 
     for pid in remove_order:
         if await _send_page_op(partial(conn.del_page, pid), "del_page", pid):
@@ -800,19 +861,36 @@ async def _sync_config_to_device(
     # anyway costs one round-trip on a path that was already failing, and is
     # what distinguishes "cannot store this page" from "already had it".
     add_failed = set()
+    adds = _GiveUp(entry, "page adds")
     for pid in add_order:
         if pid in rejected:
             continue
-        if not await _send_page_op(
+        if adds.tripped:
+            adds.skip(pid)
+            continue
+        ok = await _send_page_op(
             partial(_add_page_if_missing, conn, pid), "add_page", pid,
-        ):
+        )
+        adds.note(ok)
+        if not ok:
             add_failed.add(pid)
             unsure.add(pid)
+    adds.report()
+    # Never asked to create, so not written either -- and not marked as refused,
+    # since the remote was never asked about them.
+    add_skipped = set(adds.skipped)
+    failed.extend(adds.skipped)
 
     total = len(writes)
+    sets = _GiveUp(entry, "page writes")
     for n, page_data in enumerate(writes, 1):
         pid = page_data["page_id"]
-        if pid in rejected:
+        if pid in rejected or pid in add_skipped:
+            continue
+        if sets.tripped:
+            sets.skip(pid)
+            known_pages.pop(pid, None)
+            failed.append(pid)
             continue
         # A page the device has just been told to create holds nothing yet, and
         # one whose `add_page` was refused is of unknown content — both need
@@ -826,6 +904,7 @@ async def _sync_config_to_device(
             partial(conn.set_page, timeout=PAGE_WRITE_TIMEOUT, **payload),
             "set_page", pid, n, total,
         )
+        sets.note(ok)
         if ok:
             if pid in add_failed:
                 _LOGGER.info(
@@ -852,6 +931,7 @@ async def _sync_config_to_device(
             # fetches on the device. A breather between them spreads that burst
             # out instead of handing the device the whole thing at once.
             await asyncio.sleep(PAGE_WRITE_PACING)
+    sets.report()
 
     # Listing only the pages that actually made it, and sent whenever that list
     # or the order moved. Previously a single timed-out page raised straight
@@ -882,22 +962,16 @@ async def _sync_config_to_device(
         # to write -- but the cache may not have known that yet.
         conn._known_main_pages = list(deliverable)
 
-    if rejected:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            f"pages_rejected_{entry.entry_id}",
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="pages_rejected",
-            translation_placeholders={
-                "device": entry.title,
-                "pages": ", ".join(str(p) for p in sorted(rejected)),
-                "stored": str(len(known_pages)),
-            },
+    newly_rejected = rejected - rejected_before
+    if newly_rejected:
+        _LOGGER.error(
+            "%s refused to store page(s) %s and holds %d page(s); it reports no "
+            "page limit, so this may be the one it has. They are skipped until "
+            "the remote reconnects. Remove them in the lizaIP panel or update "
+            "the firmware.",
+            entry.title, ", ".join(str(p) for p in sorted(newly_rejected)),
+            len(known_pages),
         )
-    else:
-        ir.async_delete_issue(hass, DOMAIN, f"pages_rejected_{entry.entry_id}")
 
     if failed:
         names = ", ".join(str(p) for p in sorted(set(failed)))
@@ -932,48 +1006,50 @@ async def _sync_config_to_device(
 MAX_SYNC_FAILURES = 3
 
 
-def _sync_issue_id(entry: ConfigEntry) -> str:
-    """One issue per device, so two failing remotes do not overwrite each other."""
-    return f"page_sync_failed_{entry.entry_id}"
+#: What the protocol raises when there is no socket to talk over -- before a
+#: request ("Not connected") or because it closed under one ("Connection lost").
+_DISCONNECT_MESSAGES = frozenset({"Not connected", "Connection lost"})
+
+
+def _is_disconnect(conn: Any, err: Exception) -> bool:
+    """True when *err* says the remote is gone rather than that it failed."""
+    if not getattr(conn, "connected", True):
+        return True
+    return isinstance(err, ProtocolError) and err.message in _DISCONNECT_MESSAGES
 
 
 def _note_sync_failure(
     hass: HomeAssistant, entry: ConfigEntry, conn: Any, err: Exception,
 ) -> None:
-    """Count a failed sync and, once they stack up, say so in the UI.
+    """Count a failed sync and, once they stack up, log it as an error.
 
-    Until this existed the only trace was an ERROR line in the log. A remote
-    whose pages silently stopped matching the panel is exactly the kind of
-    fault nobody goes looking for, so it has to come to the user instead.
+    Not raised in Repairs: a remote refusing pages is a firmware problem the
+    user can do nothing about, and a notice there only confused. The ERROR
+    line, written once when the run of failures reaches the threshold, is
+    what support reads.
     """
+    if _is_disconnect(conn, err):
+        # The remote is away, not refusing pages. The next hello syncs
+        # everything anyway, so a remote that was simply asleep or switched
+        # off is not counted.
+        _LOGGER.debug("Sync failure not counted, the remote is not connected: %s", err)
+        return
     count = getattr(conn, "_page_sync_failures", 0) + 1
     conn._page_sync_failures = count
-    if count < MAX_SYNC_FAILURES:
-        return
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        _sync_issue_id(entry),
-        is_fixable=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="page_sync_failed",
-        translation_placeholders={
-            "device": entry.title,
-            "count": str(count),
-            "error": str(err),
-        },
-    )
+    if count == MAX_SYNC_FAILURES:
+        _LOGGER.error(
+            "Pages could not be sent to %s: %d syncs in a row failed (last "
+            "error: %s). The remote may show outdated pages until a sync "
+            "succeeds.",
+            entry.title, count, err,
+        )
 
 
 def _note_sync_success(hass: HomeAssistant, entry: ConfigEntry, conn: Any) -> None:
-    """Clear the count and take the issue down.
-
-    Unconditional on purpose: deleting an issue that was never raised is a
-    no-op, and tracking whether we raised one is a second piece of state that
-    could disagree with the registry.
-    """
+    """Clear the failure count."""
+    if getattr(conn, "_page_sync_failures", 0) >= MAX_SYNC_FAILURES:
+        _LOGGER.info("Pages are in sync with %s again", entry.title)
     conn._page_sync_failures = 0
-    ir.async_delete_issue(hass, DOMAIN, _sync_issue_id(entry))
 
 
 def _page_delta(previous: dict | None, desired: dict) -> dict:
@@ -1111,7 +1187,7 @@ async def _push_variable_pages(
     variable can, falls back to the full sync.
     """
     conn = _get_device_connection(hass, entry)
-    if conn is None or not conn.connected:
+    if not is_ready(conn):
         return
     device_id = entry.runtime_data._device_id if hasattr(entry, "runtime_data") else None
     queue = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("icon_push_queue")

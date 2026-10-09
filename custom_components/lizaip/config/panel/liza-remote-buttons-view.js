@@ -4396,8 +4396,12 @@ export const ButtonsViewMixin = {
    * @param ev     The event that asked for the menu; supplies the position.
    * @param items  `{cls, label, run}` -- `cls` also names the hook the tests
    *               and the stylesheet use, so it is not decoration.
+   * @param opts   `keepCase` leaves the labels as written. The tile and page
+   *               menus borrow Home Assistant's lower-case verbs ("move",
+   *               "clear"); the diagnostics menu names files in whole
+   *               sentences, and lower-casing those reads as a typo.
    */
-  _openMenu(ev, items) {
+  _openMenu(ev, items, { keepCase = false, anchor = null } = {}) {
     this._closeFaceMenu();
     const root = this.shadowRoot;
     if (!root || !items?.length) return;
@@ -4417,21 +4421,34 @@ export const ButtonsViewMixin = {
     menu.innerHTML = items.map(it => it.separator
       ? `<div role="separator" class="face-menu-sep"></div>`
       : `<button type="button" role="menuitem" class="face-menu-item ${it.cls}">`
-        + `${String(it.label).toLocaleLowerCase(lang)}</button>`).join("");
-    const x = Number(ev?.clientX) || 0;
-    const y = Number(ev?.clientY) || 0;
-    // `position: fixed`, so viewport coordinates go straight on. Nudged back
-    // inside when the tile is near the right or bottom edge — the face sits in
-    // a scrolling column, and a menu opened on the last row would otherwise
-    // extend the page rather than appear.
+        + (it.icon ? `<ha-icon icon="${it.icon}" aria-hidden="true"></ha-icon>` : "")
+        + `<span>${keepCase ? String(it.label) : String(it.label).toLocaleLowerCase(lang)}</span></button>`).join("");
+    // Measured rather than guessed. A fixed width allowance has to be wrong
+    // in one direction or the other, and when it is too wide the menu opens a
+    // hand's width from the button that asked for it.
+    menu.style.visibility = "hidden";
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    root.appendChild(menu);
+    const seps = items.filter(it => it.separator).length;
+    // About 40px an item, 9 a separator, plus the frame -- the fallback for an
+    // environment that reports no layout at all.
+    const width = Number(menu.offsetWidth) || (keepCase ? 280 : 180);
+    const height = Number(menu.offsetHeight) || ((items.length - seps) * 40 + seps * 9 + 10);
+
+    // `position: fixed`, so viewport coordinates go straight on. An anchored
+    // menu hangs off its button's right edge, which is where a ⋮ in a toolbar
+    // puts it; everything else opens at the pointer.
+    const rect = anchor?.getBoundingClientRect?.();
+    const x = rect ? rect.right - width : Number(ev?.clientX) || 0;
+    const y = rect ? rect.bottom + 4 : Number(ev?.clientY) || 0;
+    // Nudged back inside near an edge: the face sits in a scrolling column, and
+    // a menu opened on the last row would otherwise extend the page.
     const vw = Number(window?.innerWidth) || 0;
     const vh = Number(window?.innerHeight) || 0;
-    menu.style.left = `${vw ? Math.min(x, vw - 180) : x}px`;
-    // About 40px an item, 9 a separator, plus the frame; a fixed allowance
-    // only ever fitted the two-item tile menu, and the page menu is longer.
-    const seps = items.filter(it => it.separator).length;
-    const height = (items.length - seps) * 40 + seps * 9 + 10;
-    menu.style.top = `${vh ? Math.min(y, vh - height) : y}px`;
+    menu.style.left = `${Math.max(4, vw ? Math.min(x, vw - width - 4) : x)}px`;
+    menu.style.top = `${Math.max(4, vh ? Math.min(y, vh - height - 4) : y)}px`;
+    menu.style.visibility = "";
 
     const dismiss = () => this._closeFaceMenu();
     for (const it of items) {
@@ -4464,7 +4481,6 @@ export const ButtonsViewMixin = {
       items[next].focus?.();
     });
 
-    root.appendChild(menu);
     this._faceMenuEl = menu;
     menu.querySelector(".face-menu-item")?.focus?.();
   },

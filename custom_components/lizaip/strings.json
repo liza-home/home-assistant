@@ -185,24 +185,6 @@
       }
     }
   },
-  "issues": {
-    "pages_rejected": {
-      "title": "lizaIP pages could not be stored on the device",
-      "description": "Device \"{device}\" refused to store page(s) {pages}. It is currently holding {stored} page(s), and reports no page limit in its capabilities, so this limit can only be discovered by reaching it. Remove the listed page(s) in the lizaIP panel, or update the device firmware. Every other page is synced and working."
-    },
-    "protocol_version_mismatch": {
-      "title": "lizaIP protocol version mismatch",
-      "description": "Device \"{device}\" reports protocol version {device_version}, but this integration expects version {ha_version}. Update the device firmware or the integration to resolve."
-    },
-    "repeated_connection_failure": {
-      "title": "lizaIP device repeatedly disconnecting",
-      "description": "Device \"{device}\" has disconnected {count} times without a successful handshake. Check the device power and network connection."
-    },
-    "page_sync_failed": {
-      "title": "lizaIP pages could not be sent to the device",
-      "description": "Home Assistant has failed {count} times in a row to write the page configuration to \"{device}\". The last error was: {error}. The pages on the remote may no longer match what the panel shows. Try \"Clear and rebuild pages\" in the lizaIP panel settings; if that does not help, power-cycle the remote."
-    }
-  },
   "exceptions": {
     "not_connected": {
       "message": "The lizaIP device is not connected."

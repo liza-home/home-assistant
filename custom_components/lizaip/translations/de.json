@@ -253,24 +253,6 @@
       "message": "Das Gerät hat keine Module gemeldet, die zurückgesetzt werden könnten."
     }
   },
-  "issues": {
-    "pages_rejected": {
-      "title": "lizaIP Seiten konnten nicht auf dem Gerät gespeichert werden",
-      "description": "Gerät \"{device}\" hat die Seite(n) {pages} abgelehnt. Es speichert derzeit {stored} Seite(n) und meldet in seinen Fähigkeiten kein Seitenlimit, dieses Limit lässt sich also nur durch Erreichen feststellen. Entferne die genannten Seiten im lizaIP-Panel oder aktualisiere die Geräte-Firmware. Alle übrigen Seiten sind synchronisiert und funktionieren."
-    },
-    "protocol_version_mismatch": {
-      "title": "lizaIP Protokollversion stimmt nicht überein",
-      "description": "Gerät \"{device}\" meldet Protokollversion {device_version}, diese Integration erwartet jedoch Version {ha_version}. Aktualisiere die Geräte-Firmware oder die Integration."
-    },
-    "repeated_connection_failure": {
-      "title": "lizaIP-Gerät trennt wiederholt die Verbindung",
-      "description": "Gerät \"{device}\" hat sich {count}-mal ohne erfolgreichen Handshake getrennt. Prüfe die Stromversorgung und die Netzwerkverbindung des Geräts."
-    },
-    "page_sync_failed": {
-      "title": "lizaIP-Seiten konnten nicht an das Gerät gesendet werden",
-      "description": "Home Assistant konnte die Seitenkonfiguration {count}-mal in Folge nicht auf \"{device}\" schreiben. Der letzte Fehler war: {error}. Die Seiten auf der Fernbedienung stimmen möglicherweise nicht mehr mit der Anzeige im Panel überein. Versuche \"Seiten löschen und neu aufbauen\" in den lizaIP-Panel-Einstellungen; hilft das nicht, trenne die Fernbedienung kurz von der Stromversorgung."
-    }
-  },
   "action_labels": {
     "back": "Zurück",
     "back_menu": "Zurück / Menü",

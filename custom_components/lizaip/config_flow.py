@@ -4,6 +4,7 @@ Handles Zeroconf discovery and WebSocket-based device onboarding.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any, Final
@@ -75,6 +76,10 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # on port 80 on physical hardware, regardless of what the mDNS SRV record
     # advertises (which is the WSS port, typically 443).
     _DEVICE_HTTP_PORT = 80
+
+    # Seconds an advertising device aimed at a stale address gets to connect
+    # on its own before its Home Assistant address is re-pushed.
+    _RECONNECT_GRACE = 30
 
     # Fallback device info when GET /api/info is unreachable.
     _FALLBACK_DEVICE_INFO: dict[str, Any] = {
@@ -159,7 +164,11 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                     self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
                 elif await self._async_address_is_stale(cfg, unique_id):
-                    self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
+                    self.hass.async_create_task(
+                        self._reprovision_unless_it_connects(
+                            unique_id, self.discovered_ips
+                        )
+                    )
                 else:
                     _LOGGER.debug(
                         "Re-discovery of known device %s, already provisioned "
@@ -248,13 +257,14 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         The case worth repairing is the opposite one: the values are wrong, the
         device cannot get through, and nothing notices because ``ha_hostname``
-        is merely non-empty. That device is not connected, and that is the
-        signal this reads.
+        is merely non-empty -- after a change of Home Assistant's port, say.
+        Such a device is not connected and falls back to advertising, so an
+        advertisement from a known device is the cue to look.
 
-        A connection state that cannot be read counts as connected. Discovery
-        can run before the entry has loaded, and re-provisioning a device on
-        the strength of not having looked yet is the failure this guard exists
-        to avoid.
+        A connection state that cannot be read yet (discovery can run before
+        the entry has loaded) is not taken as an answer either way: this says
+        stale, and :meth:`_reprovision_unless_it_connects` gives the device a
+        moment to show it is getting through before anything is pushed.
         """
         stored_host = str(cfg.get("ha_hostname") or "").strip()
         wanted_host, wanted_port = await self._async_ha_address()
@@ -276,16 +286,10 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if same_host and same_port:
             return False
 
-        connection = None
-        for entry in self._async_current_entries():
-            if entry.unique_id == unique_id:
-                connection = getattr(entry, "runtime_data", None)
-                break
-
         stored = f"{stored_host}:{stored_port if stored_port is not None else '?'}"
         wanted = f"{wanted_host}:{wanted_port}"
 
-        if getattr(connection, "connected", True):
+        if self._device_connected(unique_id):
             _LOGGER.debug(
                 "Device %s is aimed at %s and we would send %s, but it is "
                 "connected — leaving the working address alone",
@@ -295,10 +299,43 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         _LOGGER.info(
             "Device %s is aimed at %s, which is not where this Home Assistant "
-            "is (%s), and it is not connected — re-provisioning",
-            unique_id, stored, wanted,
+            "is (%s), and it is not connected — re-provisioning unless it "
+            "connects within %ss",
+            unique_id, stored, wanted, self._RECONNECT_GRACE,
         )
         return True
+
+    def _device_connected(self, unique_id: str) -> bool | None:
+        """The device's WebSocket state, or ``None`` before its entry loaded."""
+        for entry in self._async_current_entries():
+            if entry.unique_id == unique_id:
+                connected = getattr(
+                    getattr(entry, "runtime_data", None), "connected", None
+                )
+                return connected if isinstance(connected, bool) else None
+        return None
+
+    async def _reprovision_unless_it_connects(
+        self, unique_id: str, device_ips: list[str]
+    ) -> None:
+        """Push the address to an advertising device that is not getting through.
+
+        The firmware advertises while connected too, and right after a restart
+        of Home Assistant a device whose address is still good is usually back
+        within seconds -- often before its entry has even loaded. Waiting that
+        out keeps a working address from being replaced by a theory.
+        """
+        for _ in range(self._RECONNECT_GRACE):
+            if self._device_connected(unique_id):
+                _LOGGER.info(
+                    "Device %s connected on its own — leaving its address alone",
+                    unique_id,
+                )
+                return
+            await asyncio.sleep(1)
+        if self._device_connected(unique_id):
+            return
+        await self._try_reprovision(device_ips)
 
     # ------------------------------------------------------------------
     # Provisioning — POST /api/config/ha on the device

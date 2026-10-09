@@ -2751,13 +2751,24 @@ export const HelpersMixin = {
 
   /** Open a modal and return it with its close function. A native <dialog>,
    *  as HA's own ha-dialog is: the focus trap, Escape, inertness, role and
-   *  focus-return all come from the platform. The caller supplies the name. */
-  _openModal(innerHtml, { labelledBy = "", describedBy = "", role = "" } = {}) {
+   *  focus-return all come from the platform. The caller supplies the name.
+   *
+   *  `onClose` is called once, on every way out -- the returned function,
+   *  Escape, the scrim, and being pushed aside by the next modal. A caller
+   *  that owns state behind the dialog should tear it down here rather than
+   *  on the `close` event, which a re-render also fires and fires late. */
+  _openModal(innerHtml, { labelledBy = "", describedBy = "", role = "", onClose = null } = {}) {
     const sr = this.shadowRoot;
     // One at a time: these dialogs open each other. Closed before it is
     // removed, for the reason `close` gives below.
     const stale = sr.querySelector("dialog.add-page-overlay");
-    if (stale) { if (stale.open) stale.close(); stale.remove(); }
+    if (stale) {
+      const owner = stale._onOverlayClose;
+      stale._onOverlayClose = null;
+      if (stale.open) stale.close();
+      stale.remove();
+      owner?.();
+    }
 
     const dlg = document.createElement("dialog");
     dlg.className = "add-page-overlay";
@@ -2773,12 +2784,16 @@ export const HelpersMixin = {
     if (role) dlg.setAttribute("role", role);
     dlg.innerHTML = innerHtml;
 
+    dlg._onOverlayClose = onClose;
     const close = () => {
       // `close()` before `remove()`, never the other way round: removing the
       // node drops it from the top layer without ever firing `close`, and the
       // focus the browser was holding for the opener goes with it.
+      const owner = dlg._onOverlayClose;
+      dlg._onOverlayClose = null;
       if (dlg.open) dlg.close();
       dlg.remove();
+      owner?.();
     };
 
     // Escape. Prevented so the browser does not also close it underneath us
@@ -2825,7 +2840,13 @@ export const HelpersMixin = {
       // `close` fires for Escape, the scrim, our own buttons, and a stale
       // dialog being cleared by the next `_openModal`. Anything that is not an
       // explicit confirm is a no.
-      dlg.addEventListener("close", () => settle(false));
+      // Not a dismissal when the panel is only moving the dialog between
+      // renders: that fires `close` too, and settling there would answer the
+      // question with "cancel" while it is still on screen.
+      dlg.addEventListener("close", () => {
+        if (this._reattachingOverlays) return;
+        settle(false);
+      });
       dlg.querySelector(".confirm-cancel-btn")?.addEventListener("click", () => { settle(false); close(); });
       dlg.querySelector(".confirm-danger-btn")?.addEventListener("click", () => { settle(true); close(); });
       dlg.querySelector(".confirm-cancel-btn")?.focus?.();

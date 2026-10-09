@@ -1902,7 +1902,11 @@ export const STYLES = `
     box-shadow: 0 6px 20px rgba(0,0,0,.24);
   }
   .face-menu-item {
-    display: block;
+    /* Flex rather than block: an item may carry an icon, and one that does
+       must line its label up with the labels of the items that do not. */
+    display: flex;
+    align-items: center;
+    gap: 10px;
     width: 100%;
     padding: 8px 12px;
     border: none;
@@ -1913,6 +1917,11 @@ export const STYLES = `
     text-align: left;
     cursor: pointer;
     color: var(--primary-text-color);
+  }
+  .face-menu-item ha-icon {
+    --mdc-icon-size: 20px;
+    flex: 0 0 auto;
+    color: var(--liza-muted-text);
   }
   .face-menu-item:hover, .face-menu-item:focus-visible {
     background: var(--secondary-background-color);
@@ -2128,6 +2137,176 @@ export const STYLES = `
   .settings-actions {
     display: flex;
     gap: 8px;
+  }
+
+  /* --- Diagnostics menu, pill and progress dialog --- */
+  /* The ⋮ that offers the three downloads. Sized like the toolbar's own icon
+     buttons so it sits level with the tabs beside it. */
+  .diag-menu-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--liza-muted-text);
+    cursor: pointer;
+    --mdc-icon-size: 20px;
+  }
+  .diag-menu-btn:hover {
+    background: var(--secondary-background-color, #e8e8e8);
+    color: var(--primary-text-color, #212121);
+  }
+  .diag-menu-btn:focus-visible {
+    outline: 2px solid var(--primary-color, #03a9f4);
+    outline-offset: 2px;
+  }
+  /* On the accent-filled toolbar the muted grey disappears; there the button
+     borrows the bar's own text colour, as the tabs beside it do. */
+  .toolbar .diag-menu-btn {
+    color: inherit;
+    margin-left: 4px;
+  }
+  .toolbar .diag-menu-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: inherit;
+  }
+  /* In a device row the ⋮ must not shove the status badge around, and it is
+     only worth noticing once the pointer is on the row it belongs to. */
+  .device-item .diag-menu-btn {
+    margin-left: 4px;
+    opacity: 0.55;
+  }
+  .device-item:hover .diag-menu-btn,
+  .device-item .diag-menu-btn:focus-visible {
+    opacity: 1;
+  }
+
+  /* The dismissed builds, parked where a snackbar would be. Fixed, because a
+     build outlives whichever screen started it, and stacked because the
+     configuration and diagnostics lanes can run at the same time. */
+  .diag-pills {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .diag-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: calc(100vw - 32px);
+    padding: 8px 14px;
+    border: none;
+    border-radius: 999px;
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color, #212121);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    font-size: 13px;
+    cursor: pointer;
+    --mdc-icon-size: 18px;
+  }
+  .diag-pill.running ha-icon { color: var(--primary-color, #03a9f4); }
+  .diag-pill.error ha-icon { color: var(--error-color, #db4437); }
+  .diag-pill:focus-visible {
+    outline: 2px solid var(--primary-color, #03a9f4);
+    outline-offset: 2px;
+  }
+
+  .diag-dialog {
+    text-align: left;
+  }
+  .diag-dialog-bar {
+    height: 4px;
+    margin: 12px 0 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--divider-color, #e0e0e0);
+  }
+  .diag-dialog-bar > div {
+    height: 100%;
+    background: var(--primary-color, #03a9f4);
+    transition: width 0.2s ease;
+  }
+  .diag-steps {
+    margin: 8px 0 0;
+    padding: 0 0 8px;
+    list-style: none;
+    max-height: 46vh;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  /* The heading a run of steps belongs under. Quiet and sticky: the list
+     scrolls, and a row that has scrolled away from its heading is a row
+     whose "Status" could be the remote's or Home Assistant's. */
+  .diag-group {
+    position: sticky;
+    top: 0;
+    padding: 10px 2px 4px;
+    background: var(--card-background-color, #fff);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--liza-muted-text);
+  }
+  .diag-group:first-child { padding-top: 2px; }
+  .diag-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 2px 5px 6px;
+    font-size: 13px;
+    color: var(--liza-muted-text);
+  }
+  .diag-step.done,
+  .diag-step.running {
+    color: var(--primary-text-color, #212121);
+  }
+  .diag-step-mark {
+    flex: 0 0 auto;
+    width: 16px;
+    text-align: center;
+    font-size: 12px;
+  }
+  .diag-step.done .diag-step-mark { color: var(--success-color, #4caf50); }
+  .diag-step.running .diag-step-mark { color: var(--primary-color, #03a9f4); }
+  /* The one row that is actually happening, told apart without relying on the
+     colour alone. */
+  .diag-step.running .diag-step-label { font-weight: 500; }
+  .diag-step-label { flex: 1 1 auto; }
+  .diag-step-state {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--liza-muted-text);
+  }
+  /* What the file carries. Quieter than the result above it -- it is a caution,
+     not the outcome -- but on the same screen as the download. */
+  .diag-dialog-privacy {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  /* The list, then the two notes, then the button: each separated enough to
+     be read as its own thing rather than as one block of small grey text. */
+  .diag-dialog > .config-field-hint { margin-top: 12px; }
+  .diag-dialog > .layout-dialog-actions { margin-top: 18px; }
+  .diag-dialog-error {
+    margin: 12px 0 0;
+    font-size: 13px;
+    color: var(--error-color, #db4437);
+    overflow-wrap: anywhere;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .diag-dialog-bar > div { transition: none; }
   }
 
   /* --- Debug tab --- */
@@ -3082,9 +3261,14 @@ export const STYLES = `
     .toolbar .main-title {
       flex: 1 1 auto;
     }
+    /* The ⋮ rides along on the tabs' wrapped row rather than claiming a third
+       one of its own, so the tabs give up its width. */
     .toolbar-tabs {
-      flex: 1 0 100%;
+      flex: 1 0 calc(100% - 44px);
       margin-left: 0;
+      margin-top: 4px;
+    }
+    .toolbar .diag-menu-btn {
       margin-top: 4px;
     }
     .toolbar-tab {

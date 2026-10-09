@@ -6,6 +6,133 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.2] - 2026-10-09
+
+The second stable release of October. It includes everything since 2026.10.1;
+the beta sections below record when each change arrived.
+
+### Added
+
+- **Live values from Home Assistant on buttons, titles and tooltips.** Write
+  `${sensor.outdoor_temperature}` into a tooltip (`Outside ${sensor.outdoor_temperature}`)
+  and the remote shows the current value with its unit, such as
+  "Outside 21.5 °C". `${weather.home.temperature}` shows one attribute. The same
+  works in button images, page titles and every icon field, for example
+  `mdi:battery-${sensor.phone_battery}`. The remote updates as the value changes
+  and falls back to the usual icon when the entity is unavailable.
+  - `${weather.home}` on its own draws the current weather icon, and in a
+    tooltip reads "Partly cloudy" in your language.
+  - On a layout page, `${_device}` is the page's device and
+    `${_device.attribute}` one of its attributes, e.g.
+    `Vol ${round(_device.volume_level * 100)}%`.
+- **Long touch.** Rest a finger on a button for 2 seconds to run a second
+  action. Turn it on per remote in the gear tab; each button then gets a
+  "Long touch" action. On such buttons the click runs when you lift your
+  finger. With the switch off, nothing changes.
+- **Buttons that show what a light is doing.** A button bound to a light can
+  take the lamp's colour and fill its icon from the bottom as the lamp dims.
+  Both are switched on per remote under "Icon options" in the gear tab, which
+  also sets how finely the fill follows the brightness (formerly in the
+  Configure dialog; your setting is kept).
+- **Virtual toggle button.** A button can be a toggle you set up entirely in
+  the editor.
+- **Fonts for titles and tooltips.** A gear tab sets the font and size of page
+  titles and tooltips per remote, with a live preview. Your own `.ttf`/`.otf`
+  files in `/config/lizaip/fonts/` appear in the list; add
+  `NotoColorEmoji.ttf` for colour emoji.
+- **Sonos Radio and Sonos Playlists pages**: your favourite stations or
+  playlists on buttons 1–12, following changes made in the Sonos app.
+- **Page tools in the editor.** Right-click (or long-press) a page in the page
+  strip to:
+  - **duplicate** it, with all its buttons;
+  - **change device…** (or **change hub…**) for a layout page, keeping your
+    buttons and labels;
+  - **make subpage**, so the remote stops paging through a page you only
+    reach from a "Go to page" button;
+  - **delete** it. With a page open, **Delete** or **Backspace** asks the same.
+  **Shift+F10** or the **Context Menu** key opens the menu without a mouse.
+- **Drag a button onto another** to swap their configuration.
+- **Scaling a `media:` picture.** `size=200x200` in the URL or after a `|`
+  scales it; `mode`, `fg`, `bg`, `crop` and `alpha` work the same way.
+- **Firmware release notes.** The update dialog shows the notes of every
+  release since the version your remote runs.
+- **One-click diagnostics.** The ⋮ menu in the panel's toolbar and on every
+  row of the device list offers **Download diagnostics**: one ZIP with the
+  remote's configuration, its report and device log, the lizaip lines from
+  Home Assistant's log, recent messages with the remote, and the versions in
+  play, with a short `summary.txt` on top. A window ticks off each part; you can
+  close it and the download still starts. Parts that can't be collected are
+  listed with the reason. The bundle contains your entity ids, and the panel
+  says so first.
+- **Download configuration** in the same menu copies the remote's stored
+  files as they are; put the folder back into `<config>/lizaip/` to restore.
+- **Home Assistant's own Download diagnostics** for a lizaIP device now
+  includes the remote's report, settings, and the errors and log lines about
+  lizaIP, with entity ids hidden and secrets redacted, so it is safe to post.
+
+### Changed
+
+- **Starting Home Assistant no longer re-uploads every page.** Only pages that
+  differ are written, and a reorder only changes the order.
+- **Faster editor and lighter live updates.** Big setups load in one request,
+  and a changed value redraws only the buttons showing it; changes that don't
+  alter what you see are ignored.
+- **Page titles, button images and tooltips are plain text boxes.** Enter or
+  clicking elsewhere saves, Escape undoes. Plain words need no `text:` prefix.
+- **Icon suggestions as you type** `mdi:` or the prefix of any icon set
+  installed in Home Assistant. Icons from such sets (e.g. `hue:`) are now drawn
+  on the remote instead of printed as text.
+- **Tooltips can show icons and pictures**, e.g. `mdi:lightbulb` or
+  `logo:sonos`.
+- **Pages are named by position and id**, as "Page 3/9 (24)" with the title
+  under it, in dialogs, tooltips and the "go to page" lists.
+- **The built-in label tokens take a leading underscore:** `${_state}`,
+  `${_name}` and `${_cmd}` instead of `${STATE}`, `${NAME}` and `${COMMAND}`.
+  Existing labels are converted automatically.
+- **The panel lives at `/lizaip`** instead of `/liza-remote`. Update your
+  bookmarks.
+- **Clicking a page in the editor no longer moves the remote to it.** Adding a
+  page still does.
+- **Smaller button text and inset page titles on the remote**, so longer names
+  fit. The remote refreshes its pages once after the update.
+- **The colour temperature slider** now makes the light warmer when you slide
+  up.
+- **Subpages look like main pages in the editor**, just slightly lower and
+  shaded darker.
+- **lizaIP no longer creates Repairs notices.** Refused pages, failing syncs
+  and connection problems are logged as errors. Older notices are removed when
+  Home Assistant starts.
+- **Messages from the remote that break the protocol are logged as
+  `PROTOCOL_ERROR`**, every time, so firmware problems show up in the log.
+
+### Fixed
+
+- **A remote finds Home Assistant again by itself.** HA writes its address
+  into the remote whenever the remote connects, and when a known remote shows
+  up on the network with an outdated address (after a change of HA's port, for
+  instance), also while HA is still starting.
+- **A remote that keeps refusing pages no longer stalls the sync for about 15
+  minutes.** Refused pages aren't retried, and after three failures in a row
+  the rest wait for the next sync.
+- **A remote that is asleep or offline no longer counts as a failed sync**, and
+  no page updates are sent while it is still connecting.
+- **A request the remote couldn't read fails at once** instead of after 20–30
+  seconds, and "exception in shielded future" errors are gone from the log.
+- **Pictures** given as an HA path (e.g. `${_device.entity_picture}`) show on
+  the remote, very long picture URLs such as Spotify mosaics work, and a cover
+  the remote can't load is logged with the host's HTTP status.
+- **A picture or name on a favorites slot survives the next refresh.**
+- **Deleting a page** always asks first, with the right button count, and the
+  editor shows it gone without waiting for the remote.
+- **The firmware update card stays visible** through the whole installation
+  and names the step the remote reports.
+- **Editor details:** clicking the page outside a button returns to its
+  settings; "change hub…" says "hub"; moving a page to a new device leaves
+  your labels alone; subpages are announced to screen readers; the debug
+  page's device-log switch shows the real state.
+- **No more deprecation warning about lizaIP in Home Assistant's log**; the
+  device lookup it warned about would have stopped working in 2027.8.0.
+
 ## [2026.10.2b4] - 2026-10-08
 
 ### Added

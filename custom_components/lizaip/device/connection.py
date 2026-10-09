@@ -23,7 +23,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .. import provisioning
@@ -103,6 +102,8 @@ class LizaIPConnection:
         self._entry = entry
         self._device_id = device_id
         self._ws: web.WebSocketResponse | None = None
+        # The socket whose hello was answered; `ready` compares it with `_ws`.
+        self._hello_ws: web.WebSocketResponse | None = None
         self._protocol = LizaIPProtocol()
 
         # Compiled action Scripts for this entry, keyed on (page_id, button_key).
@@ -200,6 +201,16 @@ class LizaIPConnection:
     @property
     def connected(self) -> bool:
         return self._ws is not None and not self._ws.closed
+
+    @property
+    def ready(self) -> bool:
+        """Connected *and* this socket's hello has been answered.
+
+        Until then the remote is still setting itself up and rejects page
+        requests with -4 ("No handler for packet request:set_page") -- or, short
+        on memory, never answers them, holding the line until it drops.
+        """
+        return self.connected and self._hello_ws is self._ws
 
     @property
     def protocol(self) -> LizaIPProtocol:
@@ -326,6 +337,7 @@ class LizaIPConnection:
             await old_ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"replaced by new connection")
 
         self._ws = ws
+        self._hello_ws = None
         self._protocol.set_ws(ws)
         self._notify_availability(True)
         _LOGGER.info("Device connected: %s", self._entry.title)
@@ -334,7 +346,6 @@ class LizaIPConnection:
         try:
             await self._send_hello()
             self._consecutive_failures = 0  # successful hello — clear failure count
-            ir.async_delete_issue(self._hass, DOMAIN, "repeated_connection_failure")
             await read_task
         except asyncio.CancelledError:
             read_task.cancel()
@@ -356,18 +367,11 @@ class LizaIPConnection:
                     self._entry.title,
                 )
                 self._consecutive_failures += 1
-                if self._consecutive_failures >= MAX_FAILURES:
-                    ir.async_create_issue(
-                        self._hass,
-                        DOMAIN,
-                        "repeated_connection_failure",
-                        is_fixable=False,
-                        severity=ir.IssueSeverity.WARNING,
-                        translation_key="repeated_connection_failure",
-                        translation_placeholders={
-                            "device": self._entry.title,
-                            "count": str(self._consecutive_failures),
-                        },
+                if self._consecutive_failures == MAX_FAILURES:
+                    _LOGGER.error(
+                        "%s disconnected %d times in a row without completing "
+                        "the handshake. Check its Wi-Fi signal and power.",
+                        self._entry.title, self._consecutive_failures,
                     )
                 self._notify_availability(False)
             else:
@@ -767,6 +771,7 @@ class LizaIPConnection:
             result = await self._protocol.send_request("hello", {
                 "protocol_version": PROTOCOL_VERSION,
             }, wait_while_silent=False)
+            self._hello_ws = self._ws
             self._device_protocol_version = result.get("protocol_version")
             self._device_mac = result.get("device_id")
             self._device_version = result.get("version")
@@ -778,26 +783,16 @@ class LizaIPConnection:
                 "Hello: id=%s ver=%s proto=%s",
                 self._device_mac, self._device_version, self._device_protocol_version,
             )
-            # Repair issue: protocol version mismatch
             if (
                 self._device_protocol_version is not None
                 and self._device_protocol_version != PROTOCOL_VERSION
             ):
-                ir.async_create_issue(
-                    self._hass,
-                    DOMAIN,
-                    "protocol_version_mismatch",
-                    is_fixable=False,
-                    severity=ir.IssueSeverity.WARNING,
-                    translation_key="protocol_version_mismatch",
-                    translation_placeholders={
-                        "device": self._entry.title,
-                        "device_version": str(self._device_protocol_version),
-                        "ha_version": str(PROTOCOL_VERSION),
-                    },
+                _LOGGER.error(
+                    "%s speaks protocol version %s, Home Assistant speaks %s. "
+                    "Some features may not work until the firmware and the "
+                    "integration are updated to match.",
+                    self._entry.title, self._device_protocol_version, PROTOCOL_VERSION,
                 )
-            else:
-                ir.async_delete_issue(self._hass, DOMAIN, "protocol_version_mismatch")
             # Notify listeners (e.g. config/panel.py) that hello completed — triggers page sync
             self._hass.bus.async_fire(LIZAIP_HELLO_EVENT, {"entry_id": self._entry.entry_id})
             fire_and_forget(self.async_refresh_brightness())
