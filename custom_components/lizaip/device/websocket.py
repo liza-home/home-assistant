@@ -9,7 +9,8 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .connection import LizaIPConnection
-from .const import DOMAIN, WS_PATH
+from ..const import DOMAIN
+from .const import WS_PATH
 from .protocol import PING_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)

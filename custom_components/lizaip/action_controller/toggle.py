@@ -67,15 +67,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..const import (
-    DOMAIN_ICONS,
-    clean_label_text,
-    get_ui_language,
-    service_fixed_icon,
-    service_name,
-    state_token_label,
-    substitute_label_tokens,
-)
+from ..shared.icon_defaults import icon_defaults
+from ..shared.tokens import clean_label_text, substitute_label_tokens
+from ..shared.i18n import get_ui_language
+from ..shared.services import service_fixed_icon, service_name
+from ..shared.labels import state_token_label
 from .helpers import subject_for_assign
 
 _LOGGER = logging.getLogger(__name__)
@@ -261,7 +257,7 @@ def step_icon(
         if svc_icon:
             return svc_icon
 
-    return DOMAIN_ICONS.get(svc_domain)
+    return icon_defaults.domain_icons.get(svc_domain)
 
 
 def rule_action_id(rule: Any) -> str | None:

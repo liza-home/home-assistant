@@ -24,8 +24,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_track_state_change_event
 
-from ..const import ASSIGNMENT_DYNAMIC_KEY
+from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,17 +84,6 @@ class DynamicItem:
             "data": dict(self.data),
             "identity": self.identity or self.title,
         }
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> DynamicItem:
-        data = raw.get("data")
-        return cls(
-            title=str(raw.get("title") or ""),
-            thumbnail=str(raw.get("thumbnail") or ""),
-            action=str(raw.get("action") or ""),
-            data=dict(data) if isinstance(data, dict) else {},
-            identity=str(raw.get("identity") or raw.get("title") or ""),
-        )
 
     @property
     def icon(self) -> str:
@@ -240,21 +230,6 @@ def bound_specs(
             seen.add(key)
             specs.append((source_id, spec))
     return specs
-
-
-def bound_entities(assignments_by_page: dict[Any, dict[str, Any]]) -> set[str]:
-    """Every entity a page's dynamic bindings resolve against.
-
-    Read from the bindings rather than from the page's target entity: in device
-    mode the page's primary entity can be a ``remote.*`` that cannot be browsed,
-    and the binding already records the media player we actually resolved with.
-    """
-    entities: set[str] = set()
-    for _source_id, spec in bound_specs(assignments_by_page):
-        entity_id = str(spec.get("entity") or spec.get("entity_id") or "")
-        if entity_id:
-            entities.add(entity_id)
-    return entities
 
 
 # ── browse helpers ────────────────────────────────────────────────────
@@ -895,8 +870,6 @@ def subscribe_favorites(hass: HomeAssistant, specs, on_change) -> Any | None:
     Media players emit frequent playback state changes; each false refresh can
     start a 15-20 second browse.
     """
-    from homeassistant.helpers.event import async_track_state_change_event
-
     entities = sorted(
         {
             str(spec.get("entity") or spec.get("entity_id") or "")

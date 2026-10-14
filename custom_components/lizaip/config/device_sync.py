@@ -1,10 +1,12 @@
 """Push the panel's configuration at the physical device.
 
-Turns the stored pages, assignments and action library into protocol-compliant
-``set_page`` payloads and sends them through ha_integration_device's
-``LizaIPConnection``. What each button *looks* like is decided in
-:mod:`button_rendering`; this module decides what a page *contains*, whether it
-changed since last time (``_compute_page_hash``), and when to ship it.
+Three modules share the job:
+
+- :mod:`button_rendering` -- what one button *looks* like;
+- :mod:`page_payload` -- what a page *contains* (its ``set_page`` payload);
+- this module -- *when* and *how* pages are sent: comparing hashes with the
+  device, sending only what changed, retrying, and giving up on a remote that
+  stopped answering.
 
 Usage:
     from . import device_sync as _device_sync_mod
@@ -14,8 +16,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 import time
 from functools import partial
@@ -24,43 +24,13 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from ..action_controller.toggle import runtime_assign
-from ..const import (
-    DOMAIN,
-    longtouch_steps,
-    page_scope,
-    resolve_icon_url,
-    resolve_title_url,
-    resolve_tooltip_url,
-    substitute_device_token,
-    variables_scope,
-)
-from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError
-from ..device.services import _selected_entry_ids
-from ..state_icon import (
-    IconStyle,
-    IconStyleOptions,
-    icon_style_for,
-    read_icon_style_options,
-)
-from .button_rendering import (
-    _get_service_icons,
-    _resolve_button_icon,
-    _resolve_button_tooltip,
-    with_resolved_image,
-)
-from .const import (
-    is_subpage,
-    is_valid_page_id,
-    step_service,
-)
-from .internal_commands import (
-    build_page_context,
-)
-from .internal_commands import (
-    resolve_action as resolve_internal_action,
-)
-from .text_style import longtouch_enabled, toggle_enabled
+from ..const import DOMAIN
+from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError, is_valid_page_id
+from ..runtime import entry_connection, entry_device_id, _get_store
+from ..variables_calc import variables_scope
+from .const import is_subpage
+from .page_payload import build_page_payload, build_sync_context, compute_page_hash
+from .panel_entry import get_panel_entry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -232,29 +202,6 @@ def _page_delta(previous: dict | None, desired: dict) -> dict:
     return delta
 
 
-def _button_icon_style(
-    hass: HomeAssistant | None,
-    assign: dict,
-    page_color: str,
-    style_options: IconStyleOptions | None = None,
-) -> IconStyle:
-    """Tint and fill for a button's tile, from the light it is bound to.
-
-    The listener resolves its live push through the same ``icon_style_for``, so
-    the two agree by construction -- otherwise the first state change after a
-    sync would restyle a freshly-pushed tile. *style_options* is part of that
-    agreement: the step and both switches are read from the same entry options
-    on both paths.
-    """
-    config = assign.get("config", [])
-    step = config[0] if isinstance(config, list) and config else {}
-    opts = style_options or read_icon_style_options(None)
-    return icon_style_for(
-        hass, step, page_color,
-        fill_step=opts.step, fill=opts.fill, tint=opts.tint,
-    )
-
-
 def is_ready(conn) -> bool:
     """Whether *conn* can take page requests: connected, hello answered.
 
@@ -268,317 +215,6 @@ def is_ready(conn) -> bool:
     return ready if isinstance(ready, bool) else True
 
 
-def _get_device_connection(hass: HomeAssistant, entry: ConfigEntry):
-    """Get the device connection for this config entry."""
-    if hasattr(entry, "runtime_data") and entry.runtime_data:
-        conn = entry.runtime_data
-        if hasattr(conn, "connected"):
-            return conn
-    return None
-
-
-def _compute_page_hash(page_data: dict) -> int:
-    """Compute a 32-bit hash for a page's content."""
-    raw = json.dumps(page_data, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.md5(raw.encode()).hexdigest()
-    return int(digest[:8], 16)  # 32-bit integer
-
-
-def step_targets_entry(hass: HomeAssistant, entry: ConfigEntry, config) -> bool:
-    """Whether a stored step's target names the remote whose page this is.
-
-    A button lives on one remote, and a device-local action is executed by that
-    remote alone — it never reaches Home Assistant, so there is nothing left to
-    route it. A step naming a *different* device therefore cannot be run
-    locally without navigating the wrong remote, and one naming no device at
-    all means "wherever this runs", which here is this remote.
-
-    The target is read through the same resolver the service handler uses, so
-    the two cannot form different opinions about what a target names.
-    """
-    step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
-
-    payload: dict = {}
-    target = step.get("target")
-    if isinstance(target, dict):
-        payload.update(target)
-    data = step.get("data")
-    if isinstance(data, dict) and data.get("config_entry_id"):
-        payload["config_entry_id"] = data["config_entry_id"]
-
-    if not payload:
-        return True
-
-    selected = _selected_entry_ids(hass, payload)
-    return selected is None or entry.entry_id in selected
-
-
-async def build_sync_context(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    all_pages: list[dict] | None = None,
-) -> dict:
-    """Everything a page payload needs that is the same for every page.
-
-    `_build_page_payload` used to fetch all of this itself, once per page, even
-    though only the per-page assignments actually differ. The action library,
-    the text settings and the icon style options are per *device*; the service
-    icon registry is per *installation*; and `build_page_context` walks the
-    whole page list, so calling it inside the page loop made the sync O(N²) —
-    20 pages cost 400 passes over the list, 100 pages cost 10,000.
-
-    `_get_service_icons` is deliberately uncached at module level
-    (see `button_rendering._get_service_icons`) because `async_get_icons`
-    answers for the integrations loaded *so far*, and pinning a partial registry
-    for the lifetime of the process would leave late-loading integrations with
-    fallback icons until a reload. Holding it for the duration of one sync keeps
-    that property: the next sync reads the registry again.
-    """
-    store = hass.data[DOMAIN]["_store"]
-    device_id = entry.runtime_data._device_id if hasattr(entry, "runtime_data") else None
-
-    library = await store.async_get_action_library(device_id)
-    text_settings = await store.async_get_settings(device_id)
-    return {
-        "library": library,
-        "lib_by_id": {a["id"]: a for a in library if isinstance(a, dict) and "id" in a},
-        "text_settings": text_settings,
-        "tooltip_style": text_settings["tooltip"],
-        "longtouch": longtouch_enabled(text_settings),
-        "toggles": toggle_enabled(text_settings),
-        "internal_context": build_page_context(all_pages),
-        "style_options": read_icon_style_options(getattr(entry, "options", None)),
-        "service_icons": await _get_service_icons(hass),
-    }
-
-
-async def _build_page_payload(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    page_id: int,
-    page_config: dict,
-    all_pages: list[dict] | None = None,
-    *,
-    ctx: dict | None = None,
-) -> dict:
-    """Build a set_page data payload, its tiles reading ``${_device}`` as the page has it."""
-    layout = page_config.get("layout") if isinstance(page_config, dict) else None
-    with page_scope(layout):
-        return await _build_page_payload_in_scope(
-            hass, entry, page_id, page_config, all_pages, ctx=ctx,
-        )
-
-
-async def _build_page_payload_in_scope(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    page_id: int,
-    page_config: dict,
-    all_pages: list[dict] | None = None,
-    *,
-    ctx: dict | None = None,
-) -> dict:
-    """Build a set_page data payload from the store.
-
-    Returns a dict matching the protocol's set_page.data shape:
-      {page_id, hash, img_title, buttons: [{name, img_tile, img_tooltip, action}]}
-
-    *all_pages* is every stored page of this device. It is what lets an internal
-    command notice that its target is gone; without it such a command is only
-    validated, never cross-checked.
-
-    *ctx* is the shared, per-device half of the inputs, from
-    :func:`build_sync_context`. A caller building several pages in a row should
-    build it once and pass it in; left out, it is built here, which is what the
-    single-page callers want.
-    """
-    store = hass.data[DOMAIN]["_store"]
-    device_id = entry.runtime_data._device_id if hasattr(entry, "runtime_data") else None
-    if not device_id:
-        return {"page_id": page_id, "img_title": "", "buttons": [], "hash": 0}
-
-    if ctx is None:
-        ctx = await build_sync_context(hass, entry, all_pages)
-
-    library = ctx["library"]
-    text_settings = ctx["text_settings"]
-    tooltip_style = ctx["tooltip_style"]
-    longtouch = ctx["longtouch"]
-    toggles = ctx["toggles"]
-    lib_by_id = ctx["lib_by_id"]
-
-    page_store_id = page_config.get("id", 1)
-    assignments = await store.async_get_assignments(device_id, page_store_id)
-
-    internal_context = ctx["internal_context"]
-
-    # Page-level default icon color (6-char hex, no #)
-    page_color = page_config.get("default_color", "")
-
-    # Resolved once per page, not per button: they cannot change mid-payload,
-    # and the live listener reads the same options so the two producers agree.
-    style_options = ctx["style_options"]
-
-    # Fetch HA service icons for stateless action fallback
-    service_icons = ctx["service_icons"]
-
-    # Build buttons array — exclude sliders (they are NOT buttons per the
-    # protocol; slider_horizontal / slider_vertical have their own event type).
-    buttons = []
-    for button_name, assign in assignments.items():
-        if not isinstance(assign, dict):
-            continue
-        if button_name.startswith("slider_"):
-            continue
-
-        # Applied once, here: everything below derives the button's face, words
-        # and long-touch steps from `assign`, so taking the block off at the top
-        # of the loop is what makes the switch govern all of them at once.
-        assign = runtime_assign(assign, toggles)
-        action_id = assign.get("action_id")
-        if not action_id:
-            # No action — still resolve per-button image and tooltip if configured
-            assign_image = with_resolved_image(assign, hass).get("image")
-            img_tile = resolve_icon_url(assign_image, color=page_color) if assign_image else ""
-            buttons.append({
-                "name": button_name,
-                "img_tile": img_tile,
-                "img_tooltip": resolve_tooltip_url(
-                    _resolve_button_tooltip({}, assign, hass, entry, internal_context),
-                    page_color,
-                    tooltip_style,
-                ),
-                "action": {"type": "ha_event", "params": {}},
-            })
-            continue
-
-        action_def = lib_by_id.get(action_id, {})
-
-        # Resolve images — a button's own stored image is what the panel shows
-        # for it (`_resolveButtonIcon` returns `a.image` before deriving
-        # anything), so honouring it here is what keeps the two surfaces
-        # showing the same glyph.
-        #
-        # Only a service whose icon genuinely follows the entity may override
-        # it, and then only because it has something better to say: the *current*
-        # state. This used to ask `is_stateless_service` instead, which is a
-        # narrower set -- `media_player.turn_off` is one-way, not stateless, so
-        # the device threw the stored image away and re-derived a generic power
-        # glyph while the panel kept showing the chosen one.
-        #
-        # Exception: when the button carries its own payload identity (play_media /
-        # select_source), a pinned image that came from a layout may belong to a
-        # different media item, so the payload thumbnail wins.
-        # Lets a cycle toggle paint the step that is actually next rather than
-        # restarting at step one every time the page is resynced. Read
-        # defensively because this payload is also built for stand-in entries
-        # that carry no id; `toggle_icon` declines rather than guessing when the
-        # button cannot be identified.
-        sync_entry_id = getattr(entry, "entry_id", None)
-        button_ref = (
-            (sync_entry_id, page_store_id, button_name) if sync_entry_id else None
-        )
-        resolved_icon = _resolve_button_icon(
-            action_def, assign, hass, service_icons, internal_context,
-            button_ref=button_ref,
-        )
-
-        # Still needed below, to decide whether the remote runs the command
-        # itself or hands it to Home Assistant as a button event.
-        svc_full = action_def.get("service", "")
-        config = assign.get("config", [])
-        internal_service = step_service(config) or svc_full
-        step_data = (
-            config[0].get("data")
-            if isinstance(config, list) and config and isinstance(config[0], dict)
-            else None
-        )
-        _LOGGER.debug(
-            "Button %s: action_id=%s, action_def.icon=%s, service=%s, resolved=%s",
-            button_name, action_id, action_def.get("icon"), action_def.get("service"), resolved_icon,
-        )
-        tile_style = _button_icon_style(hass, assign, page_color, style_options)
-        img_tile = resolve_icon_url(
-            resolved_icon,
-            color=tile_style.color,
-            percent=tile_style.percent,
-        )
-
-        # Tooltip: dynamic next-state label
-        tooltip_text = _resolve_button_tooltip(
-            action_def, assign, hass, entry, internal_context, button_ref,
-        )
-        img_tooltip = resolve_tooltip_url(tooltip_text, page_color, tooltip_style)
-
-        # Determine action type. A device-local ("internal") command is executed
-        # by the remote itself; everything else travels to HA as a button event.
-        action_type = "ha_event"  # Default — HA handles via automations
-        action_params = {}
-
-        internal = resolve_internal_action(
-            internal_service, step_data, internal_context
-        )
-        if internal is not None and not step_targets_entry(hass, entry, config):
-            # The command is valid, it just is not this remote's to run. Left
-            # as a button event, Home Assistant receives it and calls the
-            # service with the target the step actually names.
-            internal = ("ha_event", {})
-        if internal is not None and longtouch and longtouch_steps(assign):
-            # A long touch holds the click back until the finger lifts, which
-            # only Home Assistant can do: run by the remote, the command would
-            # fire on press, before anyone knows the touch will be long.
-            internal = None
-        if internal is not None:
-            action_type, action_params = internal
-
-        buttons.append({
-            "name": button_name,
-            "img_tile": img_tile,
-            "img_tooltip": img_tooltip,
-            "action": {"type": action_type, "params": action_params},
-        })
-
-    # Ensure ALL non-slider button names are present in the payload.
-    # The store strips empty buttons from the page file to keep YAMLs lean,
-    # but the device uses merge semantics ("incoming fields override, omitted
-    # fields keep their current value").  If we omit an empty button the
-    # device keeps its previous/default icon for that position.
-    ALL_BUTTON_NAMES = (
-        ["button_power"]
-        + [f"button_{i}" for i in range(1, 13)]
-        + ["button_back", "button_voice", "button_volume_up", "button_volume_down"]
-    )
-    sent_names = {b["name"] for b in buttons}
-    for btn_name in ALL_BUTTON_NAMES:
-        if btn_name not in sent_names:
-            buttons.append({
-                "name": btn_name,
-                "img_tile": "",
-                "img_tooltip": "",
-                "action": {"type": "ha_event", "params": {}},
-            })
-
-    # Page-level properties — img_title is always a URL to a PNG image
-    # Entity variables resolve as they do on a button; one with no value leaves
-    # the title strip blank rather than drawing half a name.
-    # `${_device}` first: what it names can itself hold no variable.
-    page_img_title = with_resolved_image(
-        {"image": substitute_device_token(
-            page_config.get("image", ""), hass, page_config.get("layout"),
-        )}, hass,
-    ).get("image") or ""
-    img_title = resolve_title_url(page_img_title, page_color, text_settings["title"])
-
-    page_data = {
-        "page_id": page_id,
-        "img_title": img_title,
-        "buttons": buttons,
-    }
-    page_data["hash"] = _compute_page_hash(page_data)
-
-    return page_data
-
-
 async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Sync the panel's page configuration to the device, one sync at a time.
 
@@ -586,7 +222,7 @@ async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool
     and a dynamic-source refresh. None of them coordinated, and the sync body
     awaits a device round trip per page, so two of them could interleave their
     ``add_page``/``set_page``/``set_main_pages`` commands at every await and
-    leave ``_known_pages`` describing a device state that never existed.
+    leave ``page_cache.pages`` describing a device state that never existed.
 
     This is the single-flight guard the live icon path already has in
     :class:`~.icon_push.IconPushQueue`: one sync runs, a sync requested while
@@ -661,11 +297,11 @@ async def _sync_locked(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     Returns True if sync was performed, False if device not available.
     """
-    conn = _get_device_connection(hass, entry)
+    conn = entry_connection(entry)
     if not is_ready(conn):
         _LOGGER.debug("Device not connected, skipping sync for %s", entry.title)
         return False
-    async with conn._page_sync_lock:
+    async with conn.page_cache.lock:
         with variables_scope(getattr(entry, "options", None)):
             return await _sync_config_to_device(hass, entry, conn)
 
@@ -678,15 +314,15 @@ async def _sync_config_to_device(
     Uses the protocol commands: get_pages, clear_all/add_page/set_page/set_main_pages.
     """
     # Load pages from store
-    device_id = entry.runtime_data._device_id if hasattr(entry, "runtime_data") else None
+    device_id = entry_device_id(entry)
     if not device_id:
         _LOGGER.debug("No device_id for entry %s", entry.entry_id)
         return False
-    store = hass.data[DOMAIN]["_store"]
+    store = _get_store(hass)
     pages = await store.async_get_pages(device_id)
 
     # Use cached device state if available; otherwise query the device (first sync after connect)
-    if conn._known_pages is None:
+    if conn.page_cache.pages is None:
         listing_timeout = _listing_timeout(len(pages))
         try:
             device_pages = await conn.get_pages(timeout=listing_timeout)
@@ -714,8 +350,8 @@ async def _sync_config_to_device(
             _LOGGER.debug("Failed to get_main_pages from device: %s", err)
             device_main_pages = []
     else:
-        device_hash_map = {pid: p.get("hash") for pid, p in conn._known_pages.items()}
-        device_main_pages = conn._known_main_pages or []
+        device_hash_map = {pid: p.get("hash") for pid, p in conn.page_cache.pages.items()}
+        device_main_pages = conn.page_cache.main_pages or []
 
     # Build desired state
     build_started = time.monotonic()
@@ -737,7 +373,7 @@ async def _sync_config_to_device(
                 page_id,
             )
             continue
-        page_data = await _build_page_payload(
+        page_data = await build_page_payload(
             hass, entry, page_id, page_config, pages, ctx=page_ctx,
         )
         desired_pages.append(page_data)
@@ -768,10 +404,7 @@ async def _sync_config_to_device(
     order_changed = device_main_pages != main_page_ids
     # A page whose write went unanswered may be on the device although it is
     # not in the cache; once it leaves the config it is removed all the same.
-    unsure = getattr(conn, "_unsure_pages", None)
-    if unsure is None:
-        unsure = set()
-        conn._unsure_pages = unsure
+    unsure = conn.page_cache.unsure
     unsure.difference_update(device_page_ids)
     stray_pages = sorted(unsure - desired_page_ids)
 
@@ -781,8 +414,8 @@ async def _sync_config_to_device(
     ):
         # Populate the cache so subsequent syncs skip the device query. Nothing
         # differed, so what was just built is what the device holds.
-        conn._known_pages = {p["page_id"]: p for p in desired_pages}
-        conn._known_main_pages = list(main_page_ids)
+        conn.page_cache.pages = {p["page_id"]: p for p in desired_pages}
+        conn.page_cache.main_pages = list(main_page_ids)
         _note_sync_success(hass, entry, conn)
         _LOGGER.debug("Device pages up to date, no sync needed")
         return True
@@ -806,15 +439,15 @@ async def _sync_config_to_device(
     # the identical diff, resent the identical pages in the identical order and
     # stopped at the identical page — the failure never healed. Keeping what
     # landed means a retry only carries what did not.
-    if conn._known_pages is None:
+    if conn.page_cache.pages is None:
         # Seeded from what the device just reported, which is a hash and no
         # payload. A page with no recorded payload is sent whole rather than
         # as a delta -- right, because its content is the device's, not ours.
-        conn._known_pages = {
+        conn.page_cache.pages = {
             pid: {"page_id": pid, "hash": h}
             for pid, h in device_hash_map.items()
         }
-    known_pages = conn._known_pages
+    known_pages = conn.page_cache.pages
 
     # Pages the diff did not pick up match the device by hash, so what was just
     # built *is* what the device holds. Recording the payload keeps
@@ -830,10 +463,7 @@ async def _sync_config_to_device(
     # Page IDs the device refused outright earlier in this session. Retrying
     # them costs four round-trips each on every config change and can never
     # succeed, so they are skipped until the next reconnect.
-    rejected = getattr(conn, "_rejected_pages", None)
-    if rejected is None:
-        rejected = set()
-        conn._rejected_pages = rejected
+    rejected = conn.page_cache.rejected
     rejected_before = set(rejected)
 
     for pid in remove_order:
@@ -947,9 +577,9 @@ async def _sync_config_to_device(
             partial(conn.set_main_pages, deliverable), "set_main_pages", None,
             error_sink=order_errors,
         ):
-            conn._known_main_pages = list(deliverable)
+            conn.page_cache.main_pages = list(deliverable)
         else:
-            conn._known_main_pages = None
+            conn.page_cache.main_pages = None
             # The pages may all be stored and still be in the wrong order, and
             # order is the whole of what navigation shows. Reporting success
             # here would reset the failure counter and leave nothing to retry.
@@ -960,7 +590,7 @@ async def _sync_config_to_device(
     else:
         # Already the order the device reported this pass, so there is nothing
         # to write -- but the cache may not have known that yet.
-        conn._known_main_pages = list(deliverable)
+        conn.page_cache.main_pages = list(deliverable)
 
     newly_rejected = rejected - rejected_before
     if newly_rejected:
@@ -1034,8 +664,8 @@ def _note_sync_failure(
         # off is not counted.
         _LOGGER.debug("Sync failure not counted, the remote is not connected: %s", err)
         return
-    count = getattr(conn, "_page_sync_failures", 0) + 1
-    conn._page_sync_failures = count
+    count = conn.page_cache.failures + 1
+    conn.page_cache.failures = count
     if count == MAX_SYNC_FAILURES:
         _LOGGER.error(
             "Pages could not be sent to %s: %d syncs in a row failed (last "
@@ -1047,69 +677,9 @@ def _note_sync_failure(
 
 def _note_sync_success(hass: HomeAssistant, entry: ConfigEntry, conn: Any) -> None:
     """Clear the failure count."""
-    if getattr(conn, "_page_sync_failures", 0) >= MAX_SYNC_FAILURES:
+    if conn.page_cache.failures >= MAX_SYNC_FAILURES:
         _LOGGER.info("Pages are in sync with %s again", entry.title)
-    conn._page_sync_failures = 0
-
-
-def _page_delta(previous: dict | None, desired: dict) -> dict:
-    """The smallest `set_page` payload that takes the device from *previous* to *desired*.
-
-    `set_page` merges: fields left out keep their current value, and a partial
-    `buttons` array is merged per button rather than replacing the array
-    (PROTOCOL.md §set_page). So a page whose tooltip changed need only carry
-    that one button instead of all seventeen.
-
-    *previous* is what we last successfully sent for this page. Without it --
-    a fresh connection, or a sync that failed and dropped the cache -- there is
-    nothing to merge against and the whole page goes out.
-
-    `hash` always travels, whole-page and partial alike: it describes the page
-    the device ends up with, and `get_pages` compares it on the next connect.
-    """
-    if not previous:
-        return desired
-
-    prev_buttons = {b["name"]: b for b in previous.get("buttons", [])}
-    changed = [
-        b for b in desired.get("buttons", [])
-        if prev_buttons.get(b["name"]) != b
-    ]
-
-    # Nothing saved by a partial that names every button anyway, and the full
-    # payload is the better thing to send when the whole page moved.
-    if len(changed) == len(desired.get("buttons", [])):
-        return desired
-
-    delta: dict = {"page_id": desired["page_id"], "hash": desired["hash"]}
-    if previous.get("img_title") != desired.get("img_title"):
-        delta["img_title"] = desired["img_title"]
-    if changed:
-        delta["buttons"] = changed
-    return delta
-
-
-async def _add_page_if_missing(conn: Any, page_id: int) -> None:
-    """Add *page_id* to the device, tolerating a page that is already there.
-
-    An interrupted sync can leave a page added but unrecorded, and firmware
-    answers the second `add_page` with an error (``409`` per PROTOCOL.md, but
-    at least one version sends ``-4 "data"."page_id"``). The code alone cannot
-    be trusted to mean "already exists" -- it is also what a genuinely invalid
-    id returns -- so ask the device and only swallow the error when the page
-    really is present.
-    """
-    try:
-        await conn.add_page(page_id)
-    except Exception as err:
-        try:
-            existing = {p["page_id"] for p in await conn.get_pages()}
-        except Exception:
-            raise err from None
-        if page_id not in existing:
-            raise
-        _LOGGER.debug("Page %s already on device, keeping it: %s", page_id, err)
-
+    conn.page_cache.failures = 0
 
 
 #: The parts of a button an entity variable can move. Anything else differing
@@ -1150,7 +720,7 @@ def note_partial_page(
     push resends it, and the next full sync resends the whole page. A page the
     cache does not hold is left for the full sync to settle.
     """
-    known = getattr(conn, "_known_pages", None)
+    known = conn.page_cache.pages
     copy = None if known is None else known.get(page_id)
     if copy is None:
         return
@@ -1163,7 +733,7 @@ def note_partial_page(
     if img_title is not None:
         patched["img_title"] = img_title
     patched["buttons"] = [{**b, **moved.get(b.get("name"), {})} for b in copy["buttons"]]
-    patched["hash"] = _compute_page_hash(patched)
+    patched["hash"] = compute_page_hash(patched)
     known[page_id] = patched
 
 
@@ -1186,17 +756,18 @@ async def _push_variable_pages(
     them. A page the device's copy of is not known, or that changed more than a
     variable can, falls back to the full sync.
     """
-    conn = _get_device_connection(hass, entry)
+    conn = entry_connection(entry)
     if not is_ready(conn):
         return
-    device_id = entry.runtime_data._device_id if hasattr(entry, "runtime_data") else None
-    queue = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("icon_push_queue")
-    known = conn._known_pages
+    device_id = entry_device_id(entry)
+    panel_entry = get_panel_entry(hass, entry.entry_id)
+    queue = panel_entry.icon_push_queue if panel_entry is not None else None
+    known = conn.page_cache.pages
     if not device_id or queue is None or not known:
         await sync_config_to_device(hass, entry)
         return
 
-    pages = await hass.data[DOMAIN]["_store"].async_get_pages(device_id)
+    pages = await _get_store(hass).async_get_pages(device_id)
     by_id = {p.get("id", 1): p for p in pages if isinstance(p, dict)}
     pushed = False
     for page_id in sorted(page_ids):
@@ -1209,7 +780,7 @@ async def _push_variable_pages(
         if sent is None:
             await sync_config_to_device(hass, entry)
             return
-        built = await _build_page_payload(hass, entry, page_id, page_config, pages)
+        built = await build_page_payload(hass, entry, page_id, page_config, pages)
         changes = _live_button_changes(sent, built)
         if changes is None:
             await sync_config_to_device(hass, entry)

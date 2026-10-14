@@ -7,20 +7,17 @@ import time
 from collections.abc import Callable
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .. import optimistic
 from ..config.text_style import toggle_enabled
-from ..const import (
-    ICON_UPDATE_EVENT,
-    PREDICTED_UPDATE_EVENT,
-    catchall_state_icon,
-    page_scope,
-    resolve_icon_url,
-    resolve_image_tokens,
-    variables_scope,
-)
+from ..const import SIGNAL_ICON_UPDATE, SIGNAL_PREDICTED_UPDATE
+from ..shared.services import catchall_state_icon
+from ..shared.tokens import page_scope, resolve_image_tokens
+from ..shared.icon_urls import resolve_icon_url
+from ..variables_calc import variables_scope
 from ..state_icon import (
     icon_style_for_entities,
     is_styleable,
@@ -45,13 +42,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# State listener — tracks entity changes → fires icon update events
+# State listener — tracks entity changes → sends icon updates
 # ---------------------------------------------------------------------------
 
 async def setup_state_listener(
     hass: HomeAssistant, entry: ConfigEntry,
 ) -> Callable[[], None]:
-    """Watch entities used in button assignments; fire icon-update events on change.
+    """Watch entities used in button assignments; send icon updates when they change.
 
     Returns a cleanup callable.
     """
@@ -101,11 +98,11 @@ async def setup_state_listener(
             await _async_flush_locked(entities)
 
     async def _async_flush_locked(entities: list[str]):
-        # Inline: device_sync -> action_controller -> this module, so a top-level
-        # import re-enters a half-built package (and `lizaip.reload` re-executes
-        # both in its own order). Reusing its resolver is what keeps the live
-        # push and the full sync agreeing on the glyph by construction.
-        from ..config.device_sync import _get_service_icons, _resolve_button_icon
+        # Inline: button_rendering -> action_controller -> this module, so a
+        # top-level import re-enters a half-built package (and `lizaip.reload`
+        # re-executes both in its own order). Reusing the full sync's resolver
+        # is what keeps the live push and the sync agreeing on the glyph.
+        from ..config.button_rendering import _get_service_icons, _resolve_button_icon
 
         current_lib = await store.async_get_action_library(device_id)
         current_pages = await store.async_get_pages(device_id)
@@ -256,22 +253,10 @@ async def setup_state_listener(
         if not changed:
             return
 
-        hass.bus.async_fire(ICON_UPDATE_EVENT, {
-            "device_id": device_id,
-            "updates": changed,
-        })
+        async_dispatcher_send(hass, SIGNAL_ICON_UPDATE.format(device_id), changed)
 
     @callback
-    def _on_state_change(event: Event):
-        eid = event.data.get("entity_id")
-        if eid not in watched_entities:
-            return
-        # A real update is the authority, so let it retire any prediction it
-        # agrees with before the flush reads the entity back. `settle` keeps a
-        # prediction the lamp has not reached yet, which is what stops a
-        # mid-ramp report from yanking the tile back down.
-        if event.event_type != PREDICTED_UPDATE_EVENT:
-            optimistic.settle(hass.states.get(eid))
+    def _mark_dirty(eid: str) -> None:
         dirty.add(eid)
 
         if timer_handle[0] is not None:
@@ -283,7 +268,7 @@ async def setup_state_listener(
         # user is waiting to see -- a lamp switched on, a scene recalled -- and
         # making it wait out a debounce is pure latency: there is no burst to
         # coalesce yet. `last_sent` already drops flushes that change nothing,
-        # so firing eagerly costs an event only when there is news.
+        # so flushing eagerly costs a push only when there is news.
         if elapsed >= _STATE_MAX_WAIT_SECONDS:
             _flush()
             return
@@ -296,14 +281,31 @@ async def setup_state_listener(
         )
         timer_handle[0] = hass.loop.call_later(delay, _flush)
 
-    unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, _on_state_change)
-    # The same handler, so a prediction is coalesced by the same throttle as a
-    # real change -- a drag must not be able to outrun the device.
-    unsub_predicted = hass.bus.async_listen(PREDICTED_UPDATE_EVENT, _on_state_change)
+    @callback
+    def _on_state_change(event: Event) -> None:
+        eid = event.data["entity_id"]
+        # A real update is the authority, so let it retire any prediction it
+        # agrees with before the flush reads the entity back. `settle` keeps a
+        # prediction the lamp has not reached yet, which is what stops a
+        # mid-ramp report from yanking the tile back down.
+        optimistic.settle(hass.states.get(eid))
+        _mark_dirty(eid)
+
+    @callback
+    def _on_predicted(eid: str) -> None:
+        # Through the same throttle as a real change, so a drag cannot outrun
+        # the device.
+        if eid in watched_entities:
+            _mark_dirty(eid)
+
+    unsubs = [
+        async_track_state_change_event(hass, watched_entities, _on_state_change),
+        async_dispatcher_connect(hass, SIGNAL_PREDICTED_UPDATE, _on_predicted),
+    ]
 
     def _cleanup():
-        unsub()
-        unsub_predicted()
+        for unsub in unsubs:
+            unsub()
         if timer_handle[0] is not None:
             timer_handle[0].cancel()
         dirty.clear()

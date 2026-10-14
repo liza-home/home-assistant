@@ -9,25 +9,24 @@ from aiohttp import web
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.components.frontend import async_remove_panel
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.panel_custom import async_register_panel
 
 from ..action_controller import (
-    clear_cycle_state,
-    clear_slider_state,
+    forget_remote,
     get_current_page,
     setup as setup_action_dispatch,
     setup_state_listener,
 )
-from ..const import (
-    DOMAIN,
-    ICON_UPDATE_EVENT,
-    async_preload_action_labels,
-    resolve_tooltip_url,
-)
+from ..const import DOMAIN, SIGNAL_ICON_UPDATE
+from ..shared.i18n import action_labels
+from ..shared.icon_urls import resolve_tooltip_url
+from ..runtime import entry_connection, _get_store
 from .const import CONFIG_CHANGED_EVENT
 from .icon_push import IconPushQueue
+from .panel_entry import add_panel_entry, pop_panel_entry
 from . import device_sync as _device_sync_mod
 from .layouts import refresh as _layout_refresh
 from .variables import async_setup_variable_listener
@@ -124,7 +123,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
     # Before anything can ask for a label: the ladder that builds tooltips is
     # synchronous and cannot await, so its translations are read here, once,
     # off the loop.
-    await async_preload_action_labels(hass)
+    await action_labels.async_preload(hass)
 
     hass.http.register_view(LizaIPPanelView)
 
@@ -164,7 +163,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
     # safety net that also covers a listener lost to a partial/failed setup.
     setup_action_dispatch(hass)
 
-    entry_data = hass.data[DOMAIN].setdefault(entry.entry_id, {})
+    panel_entry = add_panel_entry(hass, entry.entry_id)
 
     # Resolve device_id once via the device registry for all closures
     dev_reg = dr.async_get(hass)
@@ -176,12 +175,12 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     # The live icon-update callback below cannot await; read the text settings
     # now so it finds them kept rather than falling back to the defaults.
-    store = hass.data[DOMAIN]["_store"]
+    store = _get_store(hass)
     if device_id is not None:
         await store.async_get_settings(device_id)
 
     # State listener → icon updates
-    entry_data["state_unsub"] = await setup_state_listener(hass, entry)
+    panel_entry.replace_state_listener(await setup_state_listener(hass, entry))
 
     async def _on_config_changed(event: Event) -> None:
         if needs_device_sync(event.data, entry.entry_id):
@@ -208,7 +207,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         remote answers -4 until its hello is done, and the sync that follows
         the hello sends the current icons anyway.
         """
-        conn = entry.runtime_data if hasattr(entry, "runtime_data") else None
+        conn = entry_connection(entry)
         if not _device_sync_mod.is_ready(conn):
             return
         fields: dict = {"buttons": buttons} if buttons else {}
@@ -221,29 +220,26 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         _send_page,
         current_page=lambda: get_current_page(entry.entry_id),
     )
-    entry_data["icon_push_queue"] = push_queue
+    panel_entry.icon_push_queue = push_queue
 
     # Entity variables in tooltips and icons → push what moved when their
     # entity does, through the queue above.
-    entry_data["variable_unsub"] = await async_setup_variable_listener(
+    panel_entry.on_close(await async_setup_variable_listener(
         hass, entry, _device_sync_mod.async_push_variable_pages
-    )
+    ))
 
     # A plain callback, so it cannot start a concurrent round-trip of its own.
     # The tooltip style therefore comes from `cached_settings`, warmed during
     # entry setup, rather than an awaited disk read.
     @callback
-    def _on_icon_update(event: Event) -> None:
-        if event.data.get("device_id") != device_id:
-            return
-
+    def _on_icon_update(updates: list[dict]) -> None:
         # Resolve page IDs — they are 32-bit integers matching protocol page IDs
         # Group updates by page for efficiency (one set_page call per page)
         page_buttons: dict[int, list[dict]] = {}
         # The same font and size the page sync drew the tooltip in; without
         # them a live update would redraw it in the defaults.
         tooltip_style = None
-        for upd in event.data.get("updates", []):
+        for upd in updates:
             btn_name = upd.get("button_key", "")
             if not btn_name:
                 continue
@@ -281,19 +277,21 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             ),
         )
 
-    entry_data["sync_unsub"] = hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed)
-    entry_data["icon_sync_unsub"] = hass.bus.async_listen(ICON_UPDATE_EVENT, _on_icon_update)
-    entry_data["hello_sync_unsub"] = hass.bus.async_listen(LIZAIP_HELLO_EVENT, _on_device_hello)
+    panel_entry.on_close(hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed))
+    if device_id is not None:
+        panel_entry.on_close(async_dispatcher_connect(
+            hass, SIGNAL_ICON_UPDATE.format(device_id), _on_icon_update,
+        ))
+    panel_entry.on_close(hass.bus.async_listen(LIZAIP_HELLO_EVENT, _on_device_hello))
 
     # Dynamic-source refresh triggers (goto_page navigation).
-    entry_data.update(_layout_refresh.async_setup_entry_triggers(hass, entry))
+    for stop in _layout_refresh.async_setup_entry_triggers(hass, entry):
+        panel_entry.on_close(stop)
     _layout_refresh.async_register_service(hass)
 
     # Source-side push triggers.
     try:
-        entry_data.update(
-            await _layout_refresh.async_setup_push_triggers(hass, entry)
-        )
+        panel_entry.push_triggers = await _layout_refresh.async_setup_push_triggers(hass, entry)
     except Exception as err:  # noqa: BLE001 - an optimisation must never break setup
         _LOGGER.debug("Dynamic push triggers unavailable for %s: %s", entry.title, err)
 
@@ -303,51 +301,16 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
 async def async_unload_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Tear down config-panel listeners for one device entry."""
-    entry_data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, {})
+    panel_entry = pop_panel_entry(hass, entry.entry_id)
 
-    # An in-flight slider gesture cannot survive the entry going away: its
-    # base value was read from an entity this entry owns.
-    clear_slider_state(entry.entry_id)
-    # Cycle positions outlive a page change on purpose, so unload is the only
-    # place they are dropped — and they must be, or a reload would resume a
-    # conversation with a device that is no longer configured.
-    clear_cycle_state(entry.entry_id)
+    # Gestures, selection and cycle positions all belonged to this entry.
+    forget_remote(entry.entry_id)
 
-    # Before the unsubscribes below, so a drain cannot start a fresh round-trip
-    # against a connection this unload is about to drop. The task is tied to
-    # the entry and would be cancelled anyway; this also discards the pending
-    # set, which a reload would otherwise re-send as stale state.
-    push_queue = entry_data.get("icon_push_queue")
-    if push_queue is not None:
-        push_queue.close()
-
-    for key in (
-        "state_unsub",
-        "variable_unsub",
-        "sync_unsub",
-        "icon_sync_unsub",
-        "hello_sync_unsub",
-        "dynamic_goto_unsub",
-        "dynamic_debounce_unsub",
-    ):
-        unsub = entry_data.get(key)
-        if unsub:
-            unsub()
-
-    # Cancelling the pending debounce matters as much as unsubscribing: a
-    # scheduled refresh that fires after the entry is gone would resolve a
-    # device that no longer exists. Listed explicitly rather than matched on a
-    # "dynamic_push_" prefix, because that key space also holds the signal
-    # callback and the watched-entity set — calling either would be a bug
-    # (the handler would schedule a refresh during teardown).
-    for key in ("dynamic_push_unsub", "dynamic_push_debounce_unsub"):
-        unsub = entry_data.get(key)
-        if not unsub:
-            continue
-        try:
-            unsub()
-        except Exception as err:  # noqa: BLE001 - teardown must not raise
-            _LOGGER.debug("Push trigger teardown failed for %s: %s", key, err)
+    # Closing the queue, the listeners and the pending refreshes all at once:
+    # a refresh that fired after the entry is gone would resolve a device that
+    # no longer exists.
+    if panel_entry is not None:
+        panel_entry.close()
 
     # NOTE: the button listener ("_button_unsub") is deliberately NOT torn down here.
     # It is integration-scoped — registered by action_controller.setup() from

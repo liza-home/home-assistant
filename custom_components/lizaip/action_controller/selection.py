@@ -5,14 +5,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
-from ._state import (
-    _clear_selected_device,
-    _selected_button,
-    _selected_control,
-    _selected_entity,
-    _selected_factor,
-    get_selected_entity,
-)
+from ._state import remote_state
 from .helpers import _get_store, _resolve_device_id
 from .overrides import (
     is_grid_button,
@@ -44,9 +37,10 @@ def _update_context(
     user saying "nothing is selected now", which is also what the panel does in
     `_switchTab` / `_selectButton`.
     """
+    state = remote_state(entry_id)
     if may_be_context(button_key, assign):
-        previous = _selected_button.get(entry_id)
-        _selected_button[entry_id] = button_key
+        previous = state.selected_button
+        state.selected_button = button_key
         if previous != button_key:
             _LOGGER.debug("Context: %s (was %s)", button_key, previous)
         return
@@ -57,17 +51,17 @@ def _update_context(
     if interaction != _CLICK:
         _LOGGER.debug(
             "Context: %s is blank — keeping %s (interaction=%s)",
-            button_key, _selected_button.get(entry_id), interaction,
+            button_key, state.selected_button, interaction,
         )
         return
 
-    previous = _selected_button.pop(entry_id, None)
+    previous, state.selected_button = state.selected_button, None
     # The slider selection goes with it: one gesture, one meaning. Leaving the
     # slider on the last lamp while the fixed buttons reset showed half a face
     # changing on the device with nothing to say why. Scoped to *blank* buttons
     # only -- a configured button that simply declines the slider job keeps the
     # selection, or half a typical grid would become a deselect button.
-    _clear_selected_device(entry_id)
+    state.clear_selection()
     if previous is not None:
         _LOGGER.debug(
             "Context: cleared (was %s) — %s was pressed and is blank",
@@ -93,7 +87,7 @@ async def _record_selection(
     that today -- the panel's picker only targets grid keys -- but hand-edited
     YAML and direct websocket saves still reach it, so it is latent rather than
     fixed. If it is ever closed, guard the *writer*
-    (`_build_assignment_entry` in ``websocket.py``): guarding only this side
+    (`build_assignment_entry` in ``config/websocket/assignment_entry.py``): guarding only this side
     leaves the panel storing a key that is silently inert.
 
     Runs on every touch of every button, so it stays cheap: one cached store
@@ -136,8 +130,9 @@ def _record_selected_entity(
     is now the whole opt-in, so there is one, and the split earns its keep as a
     boundary rather than as deduplication.
     """
-    previous = get_selected_entity(entry_id)
-    _selected_entity[entry_id] = entity_id
+    state = remote_state(entry_id)
+    previous = state.selected_entity
+    state.selected_entity = entity_id
     # Set and cleared together with the entity, never left over from an
     # earlier button: a stale control id would ask a speaker for colour
     # temperature. Whether the entity actually supports it is not this
@@ -146,10 +141,7 @@ def _record_selected_entity(
     control_id = slider_control_override(assign)
     # Stripped by `slider_control_override`: this reads whatever is in the
     # store, which a hand-edited config can reach without passing either writer.
-    if control_id:
-        _selected_control[entry_id] = control_id
-    else:
-        _selected_control.pop(entry_id, None)
+    state.selected_control = control_id or None
     # The same rule for sensitivity, and the same reason for reading it here:
     # resolution is sync and has no store, while this function is holding the
     # assignment already. Anything unusable -- a string, a bool, a value outside
@@ -163,9 +155,9 @@ def _record_selected_entity(
         and not isinstance(factor, bool)
         and SLIDER_FACTOR_MIN <= float(factor) <= SLIDER_FACTOR_MAX
     ):
-        _selected_factor[entry_id] = float(factor)
+        state.selected_factor = float(factor)
     else:
-        _selected_factor.pop(entry_id, None)
+        state.selected_factor = None
     if previous != entity_id:
         _LOGGER.debug(
             "Selection: %s → %s (was %s)", button_key, entity_id, previous,

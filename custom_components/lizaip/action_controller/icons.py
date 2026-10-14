@@ -5,36 +5,30 @@ import logging
 
 from homeassistant.core import HomeAssistant, State
 
-from ..const import (
+from ..shared.services import (
     attr_str,
-    clean_label_text,
-    friendly_svc,
-    get_action_label,
-    get_default_icon,
-    get_ui_language,
     is_attribute_state_service,
     is_state_toggle_service,
     is_stateless_service,
-    is_token_only_label,
     is_two_way_service,
-    localize_static_name,
-    name_is_source_owned,
-    name_is_user_written,
     NEXT_STATE_MAP,
-    resolve_image_tokens,
     scope_action_states,
     scoped_icon_state,
     service_to_attribute,
-    state_token_label,
+    service_name,
+)
+from ..shared.tokens import (
+    clean_label_text,
+    finish_tooltip,
+    resolve_image_tokens,
     substitute_label_tokens,
 )
+from ..shared.i18n import action_labels, get_ui_language
+from ..shared.icon_defaults import icon_defaults
+from ..shared.labels import is_token_only_label, state_token_label
+from ..shared.assignment import name_is_source_owned, name_is_user_written
 from ._state import cycle_index
-from .helpers import (
-    first_step,
-    resolve_step_entity,
-    service_name,
-    subject_for_assign,
-)
+from .helpers import first_step, resolve_step_entity, subject_for_assign
 from .toggle import (
     MODE_CYCLE,
     rule_icon,
@@ -61,16 +55,16 @@ def _compute_next_state_tooltip(
 ) -> str:
     """Compute dynamic tooltip showing the next state action will trigger.
 
-    Cleaned on the way out for the same reason as ``device_sync``'s ladder: the
+    Cleaned on the way out for the same reason as ``button_rendering``'s ladder: the
     result ends up inside an ``imgserv://`` URL, where a brace is fatal.
 
     *entry* carries the device's language option. It has to reach here as well
-    as ``device_sync``: this is the *live* producer of the same tooltip, so a
+    as ``button_rendering``: this is the *live* producer of the same tooltip, so a
     device left out of it would relabel itself in Home Assistant's language the
     first time its entity moved.
     """
-    return clean_label_text(
-        _compute_next_state_tooltip_inner(action, assign, state, hass, entry)
+    return finish_tooltip(
+        _compute_next_state_tooltip_inner(action, assign, state, hass, entry), hass,
     )
 
 
@@ -99,8 +93,8 @@ def _compute_next_state_tooltip_inner(
         static_name = action.get("name") or ""
 
     lang = get_ui_language(hass, entry) if hass else "en"
-    # Same rung `device_sync` localizes, or this overwrites the synced text.
-    static_name = localize_static_name(static_name, lang, name_is_user_written(assign))
+    # Same rung `button_rendering` localizes, or this overwrites the synced text.
+    static_name = action_labels.localize(static_name, lang, name_is_user_written(assign))
 
     if not svc:
         return static_name
@@ -108,12 +102,12 @@ def _compute_next_state_tooltip_inner(
     # What a setter's `${_state}` reads: the entity's attributes, and the step's
     # own service data when it names a literal value. Both producers of this
     # tooltip must pass the same pair or the label flickers the first time the
-    # entity changes -- `device_sync._fill_label_tokens` is the other one.
+    # entity changes -- `button_rendering._fill_label_tokens` is the other one.
     _step = first_step(assign)
     step_data = _step.get("data") or {}
 
     # The subject is what the button targets, not the entity whose change woke
-    # this. Resolved by the same helper `device_sync` uses: deriving the pair
+    # this. Resolved by the same helper `button_rendering` uses: deriving the pair
     # separately let an unnamed target take two different states.
     subject_name, state = subject_for_assign(assign, hass, state)
 
@@ -124,17 +118,17 @@ def _compute_next_state_tooltip_inner(
     # `step_data` was already missing from one of them once.
     token_state = state_token_label(svc, state.state if state else "", lang, attrs, step_data)
 
-    # A label the user typed wins here exactly as it does in `device_sync`'s
+    # A label the user typed wins here exactly as it does in `button_rendering`'s
     # tooltip ladder. Without this the two producers disagree: the initial sync
     # would send the custom label and the first state change would overwrite it
     # with an entity-derived one, so a `${_state}` label lost its prefix.
     stored_name = (assign.get("label") or "").strip()
     token_only = is_token_only_label(stored_name)
-    # See `device_sync`'s ladder: a recorded edit outranks the guess below it,
+    # See `button_rendering`'s ladder: a recorded edit outranks the guess below it,
     # and releases the source-owned guard, so a lamp the user renamed by hand
     # keeps its own words on every state change too.
     user_named = name_is_user_written(assign)
-    # See `device_sync`'s ladder: a name a dynamic source wrote names the
+    # See `button_rendering`'s ladder: a name a dynamic source wrote names the
     # button's subject, so a toggle is allowed to print the state after it.
     bound_toggle = (
         not user_named and name_is_source_owned(assign) and is_two_way_service(svc)
@@ -150,7 +144,7 @@ def _compute_next_state_tooltip_inner(
         and (user_named or stored_name != (action.get("name") or ""))
     ):
         # Empty after cleaning means the label was only wreckage; fall through
-        # rather than blanking the tooltip. Mirrors `device_sync`'s rung.
+        # rather than blanking the tooltip. Mirrors `button_rendering`'s rung.
         resolved = clean_label_text(
             substitute_label_tokens(
                 stored_name,
@@ -180,7 +174,7 @@ def _compute_next_state_tooltip_inner(
             return stored_name
 
     # "${_state}" names nothing by itself, so the entity goes in front of it —
-    # the same shape `device_sync` produces for the very same stored label.
+    # the same shape `button_rendering` produces for the very same stored label.
     if token_only:
         resolved = substitute_label_tokens(
             stored_name,
@@ -192,7 +186,7 @@ def _compute_next_state_tooltip_inner(
 
     # An unrenamed attribute button announces its next action, exactly as an
     # unrenamed toggle announces its next state below. Mirrors the rung of the
-    # same name in `device_sync._resolve_button_tooltip_ladder`; the two must
+    # same name in `button_rendering._resolve_button_tooltip_ladder`; the two must
     # agree or the label changes the first time the entity moves.
     if is_attribute_state_service(svc):
         if token_state:
@@ -201,10 +195,10 @@ def _compute_next_state_tooltip_inner(
     if is_state_toggle_service(svc) and state:
         next_key = NEXT_STATE_MAP.get(state.state)
         if next_key:
-            label = get_action_label(next_key, lang)
+            label = action_labels.get(next_key, lang)
             return f"{entity_name} {label}" if entity_name else label
 
-    label = friendly_svc(svc, lang)
+    label = action_labels.for_service(svc, lang)
     if label:
         return f"{entity_name} {label}" if entity_name else label
 
@@ -244,7 +238,7 @@ def _match_state_icon(action: dict, state: State) -> str | None:
     attribute = service_to_attribute(svc)
     if attribute:
         attr_val = attr_str(state.attributes.get(attribute, ""))
-        return get_default_icon(domain, attribute, attr_val)
+        return icon_defaults.for_state(domain, attribute, attr_val)
 
     if is_state_toggle_service(svc):
         # A service narrower than its domain reads the shared icon table through
@@ -252,7 +246,7 @@ def _match_state_icon(action: dict, state: State) -> str | None:
         # rather than the power glyph that entry carries for `turn_on`. A
         # one-way service gets no state-keyed icon at all.
         lookup = scoped_icon_state(svc, domain, state.state)
-        return get_default_icon(domain, None, lookup) if lookup else None
+        return icon_defaults.for_state(domain, None, lookup) if lookup else None
 
     return None
 

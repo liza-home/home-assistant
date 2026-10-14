@@ -14,12 +14,14 @@ from ._state import (
     _DEFAULT_PAGE_ID,
     _live_touch,
     _slider_gesture_active,
-    _slider_touch_state,
+    _drop_touch,
+    remote_state,
     get_selected_control,
     get_selected_entity,
     get_selected_factor,
 )
-from .helpers import _get_store, _resolve_device_id, split_service
+from .helpers import _get_store, _resolve_device_id
+from ..shared.services import split_service
 from .sliders import (
     SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY,
     _effective_target,
@@ -255,9 +257,8 @@ def _resolve_selection_config(
             "factor": override if override is not None else slider_cfg.get("factor", 1.0),
         }
 
-    # `_effective_target`, not `targets_last_touched_or_entity`: a bare
-    # proportional slider naming an entity resolves here too, and its stored
-    # blob is a complete pinned config for the same reason.
+    # A bare proportional slider naming an entity: its stored blob is a
+    # complete pinned config, used whenever nothing is selected.
     if _effective_target(slider_cfg) == SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY:
         # Whole and unmodified — it already *is* a complete pinned config.
         # `target` goes because from here on this is an ordinary drag.
@@ -379,7 +380,7 @@ def _pinned_config(
         # nothing to drive. Popping matters in the first case: leaving the state
         # would make every later touch read as a slide and bail here again,
         # killing the slider until the staleness cutoff.
-        _slider_touch_state.pop(state_key, None)
+        _drop_touch(state_key)
         _LOGGER.debug(
             "Slider %s: '%s' with no resolved target — ignoring", slider_key, gesture,
         )
@@ -401,7 +402,8 @@ def _begin_gesture(
     state_key: tuple[str, str], base_value: float, position: float, pinned_cfg: dict | None,
 ) -> None:
     """Store the origin a drag is measured from."""
-    _slider_touch_state[state_key] = {
+    entry_id, slider_key = state_key
+    remote_state(entry_id).slider_touches[slider_key] = {
         "base_value": base_value,
         "zero_pos": position,
         # What actually reached the entity, so `touch_end` can tell whether it
@@ -640,11 +642,11 @@ async def _execute_slider_action(
           min: 0.0
           max: 1.0
 
-    With ``target: last_touched`` everything but `factor` comes from whichever
+    With no ``target_entity`` everything but `factor` comes from whichever
     button was last touched, resolved at `touch_start` and pinned for the rest
-    of the gesture; with nothing touched the gesture is dropped. With
-    ``target: last_touched_or_entity`` the stored config above drives instead
-    whenever nothing is selected. :data:`SLIDER_VERTICAL_KEY` with no config at
+    of the gesture; with nothing touched the gesture is dropped. With a
+    ``target_entity`` the stored config above drives instead whenever nothing
+    is selected; ``target: entity`` pins it there unconditionally. :data:`SLIDER_VERTICAL_KEY` with no config at
     all reads as ``last_touched_slider_actions(1.0)``; any other key is ignored.
 
     Position is normalized to 0.0-1.0 (0=bottom), or None when the event carried
@@ -661,7 +663,7 @@ async def _execute_slider_action(
     if slider_cfg is None:
         # Any live state is stale — the slider was reconfigured mid-gesture —
         # and a delta against its zero-point would land on the next touch.
-        _slider_touch_state.pop(state_key, None)
+        _drop_touch(state_key)
         _LOGGER.debug(
             "execute_slider_action: %s has no slider_actions — ignoring", slider_key,
         )
@@ -669,12 +671,12 @@ async def _execute_slider_action(
 
     gesture = _gesture_for(interaction, state_key)
     if gesture == _TOUCH_CANCEL:
-        _slider_touch_state.pop(state_key, None)
+        _drop_touch(state_key)
         _LOGGER.debug("Slider %s: gesture cancelled — state discarded", slider_key)
         return
 
     if gesture != _TOUCH_START and _shape_changed_mid_gesture(state_key, follows):
-        _slider_touch_state.pop(state_key, None)
+        _drop_touch(state_key)
         _LOGGER.debug(
             "Slider %s: config changed shape mid-gesture — discarding it", slider_key,
         )

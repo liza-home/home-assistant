@@ -21,24 +21,28 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigEntryChange,
 )
-from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event
 
 from ..action_controller.helpers import _get_store, _resolve_device_id
 from ..action_controller.toggle import rule_icon, rule_label, toggle_rules
-from ..const import (
+from ..variables_calc import (
     _EXPR_ENTITY_RE,
+    FUNCTION_TOKEN_RE,
+    read_variables_enabled,
+    DEFAULT_VARIABLES_INTERVAL,
+    read_variables_interval,
+)
+from ..shared.history import history_entity
+from ..shared.tokens import (
     DEVICE_TOKEN_RE,
     ENTITY_TOKEN_RE,
-    FUNCTION_TOKEN_RE,
     current_page_layout,
     expand_device_alias,
     page_scope,
-    read_variables_enabled,
 )
-from ..variables_calc import DEFAULT_VARIABLES_INTERVAL, read_variables_interval
 from .const import CONFIG_CHANGED_EVENT
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +61,10 @@ _Reads = dict[str, set[str | None]]
 
 
 def _token_reads(text) -> _Reads:
+    graphed = history_entity(text)
+    if graphed is not None:
+        # A graph moves when its entity's state does.
+        return {graphed: {None}}
     if not isinstance(text, str) or "${" not in text:
         return {}
     if "_device" in text:
@@ -123,19 +131,6 @@ def _action_reads(action) -> _Reads:
         if isinstance(row, dict):
             _merge(found, _token_reads(row.get("icon")))
     return found
-
-
-def assignment_variable_entities(assign) -> set[str]:
-    """Every entity a button's tooltip or icons name.
-
-    Its overrides and its toggle's press rules included.
-    """
-    return set(_assignment_reads(assign))
-
-
-def action_variable_entities(action) -> set[str]:
-    """Every entity a library action's icon or per-state icons name."""
-    return set(_action_reads(action))
 
 
 @dataclass
@@ -244,11 +239,6 @@ async def async_device_title_targets(
     return targets
 
 
-async def async_variable_entities(hass: HomeAssistant, device_id: str) -> set[str]:
-    """Every entity named by a variable anywhere on the device's pages."""
-    return set(await async_variable_uses(hass, device_id))
-
-
 def _read(state, what: str | None):
     if state is None:
         return None
@@ -285,6 +275,7 @@ async def async_setup_variable_listener(
     hub_titles: dict[str, str] = {}
     pending: set[int] = set()
     timer: list[asyncio.TimerHandle | None] = [None]
+    stop_tracking: list[Callable[[], None]] = [lambda: None]
 
     async def _refresh_watched() -> None:
         uses.clear()
@@ -304,8 +295,11 @@ async def async_setup_variable_listener(
         except Exception as err:  # noqa: BLE001 - live values must never break setup
             _LOGGER.debug("Variable listener: cannot read pages: %s", err)
         _LOGGER.debug("Variable listener: watching %s", sorted(uses))
-
-    await _refresh_watched()
+        # Subscribe to exactly the entities read now; HA skips all others.
+        stop_tracking[0]()
+        stop_tracking[0] = async_track_state_change_event(
+            hass, list(uses), _on_state_change,
+        )
 
     @callback
     def _flush() -> None:
@@ -361,14 +355,15 @@ async def async_setup_variable_listener(
             pending.clear()
             await _refresh_watched()
 
+    await _refresh_watched()
     unsubs = [
-        hass.bus.async_listen(EVENT_STATE_CHANGED, _on_state_change),
         hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed),
         hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _on_device_renamed),
         async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _on_hub_changed),
     ]
 
     def _cleanup() -> None:
+        stop_tracking[0]()
         for unsub in unsubs:
             unsub()
         if timer[0] is not None:

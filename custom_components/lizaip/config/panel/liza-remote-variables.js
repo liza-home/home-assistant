@@ -57,11 +57,16 @@ export const VariablesMixin = {
     return { found: false };
   },
 
-  /** A picture's `${…}` filled in, or null while unknown or when one has no value. */
+  /**
+   * A picture's `${…}` filled in, or null while unknown or when one has no value.
+   * A `history:` graph is asked for too: the backend adds the version that
+   * changes with its entity, and only graphs what it was asked for this way.
+   */
   _resolveImageVariables(image) {
-    if (typeof image !== "string" || !image.includes("${")) return image;
+    if (typeof image !== "string") return image;
+    if (!image.includes("${") && !image.startsWith("history:")) return image;
     image = this._expandPageDevice?.(image) ?? image;
-    if (!image.includes("${")) return image;
+    if (!image.includes("${") && !image.startsWith("history:")) return image;
     const r = this._variableValue("image", image);
     return r.found ? r.value : null;
   },
@@ -147,9 +152,19 @@ export const VariablesMixin = {
     const typing = active && /^(INPUT|TEXTAREA)$/.test(active.tagName)
       && active.value !== active.defaultValue;
     if (typing || active?.tagName === "SELECT") {
-      // Draw it once the typing is committed or the field is left, not never.
-      if (!this._variablesRetry) {
-        this._variablesRetry = setTimeout(() => { this._variablesRetry = null; this._variablesLoaded(); }, 500);
+      // Draw it once the typing is committed or the field is left, not never:
+      // one listener for whichever of the two comes first, instead of a timer.
+      const root = this.shadowRoot;
+      if (!this._variablesRetry && root?.addEventListener) {
+        const retry = () => {
+          root.removeEventListener("change", retry, true);
+          root.removeEventListener("focusout", retry, true);
+          this._variablesRetry = null;
+          this._variablesLoaded();
+        };
+        this._variablesRetry = retry;
+        root.addEventListener("change", retry, true);
+        root.addEventListener("focusout", retry, true);
       }
       return;
     }

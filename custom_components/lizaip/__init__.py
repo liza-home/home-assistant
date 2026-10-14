@@ -15,7 +15,6 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
-    issue_registry as ir,
 )
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.network import get_url
@@ -41,6 +40,8 @@ from .config.panel import async_setup_panel, async_setup_config_entry, async_unl
 from .config.store import LizaRemoteStore
 from .diagnostics_bundle import async_setup_diagnostics_bundle
 from .imgserv import async_setup_imgserv
+from .shared.numbers import to_float
+from .runtime import find_store, install_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,23 +77,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
 
-    _clear_repair_issues(hass)
-
     return True
-
-
-@callback
-def _clear_repair_issues(hass: HomeAssistant) -> None:
-    """Take down every Repairs notice an earlier version raised.
-
-    The integration no longer raises any -- what they reported is logged as an
-    error instead -- and the registry keeps an issue across restarts, so
-    without this one would stay on screen for good.
-    """
-    registry = ir.async_get(hass)
-    for domain, issue_id in list(registry.issues):
-        if domain == DOMAIN:
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bool:
@@ -146,12 +131,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
     # answered in place without firing the hello event.
 
     # Initialize per-device store (lazy-loading, no upfront load needed)
-    hass.data.setdefault(DOMAIN, {})
-    if "_store" not in hass.data[DOMAIN]:
+    store = find_store(hass)
+    if store is None:
         store = LizaRemoteStore(hass)
-        hass.data[DOMAIN]["_store"] = store
-    else:
-        store = hass.data[DOMAIN]["_store"]
+        install_store(hass, store)
 
     # Ensure a default storage file exists for this device (with all button slots)
     await store.async_ensure_default(device.id)
@@ -167,25 +150,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
     # A targeted resync rather than `async_reload`: the labels are the only
     # thing an option can change on the device, and reloading would drop the
     # websocket connection to a remote that is working fine.
-    def _optional_float(value: object) -> float | None:
-        if value in (None, ""):
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
     last_demo_mode = bool(entry.options.get(CONF_DEMO_MODE, False))
-    last_demo_dwell = _optional_float(entry.options.get(CONF_DEMO_MODE_DWELL_TIME))
-    last_demo_swipe = _optional_float(entry.options.get(CONF_DEMO_MODE_SWIPE_TIME))
+    last_demo_dwell = to_float(entry.options.get(CONF_DEMO_MODE_DWELL_TIME))
+    last_demo_swipe = to_float(entry.options.get(CONF_DEMO_MODE_SWIPE_TIME))
 
     async def _options_updated(hass: HomeAssistant, updated: LizaIPConfigEntry) -> None:
         nonlocal last_demo_mode, last_demo_dwell, last_demo_swipe
         from .config.device_sync import sync_config_to_device  # noqa: PLC0415
 
         demo_mode = bool(updated.options.get(CONF_DEMO_MODE, False))
-        demo_dwell = _optional_float(updated.options.get(CONF_DEMO_MODE_DWELL_TIME))
-        demo_swipe = _optional_float(updated.options.get(CONF_DEMO_MODE_SWIPE_TIME))
+        demo_dwell = to_float(updated.options.get(CONF_DEMO_MODE_DWELL_TIME))
+        demo_swipe = to_float(updated.options.get(CONF_DEMO_MODE_SWIPE_TIME))
         demo_dwell_cmp = demo_dwell if demo_mode else None
         demo_swipe_cmp = demo_swipe if demo_mode else None
 
@@ -309,13 +284,10 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     )
     device_id = device.id if device else None
 
-    store: LizaRemoteStore | None = hass.data.get(DOMAIN, {}).get("_store")
+    store: LizaRemoteStore | None = find_store(hass)
     if store and device_id:
         await store.async_remove_device(device_id)
 
-    # In-flight slider gestures are otherwise never evicted for a device that no
-    # longer exists. Compiled scripts went with the entry's connection above.
-    action_controller.clear_slider_state(entry.entry_id)
-    # Same reasoning for toggle cycle positions: nothing else drops them, since
-    # they are deliberately kept across page changes.
-    action_controller.clear_cycle_state(entry.entry_id)
+    # Gestures and cycle positions are otherwise never evicted for a device
+    # that no longer exists. Compiled scripts went with the connection above.
+    action_controller.forget_remote(entry.entry_id)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ...const import substitute_label_tokens
+from ...shared.tokens import substitute_label_tokens
 from ...device.protocol import is_valid_page_id
 from .base import InternalCommand, InternalCommandError
 from .goto_page import GOTO_PAGE, coerce_page_id

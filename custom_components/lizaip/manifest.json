@@ -15,8 +15,11 @@
     "frontend",
     "panel_custom"
   ],
+  "after_dependencies": [
+    "recorder"
+  ],
   "requirements": [],
-  "version": "2026.10.2",
+  "version": "2026.10.3b1",
   "zeroconf": [
     {
       "type": "_lizaip._tcp.local."

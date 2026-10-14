@@ -56,7 +56,7 @@ from .diagnostics import (
     async_get_config_entry_diagnostics,
     async_settings_snapshot,
 )
-from .runtime import _resolve_device_id
+from .runtime import debug_available, entry_connection, find_store, _resolve_device_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -178,11 +178,6 @@ class _Collector:
             return None
 
 
-def _connection(entry: ConfigEntry):
-    """The entry's live connection, or ``None`` if it has none yet."""
-    return getattr(entry, "runtime_data", None)
-
-
 async def _add_diagnostics(collector: _Collector) -> None:
     """The same JSON the device page's button produces.
 
@@ -212,7 +207,7 @@ async def _add_config_store(collector: _Collector) -> None:
     """
     async def build() -> None:
         hass, entry = collector.hass, collector.entry
-        store = hass.data.get(DOMAIN, {}).get("_store")
+        store = find_store(hass)
         device_id = _resolve_device_id(hass, entry.entry_id)
         if store is None or not device_id:
             collector.skip("configuration/store.json", "No store or device id for this entry")
@@ -380,7 +375,7 @@ async def _add_reachability(collector: _Collector) -> None:
     eight endpoints by timeout, at ten seconds each. Asking once and skipping
     the rest is the difference between five seconds and a minute and a half.
     """
-    conn = _connection(collector.entry)
+    conn = entry_connection(collector.entry)
     collector.device_conn = conn
     if conn is None:
         collector.device_reason = "the entry has no connection object"
@@ -491,7 +486,7 @@ async def _add_traffic(collector: _Collector) -> None:
     the one conversation most reports are about.
     """
     async def build() -> None:
-        conn = _connection(collector.entry)
+        conn = entry_connection(collector.entry)
         protocol = getattr(conn, "_protocol", None)
         traffic = getattr(protocol, "traffic", None)
         snapshot = traffic.snapshot(_MESSAGES_KEPT, bodies=True) if traffic is not None else None
@@ -646,7 +641,7 @@ async def _add_debug_dumps(collector: _Collector) -> None:
             collector.skip("debug/port.json", "This build ships without the debug tooling")
             return
 
-        conn = _connection(collector.entry)
+        conn = entry_connection(collector.entry)
         if conn is None:
             collector.skip("debug/port.json", "The entry has no connection object")
             return
@@ -674,6 +669,17 @@ def _integration_version() -> str | None:
         return None
 
 
+def _environment_facts() -> tuple[str | None, str]:
+    """The two facts about this machine that cost a disk read.
+
+    `platform.platform()` is not the cheap string it looks like: to name the
+    libc it opens the Python binary and reads its headers, which Home
+    Assistant's loop watchdog reports as a blocking call. It is gathered here
+    beside the manifest so that one executor hop pays for both.
+    """
+    return _integration_version(), platform.platform()
+
+
 async def _add_environment(collector: _Collector) -> None:
     """Which versions of what produced this bundle.
 
@@ -684,15 +690,15 @@ async def _add_environment(collector: _Collector) -> None:
     """
     async def build() -> None:
         hass = collector.hass
-        version = await hass.async_add_executor_job(_integration_version)
+        version, platform_name = await hass.async_add_executor_job(_environment_facts)
         collector.add("homeassistant/environment.json", _dumps({
             "integration_version": version,
             "home_assistant_version": HA_VERSION,
             "python_version": sys.version,
-            "platform": platform.platform(),
+            "platform": platform_name,
             "config_dir": hass.config.path(),
             "time_zone": str(hass.config.time_zone),
-            "debug_tooling": _debug_tooling_present(),
+            "debug_tooling": debug_available(),
             "custom_integrations": await _custom_integrations(hass),
             "setup_times": _setup_times(hass),
         }))
@@ -736,18 +742,6 @@ def _setup_times(hass: HomeAssistant) -> dict[str, Any]:
         str(entry_id): {str(phase): seconds for phase, seconds in phases.items()}
         for entry_id, phases in timings.items()
     }
-
-
-def _debug_tooling_present() -> bool:
-    """Whether this build carries the pre-release debug tools.
-
-    Asked by import rather than by version, for the same reason
-    `config.websocket.debug_available` does: a tree we rsync to a test instance
-    has the tools whatever its version string says.
-    """
-    import importlib.util
-
-    return importlib.util.find_spec(f"{__package__}.config.debug_websocket") is not None
 
 
 #: What each file in the bundle is, in reading order. A table rather than a

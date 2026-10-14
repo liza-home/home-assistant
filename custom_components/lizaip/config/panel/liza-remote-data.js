@@ -691,7 +691,7 @@ export const DataMixin = {
       return { devices: r?.devices || [], error: null };
     } catch (e) {
       console.warn("[LIZA] Failed to load layout devices:", e);
-      return { devices: [], error: e?.message || String(e) };
+      return { devices: [], error: this._wsErrorText(e) };
     }
   },
 
@@ -706,7 +706,7 @@ export const DataMixin = {
       return { entries: r?.entries || [], error: null };
     } catch (e) {
       console.warn("[LIZA] Failed to load layout config entries:", e);
-      return { entries: [], error: e?.message || String(e) };
+      return { entries: [], error: this._wsErrorText(e) };
     }
   },
 

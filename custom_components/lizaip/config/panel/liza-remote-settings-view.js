@@ -253,6 +253,40 @@ export const SettingsViewMixin = {
       </div>`;
   },
 
+  /**
+   * The Editor card: how this panel draws, not how the remote behaves.
+   *
+   * Every other card on this tab is a *device* setting that is saved to the
+   * backend and reaches the remote. This one is neither — it changes what the
+   * Buttons tab draws over its own page strip, for this browser only. Kept on
+   * the gear tab regardless, because that is where a user goes to look for a
+   * switch; the hint is what says which kind of switch it is.
+   */
+  _htmlSettingsEditorCard() {
+    const id = "liza-settings-page-links";
+    const hintId = `${id}-hint`;
+    const labelId = `${id}-label`;
+    return `
+      <ha-card outlined>
+        <div class="actions-card-header">
+          <h2 class="actions-card-title">${this._esc(this._t("settings_editor"))}</h2>
+        </div>
+        <div class="settings-body">
+          <div class="settings-switch-list">
+            <div class="settings-switch-row">
+              <div class="settings-switch-text">
+                <label id="${labelId}" for="${id}">${this._esc(this._t("settings_page_links"))}</label>
+                <span class="config-field-hint" id="${hintId}">${this._esc(this._t("settings_page_links_hint"))}</span>
+              </div>
+              <ha-switch id="${id}" class="settings-pagelinks-switch"
+                         ${this._pageLinksEnabled() ? "checked" : ""}
+                         aria-labelledby="${labelId}" aria-describedby="${hintId}"></ha-switch>
+            </div>
+          </div>
+        </div>
+      </ha-card>`;
+  },
+
   _htmlSettingsView() {
     if (!this._textSettings) {
       const msg = this._textSettingsError
@@ -278,6 +312,7 @@ export const SettingsViewMixin = {
         ${this._htmlSettingsIconCard()}
         ${this._htmlSettingsVariablesCard()}
         ${this._htmlSettingsButtonsCard()}
+        ${this._htmlSettingsEditorCard()}
         ${this._htmlSettingsDeviceCard()}
       </div>`;
   },
@@ -793,18 +828,35 @@ export const SettingsViewMixin = {
     root.querySelectorAll(".settings-icon-switch").forEach((el) =>
       el.addEventListener("change", () =>
         this._saveIconOptions({ [el.dataset.key]: el.checked === true })));
+    // Local to the browser, so nothing is saved to the backend and there is no
+    // busy state to wait on or failure to report.
+    root.querySelector(".settings-pagelinks-switch")?.addEventListener("change", (ev) =>
+      this._setPageLinksEnabled(ev.currentTarget.checked === true));
     // `ha-switch` is not a native input, so `<label for>` does not reach it.
     // `preventDefault` so that a browser which *does* forward the click cannot
     // toggle the switch as well and have the two handlers undo each other.
-    // Both kinds of row share this label, so where the new value goes is read
-    // off the switch rather than off the row it was found in.
+    // Every switch in the tab shares this label, so what the click means is
+    // read off the switch rather than off the row it was found in -- by class,
+    // because that is what each kind has and `dataset` is not: the page-links
+    // switch carries neither `data-section` nor `data-key`, so an `else` on
+    // those two sent `{ undefined: ... }` to the icon-options endpoint.
     root.querySelectorAll(".settings-switch-text label").forEach((el) =>
       el.addEventListener("click", (ev) => {
         ev.preventDefault();
         const sw = root.querySelector(`#${el.getAttribute("for")}`);
         if (!sw || sw.disabled) return;
-        if (sw.dataset.section) this._changeTextSetting(sw.dataset.section, "enabled", !sw.checked);
-        else this._saveIconOptions({ [sw.dataset.key]: !sw.checked });
+        const next = !sw.checked;
+        if (sw.classList.contains("settings-pagelinks-switch")) {
+          // Nothing re-renders this one from a stored value -- the preference
+          // is browser-local and the view is not rebuilt for it -- so the
+          // control is moved here or it does not move at all.
+          sw.checked = next;
+          this._setPageLinksEnabled(next);
+        } else if (sw.classList.contains("settings-feature-switch")) {
+          this._changeTextSetting(sw.dataset.section, "enabled", next);
+        } else if (sw.classList.contains("settings-icon-switch")) {
+          this._saveIconOptions({ [sw.dataset.key]: next });
+        }
       }));
     root.querySelector(".settings-clear-pages")?.addEventListener(
       "click", () => this._clearDevicePages());

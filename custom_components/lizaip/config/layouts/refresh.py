@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
@@ -23,18 +24,21 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 
 from ...action_controller import SLIDER_VERTICAL_KEY
-from ...const import DOMAIN, name_is_user_written
-from ...device.const import LIZAIP_EVENT
-from ..const import (
-    ASSIGNMENT_BLANKED_KEY,
+from ...const import DOMAIN
+from ...shared.assignment import (
+    name_is_user_written,
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_LABEL_EDITED_KEY,
 )
+from ...device.const import LIZAIP_EVENT
+from ..const import ASSIGNMENT_BLANKED_KEY
 from .resolver import ASSIGNMENT_FIELD_MAP, field_value, resolve_binding
 from .sources import bound_specs, get_source
-from ..snapshot import _fire_config_changed, _resolve_device_id
+from ...runtime import entry_device_id, find_store, _resolve_device_id
+from ..events import fire_config_changed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -250,7 +254,7 @@ def _give_up_on_the_item(
 
     Bindings survive normal disappearance so a re-added favorite refills the
     slot. But an itemless slot with a user action must be detached, matching
-    ``_claims_the_button`` in ``websocket.py``.
+    ``_claims_the_button`` in ``websocket/assignment_entry.py``.
     """
     if _user_armed_an_itemless_button(assignment, binding):
         # Detach, or a later source refill would overwrite the user's button.
@@ -367,7 +371,7 @@ async def async_refresh_page(
     page_id: int,
 ) -> bool:
     """Refresh every dynamic button on one page. Returns True if it changed."""
-    store = hass.data.get(DOMAIN, {}).get("_store")
+    store = find_store(hass)
     if store is None:
         return False
 
@@ -403,7 +407,7 @@ async def async_refresh_entry(
     page_id: int | None = None,
 ) -> bool:
     """Refresh one page, or every page, of a config entry's device."""
-    store = hass.data.get(DOMAIN, {}).get("_store")
+    store = find_store(hass)
     if store is None:
         return False
     device_id = _resolve_device_id(hass, entry_id)
@@ -433,7 +437,7 @@ async def async_refresh_and_sync(
     """Refresh, and push to the device if anything moved."""
     changed = await async_refresh_entry(hass, entry_id, page_id=page_id)
     if changed:
-        await _fire_config_changed(hass, entry_id)
+        fire_config_changed(hass, entry_id)
     return changed
 
 
@@ -469,60 +473,64 @@ SERVICE_SCHEMA = vol.Schema(
 )
 
 
-@callback
-def async_setup_entry_triggers(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
-    """Register the per-entry triggers. Returns unsubs keyed for teardown."""
-    # Lazy import: test stubs do not provide this helper.
-    from homeassistant.helpers.event import async_call_later
+class _DelayedRefresh:
+    """One pending refresh of a remote's dynamic pages.
 
-    unsubs: dict[str, Any] = {}
-    entry_id = entry.entry_id
+    Asking again restarts the wait, so a burst of signals costs one refresh.
+    """
 
-    # --- goto_page ------------------------------------------------------
-    #
-    debounce_handle: dict[str, Any] = {"cancel": None}
+    def __init__(self, hass: HomeAssistant, entry_id: str, delay: float, reason: str) -> None:
+        self._hass = hass
+        self._entry_id = entry_id
+        self._delay = delay
+        self._reason = reason
+        self._cancel_timer: Callable[[], None] | None = None
 
-    async def _do_refresh(_now=None) -> None:
-        debounce_handle["cancel"] = None
+    @callback
+    def schedule(self) -> None:
+        self.cancel()
+        self._cancel_timer = async_call_later(self._hass, self._delay, self._run)
+
+    @callback
+    def cancel(self) -> None:
+        if self._cancel_timer is not None:
+            self._cancel_timer()
+            self._cancel_timer = None
+
+    async def _run(self, _now=None) -> None:
+        self._cancel_timer = None
         try:
-            changed = await async_refresh_and_sync(hass, entry_id)
-            _LOGGER.debug("Dynamic refresh after goto_page: changed=%s", changed)
+            changed = await async_refresh_and_sync(self._hass, self._entry_id)
+            _LOGGER.debug("Dynamic refresh after %s: changed=%s", self._reason, changed)
         except Exception as exc:  # noqa: BLE001 - a trigger must never raise
-            _LOGGER.debug("Dynamic refresh after goto_page failed: %s", exc)
+            _LOGGER.debug("Dynamic refresh after %s failed: %s", self._reason, exc)
+
+
+@callback
+def async_setup_entry_triggers(
+    hass: HomeAssistant, entry: ConfigEntry,
+) -> list[Callable[[], None]]:
+    """Refresh dynamic pages after the remote navigates. Returns what to stop on unload."""
+    entry_id = entry.entry_id
+    refresh = _DelayedRefresh(hass, entry_id, _GOTO_DEBOUNCE, "goto_page")
 
     @callback
     def _on_device_event(event: Event) -> None:
         if event.data.get("type") != "goto_page":
             return
-        conn = getattr(entry, "runtime_data", None)
-        if conn is None:
-            _LOGGER.debug(
-                "goto_page ignored: entry %s has no runtime_data yet", entry_id
-            )
+        own_device_id = entry_device_id(entry)
+        if own_device_id is None:
+            _LOGGER.debug("goto_page ignored: entry %s has no device yet", entry_id)
             return
-        own_device_id = getattr(conn, "_device_id", None)
         if event.data.get("device_id") != own_device_id:
             _LOGGER.debug(
                 "goto_page ignored: device_id %s is not ours (%s)",
                 event.data.get("device_id"), own_device_id,
             )
             return
-        if debounce_handle["cancel"] is not None:
-            debounce_handle["cancel"]()
-        debounce_handle["cancel"] = async_call_later(
-            hass, _GOTO_DEBOUNCE, _do_refresh
-        )
+        refresh.schedule()
 
-    unsubs["dynamic_goto_unsub"] = hass.bus.async_listen(LIZAIP_EVENT, _on_device_event)
-
-    @callback
-    def _cancel_debounce() -> None:
-        if debounce_handle["cancel"] is not None:
-            debounce_handle["cancel"]()
-            debounce_handle["cancel"] = None
-
-    unsubs["dynamic_debounce_unsub"] = _cancel_debounce
-    return unsubs
+    return [hass.bus.async_listen(LIZAIP_EVENT, _on_device_event), refresh.cancel]
 
 
 #: Coalesce source change bursts; Sonos may write several speakers per edit.
@@ -534,7 +542,7 @@ async def _async_read_bound_specs(hass: HomeAssistant, entry_id: str):
     ``None`` is distinct from ``[]`` during re-scan: an empty list drops
     subscriptions, while unreadable bindings should keep current ones.
     """
-    store = hass.data.get(DOMAIN, {}).get("_store")
+    store = find_store(hass)
     device_id = _resolve_device_id(hass, entry_id)
     if store is None or not device_id:
         return None
@@ -602,126 +610,69 @@ def _call_all(unsubs) -> None:
             _LOGGER.debug("Push trigger removal failed: %s", exc)
 
 
-async def async_setup_push_triggers(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> dict[str, Any]:
-    """Let each bound source push, with generic triggers as backstops.
+class PushTriggers:
+    """Source push hooks for one remote's bound dynamic buttons.
 
-    Source hooks live in ``sources``; this function supplies debounce,
-    refresh and teardown. Title-derived ``source_list`` signals cannot see
-    artwork/content-id edits or offline speakers, so navigation/reconnect still
-    re-read eventually. Kept separate because bound-spec reads are async.
+    Each bound source (a Sonos speaker's favorites, say) may offer a hook that
+    reports changes. Signals are debounced into one refresh. Navigation and
+    reconnects still re-read eventually: title-derived signals cannot see
+    artwork edits or offline speakers.
     """
-    from homeassistant.helpers.event import async_call_later
 
-    unsubs: dict[str, Any] = {}
-    entry_id = entry.entry_id
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        self._hass = hass
+        self._entry_id = entry_id
+        self._refresh = _DelayedRefresh(hass, entry_id, _PUSH_DEBOUNCE, "source signal")
+        self.specs: list = []
+        self._unsubs: list = []
 
-    specs = await _async_bound_specs(hass, entry_id)
+    def subscribe(self, specs) -> None:
+        """Watch *specs*, subscribing the new hooks before dropping the old ones.
 
-    debounce: dict[str, Any] = {"cancel": None}
+        That order leaves no gap for a signal to fall into during a save.
+        """
+        old = self._unsubs
+        self._unsubs = _subscribe_sources(self._hass, specs, self._refresh.schedule)
+        _call_all(old)
+        self.specs = list(specs)
 
-    async def _do_push_refresh(_now=None) -> None:
-        debounce["cancel"] = None
+    async def async_rescan(self) -> None:
+        """Follow bindings that may have changed (a page added or re-pointed)."""
         try:
-            changed = await async_refresh_and_sync(hass, entry_id)
-            _LOGGER.debug("Dynamic refresh after source signal: changed=%s", changed)
-        except Exception as exc:  # noqa: BLE001 - a trigger must never raise
-            _LOGGER.debug("Dynamic refresh after source signal failed: %s", exc)
-
-    @callback
-    def _schedule_refresh() -> None:
-        if debounce["cancel"] is not None:
-            debounce["cancel"]()
-        debounce["cancel"] = async_call_later(hass, _PUSH_DEBOUNCE, _do_push_refresh)
-
-    source_unsubs = _subscribe_sources(hass, specs, _schedule_refresh)
-    if source_unsubs:
-        @callback
-        def _unsub_sources() -> None:
-            _call_all(source_unsubs)
-
-        unsubs["dynamic_push_unsub"] = _unsub_sources
-
-    # Keep the handler even with no specs so later page saves can subscribe.
-    @callback
-    def _cancel_push_debounce() -> None:
-        if debounce["cancel"] is not None:
-            debounce["cancel"]()
-            debounce["cancel"] = None
-
-    unsubs["dynamic_push_debounce_unsub"] = _cancel_push_debounce
-    # Not named "..._unsub": teardown calls those, and this is not a cancel.
-    unsubs["dynamic_push_handler"] = _schedule_refresh
-    unsubs["dynamic_push_specs"] = list(specs)
-    unsubs["dynamic_push_entities"] = {
-        str(spec.get("entity") or spec.get("entity_id") or "")
-        for _sid, spec in specs
-        if (spec.get("entity") or spec.get("entity_id"))
-    }
-
-    return unsubs
-
-
-async def async_rescan_push_triggers(hass: HomeAssistant, entry_id: str) -> None:
-    """Re-subscribe after bound specs may have changed.
-
-    Pages added after setup, or bindings re-pointed to another player, need new
-    source hooks without restart. Subscribe the new set before dropping old
-    listeners so signals cannot fall into the save-time gap.
-    """
-    entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
-    if entry_data is None:
-        return
-
-    # Reuse setup's handler so one debounce covers all subscriptions.
-    on_changed = entry_data.get("dynamic_push_handler")
-    if on_changed is None:
-        return
-
-    try:
-        wanted = await _async_read_bound_specs(hass, entry_id)
-    except Exception as exc:  # noqa: BLE001 - a re-scan must never break a save
-        _LOGGER.debug("Push trigger re-scan failed for %s: %s", entry_id, exc)
-        return
-    if wanted is None:
-        # Keep current subscriptions on transient store failure.
+            wanted = await _async_read_bound_specs(self._hass, self._entry_id)
+        except Exception as exc:  # noqa: BLE001 - a re-scan must never break a save
+            _LOGGER.debug("Push trigger re-scan failed for %s: %s", self._entry_id, exc)
+            return
+        if wanted is None:
+            # Keep current subscriptions on transient store failure.
+            _LOGGER.debug(
+                "Push trigger re-scan for %s could not read bindings; "
+                "keeping the current subscriptions", self._entry_id,
+            )
+            return
+        if wanted == self.specs:
+            return
+        self.subscribe(wanted)
         _LOGGER.debug(
-            "Push trigger re-scan for %s could not read bindings; "
-            "keeping the current subscriptions", entry_id,
+            "Push triggers re-scanned for %s: now %d bound spec(s)",
+            self._entry_id, len(wanted),
         )
-        return
 
-    current = entry_data.get("dynamic_push_specs") or []
-    if wanted == current:
-        return
+    def close(self) -> None:
+        """Drop every hook and any refresh still waiting."""
+        _call_all(self._unsubs)
+        self._unsubs = []
+        self._refresh.cancel()
 
-    old_unsub = entry_data.get("dynamic_push_unsub")
-    source_unsubs = _subscribe_sources(hass, wanted, on_changed)
-    if source_unsubs:
-        @callback
-        def _unsub_sources() -> None:
-            _call_all(source_unsubs)
 
-        entry_data["dynamic_push_unsub"] = _unsub_sources
-    else:
-        entry_data.pop("dynamic_push_unsub", None)
+async def async_setup_push_triggers(hass: HomeAssistant, entry: ConfigEntry) -> PushTriggers:
+    """Start the push triggers for *entry*'s current bindings.
 
-    if old_unsub:
-        try:
-            old_unsub()
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.debug("Push trigger removal failed: %s", exc)
-
-    entry_data["dynamic_push_specs"] = list(wanted)
-    entry_data["dynamic_push_entities"] = {
-        str(spec.get("entity") or spec.get("entity_id") or "")
-        for _sid, spec in wanted
-        if (spec.get("entity") or spec.get("entity_id"))
-    }
-    _LOGGER.debug(
-        "Push triggers re-scanned for %s: now %d bound spec(s)", entry_id, len(wanted)
-    )
+    Kept even with no bindings, so a later page save can subscribe.
+    """
+    triggers = PushTriggers(hass, entry.entry_id)
+    triggers.subscribe(await _async_bound_specs(hass, entry.entry_id))
+    return triggers
 
 
 async def async_handle_hello(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -768,7 +719,7 @@ async def async_binding_summary(hass: HomeAssistant, entry_id: str) -> dict[str,
         "errors": {},
     }
 
-    store = hass.data.get(DOMAIN, {}).get("_store")
+    store = find_store(hass)
     device_id = _resolve_device_id(hass, entry_id)
     if store is None or not device_id:
         return summary

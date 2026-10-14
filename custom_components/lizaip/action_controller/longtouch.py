@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 
 from homeassistant.core import HomeAssistant
 
-from ..const import LONGTOUCH_SECONDS
-from ._state import _button_gestures as _gestures
+from ..shared.assignment import LONGTOUCH_SECONDS
+from ._state import remote_state
 from .buttons import execute_action, execute_longtouch, longtouch_assignment
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,10 +48,10 @@ async def on_touch(hass: HomeAssistant, entry_id: str, button_key: str, page_id:
     The remote repeats ``touch`` after the press while the finger is still
     down, so a touch on a button already being timed changes nothing.
     """
-    key = (entry_id, button_key)
-    if key in _gestures:
+    gestures = remote_state(entry_id).button_gestures
+    if button_key in gestures:
         return
-    if not await longtouch_assignment(hass, entry_id, button_key, page_id) or key in _gestures:
+    if not await longtouch_assignment(hass, entry_id, button_key, page_id) or button_key in gestures:
         return
     gesture = _Gesture(page_id)
     loop = asyncio.get_running_loop()
@@ -59,14 +59,14 @@ async def on_touch(hass: HomeAssistant, entry_id: str, button_key: str, page_id:
         loop.call_later(LONGTOUCH_SECONDS, _fire, hass, entry_id, button_key, gesture)
     )
     gesture.timers.append(
-        loop.call_later(LONGTOUCH_SECONDS + GESTURE_TIMEOUT, _forget, key, gesture)
+        loop.call_later(LONGTOUCH_SECONDS + GESTURE_TIMEOUT, _forget, entry_id, button_key, gesture)
     )
-    _gestures[key] = gesture
+    gestures[button_key] = gesture
 
 
 def on_click(entry_id: str, button_key: str) -> bool:
     """A press: ``True`` when it is held back for the release to decide."""
-    gesture = _gestures.get((entry_id, button_key))
+    gesture = remote_state(entry_id).button_gestures.get(button_key)
     if gesture is None:
         return False
     gesture.clicked = True
@@ -75,7 +75,7 @@ def on_click(entry_id: str, button_key: str) -> bool:
 
 async def on_release(hass: HomeAssistant, entry_id: str, button_key: str) -> None:
     """The finger left: run a held-back click unless the long touch ran."""
-    gesture = _gestures.pop((entry_id, button_key), None)
+    gesture = remote_state(entry_id).button_gestures.pop(button_key, None)
     if gesture is None:
         return
     gesture.cancel()
@@ -84,7 +84,7 @@ async def on_release(hass: HomeAssistant, entry_id: str, button_key: str) -> Non
 
 
 def _fire(hass: HomeAssistant, entry_id: str, button_key: str, gesture: _Gesture) -> None:
-    if _gestures.get((entry_id, button_key)) is not gesture:
+    if remote_state(entry_id).button_gestures.get(button_key) is not gesture:
         return
     gesture.fired = True
     _LOGGER.debug("Long touch on %s (%s)", button_key, entry_id)
@@ -94,6 +94,7 @@ def _fire(hass: HomeAssistant, entry_id: str, button_key: str, gesture: _Gesture
     )
 
 
-def _forget(key: tuple[str, str], gesture: _Gesture) -> None:
-    if _gestures.get(key) is gesture:
-        del _gestures[key]
+def _forget(entry_id: str, button_key: str, gesture: _Gesture) -> None:
+    gestures = remote_state(entry_id).button_gestures
+    if gestures.get(button_key) is gesture:
+        del gestures[button_key]

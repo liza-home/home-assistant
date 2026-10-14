@@ -18,7 +18,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .connection import LizaIPConnection
-from .const import DOMAIN, MODEL_ID
+from ..const import DOMAIN
+from .const import MODEL_ID
 from .entity import LizaIPEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,7 +51,6 @@ _OTA_POLL_TIMEOUT = 300
 
 # After the image is committed the device reboots. Keep the update card in
 # "installing" state until it is back, so the reported version is the new one.
-_OTA_REBOOT_POLL_INTERVAL = 2
 _OTA_REBOOT_TIMEOUT = 120
 
 
@@ -383,21 +383,27 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             return
 
         _LOGGER.debug("Waiting for %s to reboot after OTA", self._entry_title)
-        deadline = _OTA_REBOOT_TIMEOUT
-        waited = 0
-        while waited < deadline:
-            await asyncio.sleep(_OTA_REBOOT_POLL_INTERVAL)
-            waited += _OTA_REBOOT_POLL_INTERVAL
-            if self._connection.connected:
-                _LOGGER.info(
-                    "%s reconnected after OTA (version %s)",
-                    self._entry_title, self._connection.device_version,
-                )
-                return
+        back = asyncio.Event()
 
-        _LOGGER.warning(
-            "%s did not reconnect within %ss after the firmware update",
-            self._entry_title, deadline,
+        def _on_availability(available: bool) -> None:
+            if available:
+                back.set()
+
+        # Woken by the connection itself rather than by checking on a timer.
+        self._connection.register_availability(_on_availability)
+        try:
+            await asyncio.wait_for(back.wait(), _OTA_REBOOT_TIMEOUT)
+        except TimeoutError:
+            _LOGGER.warning(
+                "%s did not reconnect within %ss after the firmware update",
+                self._entry_title, _OTA_REBOOT_TIMEOUT,
+            )
+            return
+        finally:
+            self._connection.unregister_availability(_on_availability)
+        _LOGGER.info(
+            "%s reconnected after OTA (version %s)",
+            self._entry_title, self._connection.device_version,
         )
 
     def _set_installing(self) -> None:

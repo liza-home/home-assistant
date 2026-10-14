@@ -67,6 +67,11 @@ SPEC_ERROR_CODES = frozenset({
 })
 #: Events a remote may send (PROTOCOL.md §8) and requests it may make (§4).
 SPEC_EVENTS = frozenset({"button", "slider", "goto_page", "diag"})
+#: Spellings shipped firmware uses for a spec event (PROTOCOL.md §8, "Aliases").
+#: `connection.py` registers the same handler under both, so the event is acted
+#: on either way -- these are listed here only so the check below stops
+#: reporting a working event as a protocol violation.
+SPEC_EVENT_ALIASES = frozenset({"gotopage"})
 SPEC_DEVICE_REQUESTS = frozenset({"hello"})
 
 # `page_id` bounds — see PROTOCOL.md §3 "Rules". A page_id is a 32-bit UNSIGNED
@@ -156,11 +161,6 @@ def build_error_response(name: str, seq_id: int, code: int, message: str) -> str
     )
 
 
-def build_event(name: str, data: dict) -> str:
-    """Build a JSON event message string (fire-and-forget, no seq_id)."""
-    return _encode(type=TYPE_EVENT, name=name, data=data)
-
-
 def parse_message(raw: str) -> dict:
     """Parse and validate a raw JSON message. Raises ValueError on invalid input."""
     msg = json.loads(raw)
@@ -177,24 +177,6 @@ def parse_message(raw: str) -> dict:
     if "data" in msg and not isinstance(msg["data"], dict):
         raise ValueError("'data' field must be an object")
     return msg
-
-
-def resolve_image_url(url: str, ha_hostname: str, ha_port: int) -> str:
-    """Resolve image URL schemes.
-
-    - ha://path        → https://<ha_hostname>:<ha_port>/path
-      e.g. ha://api/imgserv/mdi:home?size=tile → https://ha.local:8123/api/imgserv/mdi:home?size=tile
-    - imgserv://path   → https://<ha_hostname>:<ha_port>/api/imgserv/path
-      e.g. imgserv://mdi:home?size=tile → https://ha.local:8123/api/imgserv/mdi:home?size=tile
-    - local://path     → unchanged (device resolves locally)
-    - http:// / https:// → unchanged
-    """
-    base = f"https://{ha_hostname}:{ha_port}"
-    if url.startswith("ha://"):
-        return f"{base}/{url.removeprefix('ha://')}"
-    if url.startswith("imgserv://"):
-        return f"{base}/api/imgserv/{url.removeprefix('imgserv://')}"
-    return url
 
 
 class SeqIdGenerator:
@@ -364,10 +346,6 @@ class LizaIPProtocol:
             build_error_response(name, seq_id, code, message), TYPE_RESPONSE, name, seq_id
         )
 
-    async def send_event(self, name: str, data: dict) -> None:
-        """Send a fire-and-forget event."""
-        await self._send(build_event(name, data), TYPE_EVENT, name)
-
     # ── Receiving ─────────────────────────────────────────────────────────
 
     @staticmethod
@@ -513,13 +491,13 @@ class LizaIPProtocol:
             self._protocol_error(
                 f"event '{name}' carries a seq_id (§3)", msg,
             )
-        if name not in SPEC_EVENTS:
+        if name not in SPEC_EVENTS and name not in SPEC_EVENT_ALIASES:
             self._protocol_error(
                 f"event '{name}' is not one of {sorted(SPEC_EVENTS)} (§8)", msg,
             )
         if handler := self._event_handlers.get(name):
             handler(msg.get("data", {}))
-        elif name in SPEC_EVENTS:
+        elif name in SPEC_EVENTS or name in SPEC_EVENT_ALIASES:
             _LOGGER.warning("Unhandled device event: %s (data=%s)", name, msg.get("data", {}))
 
     def _handle_request(self, msg: dict) -> None:

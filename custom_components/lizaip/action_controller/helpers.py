@@ -16,9 +16,9 @@ from homeassistant.helpers.target import (
     async_extract_referenced_entity_ids,
 )
 
-from ..const import DOMAIN, service_name, split_service  # noqa: F401
+from ..const import DOMAIN
 from ..runtime import _get_store, _resolve_device_id  # noqa: F401
-from ._state import _DEFAULT_PAGE_ID, _current_page
+from ._state import _DEFAULT_PAGE_ID, get_current_page
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def _coerce_page_id(data: dict, entry_id: str | None = None) -> int:
     if page_id:
         return page_id
     if entry_id:
-        return _current_page.get(entry_id) or _DEFAULT_PAGE_ID
+        return get_current_page(entry_id) or _DEFAULT_PAGE_ID
     return _DEFAULT_PAGE_ID
 
 

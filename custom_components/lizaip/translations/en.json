@@ -161,16 +161,12 @@
       }
     },
     "goto_page": {
-      "name": "Go to page",
+      "name": "goto page",
       "description": "Show a page on the remote. On a button this becomes a device-local action the remote executes itself.",
       "fields": {
-        "page": {
-          "name": "Page name",
-          "description": "The page to show, by its name in the lizaIP panel."
-        },
         "page_id": {
-          "name": "Page",
-          "description": "The page to show."
+          "name": "Page ID",
+          "description": "The numeric id of the page to show, as listed in the lizaIP panel."
         }
       }
     },

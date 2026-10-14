@@ -272,7 +272,7 @@ export const DebugViewMixin = {
       if (setup?.modules) this._debugLogging = setup;
     } catch (e) {
       if (this._currentEntry !== entry) return;
-      this._debugLoggingError = e?.message || String(e);
+      this._debugLoggingError = this._wsErrorText(e);
     } finally {
       this._debugLoggingBusy = false;
       this._render();
@@ -310,7 +310,7 @@ export const DebugViewMixin = {
     } catch (e) {
       if (this._currentEntry !== entry) return;
       this._debugLogging = null;
-      this._debugLoggingError = e?.message || String(e);
+      this._debugLoggingError = this._wsErrorText(e);
     } finally {
       this._debugLoggingBusy = false;
       this._render();
@@ -329,9 +329,13 @@ export const DebugViewMixin = {
    * "off": claiming a port is closed is how someone ends up leaving one open.
    */
   async _loadDebugPortState() {
-    if (!this._currentEntry || this._debugPortBusy) return;
+    if (!this._currentEntry) return;
     const entry = this._currentEntry;
+    // Busy only counts for this remote: a read still in flight for the one
+    // just left must not stop the new one from being read.
+    if (this._debugPortBusy && this._debugPortBusyFor === entry) return;
     this._debugPortBusy = true;
+    this._debugPortBusyFor = entry;
     this._render();
     try {
       const state = await this._hass.callWS({
@@ -348,11 +352,23 @@ export const DebugViewMixin = {
       this._debugPortKnown = true;
     } catch (e) {
       if (this._currentEntry !== entry) return;
-      this._debugPortError = e?.message || String(e);
+      this._debugPortError = this._wsErrorText(e);
     } finally {
-      this._debugPortBusy = false;
+      if (this._debugPortBusyFor === entry) this._debugPortBusy = false;
       this._render();
     }
+  },
+
+  /**
+   * Re-read the log-stream switch whenever the debug page comes back into
+   * view without being re-entered: the browser tab foregrounded, Home
+   * Assistant's connection restored, the remote reconnected. The port is the
+   * device's, and any of those can mean it changed -- a reboot closes it --
+   * while the switch went on showing what it last knew.
+   */
+  _recheckDebugPort() {
+    if (this._activeTab !== "debug" || !this._currentEntry) return;
+    this._loadDebugPortState();
   },
 
   /**
@@ -418,7 +434,7 @@ export const DebugViewMixin = {
       if (!this._debugLogging) this._debugLoggingError = this._t("debug_logging_empty");
     } catch (e) {
       if (this._currentEntry !== entry) return;
-      this._debugLoggingError = e?.message || String(e);
+      this._debugLoggingError = this._wsErrorText(e);
     } finally {
       this._debugLoggingBusy = false;
       this._render();
@@ -679,7 +695,7 @@ export const DebugViewMixin = {
     } catch (e) {
       if (this._currentEntry !== entry) return;
       this._debugReport = null;
-      this._debugReportError = e?.message || String(e);
+      this._debugReportError = this._wsErrorText(e);
     } finally {
       this._debugReportBusy = false;
       this._render();
@@ -715,7 +731,7 @@ export const DebugViewMixin = {
       // The failure is a fact about the device and belongs in the row that
       // asked for it, not in the report's own error line -- the other rows are
       // unaffected and must keep saying so.
-      section = { error: e?.message || String(e) };
+      section = { error: this._wsErrorText(e) };
     }
     // Selection moved on while the read was out: writing it now would file one
     // device's answer under another.
@@ -1074,7 +1090,7 @@ export const DebugViewMixin = {
       this._debugTraffic = tr;
     } catch (e) {
       if (this._currentEntry !== entry) return;
-      this._debugTrafficError = e?.message || String(e);
+      this._debugTrafficError = this._wsErrorText(e);
     } finally {
       this._debugTrafficBusy = false;
       this._render();
@@ -1102,7 +1118,7 @@ export const DebugViewMixin = {
       // than swallowed into the console.
       if (this._currentEntry !== entry) return;
       this._debugProbe = null;
-      this._debugProbeError = e?.message || String(e);
+      this._debugProbeError = this._wsErrorText(e);
     } finally {
       this._debugProbeBusy = false;
       this._render();
@@ -1110,9 +1126,11 @@ export const DebugViewMixin = {
   },
 
   async _setDebugPort(enabled) {
-    if (!this._currentEntry || this._debugPortBusy) return;
+    if (!this._currentEntry) return;
     const entry = this._currentEntry;
+    if (this._debugPortBusy && this._debugPortBusyFor === entry) return;
     this._debugPortBusy = true;
+    this._debugPortBusyFor = entry;
     this._debugPortError = null;
     this._render();
     try {
@@ -1129,9 +1147,9 @@ export const DebugViewMixin = {
       this._debugPortKnown = true;
     } catch (e) {
       if (this._currentEntry !== entry) return;
-      this._debugPortError = e?.message || String(e);
+      this._debugPortError = this._wsErrorText(e);
     } finally {
-      this._debugPortBusy = false;
+      if (this._debugPortBusyFor === entry) this._debugPortBusy = false;
       this._render();
     }
   },

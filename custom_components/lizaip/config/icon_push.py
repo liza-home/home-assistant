@@ -66,11 +66,6 @@ class IconPushQueue:
         self._draining = False
         self._closed = False
 
-    @property
-    def pending_pages(self) -> int:
-        """How many pages are waiting. Diagnostics and tests only."""
-        return len(self._pending)
-
     def submit(
         self, page_id: int, buttons: Iterable[dict], *, img_title: str | None = None,
     ) -> None:

@@ -159,14 +159,6 @@ export const ActionsViewMixin = {
     this._flushPendingConfigReload();
   },
 
-  _addAction() {
-    const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36);
-    this._actions.push({ id, name: "New Action", service: "", states: [] });
-    this._editingActionIdx = this._actions.length - 1;
-    this._scheduleAutoSave();
-    this._render();
-  },
-
   async _deleteAction(idx) {
     const action = this._actions[idx];
     if (!action) return;

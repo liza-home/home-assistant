@@ -16,7 +16,7 @@ import voluptuous as vol
 
 from homeassistant.helpers import config_validation as cv
 
-from ...const import custom_icon_scheme
+from ...shared.icon_urls import custom_icon_scheme
 from ...device.protocol import is_valid_page_id
 from .base import InternalCommand, InternalCommandError
 

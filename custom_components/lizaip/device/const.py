@@ -1,8 +1,6 @@
 """Constants for the lizaIP device sub-package."""
 from typing import Final
 
-from ..const import DOMAIN  # noqa: F401 — re-exported; canonical definition lives in the root const
-
 LIZAIP_EVENT: Final = "lizaip_event"
 LIZAIP_HELLO_EVENT: Final = "lizaip_device_hello"  # fired after hello handshake — triggers config sync
 #: Fired on both edges of the device's WebSocket, carrying ``entry_id`` and

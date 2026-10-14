@@ -8,34 +8,37 @@ from collections.abc import Mapping
 import voluptuous as vol
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.script import SCRIPT_MODE_PARALLEL, Script
 
 from ..config.internal_commands import get_internal_command
 from ..config.text_style import longtouch_enabled, toggle_enabled
-from ..const import (
-    CONF_OPTIMISTIC_UPDATES,
-    DOMAIN,
+from ..const import CONF_OPTIMISTIC_UPDATES, DOMAIN, SIGNAL_ICON_UPDATE
+from ..shared.preludes import (
     ENSURE_ON_SETTLE,
-    ICON_UPDATE_EVENT,
-    NEXT_STATE_MAP,
-    PREDICTED_HA_STATE_MAP,
     build_ensure_on_prelude,
     build_launch_capture,
     build_launch_verification,
-    catchall_state_icon,
-    clean_label_text,
-    get_action_label,
-    get_ui_language,
-    is_state_toggle_service,
-    longtouch_steps,
-    normalise_payload,
-    page_scope,
-    resolve_icon_url,
-    resolve_image_tokens,
-    scope_action_states,
-    substitute_label_tokens,
-    variables_scope,
 )
+from ..shared.services import (
+    NEXT_STATE_MAP,
+    PREDICTED_HA_STATE_MAP,
+    catchall_state_icon,
+    is_state_toggle_service,
+    normalise_payload,
+    scope_action_states,
+    service_name,
+)
+from ..shared.tokens import (
+    clean_label_text,
+    page_scope,
+    resolve_image_tokens,
+    substitute_label_tokens,
+)
+from ..shared.i18n import action_labels, get_ui_language
+from ..shared.assignment import longtouch_steps
+from ..shared.icon_urls import resolve_icon_url
+from ..variables_calc import variables_scope
 from ..state_icon import entity_icon_style, read_icon_style_options
 from ._state import (
     _DEFAULT_PAGE_ID,
@@ -43,13 +46,7 @@ from ._state import (
     cycle_index,
     get_selected_button,
 )
-from .helpers import (
-    _get_store,
-    _resolve_device_id,
-    first_step,
-    resolve_step_entity,
-    service_name,
-)
+from .helpers import _get_store, _resolve_device_id, first_step, resolve_step_entity
 from .icons import toggle_icon
 from .overrides import resolve_fixed_action
 from .toggle import (
@@ -436,16 +433,13 @@ async def _fire_cycle_update_in_scope(
         page_id, button_key, index + 1, len(rules), icon,
     )
 
-    hass.bus.async_fire(ICON_UPDATE_EVENT, {
-        "device_id": device_id,
-        "updates": [{
-            "page_id": page_id,
-            "button_key": button_key,
-            "icon": resolve_icon_url(icon, color=page_color),
-            "tooltip": tooltip,
-            "page_color": page_color,
-        }],
-    })
+    async_dispatcher_send(hass, SIGNAL_ICON_UPDATE.format(device_id), [{
+        "page_id": page_id,
+        "button_key": button_key,
+        "icon": resolve_icon_url(icon, color=page_color),
+        "tooltip": tooltip,
+        "page_color": page_color,
+    }])
 
 
 async def _fire_optimistic_update(
@@ -588,7 +582,7 @@ async def _fire_optimistic_update(
 
     # Same entry as the style above; the correcting state listener uses it too.
     lang = get_ui_language(hass, entry)
-    tooltip_label = get_action_label(predicted_action_key, lang)
+    tooltip_label = action_labels.get(predicted_action_key, lang)
     entity_name = (
         state.attributes.get("friendly_name", "")
         or entity_id.split(".")[-1].replace("_", " ").title()
@@ -600,16 +594,13 @@ async def _fire_optimistic_update(
         page_id, button_key, predicted_ha_state, resolved, tooltip,
     )
 
-    hass.bus.async_fire(ICON_UPDATE_EVENT, {
-        "device_id": device_id,
-        "updates": [{
-            "page_id": page_id,
-            "button_key": button_key,
-            "icon": resolved,
-            "tooltip": tooltip,
-            "page_color": page_color,
-        }],
-    })
+    async_dispatcher_send(hass, SIGNAL_ICON_UPDATE.format(device_id), [{
+        "page_id": page_id,
+        "button_key": button_key,
+        "icon": resolved,
+        "tooltip": tooltip,
+        "page_color": page_color,
+    }])
 
 
 async def resolve_button_assignment(

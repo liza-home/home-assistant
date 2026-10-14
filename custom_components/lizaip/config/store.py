@@ -28,13 +28,12 @@ from ..action_controller import (
     sanitize_slider_override,
     sanitize_toggle,
 )
-from ..const import longtouch_steps, migrate_legacy_label_tokens
-from .const import (
+from ..shared.assignment import (
+    longtouch_steps,
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_LABEL_EDITED_KEY,
-    PAGE_SUBPAGE_KEY,
-    is_subpage,
 )
+from .const import PAGE_SUBPAGE_KEY, is_subpage
 from .layouts import async_load_layout, layout_bindings, load_layout
 from .text_style import normalize_settings
 
@@ -167,8 +166,7 @@ class LizaRemoteStore:
                 # The slider block is runnable when it names a subject —
                 # including the empty-string placeholder a bound slot keeps, so
                 # a refresh still has a key to refill. `sanitize_slider_override`
-                # is the one gate; a bare string here is a legacy spelling the
-                # read migration has already folded away.
+                # is the one gate.
                 block = sanitize_slider_override(v)
                 if block:
                     out[k] = block
@@ -297,19 +295,12 @@ class LizaRemoteStore:
     #   hash: <int>
     #   default_color: <hex color>       (optional)
     #   layout: {...}                    (optional layout provenance)
-    #   dynamic: {...}                   (legacy; read, never written — see
-    #                                     _merge_shared_binding)
     #   buttons:
     #     <button_key>: { action_id, config, label, image, state_icons, ... }
     #       toggle: optional sibling of config, giving one button several
     #               faces. { mode: "cycle", rules: [{icon?, label?, config:
     #               [...]}, ...] }. Each press runs the next rule; config
     #               mirrors rule 1 and is the fallback if the block is inert.
-
-    #: Page-level key an older writer used to hold the part of a dynamic binding
-    #: every bound button shared. Still read so pages already on disk keep
-    #: working; :meth:`_strip_layout_stated_keys` supersedes it.
-    SHARED_BINDING_KEY = "dynamic"
 
     @staticmethod
     def _layout_bindings(page_meta: dict) -> dict[str, dict]:
@@ -419,26 +410,6 @@ class LizaRemoteStore:
             ", ".join(sorted(orphaned)),
         )
 
-    @classmethod
-    def _merge_shared_binding(cls, raw: dict, buttons: dict) -> None:
-        """Put back keys an older writer hoisted to a page-level ``dynamic:``.
-
-        Nothing writes that block any more — the layout states those keys, and
-        :meth:`_restore_layout_stated_keys` reads them from there. This stays for
-        pages already on disk, which shed the block the next time they are saved.
-
-        Only buttons that already carry a binding get one: a hand-made button on
-        a generated page has no dynamic slot and must not be given one.
-        """
-        shared = raw.get(cls.SHARED_BINDING_KEY)
-        if not isinstance(shared, dict) or not shared:
-            return
-        for btn in buttons.values():
-            binding = btn.get(ASSIGNMENT_DYNAMIC_KEY) if isinstance(btn, dict) else None
-            if isinstance(binding, dict):
-                for key, value in shared.items():
-                    binding.setdefault(key, deepcopy(value))
-
     def _build_page_file_data(self, page_meta: dict, assignments: dict) -> dict:
         clean_buttons = {k: self._strip_empty_fields(v)
                          for k, v in assignments.items()
@@ -473,12 +444,6 @@ class LizaRemoteStore:
         default_color = raw.get("default_color", "")
         layout = raw.get("layout")
         buttons = raw.get("buttons", {})
-        # Back-compat: old page files kept buttons at top level.
-        if not buttons and any(k.startswith("button_") or k.startswith("slider_") for k in raw):
-            buttons = {k: v for k, v in raw.items()
-                       if k not in ("image", "hash", "buttons", "layout",
-                                    "default_color", PAGE_SUBPAGE_KEY,
-                                    self.SHARED_BINDING_KEY)}
         meta: dict[str, Any] = {"image": img_title, "hash": page_hash}
         if default_color:
             meta["default_color"] = default_color
@@ -487,113 +452,9 @@ class LizaRemoteStore:
         if layout and isinstance(layout, dict):
             meta["layout"] = layout
         buttons = buttons if isinstance(buttons, dict) else {}
-        # Before anything reads a binding: undo how the file spells them. The
-        # legacy page-level block comes first so a page carrying both keeps what
-        # it was written with over what the layout now says.
-        self._merge_shared_binding(raw, buttons)
+        # Before anything reads a binding: undo how the file spells them.
         self._restore_layout_stated_keys(meta, buttons)
-        for assign in buttons.values():
-            self._migrate_slider_control(assign)
-            self._drop_unread_binding_keys(assign)
-            migrate_legacy_label_tokens(assign)
         return meta, buttons
-
-    #: Binding keys written by an older resolver that nothing has ever read.
-    #: Dropped on load so a page sheds them the next time it is saved, rather
-    #: than every reader having to know they are noise.
-    UNREAD_BINDING_KEYS = frozenset({
-        # A creation timestamp. Refresh never updated it, so it recorded when a
-        # page was first generated and was consulted by nothing.
-        "resolved_at",
-    })
-
-    @classmethod
-    def _drop_unread_binding_keys(cls, assign: Any) -> None:
-        if not isinstance(assign, dict):
-            return
-        binding = assign.get(ASSIGNMENT_DYNAMIC_KEY)
-        if not isinstance(binding, dict):
-            return
-        for key in cls.UNREAD_BINDING_KEYS:
-            binding.pop(key, None)
-
-    @staticmethod
-    def _migrate_slider_control(assign: Any) -> None:
-        """Fold the two legacy flat spellings into the slider override block.
-
-        Three spellings reached disk before a grid button's slider settings
-        shared one block, and pages written then are still on disk:
-
-        * ``slider_control``, from before every control a grid button drives
-          shared the ``overrides`` table at all;
-        * ``overrides.slider_vertical`` as a bare **string** control id, paired
-          with
-        * a top-level ``slider_entity`` naming the subject.
-
-        All three become ``overrides.slider_vertical = {entity_id, control}``.
-        Migrating on read rather than keeping a second reader means only one
-        place ever has to know the old names, and the next save drops them.
-
-        Order matters and is the oldest-first rule: ``slider_control`` fills the
-        string spelling only if that is absent, and the string becomes
-        ``control`` only if the block does not already say. A page carrying both
-        was written by a newer panel, and the newer spelling wins.
-
-        The subject moves whether or not anything names a control — a button may
-        point the slider at a device and let :func:`resolve_control` derive the
-        rest — so the block is created for a lone ``slider_entity`` too. Its
-        empty string is carried across rather than dropped: it is the
-        bound-empty placeholder ``_retarget_subject`` refills.
-
-        This function only decides *which* old key supplies *which* field. The
-        resulting block goes through :func:`sanitize_slider_override` like every
-        other write, so a migrated page and a freshly saved one are shaped by
-        the same code and cannot drift apart.
-        """
-        if not isinstance(assign, dict):
-            return
-        legacy_control = assign.pop("slider_control", None)
-        legacy_entity = assign.pop("slider_entity", None)
-        overrides = assign.get("overrides")
-        if not isinstance(overrides, dict):
-            overrides = None
-
-        stored = overrides.get(SLIDER_VERTICAL_KEY) if overrides else None
-        if isinstance(stored, str):
-            control = stored.strip() or None
-        elif isinstance(stored, dict):
-            control = None
-        else:
-            control = None
-            stored = None
-        if control is None and isinstance(legacy_control, str) and legacy_control.strip():
-            control = legacy_control.strip()
-
-        # Nothing to fold: a block already in the new shape, and no flat key
-        # left beside it. Leaving early keeps a modern page byte-identical.
-        if isinstance(stored, dict) and legacy_entity is None and control is None:
-            return
-        if stored is None and control is None and legacy_entity is None:
-            return
-
-        candidate = dict(stored) if isinstance(stored, dict) else {}
-        if control is not None:
-            candidate.setdefault("control", control)
-        if isinstance(legacy_entity, str) and "entity_id" not in candidate:
-            candidate["entity_id"] = legacy_entity
-        # What a valid block looks like is not this function's question. A
-        # control with no subject is a setting for a retarget that never
-        # happens -- the old pair spelled the opt-in with `slider_entity`, so a
-        # page that lost it is not opted in -- and that is exactly the case
-        # `sanitize_slider_override` answers with `{}`, so ask it rather than
-        # keep a second copy of the rule here where it can drift.
-        block = sanitize_slider_override(candidate)
-        if not block:
-            return
-        if overrides is None:
-            overrides = {}
-            assign["overrides"] = overrides
-        overrides[SLIDER_VERTICAL_KEY] = block
 
     async def _read_device_from_disk(self, device_id: str) -> dict[str, Any] | None:
         """Read the split YAML files for one device into the in-memory shape."""
@@ -606,20 +467,14 @@ class LizaRemoteStore:
         lib_path = self._action_library_path(device_id)
         if await self._hass.async_add_executor_job(os.path.isfile, lib_path):
             lib = await self._hass.async_add_executor_job(self._read_yaml, lib_path)
-            data["action_library"] = (
-                migrate_legacy_label_tokens(lib) if isinstance(lib, list) else []
-            )
+            data["action_library"] = lib if isinstance(lib, list) else []
         else:
             data["action_library"] = []
 
-        # `page_order.yaml` lists every page. Without it -- a store written
-        # before subpages left `main_pages.yaml` -- that file still lists them
-        # all, so it serves as the order.
-        page_order = await self._async_read_id_list(self._page_order_path(device_id))
-        if page_order is None:
-            page_order = await self._async_read_id_list(
-                self._main_pages_path(device_id)
-            ) or []
+        # `page_order.yaml` lists every page, subpages included.
+        page_order = await self._async_read_id_list(
+            self._page_order_path(device_id)
+        ) or []
 
         pages: list[dict] = []
         assignments: dict[int, dict] = {}

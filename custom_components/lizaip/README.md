@@ -11,33 +11,64 @@ lizaip/
   manifest.json
   strings.json
   services.yaml        # HA service definitions
-  diagnostics.py       # Diagnostics support
+  const.py             # Domain, option keys, bus event and dispatcher signal names
+  runtime.py           # Lookups into live runtime state (store, connection, device id)
+  optimistic.py        # Short-lived predictions of where a lamp is heading
+  state_icon.py        # How a tile is drawn from the bound entity's state
   state_color.py       # Entity-derived icon tint (light rgb_color → fg=)
+  state_brightness.py  # Icon fill level from a light's brightness
+  variables_calc.py    # Calculations inside ${…} variables
+  diagnostics.py       # Diagnostics support
+  event.py, number.py, sensor.py, ...   # Platform wrappers → device/
 
-  event.py             # Platform wrapper → device/event.py
-  number.py            # Platform wrapper → device/number.py
-  sensor.py            # Platform wrapper → device/sensor.py
+  shared/              # Helpers used by more than one sub-package
+    assignment.py      # Keys and helpers for a stored button assignment
+    i18n.py            # Languages; ActionLabels (translated action wordings)
+    icon_defaults.py   # IconDefaults (default icon per domain/state/service)
+    icon_urls.py       # URLs the device fetches tiles, tooltips and titles from
+    labels.py          # ${_state} / ${_name} label placeholders
+    numbers.py         # to_float: numbers typed into forms
+    preludes.py        # Wake prelude and launch verification steps
+    services.py        # What HA services do: state maps, icon scopes
+    tokens.py          # ${sensor.x} and ${_device} variables
 
   device/              # Device connection sub-package
     __init__.py        # Exports: LizaIPConnection, LizaIPWebSocketView, etc.
     connection.py      # WebSocket connection manager
     protocol.py        # Protocol implementation (request/response/event)
-    websocket.py         # HTTP WS endpoint (/api/lizaip/ws)
-    const.py           # DOMAIN, WS_PATH, MODEL, etc.
+    websocket.py       # HTTP WS endpoint (/api/lizaip/ws)
+    const.py           # WS_PATH, MODEL, bus event names, etc.
     entity.py          # Shared entity mixin
     event.py           # EventEntity (buttons)
     number.py          # NumberEntity (brightness, sliders)
     sensor.py          # SensorEntity (battery)
     services.py        # Service handlers (send_image)
+    page_cache.py      # PageCache: what the remote is known to hold
+
+  action_controller/   # What a press, a slider or a state change does
+    _state.py          # RemoteState: selection, gestures, cycle positions per remote
+    dispatch.py        # Routes button, slider and page events from the device
+    buttons.py         # Compiles and runs the action behind a button press
+    state_listener.py  # Watches entity states, sends icon updates
+    toggle.py          # Virtual toggle button: one button, several actions
+    sliders.py, slider_exec.py   # Slider capabilities and execution
+    icons.py           # Matching an entity state to an icon and tooltip
 
   config/              # Config panel sub-package
     __init__.py         # Exports: async_setup_panel
-    const.py            # Events, helpers, icon resolver
-    panel.py            # Panel registration + button listener
-    actions.py          # Action execution + state-based icon tracking
-    websocket.py        # WS API for the frontend panel
+    const.py            # Panel and storage constants
+    panel.py            # Panel registration + per-entry listeners
+    panel_entry.py      # PanelEntry: one remote's listeners, closed together
+    events.py           # fire_config_changed (the one bus event config sends)
+    websocket/          # WS API for the frontend panel, one module per panel area
+    blueprint.py        # Button geometry per remote model (reads blueprints/)
+    store.py            # YAML store for the remote's configuration
     button_rendering.py # What a button says and which icon it shows
-    device_sync.py      # Push config to the physical device
+    page_payload.py     # What a page contains: the set_page payload
+    device_sync.py      # When and how pages are sent to the device
+    icon_push.py        # Queued delivery of icon updates to one device
+    variables.py        # Keeps ${…} variables current on the remote
+    layouts/            # Dynamic layouts (favorites, scenes, ...)
     panel/              # Frontend JS assets
     blueprints/         # Button geometry, one file per hardware SKU (3029-000.yaml)
 
@@ -224,7 +255,7 @@ integration performs a `hello` handshake and re-discovers capabilities automatic
 | Image sending | Push icon/image URLs to specific buttons via the `send_image` action |
 | IR blasting | Send IR codes through the device (via page action config) |
 | Diagnostics | Battery level, connection status, protocol/firmware version |
-| Image server | On-demand PNG rendering at `/imgserv/` — MDI icons, brand logos, PHU icons, text, static files, media thumbnails |
+| Image server | On-demand PNG rendering at `/imgserv/` — MDI icons, brand logos, PHU icons, text, static files, media thumbnails, history graphs |
 | State-based icons | Automatic button icon updates when watched entity states change |
 | Config panel | Sidebar UI for managing Action Library, button assignments, and pages |
 
@@ -263,7 +294,8 @@ The integration bundles an on-demand PNG image rendering server at `/api/imgserv
 It generates PNG images suitable for pushing to device buttons or title bars.
 
 **Key characteristics:**
-- No authentication required (images are public)
+- No authentication required (images are public). The one exception is `history:`,
+  which only draws entities the integration itself put into a `history:` image
 - Responses are cached with `Cache-Control: public, max-age=3600` (1 hour)
 - Maximum image dimension: **512×512 pixels**
 - Maximum text length: **200 characters**
@@ -300,6 +332,10 @@ which only mean something for `text:`.
 | `percent` | Fill level `0`–`100`: the band holding N % of the icon's ink stays fully opaque; the upper remainder is dimmed via alpha (`70%`), with the boundary feathered across ~8 % of the height so it reads as a level rather than a cut. Measured in ink rather than rows so transparent gaps cost nothing — see **Fill is measured in ink** below. `0` and `100` are uniform, having no boundary | — |
 | `font` | Font ID for `text:` source (see [Available Fonts](#available-fonts)) | `filson-light` |
 | `font_size` | Font size in pixels for `text:` source | `title` 48, `tooltip` 24, otherwise the image height |
+| `hours` | How far back a `history:` graph looks, `1`–`168` | `24` |
+| `days` | The same period in days, `1`–`7`. Cannot be combined with `hours` | — |
+| `start_time` | Start of an absolute `history:` period, ISO 8601 (`2026-10-10T08:00:00Z`). Without a zone it is read in Home Assistant's time zone | — |
+| `end_time` | End of an absolute `history:` period, same format. Given alone, the period is `hours`/`days` long and ends there | now |
 
 A `percent` outside `0`–`100` is answered with `400 Bad Request` before any
 rendering work is done.
@@ -463,15 +499,37 @@ automatically), resizes it to the requested `size`, and returns a PNG.
   query parameter on the imgserv URL (e.g. `&_v=2`) to bypass the cache when artwork
   changes.
 
-#### Legacy `?text=` format
+#### `history:<entity_id>` — A graph of an entity's history
 
-For backward compatibility, you can also request text rendering without a source path:
+Draws the entity's recorded states over a period from the recorder — the last `hours`
+(default 24) or `days`, or the absolute period `start_time`/`end_time` name:
+a numeric entity as a line with a faint fill, scaled to its own minimum and maximum; any
+other entity as a band that is bright while it was `on`, `open`, `home` or `playing`.
+`unknown` and `unavailable` stretches stay empty. The line or band is drawn in `fg`.
+Not croppable: trimming would stretch the time axis.
 
 ```
-/api/imgserv/?text=Hello&size=tile&fg=white
+imgserv://history:sensor.outdoor_temperature?size=tile
+imgserv://history:sensor.outdoor_temperature?hours=6&size=title&fg=FF8800
+imgserv://history:binary_sensor.front_door?hours=12&size=tooltip
+imgserv://history:sensor.house_power?days=7&size=title
+imgserv://history:sensor.house_power?start_time=2026-10-10T08:00:00Z&end_time=2026-10-10T20:00:00Z
 ```
 
-This is equivalent to `/api/imgserv/text:Hello?size=tile&fg=white`.
+- **The period**: `hours` and `days` spell the same thing, so asking for both is a `400`.
+  `start_time` alone runs up to now, `end_time` alone ends a `hours`/`days`-long period
+  there, and either way the period may not exceed 168 hours. An absolute period stands
+  still, while the default one moves with every refresh.
+
+- **Access** (`shared/history.py`): imgserv needs no login, so it graphs only entities
+  for which `versioned_history_image` built a `history:` image — a remote's page payload
+  or the panel's preview (`lizaip_config/resolve_variables`). Anything else gets `403`.
+  The set is in memory; the first sync after a restart fills it again.
+- **Refresh**: `versioned_history_image` adds `v=<last_changed>` to the value, and the
+  variable listener counts the entity as a state read (`variables._token_reads`). A state
+  change therefore moves the URL and goes to the remote through the variable push, at the
+  remote's variables interval.
+- **Errors**: `400` for a bad period, `503` when the recorder is not running.
 
 ## Config Panel
 
@@ -514,6 +572,10 @@ helper for battery icons: [README.public.md → Live values on the remote](../..
   `${_state}`/`${_name}`, in both the sync ladder (`button_rendering`) and the live ladder
   (`action_controller/icons.py`). `${_state}`/`${_name}` never match the entity pattern
   (no dot), and a label of only an entity token counts as the user's own words.
+- **Pictures in tooltips** (`tokens.finish_tooltip`): a tooltip that names a picture
+  (`is_media_source`) is resolved by `resolve_image_tokens`, like an image or a title, in
+  both ladders; `substitute_label_tokens` only fills `${_state}`/`${_name}` in it and
+  `clean_label_text` leaves it alone.
 - **Images and titles** (`button_rendering.with_resolved_image`): all or nothing — if
   any token is empty the image is dropped and the derived icon is used (a title is
   blank). The unit is only added when the image is drawn text (`text:` or no scheme
@@ -614,7 +676,7 @@ pasted back into the panel sources.
 The words a button prints for what a press *does* ("Mute", "Repeat all") live
 under the `action_labels` key. Both halves of the app read the same file:
 
-- **Python** — `const.get_action_label(key, lang)` reads
+- **Python** — `shared.i18n.action_labels.get(key, lang)` reads
   `translations/<lang>.json` directly. This is what the physical remote renders.
 - **Panel JS** — fetches `lizaip_config/get_action_labels` at startup and on
   every device switch. It holds no table of its own, so the panel and the
@@ -633,7 +695,7 @@ These are deliberately *not* taken from HA's `state_translated` /
 `hass.localize`. Those name a **state** ("Playing"); these name the **action** a
 press performs ("Repeat all"), and HA has no translation at all for `unmute`,
 `shuffle_on`, `oscillate_*` or `repeat_*` as actions. Two wordings also diverge
-from HA on purpose — see the comments in `const.py`.
+from HA on purpose — see the comments in `shared/i18n.py`.
 
 ### Per-device language
 
@@ -709,9 +771,9 @@ The colour reaches the hardware as a normal `img_tile` URL — there is no new
 protocol surface. Two producers build it and must agree, or a tile would visibly
 change colour a second after the page loads:
 
-* `device_sync._button_icon_style` — the full page sync.
+* `page_payload._button_icon_style` — the full page sync.
 * `action_controller/state_listener` — the live update, pushed as a partial
-  `set_page` when the light changes. `EVENT_STATE_CHANGED` fires on attribute
+  `set_page` when the light changes. The state tracker fires on attribute
   changes too, so a colour change alone is enough.
 
 Both resolve the colour from the button's *whole* target via
@@ -778,7 +840,7 @@ snaps between a handful of poses reads as a status light, not as a level:
   button on the page rather than mis-draw one. Anything unusable falls back to
   the default and anything out of range is clamped.
 
-  Three places build a tile's style — the page push (`config/device_sync.py`),
+  Three places build a tile's style — the page push (`config/page_payload.py`),
   the live state listener, and the button entity — and all three resolve the
   step from the same entry options. They have to: they render into the same
   image URL, so one of them still assuming the default would keep re-pushing

@@ -352,7 +352,7 @@ function createFaceDrag(container, svg, opts) {
  * @param {number} selectedIdx - Selected button index (-1 = none)
  * @param {Function} hasAction - (buttonKey) => boolean
  * @param {Function} onSelect - (idx) callback
- * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor, faceTitle}
+ * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor, onHover}
  *
  * Accessibility: with `interactive` the shapes become real controls —
  * `role="button"`, a tab stop, a name from `nameFor`, and Enter/Space/context
@@ -377,6 +377,10 @@ function createFaceDrag(container, svg, opts) {
  * `canDrag(key)` and `onDrop(fromKey, toKey)` wire the drag shortcut, and only
  * when both are given. The optional `canDrop(toKey, fromKey)` narrows what may
  * *receive* one. See `createFaceDrag`.
+ *
+ * `onHover(key, el, on)` is pointer and keyboard interest in a shape: enter
+ * and focus, then the matching leave, blur and Escape. One callback, because
+ * the card it drives has one state.
  */
 export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, opts) {
   if (!container || !blueprint) return;
@@ -410,20 +414,13 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
     // actually expect to walk this face. The keyboard decides the role, so
     // forty buttons that Tab reaches individually are forty buttons.
     //
-    // `presentation`, not nothing at all: the <title> below would otherwise
-    // become this element's accessible name, and a *named element with no role*
-    // is exposed as a group. That is the bug that had a reader saying the page
-    // twice and then "group". Presentation keeps the tooltip while leaving the
-    // element out of the tree; the shapes inside keep their own roles.
+    // `presentation`, not nothing at all: a named element with no role is
+    // exposed as a group, which is the bug that had a reader saying the page
+    // twice and then "group". The shapes inside keep their own roles.
     svg.setAttribute("role", "presentation");
-    // The hover tooltip for the open page. An SVG tooltip is a <title> child,
-    // not a title attribute, and it is drawn by the renderer rather than the
-    // accessibility tree, so it survives the presentation role.
-    if (opts?.faceTitle) {
-      const tip = document.createElementNS(svgNS, "title");
-      tip.textContent = opts.faceTitle;
-      svg.appendChild(tip);
-    }
+    // No <title>: the browser drew the page's over whichever shape the pointer
+    // rested on, which is two tooltips for one gesture once the hover card
+    // arrived. The page keeps its own on the thumbnails.
   } else {
     // A picture of another page. Nothing inside it is a control here.
     svg.setAttribute("aria-hidden", "true");
@@ -486,6 +483,17 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
       // Position is not carried at all: aria-posinset is invalid on button, and
       // writing "3 of 40" into the name means saying it on every single shape.
       if (selected) el.setAttribute("aria-current", "true");
+
+      // The hover card. Focus and blur go to the same callback as the
+      // pointer, so a keyboard user is not the one person who cannot see it.
+      // Focus skips the delay: it is a deliberate arrival, not a fly-over.
+      if (opts?.onHover) {
+        const hover = (on, instant) => opts.onHover(btn.key, el, on, instant);
+        el.addEventListener("mouseenter", () => hover(true));
+        el.addEventListener("mouseleave", () => hover(false));
+        el.addEventListener("focus", () => hover(true, true));
+        el.addEventListener("blur", () => hover(false));
+      }
 
       el.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {

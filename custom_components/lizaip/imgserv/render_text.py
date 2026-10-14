@@ -184,20 +184,6 @@ def _is_tag_char(cp: int) -> bool:
     return 0xE0020 <= cp <= 0xE007F
 
 
-def _is_emoji_presentation(cp: int) -> bool:
-    """Rough check: codepoint typically rendered as emoji."""
-    if cp >= 0x1F000:
-        return True
-    # Miscellaneous symbols / dingbats / emoticons ranges
-    if 0x2600 <= cp <= 0x27BF:
-        return True
-    if 0x2300 <= cp <= 0x23FF:
-        return True
-    if 0xFE00 <= cp <= 0xFE0F:
-        return True
-    return False
-
-
 def grapheme_iter(text: str):
     """Yield grapheme clusters from *text*.
 

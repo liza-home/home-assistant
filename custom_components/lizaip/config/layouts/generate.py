@@ -27,20 +27,18 @@ from ...action_controller import (
     last_touched_or_entity_slider_actions,
     last_touched_slider_actions,
     targets_entity,
-    targets_last_touched,
-    targets_last_touched_or_entity,
 )
-from ...const import (
+from ...shared.services import (
     service_name,
     split_service,
-    ATTR_ICONS,
-    DOMAIN_STATE_ICONS,
     is_state_toggle_service,
     icon_varies_with_state,
     scope_action_states,
     service_to_attribute,
 )
-from ..const import ASSIGNMENT_BLANKED_KEY, ASSIGNMENT_DYNAMIC_KEY, drop_redundant_subject, payload_identity
+from ...shared.icon_defaults import icon_defaults
+from ..const import ASSIGNMENT_BLANKED_KEY, drop_redundant_subject, payload_identity
+from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
 from .resolver import (
     DYNAMIC_KEY,
     config_step,
@@ -384,7 +382,7 @@ def _unassigned(btn_def: dict, binding: dict | None = None) -> dict:
     """Empty slot assignment; dynamic bindings stay so later refresh can fill it.
 
     The label/artwork still render, and the shape matches ``EMPTY_BUTTON`` in
-    ``websocket.py`` including fields the panel and device sync read.
+    ``websocket/common.py`` including fields the panel and device sync read.
     """
     assignment = {
         "action_id": None,
@@ -434,13 +432,13 @@ def _register_action(
     if icon_varies_with_state(svc_name):
         attr = service_to_attribute(svc_name)
         if attr:
-            attr_icons = ATTR_ICONS.get(attr, {})
+            attr_icons = icon_defaults.attribute_icons.get(attr, {})
             derived_states = [
                 {"state": s, "icon": i, "attribute": attr}
                 for s, i in attr_icons.items() if i
             ]
         elif is_state_toggle_service(svc_name):
-            domain_icons = DOMAIN_STATE_ICONS.get(svc_domain, {})
+            domain_icons = icon_defaults.domain_state_icons.get(svc_domain, {})
             derived_states = scope_action_states(
                 svc_name,
                 [{"state": s, "icon": i} for s, i in domain_icons.items() if i],
@@ -633,8 +631,8 @@ def _slider_actions_for(
 ) -> dict | None:
     """Return declared proportional slider mechanics, or ``None`` for a button.
 
-    Priority: explicit last-touched, following with a default entity, then a
-    fully spelled proportional block. Discrete up/down stepping belongs on the
+    Priority: following with a derived default entity, then a fully spelled
+    proportional block. Discrete up/down stepping belongs on the
     normal volume buttons, not in ``slider_actions``.
     """
     cfg = page_slider(btn_def)
@@ -642,10 +640,7 @@ def _slider_actions_for(
     def factor() -> float:
         return _layout_num(cfg.get("factor", 1.0), 1.0, button_key, "factor")
 
-    if targets_last_touched(cfg):
-        return last_touched_slider_actions(factor())
-
-    if targets_last_touched_or_entity(cfg) or _wants_derived_default(btn_def):
+    if _wants_derived_default(btn_def):
         # Entity-only sliders derive mechanics from that entity's live state.
         default_entity = _slider_entity(btn_def) or target_entity
         actions = last_touched_or_entity_slider_actions(hass, default_entity, factor())
@@ -775,15 +770,6 @@ def generate_assignments(
         if slider_actions is not None:
             assignments[button_key] = _slider_assignment(btn_def, slider_actions)
             continue
-
-        if isinstance(btn_def.get("actions"), dict):
-            # Warn instead of silently treating the legacy slider shape as empty.
-            _LOGGER.warning(
-                "Layout button %r uses the legacy slider 'actions' shape without "
-                "'mode: proportional' — it will be treated as an unassigned "
-                "button. Convert it to proportional mode.",
-                button_key,
-            )
 
         action_str = page_field(btn_def, "action")
         if not action_str or action_str == "null":

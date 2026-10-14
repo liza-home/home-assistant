@@ -47,14 +47,13 @@ goto_page:
     device:
       integration: lizaip
     primary_entities_only: false
+  # The page is named by its id, not its title: titles are duplicable and get
+  # renamed, and the id is what the protocol carries. `page` is still accepted
+  # by the schema so automations written against the old field keep working, it
+  # is simply no longer offered here.
   fields:
-    page:
-      required: true
-      example: Living Room
-      selector:
-        text:
     page_id:
-      required: false
+      required: true
       example: 2
       selector:
         number:

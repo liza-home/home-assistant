@@ -232,7 +232,7 @@ def sanitize_slider_override(value: Any) -> dict:
     without it declares a control for a retarget that never happens. The empty
     string survives on purpose, because it is the placeholder a bound-empty slot
     keeps for ``_retarget_subject``; callers that have a binding to consult
-    decide whether to keep one (see ``_build_assignment_entry``).
+    decide whether to keep one (see ``build_assignment_entry``).
 
     ``control`` is dropped when absent or blank rather than stored empty, so the
     "derive one" state has a single spelling on disk.

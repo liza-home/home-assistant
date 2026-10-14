@@ -1,8 +1,8 @@
 """Constants for the lizaIP config panel.
 
-Scope: panel- and storage-specific values only. Anything the wider
-integration needs (domain, icons, action labels, i18n) lives in the
-integration-level ``const.py`` at the package root.
+Scope: panel- and storage-specific values only. The domain and other
+integration-wide names are in the root ``const.py``; icons, action labels
+and i18n are in ``shared/``.
 
 Storage scheme (v3 — Action Library):
   Actions are defined once in a shared library. Buttons reference
@@ -15,33 +15,15 @@ Key format:
 """
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 from urllib.parse import unquote
 
 import voluptuous as vol
 
-from ..device.protocol import MAX_PAGE_ID, MIN_PAGE_ID, is_valid_page_id  # noqa: F401
-# Re-exported: key on a stored button assignment holding its dynamic-source
-# binding. It is a *sibling* of `config`, not a field inside it -- the admin
-# panel truncates a button's `config` list to its first step on every edit, so
-# anything stored in there that the panel does not know about is destroyed the
-# first time a user touches the button. `before` already lives outside `config`
-# for exactly this reason. It is defined at the package root because the
-# tooltip ladders in `action_controller` read it too, and one spelling for a
-# stored key is the point of having a constant.
-from ..const import normalise_payload  # noqa: F401
-from ..const import service_name
-from ..const import ASSIGNMENT_DYNAMIC_KEY  # noqa: F401
-
-# Re-exported alongside it: the key marking a button's label as one the user
-# typed into the panel, which the tooltip ladders in `action_controller` read.
-from ..const import ASSIGNMENT_LABEL_EDITED_KEY  # noqa: F401
-# And the key holding the name a device-local command's target had when the
-# button was saved, which `device_sync` reads to label a target since deleted.
-from ..const import ASSIGNMENT_INTERNAL_TARGET_NAME_KEY  # noqa: F401
 from ..device.const import MODEL_ID
+from ..device.protocol import MAX_PAGE_ID, MIN_PAGE_ID
+from ..shared.services import normalise_payload, service_name
 
 CONFIG_CHANGED_EVENT = "lizaip_config_config_changed"
 
@@ -117,20 +99,6 @@ def is_subpage(page: Any) -> bool:
     """
     return bool(page.get(PAGE_SUBPAGE_KEY)) if isinstance(page, dict) else False
 
-
-def parse_json_option(value) -> dict | list | None:
-    """Parse a config-entry option that may be stored as a JSON string or native type.
-
-    Returns the parsed value, or None on error / empty input.
-    """
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return None
 
 # ---------------------------------------------------------------------------
 # Payload identity

@@ -59,12 +59,9 @@ def _parse_ota_reply(text: str) -> str:
         node = inner
     status = next((v for k, v in node.items() if str(k).lower() == "status"), None)
     return str(status or "").strip() or text
-from .const import (
-    DOMAIN,
-    LIZAIP_AVAILABILITY_EVENT,
-    LIZAIP_EVENT,
-    LIZAIP_HELLO_EVENT,
-)
+from ..const import DOMAIN
+from .const import LIZAIP_AVAILABILITY_EVENT, LIZAIP_EVENT, LIZAIP_HELLO_EVENT
+from .page_cache import PageCache
 from .protocol import (
     DEFAULT_REQUEST_TIMEOUT,
     ERR_INTERNAL,
@@ -157,34 +154,8 @@ class LizaIPConnection:
         # confirmed/updated by _probe_device() after every hello.
         self._device_http_port: int | None = entry.data.get("device_port")
 
-        # What the device is known to hold: page_id → the `set_page` payload it
-        # was last given, its hash included. `None` means "unknown, ask the
-        # device". One dict rather than a hash map beside a payload map: the
-        # two used to be written in six places and could drift, and every
-        # reader then needed a hash comparison to decide whether to believe the
-        # payload. Reset on disconnect and on a failed sync.
-        self._known_pages: dict[int, dict] | None = None
-        self._known_main_pages: list[int] | None = None  # ordered page IDs
-        # Page syncs must not interleave: two of them racing send conflicting
-        # `set_main_pages` orders and each diffs against a cache the other is
-        # still writing. Also held by the pushes that bypass a full sync -- the
-        # order push after `set_pages` and the `clear_all` service.
-        self._page_sync_lock = asyncio.Lock()
-        # Consecutive failed page syncs. Survives disconnects on purpose: a
-        # device that drops the socket mid-sync every time is the case the
-        # repair issue exists for, and resetting here would hide it.
-        self._page_sync_failures = 0
-        # Page IDs this device refused to both create and write during this
-        # session. Firmware reports no page-count limit in its capabilities, so
-        # the ceiling can only be learned by hitting it; remembering it stops
-        # every later sync from spending four doomed round-trips per page.
-        # Cleared on disconnect, so a firmware update or reset gets a fresh try.
-        self._rejected_pages: set[int] = set()
-        # Pages an `add_page` or `set_page` was sent for without an answer that
-        # settles whether the device now holds them. They are out of
-        # `_known_pages`, so a page in here that leaves the config still gets a
-        # `del_page` -- otherwise it would stay on the device, merely unlisted.
-        self._unsure_pages: set[int] = set()
+        # What the device is known to hold, and the lock the page sync uses.
+        self.page_cache = PageCache()
 
         # Wire up protocol event/request handlers
         self._protocol.on_event("button", self._on_button_event)
@@ -358,10 +329,7 @@ class LizaIPConnection:
                 self._ws = None
                 self._protocol.set_ws(None)
                 # Unknown device state after disconnect — must re-query on next connect
-                self._known_pages = None
-                self._known_main_pages = None
-                self._rejected_pages = set()
-                self._unsure_pages = set()
+                self.page_cache.reset()
                 _LOGGER.warning(
                     "Device %s is unavailable (WebSocket disconnected)",
                     self._entry.title,
@@ -473,8 +441,7 @@ class LizaIPConnection:
         leave it claiming a device state nobody can rely on. Forgetting it means
         the next sync re-reads `get_pages` and rebuilds from what is really there.
         """
-        self._known_pages = None
-        self._known_main_pages = None
+        self.page_cache.forget()
         return await self._protocol.send_request("clear_all")
 
     async def goto_page(self, page_id: int) -> dict[str, Any]:
@@ -698,14 +665,6 @@ class LizaIPConnection:
                 translation_key="ota_rejected",
                 translation_placeholders={"status": str(status), "error": text[:200]},
             )
-
-    async def get_ota_status(self) -> str:
-        """Poll ``GET /Device/OTA`` and return the raw status text.
-
-        e.g. ``"Image commit successful"``. Raises :exc:`HomeAssistantError` when
-        the device cannot be reached.
-        """
-        return (await self.get_ota_reply()).status
 
     async def get_ota_reply(self) -> OtaReply:
         """Poll ``GET /Device/OTA``: the status text and the raw reply.

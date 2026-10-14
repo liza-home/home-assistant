@@ -46,7 +46,7 @@ from .const import DOMAIN
 from .device import report as device_report
 from .device.const import MODEL_ID
 from .device.connection import LizaIPConnection
-from .runtime import _resolve_device_id
+from .runtime import find_store, _resolve_device_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -302,10 +302,9 @@ async def async_settings_snapshot(
     Nothing here is personal, which is why the device page carries it whole and
     the bundle reuses this same function rather than collecting it twice.
     """
-    from .config.websocket import (  # Local: the panel imports us back.
-        _async_blueprint,
-        _async_list_fonts,
-        _blueprint_id,
+    from .config.blueprint import async_get_blueprint, entry_blueprint_id
+    from .config.websocket.settings import (  # Local: the panel imports us back.
+        async_list_fonts,
         icon_options_for_entry,
     )
     from .imgserv.render_custom import get_custom_icons
@@ -313,7 +312,7 @@ async def async_settings_snapshot(
     settings: dict[str, Any] = {}
 
     try:
-        settings["fonts"] = await _async_list_fonts(hass)
+        settings["fonts"] = await async_list_fonts(hass)
     except Exception as err:  # noqa: BLE001 — one missing part, not the section
         settings["fonts"] = {"error": str(err)}
 
@@ -336,9 +335,9 @@ async def async_settings_snapshot(
         }
 
     try:
-        blueprint = await _async_blueprint(hass, entry.entry_id)
+        blueprint = await async_get_blueprint(hass, entry.entry_id)
         settings["blueprint"] = {
-            "id": _blueprint_id(hass, entry.entry_id),
+            "id": entry_blueprint_id(hass, entry.entry_id),
             # The layout itself is large and is the same for everyone with this
             # model; what varies, and what matters, is which one, and how many
             # buttons it claims the remote has.
@@ -410,7 +409,7 @@ async def _async_config_summary(hass: HomeAssistant, entry: ConfigEntry) -> dict
         "actions": {"total": 0, "unused": 0},
     }
 
-    store = hass.data.get(DOMAIN, {}).get("_store")
+    store = find_store(hass)
     device_id = _resolve_device_id(hass, entry.entry_id)
     if store is None or not device_id:
         return summary

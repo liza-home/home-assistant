@@ -2,7 +2,7 @@
 
 Everything here answers one question — given an assignment, what text and what
 icon should the device draw? None of it talks to a device or knows a page
-exists. :mod:`device_sync` calls into it while building a page payload, and
+exists. :mod:`page_payload` calls into it while building a page payload, and
 that is the only direction the dependency runs.
 
 The icon rules are the bulk of it. An icon can come from nine different places
@@ -28,40 +28,38 @@ from homeassistant.core import HomeAssistant
 # swallowed silently and left every button on its coarse per-domain icon.
 from homeassistant.helpers.icon import async_get_icons
 
-from ..const import (
+from ..shared.tokens import (
     entity_token_entities,
     resolve_image_tokens,
+    clean_label_text,
+    finish_tooltip,
+    substitute_label_tokens,
+)
+from ..shared.services import (
     service_name,
-    ATTR_ICONS,
-    DOMAIN_ICONS,
-    DOMAIN_STATE_ICONS,
     NEXT_STATE_MAP,
     attr_str,
     catchall_state_icon,
-    friendly_svc,
-    get_action_label,
-    STATE_TOKEN,
-    get_default_icon,
-    get_ui_language,
     is_attribute_state_service,
     is_state_toggle_service,
     icon_varies_with_state,
     is_stateless_service,
-    is_token_only_label,
     is_two_way_service,
-    localize_static_name,
-    name_is_source_owned,
-    name_is_user_written,
     scope_action_states,
     scoped_icon_state,
     service_fixed_icon,
     service_to_attribute,
-    state_token_label,
-    clean_label_text,
-    substitute_label_tokens,
+)
+from ..shared.history import history_entity
+from ..shared.icon_defaults import icon_defaults
+from ..shared.i18n import action_labels, get_ui_language
+from ..shared.labels import STATE_TOKEN, is_token_only_label, state_token_label
+from ..shared.assignment import (
+    name_is_source_owned,
+    name_is_user_written,
+    ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
 )
 from .const import (
-    ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
     BROKEN_TARGET_ICON,
     UNCONFIGURED_ICON,
     is_borrowed_identity_icon,
@@ -201,10 +199,11 @@ def _resolve_button_tooltip(
     brace there is rejected by the HTTP parser before any handler runs, which
     shows up on the device as a silently blank tooltip.
     """
-    return clean_label_text(
+    return finish_tooltip(
         _resolve_button_tooltip_ladder(
             action_def, assign, hass, entry, internal_context, button_ref,
-        )
+        ),
+        hass,
     )
 
 
@@ -317,7 +316,7 @@ def _resolve_button_tooltip_ladder(
     # The device's own language option first, then the panel/HA language.
     lang = get_ui_language(hass, entry)
     # Presets hardcode English here ("Power", "Volume Up").
-    static_name = localize_static_name(static_name, lang, user_named)
+    static_name = action_labels.localize(static_name, lang, user_named)
 
     if not svc:
         return static_name
@@ -371,7 +370,7 @@ def _resolve_button_tooltip_ladder(
     if is_state_toggle_service(svc) and current_state:
         next_key = NEXT_STATE_MAP.get(current_state)
         if next_key:
-            label = get_action_label(next_key, lang)
+            label = action_labels.get(next_key, lang)
             return f"{entity_name} {label}" if entity_name else label
 
     # Stateless services with a predefined name — use the button name as tooltip
@@ -380,7 +379,7 @@ def _resolve_button_tooltip_ladder(
         return f"{entity_name} {static_name}" if entity_name else static_name
 
     # All other services — derive friendly label from service name
-    label = friendly_svc(svc, lang)
+    label = action_labels.for_service(svc, lang)
     if label:
         return f"{entity_name} {label}" if entity_name else label
 
@@ -484,14 +483,14 @@ def _derived_states(subject: _IconSubject, hass: HomeAssistant) -> list:
     if attr:
         return [
             {"state": s, "icon": i, "attribute": attr}
-            for s, i in ATTR_ICONS.get(attr, {}).items() if i
+            for s, i in icon_defaults.attribute_icons.get(attr, {}).items() if i
         ]
     if is_state_toggle_service(subject.svc_name):
         return scope_action_states(
             subject.service,
             [
                 {"state": s, "icon": i}
-                for s, i in DOMAIN_STATE_ICONS.get(subject.svc_domain, {}).items() if i
+                for s, i in icon_defaults.domain_state_icons.get(subject.svc_domain, {}).items() if i
             ],
         )
     return states
@@ -629,12 +628,12 @@ def _icon_from_live_state(s: _IconSubject) -> str | None:
     attribute = service_to_attribute(s.svc_name)
     if attribute:
         attr_val = attr_str(s.current_state.attributes.get(attribute, ""))
-        return get_default_icon(s.entity_domain, attribute, attr_val) or None
+        return icon_defaults.for_state(s.entity_domain, attribute, attr_val) or None
     if is_state_toggle_service(s.svc_name):
         # A narrowed service reads the table through its catch-all, so an idle
         # speaker still shows "press to play".
         lookup = scoped_icon_state(s.svc_name, s.entity_domain, s.current_state.state)
-        return (get_default_icon(s.entity_domain, None, lookup) if lookup else None) or None
+        return (icon_defaults.for_state(s.entity_domain, None, lookup) if lookup else None) or None
     return None
 
 
@@ -664,8 +663,8 @@ def _icon_from_service(s: _IconSubject) -> str | None:
     else:
         attribute = service_to_attribute(s.svc_name)
         icons = (
-            ATTR_ICONS.get(attribute, {}) if attribute
-            else DOMAIN_STATE_ICONS.get(s.svc_domain, {})
+            icon_defaults.attribute_icons.get(attribute, {}) if attribute
+            else icon_defaults.domain_state_icons.get(s.svc_domain, {})
         )
         first_icon = next(iter(icons.values()), None)
         if first_icon:
@@ -681,7 +680,7 @@ def _icon_from_service(s: _IconSubject) -> str | None:
         if svc_icon:
             return svc_icon
 
-    return DOMAIN_ICONS.get(s.svc_domain)
+    return icon_defaults.domain_icons.get(s.svc_domain)
 
 
 #: Tried in order; the first to answer wins. See each rung for why it sits here.
@@ -708,7 +707,8 @@ def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
     would derive without one.
     """
     image = assign.get("image") if isinstance(assign, dict) else None
-    if not entity_token_entities(image):
+    # A `history:` graph is resolved too: it gets the version that moves it.
+    if not entity_token_entities(image) and history_entity(image) is None:
         return assign
     # The rules themselves are in `resolve_image_tokens`, shared with the
     # toggle rule icons that accept exactly the same syntax -- weather

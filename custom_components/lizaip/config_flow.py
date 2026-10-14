@@ -42,21 +42,12 @@ from .slider_throttle import (
     SLIDER_MIN_INTERVAL_MS_MAX,
 )
 from . import provisioning
-from .device.const import MODEL
+from .shared.numbers import to_float
+from .device.const import LIZAIP_AVAILABILITY_EVENT, MODEL
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "lizaip"
-
-
-def _optional_float(value: Any) -> float | None:
-    """Normalize an options value to float or None for form defaults."""
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -226,21 +217,6 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # HA address resolution — what we send to the device
     # ------------------------------------------------------------------
 
-    def _supervisor_hostname(self) -> str | None:
-        return provisioning.supervisor_hostname(self.hass)
-
-    def _server_port(self) -> int:
-        return provisioning.server_port(self.hass)
-
-    def _url_address(self, **kwargs: Any) -> tuple[str | None, int | None]:
-        return provisioning.url_address(self.hass, **kwargs)
-
-    def _external_address(self) -> tuple[str | None, int | None]:
-        return provisioning.external_address(self.hass)
-
-    def _ha_address(self) -> tuple[str, int]:
-        return provisioning.ha_address(self.hass)
-
     async def _async_ha_address(self) -> tuple[str, int]:
         return await provisioning.async_ha_address(self.hass)
 
@@ -325,17 +301,38 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         within seconds -- often before its entry has even loaded. Waiting that
         out keeps a working address from being replaced by a theory.
         """
-        for _ in range(self._RECONNECT_GRACE):
-            if self._device_connected(unique_id):
-                _LOGGER.info(
-                    "Device %s connected on its own — leaving its address alone",
-                    unique_id,
-                )
-                return
-            await asyncio.sleep(1)
-        if self._device_connected(unique_id):
+        if await self._connects_within_grace(unique_id):
+            _LOGGER.info(
+                "Device %s connected on its own — leaving its address alone",
+                unique_id,
+            )
             return
         await self._try_reprovision(device_ips)
+
+    async def _connects_within_grace(self, unique_id: str) -> bool:
+        """Whether the device connects within ``_RECONNECT_GRACE`` seconds.
+
+        Woken by the device's availability event rather than by looking every
+        second; the check up front covers a device that is already back.
+        """
+        if self._device_connected(unique_id):
+            return True
+        connected = asyncio.Event()
+
+        @callback
+        def _on_availability(event) -> None:
+            entry = self.hass.config_entries.async_get_entry(event.data.get("entry_id"))
+            if event.data.get("connected") and entry is not None and entry.unique_id == unique_id:
+                connected.set()
+
+        unsub = self.hass.bus.async_listen(LIZAIP_AVAILABILITY_EVENT, _on_availability)
+        try:
+            await asyncio.wait_for(connected.wait(), self._RECONNECT_GRACE)
+        except TimeoutError:
+            return False
+        finally:
+            unsub()
+        return True
 
     # ------------------------------------------------------------------
     # Provisioning — POST /api/config/ha on the device
@@ -533,11 +530,11 @@ class LizaIPOptionsFlowHandler(config_entries.OptionsFlow):
             # the device's own timings alone.
             vol.Optional(
                 CONF_DEMO_MODE_DWELL_TIME,
-                default=_optional_float(options.get(CONF_DEMO_MODE_DWELL_TIME)),
+                default=to_float(options.get(CONF_DEMO_MODE_DWELL_TIME)),
             ): vol.Any(None, vol.Coerce(float)),
             vol.Optional(
                 CONF_DEMO_MODE_SWIPE_TIME,
-                default=_optional_float(options.get(CONF_DEMO_MODE_SWIPE_TIME)),
+                default=to_float(options.get(CONF_DEMO_MODE_SWIPE_TIME)),
             ): vol.Any(None, vol.Coerce(float)),
         })
 

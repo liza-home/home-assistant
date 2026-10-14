@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -22,14 +21,13 @@ from homeassistant.exceptions import HomeAssistantError
 
 from ..device import debug
 from ..imgserv.render_mdi import _load_mdi_paths
+from ..runtime import _get_store, _resolve_device_id, entry_connection
+from .blueprint import async_get_blueprint
 from .const import generate_page_id
-from .snapshot import _fire_config_changed, _get_store, _resolve_device_id
+from .events import fire_config_changed
+from .websocket.common import refresh_state_listener, reserved_page_ids
 
 _LOGGER = logging.getLogger(__name__)
-
-#: Page helpers that live in `websocket`, which imports this module and so
-#: cannot be imported back; `register_debug_commands` is handed them.
-_PAGE_TOOLS: dict[str, Any] = {}
 
 
 def _connection_for(hass: HomeAssistant, entry_id: str):
@@ -42,10 +40,7 @@ def _connection_for(hass: HomeAssistant, entry_id: str):
     HTTP API is reached over its own address and does not depend on our
     WebSocket being up.
     """
-    entry = hass.config_entries.async_get_entry(entry_id)
-    if not entry or not getattr(entry, "runtime_data", None):
-        return None
-    return entry.runtime_data
+    return entry_connection(hass.config_entries.async_get_entry(entry_id))
 
 
 @websocket_api.websocket_command({
@@ -289,11 +284,11 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
         return
     rng = random.Random()
     pool = rng.sample(names, min(msg["images"], len(names)))
-    keys = [btn["key"] for btn in (await _PAGE_TOOLS["blueprint"](hass, entry_id)).get("buttons", [])]
+    keys = [btn["key"] for btn in (await async_get_blueprint(hass, entry_id)).get("buttons", [])]
 
     store = _get_store(hass)
     pages = await store.async_get_pages(device_id)
-    reserved = await _PAGE_TOOLS["reserved_page_ids"](
+    reserved = await reserved_page_ids(
         store, device_id, {p["id"] for p in pages if isinstance(p, dict)},
     )
     new_ids: list[int] = []
@@ -309,8 +304,8 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
     for page_id in new_ids:
         await store.async_recompute_page_hash(device_id, page_id)
 
-    await _PAGE_TOOLS["refresh_state_listener"](hass, entry_id)
-    await _fire_config_changed(hass, entry_id)
+    await refresh_state_listener(hass, entry_id)
+    fire_config_changed(hass, entry_id)
     _LOGGER.info(
         "Added %d random test pages (%d images) for device %s",
         len(new_ids), len(pool), device_id,
@@ -323,11 +318,8 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
     })
 
 
-def register_debug_commands(
-    hass: HomeAssistant, page_tools: dict[str, Any] | None = None,
-) -> None:
-    """Register the debug commands; *page_tools* are `websocket`'s page helpers."""
-    _PAGE_TOOLS.update(page_tools or {})
+def register_debug_commands(hass: HomeAssistant) -> None:
+    """Register the debug commands."""
     for handler in (ws_debug_probe, ws_set_debug_port, ws_debug_report,
                     ws_debug_logging, ws_set_log_level,
                     ws_debug_port_state, ws_reset_log_levels, ws_debug_traffic,

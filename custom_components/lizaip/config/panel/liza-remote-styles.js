@@ -631,7 +631,41 @@ export const STYLES = `
     */
     padding: 14px 12px 47px 12px;
     scrollbar-width: thin;
+    /* The containing block for .goto-link-layer. It has to be this element and
+       not the card: the layer is sized to the scrollable content, and only a
+       child of the scroller itself scrolls along with the thumbnails it is
+       drawing between. */
+    position: relative;
   }
+  /* The link from a button to the page it opens. Drawn by _drawGotoLink,
+     which also sizes it; nothing here may set a width or a height. */
+  .goto-link-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    /* It covers the whole row, including every thumbnail and the add button, so
+       anything less would make the strip untouchable. */
+    pointer-events: none;
+    /* Above the thumbs, which are positioned (for their delete button and their
+       drag offset) and so would otherwise paint over a line drawn before them
+       in document order. The layer is deliberately the strip's first child --
+       see the markup -- so the stacking has to be stated rather than inherited
+       from source order. */
+    z-index: 5;
+    /* The arc bows out of the box the endpoints span, and the arrowhead marker
+       reaches past the path's last point. */
+    overflow: visible;
+  }
+  .goto-link-layer .goto-link-path {
+    fill: none;
+    /* The text colour, so the link reads as something the panel is telling
+       you rather than a warning, and so it flips with the day/night theme --
+       a fixed colour would go invisible on one of the two. */
+    stroke: var(--primary-text-color);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+  }
+  .goto-link-layer .goto-link-head { fill: var(--primary-text-color); }
   .pages-list::-webkit-scrollbar { height: 4px; }
   .pages-list::-webkit-scrollbar-thumb { background: var(--divider-color); border-radius: 2px; }
   .page-thumb {
@@ -700,6 +734,15 @@ export const STYLES = `
     border-color: var(--liza-selected);
     background: rgba(3,169,244,.04);
     box-shadow: 0 0 12px rgba(3,169,244,.2);
+  }
+  /* The page a link points at. After .active deliberately: the target of an
+     incoming link is usually the open page itself, and this frame is what says
+     so -- that the card is also the open one is still said by every other cue
+     on it. The text colour rather than a hue of its own, matching the line it
+     terminates, so the two read as one mark. */
+  .page-thumb[goto-link] {
+    border-color: var(--primary-text-color);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--primary-text-color) 25%, transparent);
   }
   .page-add-btn {
     display: flex;
@@ -777,6 +820,101 @@ export const STYLES = `
     fill: rgba(3,169,244,.18);
     stroke: var(--primary-color, #03a9f4);
     stroke-width: 1;
+  }
+  /* The hover card, from liza-remote-button-tip.js. Fixed and parented to the
+     shadow root: .page-thumb is scaled and translated, so a positioned
+     descendant would be scaled and sheared along with it.
+
+     pointer-events:none because the card sits beside the shape it describes,
+     and one that took the pointer would end the hover that produced it. */
+  .liza-btn-tip {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 30;
+    max-width: 260px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--card-background-color, #2b2b2b);
+    color: var(--primary-text-color, #fff);
+    border: 1px solid var(--divider-color, rgba(127,127,127,.3));
+    box-shadow: 0 4px 16px rgba(0,0,0,.35);
+    font-size: 12px;
+    line-height: 1.35;
+    pointer-events: none;
+  }
+  /* Spelled out because the element carries a position, and a positioned
+     element with a display of its own would ignore the attribute. */
+  .liza-btn-tip[hidden] {
+    display: none;
+  }
+  .liza-btn-tip-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  /* The same PNG the face is drawing, at the size a line of this text is. */
+  .liza-btn-tip-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    flex: 0 0 auto;
+  }
+  .liza-btn-tip-name {
+    overflow-wrap: anywhere;
+  }
+  /* A first column so the kinds line up and the values read as a list rather
+     than a paragraph. A minimum rather than a fixed width, so a long word in
+     a language that compounds is not clipped. */
+  .liza-btn-tip-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .liza-btn-tip-kind {
+    flex: 0 1 auto;
+    min-width: 58px;
+    max-width: 112px;
+    opacity: .65;
+    overflow-wrap: anywhere;
+  }
+  .liza-btn-tip-text {
+    overflow-wrap: anywhere;
+  }
+  .liza-btn-tip-row.warn .liza-btn-tip-text {
+    color: var(--error-color, #db4437);
+  }
+  .liza-btn-tip-none {
+    opacity: .65;
+  }
+  /* The page card's lines, which have no kind to sit beside. */
+  .liza-btn-tip-line {
+    margin-top: 2px;
+    opacity: .8;
+    overflow-wrap: anywhere;
+  }
+  /* Which of forty close-packed shapes the card is about. Level with the
+     shape, which is what --tip-caret carries: the card is clamped to the
+     viewport and the shape it points at is not. */
+  .liza-btn-tip.tip-left::after,
+  .liza-btn-tip.tip-right::after {
+    content: "";
+    position: absolute;
+    top: var(--tip-caret, 50%);
+    margin-top: -6px;
+    width: 0;
+    height: 0;
+    border: 6px solid transparent;
+  }
+  .liza-btn-tip.tip-right::after {
+    left: -12px;
+    border-right-color: var(--card-background-color, #2b2b2b);
+  }
+  .liza-btn-tip.tip-left::after {
+    right: -12px;
+    border-left-color: var(--card-background-color, #2b2b2b);
   }
   .pg-svg-container .button[configured] {
     fill: color-mix(in srgb, var(--primary-text-color) 12%, transparent);
@@ -3205,6 +3343,18 @@ export const STYLES = `
     outline-offset: -2px !important;
     background: var(--liza-error-fill);
     color: #fff;
+  }
+
+  /* A button that opens a page, while its link is drawn. !important for the
+     same reason as the focus ring below: the configured/selected/per-key
+     ladder above out-ranks any reasonable selector here, and restating this
+     against each rung would mean seven attribute repeats. Declared before
+     focus-visible so that a focused button still shows focus -- between two
+     !important rules of equal specificity the later one wins. */
+  .pg-svg-container .button[goto-link] {
+    stroke: var(--primary-text-color) !important;
+    stroke-width: 2 !important;
+    vector-effect: non-scaling-stroke;
   }
 
   /* The remote face. An outline traces a bounding box, so on a round button

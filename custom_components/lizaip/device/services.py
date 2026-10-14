@@ -15,13 +15,14 @@ from homeassistant.helpers.target import (
     async_extract_referenced_entity_ids,
 )
 
-from .const import DOMAIN
+from ..const import DOMAIN
 from ..config.internal_commands import (
     InternalCommand,
     InternalCommandError,
     build_page_context,
     enabled_commands,
 )
+from ..runtime import find_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         for entry in _target_entries(hass, call.data):
             conn = entry.runtime_data
             _LOGGER.info("lizaip.clear_device_pages: clearing %s", entry.title)
-            async with conn._page_sync_lock:
+            async with conn.page_cache.lock:
                 await conn.clear_all()
             await sync_config_to_device(hass, entry)
 
@@ -196,7 +197,7 @@ async def _page_context(hass: HomeAssistant, entry) -> dict:
     unresolvable, so a device whose pages cannot be read reports that rather
     than silently rejecting names it has no opinion about.
     """
-    store = hass.data.get(DOMAIN, {}).get("_store")
+    store = find_store(hass)
     device_id = getattr(getattr(entry, "runtime_data", None), "_device_id", None)
     if store is None or not device_id:
         raise ServiceValidationError(

@@ -243,13 +243,16 @@ def resolve_control(
 #: it cannot drift apart.
 SLIDER_VERTICAL_KEY = "slider_vertical"
 
-#: Legacy/dialect spelling for "follow the last-touched button only".
+#: Effective target of a slider that follows the last-touched button only.
+#: Derived by ``_effective_target``, never stored.
 SLIDER_TARGET_LAST_TOUCHED = "last_touched"
 
-#: Legacy/dialect spelling for "follow selection, else the page entity".
+#: Effective target of a slider that follows selection, else its entity.
+#: Derived by ``_effective_target``, never stored.
 SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY = "last_touched_or_entity"
 
-#: Hand-written escape hatch for a proportional slider that must not follow.
+#: Hand-written escape hatch for a proportional slider that must not follow;
+#: the only ``target`` value a stored config can carry.
 SLIDER_TARGET_ENTITY = "entity"
 
 #: Targets that resolve from the current selection.
@@ -260,25 +263,17 @@ _SELECTION_TARGETS: frozenset[str] = frozenset({
 
 
 def _effective_target(slider_cfg: Any) -> str | None:
-    """Return the stored target or the bare-proportional compatibility target.
+    """What a stored slider config targets.
 
-    This is the single place where an absent ``target`` gets meaning. Absence
-    now means following, with ``target_entity`` as the page default when present,
-    matching what the panel writes for existing configs.
-
-    The compatibility stays in the reader rather than rewriting stored configs:
-    bare proportional layout pages such as ``sonos.yaml`` volume sliders must
-    retarget and expose the panel's Slider section without waiting for a save.
-
-    A bare config that names an entity follows selection with that entity as the
-    fallback; one that names none has no fallback. ``SLIDER_TARGET_ENTITY`` opts
-    back out, and unknown stored values pass through so membership tests reject
-    them instead of guessing."""
+    This is the single place where an absent ``target`` gets meaning: a
+    proportional config follows selection, with ``target_entity`` as the
+    fallback when present and none when absent. ``SLIDER_TARGET_ENTITY`` opts
+    out; any other stored value targets nothing rather than being guessed at."""
     if not isinstance(slider_cfg, dict):
         return None
     stored = slider_cfg.get("target")
     if stored:
-        return stored
+        return SLIDER_TARGET_ENTITY if stored == SLIDER_TARGET_ENTITY else None
     if slider_cfg.get("mode") != "proportional":
         return None
     return (
@@ -317,40 +312,14 @@ def slider_follows(slider_key: Any, assign: Any) -> bool:
 
 
 def follows_selection_only(slider_cfg: Any) -> bool:
-    """Whether behaviour is following with no fallback after compatibility rules.
+    """Whether the slider follows selection with no fallback entity.
 
-    This is the derived counterpart to literal ``targets_last_touched``: it asks
-    how the config behaves, so it reads through ``_effective_target`` and is true
-    for a bare proportional slider that names no entity.
+    True for a bare proportional slider that names no entity.
 
     Keep this as its own reader rather than open-coding
     ``follows_selection(cfg) and not cfg.get("target_entity")``; only
     ``_effective_target`` owns what an absent key means."""
     return _effective_target(slider_cfg) == SLIDER_TARGET_LAST_TOUCHED
-
-
-def targets_last_touched(slider_cfg: Any) -> bool:
-    """Whether *slider_cfg* literally stores following-with-no-default.
-
-    This one-key reader keeps the executor, sanitiser and layout writer aligned.
-    It must stay literal because layout YAML still uses the target as dialect
-    input for ``generate_assignments``, while the sanitiser preserves legacy
-    spellings based on what was written, not on inferred behaviour.
-
-    It is strictly the target with no stored mechanics and must not include
-    ``SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY``, whose point is keeping them."""
-    return (
-        isinstance(slider_cfg, dict)
-        and slider_cfg.get("target") == SLIDER_TARGET_LAST_TOUCHED
-    )
-
-
-def targets_last_touched_or_entity(slider_cfg: Any) -> bool:
-    """Literal legacy/dialect spelling for following with a default entity."""
-    return (
-        isinstance(slider_cfg, dict)
-        and slider_cfg.get("target") == SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY
-    )
 
 
 def targets_entity(slider_cfg: Any) -> bool:
@@ -374,8 +343,7 @@ def last_touched_slider_actions(factor: float) -> dict[str, Any]:
     previous mode would pin the slider to the wrong entity.
 
     Omitting ``target`` is deliberate, not an oversight; ``_effective_target``
-    reads a bare proportional blob with no entity as last-touched. Legacy configs
-    that spell the target are still accepted, but new writes avoid restating it.
+    reads a bare proportional blob with no entity as last-touched.
 
     ``mode`` remains ``"proportional"`` because the drag maths are unchanged;
     ``factor`` is the slider's own physical-track mechanic and is already coerced

@@ -283,6 +283,54 @@ The same pattern works for anything with stepped icons, such as Wi-Fi strength
 (`mdi:wifi-strength-1` … `-4`). The weather needs no helper: `${weather.home}` alone
 is already drawn as the matching `mdi:weather-…` icon.
 
+**Tooltips take pictures too.** A tooltip is usually words, but it accepts everything a
+button's image or a page's title does — `mdi:…`, `logo:…`, a URL, `history:…` — and reads its
+variables the same way: `mdi:battery-${sensor.phone_battery}` shows the battery icon (no unit
+in the name), and a variable without a value leaves no picture rather than half an icon.
+
+#### A graph of a value — `history:`
+
+A button's image, its tooltip or a page's title can show how a value moved over the last
+hours, drawn from Home Assistant's history: write `history:` and the entity. Typing
+`history:` in one of these fields lists the entities; pick one and the preview draws the graph.
+
+| You write | The remote shows |
+|---|---|
+| `history:sensor.outdoor_temperature` | the last 24 hours as a line, scaled to its lowest and highest value |
+| `history:sensor.outdoor_temperature?hours=6` | the last 6 hours (1 to 168) |
+| `history:sensor.living_room_power?days=7` | the last 7 days — `days` says the same as `hours`, in days (1 to 7) |
+| `history:binary_sensor.front_door?hours=12` | a band, bright while the door was open |
+| `history:light.kitchen?hours=24` | a band, bright while the light was on |
+| `history:sensor.house_power?start_time=2026-10-10T08:00:00Z&end_time=2026-10-10T20:00:00Z` | one fixed stretch of that day, which stays as it is |
+
+A fixed stretch is written with `start_time` and `end_time`. Either may be left out:
+`start_time` alone runs up to now, `end_time` alone ends an `hours`/`days`-long stretch
+there. A time without a zone (`2026-10-10T08:00:00`) is read in your own. No stretch may
+be longer than a week.
+
+Some places to use it:
+
+- **A button image:** a temperature sparkline next to a tooltip `${sensor.outdoor_temperature}`
+  shows the trend and the current value together.
+- **A page title:** `history:sensor.house_power?hours=12` across the top of an energy page.
+  A title or a tooltip has room for 200 pixels of history; a button for 50.
+- **A tooltip:** the graph under the button, with the button's own icon above it.
+- **Colour:** the line takes the page colour, like an icon. Add `fg=` for another one:
+  `history:sensor.outdoor_temperature?hours=6&fg=66CAB3`.
+
+- **It stays current.** When the entity's state changes, the remote is sent the new graph,
+  like a `${…}` value, and at most as often as **Settings → Variables → Update interval**
+  allows. A very busy sensor redraws often; raise the interval if that is too much for the
+  remote. With **Variables** switched off the graph is drawn when the page is synced and
+  is not updated in between.
+- **What it shows.** A sensor with numbers gets a line with a light fill below it. Anything
+  else gets a band that is bright while the entity was `on`, `open`, `home` or `playing`.
+  Stretches where the entity was `unavailable` or `unknown` stay empty.
+- **Needs the recorder.** The graph reads Home Assistant's history, so the entity has to be
+  recorded (the default). Without the recorder the picture is not drawn.
+- **Private by design.** Only entities you put into a `history:` picture are drawn. Asking
+  the image server for any other entity's history is refused.
+
 ### The vertical slider
 
 With nothing selected, the slider belongs to the page: pick the **entity** it drives,

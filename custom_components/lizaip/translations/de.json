@@ -161,16 +161,12 @@
       }
     },
     "goto_page": {
-      "name": "Seite anzeigen",
+      "name": "goto page",
       "description": "Zeigt eine Seite auf der Fernbedienung. Auf einer Taste wird daraus eine geräteinterne Aktion, die die Fernbedienung selbst ausführt.",
       "fields": {
-        "page": {
-          "name": "Seitenname",
-          "description": "Die anzuzeigende Seite, über ihren Namen im lizaIP-Panel."
-        },
         "page_id": {
-          "name": "Seite",
-          "description": "Die anzuzeigende Seite."
+          "name": "Seiten-ID",
+          "description": "Die numerische ID der anzuzeigenden Seite, wie im lizaIP-Panel gelistet."
         }
       }
     },

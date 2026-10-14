@@ -4,7 +4,7 @@
  */
 
 import { drawSVG, getPathBounds, armSuppress, suppressedNow } from "./liza-remote-svg.js";
-import { badNumber, isIconSource, isMovableSlot } from "./liza-remote-helpers.js";
+import { badNumber, isIconSource, isMovableSlot, NON_BUTTON_KEYS } from "./liza-remote-helpers.js";
 
 const capitalize = (s) => s.replace(/\b\w/g, c => c.toUpperCase());
 
@@ -315,32 +315,6 @@ const controlRange = (control, stateObj) => {
   return [lo ?? control.min, hi ?? control.max];
 };
 
-// A grid button's `overrides` block names every fixed control it drives while
-// it is the selection, the slider included. A string value names a capability
-// or a service, resolved live against whatever the button points at; a dict is
-// a frozen sub-assignment, which only the buttons may carry. These two own the
-// string half so no caller has to remember which shape a key takes.
-//
-// The setter deletes an emptied block rather than leaving `{}` behind: presence
-// is tested with `Object.hasOwn`, and an empty table would read as "overrides
-// something" on both sides of the wire.
-const liveOverride = (assign, key) => {
-  const value = assign?.overrides?.[key];
-  return typeof value === "string" ? value.trim() : "";
-};
-
-const setLiveOverride = (assign, key, value) => {
-  if (!assign) return;
-  if (value) {
-    if (!assign.overrides) assign.overrides = {};
-    assign.overrides[key] = value;
-    return;
-  }
-  if (!assign.overrides) return;
-  delete assign.overrides[key];
-  if (!Object.keys(assign.overrides).length) delete assign.overrides;
-};
-
 // The slider's own key does not hold a string. It holds a block — `{entity_id,
 // control}` — because retargeting is two answers that have to travel together:
 // *which device* this button hands the slider, and *which of that device's
@@ -525,31 +499,24 @@ const applyControl = (sa, control, stateObj) => {
 const SLIDER_VERTICAL_KEY = "slider_vertical";
 
 // A slider's target is a separate question from its mechanic: `mode` says how a
-// drag behaves, `target` says what it lands on. This is the spelling for "lands
-// on whatever was last touched", mirroring the backend's `SLIDER_TARGET_*` so
-// the two cannot drift.
-//
-// Read, never written. Nothing here emits either following value any more —
-// see `effectiveTarget` — but both are on disk on live boxes and in shipped
-// layout YAML, so the names stay and every reader below goes through them.
+// drag behaves, `target` says what it lands on. These name the derived targets,
+// mirroring the backend's `SLIDER_TARGET_*` so the two cannot drift; neither is
+// ever stored. "Lands on whatever was last touched"…
 const SLIDER_TARGET_LAST_TOUCHED = "last_touched";
-// …and the one that additionally names an entity to drive until something is
-// touched. Two stored values, one thing as far as the card is concerned: the
-// same targeting with and without a default, differing only by whether the
-// "Default entity" field is filled.
+// …and the same with an entity to drive until something is touched, differing
+// only by whether the "Default entity" field is filled.
 const SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY = "last_touched_or_entity";
 // The one target that does *not* follow. Unspellable from this panel by design
 // — there is no Target row to write it — but honoured everywhere, so a
 // hand-written page YAML can still pin a slider that must never move.
 const SLIDER_TARGET_ENTITY = "entity";
-// What "no `target` key" means, mirroring the backend's `_effective_target`:
-// following, with the stored entity as the default when there is one. The two
-// following spellings differ only by whether `target_entity` is set, so the
-// panel writes neither — but both are still read, forever, because they are on
-// disk on live boxes and in shipped layout YAML.
+// What a stored config targets, mirroring the backend's `_effective_target`:
+// with no `target` key, following, with the stored entity as the default when
+// there is one. `entity` is the only stored target; anything else targets
+// nothing.
 const effectiveTarget = (sa) => {
   if (!sa || typeof sa !== "object") return null;
-  if (sa.target) return sa.target;
+  if (sa.target) return sa.target === SLIDER_TARGET_ENTITY ? SLIDER_TARGET_ENTITY : null;
   if (sa.mode !== "proportional") return null;
   return sa.target_entity ? SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY : SLIDER_TARGET_LAST_TOUCHED;
 };
@@ -756,6 +723,65 @@ export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_a
 // button list entirely (it is Page Settings), so the row only ever rendered
 // for `slider_vertical`: the one strip where it could not make sense.
 
+/**
+ * Where a link drawn from `fromX,fromY` should stop on `rect`: the point on the
+ * rectangle's border that faces the source.
+ *
+ * Aimed at the border rather than the centre so the arrowhead lands *on* the
+ * page card instead of in the middle of its drawn face, where it would sit on
+ * top of the very thumbnail it is pointing out. Every coordinate here is in the
+ * overlay's own space; the caller converts.
+ *
+ * The scale is the smaller of "how far until the x offset reaches the half
+ * width" and the same for y, which is the side the ray leaves through — the
+ * standard ray/axis-aligned-box intersection, written out because the two
+ * degenerate cases need naming: a source level with the centre has `dy === 0`
+ * and must not divide by it, and a source *at* the centre (a page linking to
+ * itself, with the button over the card's middle) has no direction at all.
+ */
+export function gotoLinkEnd(rect, fromX, fromY) {
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = cx - fromX;
+  const dy = cy - fromY;
+  if (!dx && !dy) return { x: cx, y: cy };
+  const sx = dx ? (rect.width / 2) / Math.abs(dx) : Infinity;
+  const sy = dy ? (rect.height / 2) / Math.abs(dy) : Infinity;
+  const s = Math.min(sx, sy);
+  return { x: cx - dx * s, y: cy - dy * s };
+}
+
+/**
+ * The `d` of the link itself: a single quadratic arc from source to target.
+ *
+ * Bowed rather than straight because the two ends are usually on the same
+ * horizontal line — the strip is one row — and a straight line between them
+ * would run along the row's axis and through whatever thumbnails sit between.
+ * The arc lifts it clear of them and makes which end is which readable at a
+ * glance.
+ *
+ * The bow is always to the same side of the travel direction (the left normal),
+ * so two links drawn from neighbouring buttons stay parallel instead of
+ * crossing. It grows with the distance but caps, because a link spanning the
+ * whole strip does not need a proportionally huge detour — past a point the
+ * curve would leave the card entirely, which `overflow: hidden` would then cut.
+ *
+ * Rounded to a tenth of a pixel: these strings are compared against what is
+ * already on screen to decide whether to touch the DOM, and raw float noise
+ * from `getBoundingClientRect` would make every comparison differ.
+ */
+export function gotoLinkPath(x1, y1, x2, y2) {
+  const r = (n) => Math.round(n * 10) / 10;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (!len) return `M${r(x1)},${r(y1)}`;
+  const bow = Math.min(44, len * 0.2);
+  const cx = (x1 + x2) / 2 + (-dy / len) * bow;
+  const cy = (y1 + y2) / 2 + (dx / len) * bow;
+  return `M${r(x1)},${r(y1)} Q${r(cx)},${r(cy)} ${r(x2)},${r(y2)}`;
+}
+
 export const ButtonsViewMixin = {
   _htmlButtonsView(bp) {
 
@@ -778,11 +804,6 @@ export const ButtonsViewMixin = {
       // is what it is.
       const filledCount = allBtnKeys.filter(k => isConfigured(pageAssigns[k])).length;
 
-      // The tooltip keeps every fact in one string -- a hover tooltip cannot
-      // offer to skip half of itself. The announcement splits: the name is
-      // which page and where it sits, and the fill count becomes a
-      // description a reader announces separately and a user can skip.
-      const label = this._pageFillLabel(page, i, bp);
       // A subpage's only sighted cue is a darker tint and a lower position
       // (.page-thumb.subpage) -- neither reaches a screen reader, which would
       // otherwise have no way to tell one from a main page at all. Folded
@@ -816,12 +837,12 @@ export const ButtonsViewMixin = {
       const groupAttrs = isActive
         ? ` data-a11y-name="${this._esc(spokenName)}" tabindex="-1"`
         : '';
-      // The hover tooltip rides on the control, where an explicit aria-label
-      // already wins the name, so `title` stays a tooltip instead of becoming
-      // a second announcement. The open page's tooltip is on the face itself.
+      // No `title`: the browser's own tooltip would be a second answer to the
+      // same hover, in a second style, overlapping the card -- which is why
+      // the open face lost its `<title>` too.
       const pictureAttrs = isActive
         ? ''
-        : ` role="button" tabindex="0" title="${this._esc(label)}" aria-label="${this._esc(openLabel)}" aria-describedby="${descId}"`;
+        : ` role="button" tabindex="0" aria-label="${this._esc(openLabel)}" aria-describedby="${descId}"`;
       // tabindex="-1" makes the open page a programmatic focus target (see
       // _a11yFocusFallback) without adding a tab stop. `data-page-idx` is a
       // position and pages are draggable, so focus restoration keys on the
@@ -846,10 +867,24 @@ export const ButtonsViewMixin = {
       configHtml = this._htmlPageSettingsPanel(bp);
     }
 
+    // The goto-link overlay below is deliberately the strip's *first* child.
+    // Last is taken: _reorderPageDom moves every thumb in front of
+    // .page-add-btn on the understanding that the add button is the final
+    // node, so a sibling after it would be dragged out of place by the first
+    // reorder. Painting order is settled by the layer's z-index instead of by
+    // where it sits here.
+    //
+    // Inside the strip rather than over the card because the strip is the
+    // scroll container: an absolutely positioned child scrolls with its
+    // content, so the link's two endpoints and the overlay all move together
+    // and the drawn coordinates stay true without anything having to listen
+    // for scrolling.
     return `
       <div class="config-layout">
         <ha-card outlined class="pages-card">
-          <div class="pages-list" style="flex-wrap:nowrap;overflow-x:auto;min-height:350px;">${pagesHtml}
+          <div class="pages-list" style="flex-wrap:nowrap;overflow-x:auto;min-height:350px;">
+            <svg class="goto-link-layer" aria-hidden="true" focusable="false"></svg>
+${pagesHtml}
             <div class="page-add-btn" role="button" tabindex="0"
                  aria-label="${this._esc(this._t("add_new_page"))}"
                  title="${this._esc(this._t("add_new_page"))}">
@@ -2638,24 +2673,51 @@ export const ButtonsViewMixin = {
     return el;
   },
 
-  // Shared by the thumbnail template and the face tooltip in _refreshSVG.
-  // It used to be built in the template and read back out of the DOM with
-  // `closest()`, which tied a label to a node the caller might not have.
-  // Position included: nothing else told a reader how many pages there are or
-  // where this one sits, and the visible "3 of 9" is static text Tab skips.
-  _pageFillLabel(page, i, bp) {
+  // What the hover card says about a slider, answered here because
+  // `sliderFollows` and `matchControl` are module-local. `entity` is the
+  // fallback for a following slider and the only device for a pinned one.
+  _sliderTipFacts(key, assign) {
+    const sa = assign?.slider_actions || {};
+    const follows = sliderFollows(key, assign);
+    const stored = typeof sa.target_entity === "string" ? sa.target_entity.trim() : "";
+    // With no default of its own it takes whatever the selected grid button
+    // lends it, so the live context is the only thing that can name a device.
+    let entity = stored;
+    if (follows && !entity) {
+      const ctx = this._liveContextKey?.();
+      const ctxAssign = ctx ? (this._assignments?.[ctx] || null) : null;
+      entity = ctxAssign ? (sliderSubjectEntity(ctxAssign) || "") : "";
+    }
+    const control = matchControl(this._sliderControls, sa);
+    return { follows, entity, control: control?.label || "" };
+  },
+
+  // The other half: which device *this* grid button hands the slider. Through
+  // `shownControl`, as the slider card itself does, so a stale stored id
+  // resolves to the control a touch would really move.
+  _buttonSliderOverride(assign) {
+    const entity = sliderSubjectEntity(assign) || "";
+    if (!entity) return { entity: "", control: "" };
+    const available = controlsForEntity(
+      this._sliderControls, entity, this._hass?.states?.[entity],
+    );
+    const control = shownControl(available, sliderControlOverride(assign));
+    return { entity, control: control?.label || "" };
+  },
+
+  // Shared by the thumbnail's hover card and its accessible description.
+  // Counts rather than a finished sentence, because the two word it
+  // differently and neither is a reason for the other to recount the buttons.
+  _pageFillCounts(page, bp) {
     const currentPageId = this._pages[this._currentPageIdx]?.id;
     const pageAssigns = (page.id === currentPageId)
       ? this._assignments
       : (this._pageCache[page.id] || {});
     const allBtnKeys = bp.buttons.map(b => b.key);
-    // One tooltip, three lines: which page, its title, what is on it.
-    const title = this._pageTitle(page);
-    return this._t("page_fill", {
-      name: title ? `${this._pagePosition(page)}\n${title}` : this._pagePosition(page),
+    return {
       filled: allBtnKeys.filter(k => isConfigured(pageAssigns[k])).length,
       total: allBtnKeys.length,
-    });
+    };
   },
 
   /**
@@ -2696,6 +2758,9 @@ export const ButtonsViewMixin = {
     }
 
     this._relabelPageThumbs();
+    // This path exists to skip the render that would otherwise redraw the link,
+    // and a reorder moves the very thumbnails it points at.
+    this._drawGotoLink();
     return true;
   },
 
@@ -2707,9 +2772,6 @@ export const ButtonsViewMixin = {
    * a thumb describes the page itself and survives untouched.
    */
   _relabelPageThumbs() {
-    const bp = this._blueprint;
-    if (!bp) return;
-
     this._pages.forEach((page, i) => {
       const el = this.shadowRoot?.querySelector(
         `.page-thumb[data-page-id="${CSS.escape(String(page.id))}"]`
@@ -2726,20 +2788,431 @@ export const ButtonsViewMixin = {
       }) + subpageNote;
 
       // The open page is named by `data-a11y-name` and a closed one by the
-      // container's `aria-label`/`title` — the same split `_render()` makes,
-      // so a relabelled thumb is indistinguishable from a re-rendered one.
+      // container's `aria-label` — the same split `_render()` makes, so a
+      // relabelled thumb is indistinguishable from a re-rendered one.
       if (isActive) el.dataset.a11yName = spokenName;
       const picture = el.querySelector(".pg-svg-container");
       if (picture && !isActive) {
         picture.setAttribute("aria-label", `${this._t("a11y_open_page", { name: spokenName })}.`);
-        picture.setAttribute("title", this._pageFillLabel(page, i, bp));
       }
     });
+  },
+
+  // --- Goto links ------------------------------------------------------------
+  //
+  // A button that opens another page is the one assignment whose *target* is
+  // also on screen, and nothing said so: the card named the page in words, but
+  // finding it in a strip of lookalike thumbnails was still a reading exercise.
+  // The link draws the relation the user already configured.
+  //
+  // It is drawn from both ends, because the two questions a user asks about
+  // navigation are opposites of each other. Hovering a button, the question is
+  // "where does this go", and one link answers it. Hovering a page, the
+  // question becomes "how is this page reached", which only the whole set of
+  // buttons pointing at it can answer. A page nothing points at draws nothing,
+  // which is the honest and useful answer: that page is unreachable from the
+  // remote.
+  //
+  // Hover and nothing else. Selection does not draw links: a selected button
+  // keeps its card open while the user works elsewhere, and a link left
+  // standing for that long reads as part of the layout rather than as an
+  // answer to a question just asked.
+
+  /**
+   * The page an assignment opens, or null when it opens none.
+   *
+   * `_internalTargetPage` is the single owner of "which page does this name",
+   * and it answers null for everything that is not a resolvable page: a plain
+   * HA service call, a command targeting something else, a deleted page, a name
+   * two pages share. Each of those is a case where there is no one page to
+   * point at, so each correctly draws nothing.
+   */
+  _gotoPageOf(assign) {
+    if (!assign?.action_id) return null;
+    const action = (this._actions || []).find(a => a.id === assign.action_id);
+    return this._internalTargetPage(assign.config, action?.service) || null;
+  },
+
+  /**
+   * The page a long touch on this button opens, or null.
+   *
+   * `longtouch` is a bare step list with no `action_id` beside it -- a long
+   * touch is always configured inline -- so the step names its own service and
+   * there is no fallback to pass.
+   *
+   * Silent while the feature is switched off, matching `longtouch_assignment`
+   * in `buttons.py`: the steps stay stored but the remote does not run them,
+   * and a line drawn to a page that no long touch currently opens would be a
+   * navigation path the user cannot take.
+   */
+  _gotoLongPageOf(assign) {
+    const steps = assign?.longtouch;
+    if (!Array.isArray(steps) || !steps.length) return null;
+    if (!this._longtouchEnabled?.()) return null;
+    return this._internalTargetPage(steps) || null;
+  },
+
+  /**
+   * Every page one button can open, click and long touch together.
+   *
+   * De-duplicated by page: a button whose two gestures lead to the same place
+   * would otherwise draw one line exactly on top of another, darkening it for
+   * no reason a viewer could name.
+   */
+  _gotoPagesOf(assign) {
+    const pages = [];
+    for (const page of [this._gotoPageOf(assign), this._gotoLongPageOf(assign)]) {
+      if (page && !pages.some(p => p.id === page.id)) pages.push(page);
+    }
+    return pages;
+  },
+
+  /**
+   * The pages a control on the open page opens -- none, one, or one per gesture.
+   *
+   * Read through the edit slot, exactly as the face's own tiles are, so the
+   * link describes the same configuration the drawn button describes. Under a
+   * context that is the override being edited rather than the page default --
+   * a link pointing at the page the *stored* record names would contradict the
+   * button it starts from.
+   */
+  _gotoLinkPages(key) {
+    if (!key) return [];
+    return this._gotoPagesOf(this._editAssign?.(key));
+  },
+
+  /**
+   * Whose outgoing link is on screen: the button the pointer is over, and
+   * nothing else.
+   *
+   * Selection deliberately does not count. A link drawn for the selected
+   * button stays on screen for as long as that button is being configured,
+   * which is most of the time the editor is open -- so the one relation the
+   * overlay exists to point out became permanent furniture, and a line that is
+   * always there says nothing. Tying it to the pointer makes it an answer to a
+   * question just asked, and makes every face readable again the moment the
+   * pointer leaves.
+   *
+   * The two face shapes that are not buttons are refused. `slider_horizontal`
+   * is the page's title bar and `slider_vertical` the page slider; both are
+   * dragged, never pressed, so neither can open anything -- yet both hold a
+   * record whose stored steps may name `goto_page`, which would otherwise be
+   * read as a route that no gesture can take.
+   */
+  _gotoLinkKey() {
+    const key = this._gotoHoverKey;
+    return key && !NON_BUTTON_KEYS.has(key) ? key : null;
+  },
+
+  /**
+   * The page whose incoming links are on screen: the one under the pointer.
+   *
+   * Matched by id rather than kept as an index, because the strip reorders
+   * under drag and an index remembered across a reorder names a different
+   * page. The id arrives from a DOM attribute and is therefore a string, while
+   * page ids are numbers, so both sides are compared as text.
+   */
+  _gotoHoverPage() {
+    if (this._gotoHoverPageId == null) return null;
+    const wanted = String(this._gotoHoverPageId);
+    return (this._pages || []).find((p) => String(p.id) === wanted) || null;
+  },
+
+  // Where the switch on the gear tab remembers itself. A browser-local key,
+  // not a device setting: it changes what this editor draws and nothing the
+  // remote does, so it has no business being saved per remote on the backend.
+  PAGE_LINKS_PREF: "liza.remote.pageLinks",
+
+  /**
+   * Whether links are drawn at all. Off until switched on.
+   *
+   * Defaulting to off keeps the editor quiet: the overlay paints over the
+   * page strip on every hover, which is noise for the many sessions that are
+   * not tracing where a button leads. Whoever wants it turns it on once and
+   * the browser remembers. Read once and kept, because this is asked on
+   * every pointer move.
+   *
+   * Storage is wrapped: a browser with site data blocked throws on access
+   * rather than returning null, and an unreadable preference is not a reason
+   * for the page strip to stop rendering.
+   */
+  _pageLinksEnabled() {
+    if (this._pageLinksOn === undefined) {
+      let stored = null;
+      try { stored = window.localStorage?.getItem(this.PAGE_LINKS_PREF); } catch (e) { stored = null; }
+      this._pageLinksOn = stored === "1";
+    }
+    return this._pageLinksOn;
+  },
+
+  _setPageLinksEnabled(on) {
+    this._pageLinksOn = !!on;
+    try {
+      window.localStorage?.setItem(this.PAGE_LINKS_PREF, this._pageLinksOn ? "1" : "0");
+    } catch (e) { /* Blocked storage: the switch still works for this session. */ }
+    // A no-op while the gear tab is the one showing -- there is no overlay in
+    // the DOM to clear. Called anyway so that the one place that changes the
+    // preference is also the place that makes the change take effect.
+    this._drawGotoLink();
+  },
+
+  /**
+   * The links to draw, as pairs of live elements, in the order they are drawn.
+   *
+   * Split out from the painting because it is the whole of the *rule* -- which
+   * links exist and why -- while everything in `_drawGotoLink` is geometry.
+   *
+   * An outgoing link starts only on the open page. A closed thumbnail is a
+   * picture of another page drawn at a fifth of the size with its controls
+   * deliberately non-interactive (see `drawSVG`'s `interactive`), so there is
+   * nothing there to hover. Incoming links do start on closed thumbnails,
+   * because that is where the buttons that reach a page almost always are -- a
+   * page is usually opened from somewhere else.
+   *
+   * Both halves are hover-driven and nothing else is: a button under the
+   * pointer shows where it goes, a thumbnail under the pointer shows what
+   * reaches it, and an idle pointer draws no lines at all.
+   */
+  _gotoLinkSpecs(list) {
+    if (!list || !this._pageLinksEnabled()) return [];
+    const thumbFor = (id) =>
+      list.querySelector(`.page-thumb[data-page-id="${CSS.escape(String(id))}"]`);
+
+    const key = this._gotoLinkKey();
+    if (key) {
+      const shape = list.querySelector(
+        `.page-thumb.active .button[data-key="${CSS.escape(key)}"]`,
+      );
+      if (!shape) return [];
+      // One per gesture that opens a page: a button whose click opens one page
+      // and whose long touch opens another describes two routes, and drawing
+      // only the first would say the second does not exist.
+      return this._gotoLinkPages(key)
+        .map((page) => ({ shape, thumb: thumbFor(page.id) }))
+        .filter((spec) => spec.thumb);
+    }
+
+    // No button under the pointer: if a page is, show what reaches that page.
+    // The hovered page rather than the open one, so the question can be asked
+    // of any page in the strip without opening it first -- and so that the
+    // answer, like the outgoing half, lasts exactly as long as the pointer
+    // stays put.
+    const target = this._gotoHoverPage();
+    const thumb = target ? thumbFor(target.id) : null;
+    if (!thumb) return [];
+
+    const specs = [];
+    const openId = this._pages?.[this._currentPageIdx]?.id;
+    for (const page of this._pages) {
+      const source = thumbFor(page.id);
+      if (!source) continue;
+      // Read exactly the way the face is drawn, so a line never starts on a
+      // shape that is showing something else.
+      //
+      // The open page goes through the edit slot. That is what carries unsaved
+      // edits, and -- with a grid button in context -- what resolves a fixed
+      // control to that button's override, which is the assignment its shape is
+      // currently drawn from. Walking the page map instead made the overlay
+      // disagree with itself: hovering the override's own button drew the link
+      // (its outgoing half asks `_editAssign`), while hovering the page it
+      // opens did not, so the same relation existed or not depending on which
+      // end you looked from. The keys come from the blueprint rather than from
+      // the records, because an override exists for a key the page map does not
+      // mention at all. A fixed control with no override resolves to nothing
+      // and contributes no link, which is the face's own answer: under a
+      // context, that shape is drawn as unset.
+      //
+      // Every other page goes through `_pageCache`, which is what its closed
+      // thumbnail draws -- no context reaches it, and its unsaved edits are not
+      // in `_assignments`, which belongs to the open page alone. A page missing
+      // from the cache has genuinely not been read yet rather than being empty;
+      // it contributes nothing until it is, exactly as its thumbnail does.
+      const entries = page.id === openId
+        ? (this._blueprint?.buttons || []).map((b) => [b.key, this._editAssign?.(b.key)])
+        : Object.entries(this._pageCache?.[page.id] || {});
+      for (const [btnKey, assign] of entries) {
+        // Same two non-buttons as in `_gotoLinkKey`, refused for the same
+        // reason: their records can hold steps, but no press runs them.
+        if (NON_BUTTON_KEYS.has(btnKey)) continue;
+        if (!this._gotoPagesOf(assign).some((p) => p.id === target.id)) continue;
+        const shape = source.querySelector(`.button[data-key="${CSS.escape(btnKey)}"]`);
+        if (shape) specs.push({ shape, thumb });
+      }
+    }
+    return specs;
+  },
+
+  /**
+   * Paint the current links, or clear the overlay when there are none.
+   *
+   * Everything is measured rather than derived from the blueprint: the face is
+   * scaled to its container, thumbnails are shifted by drags and by the subpage
+   * offset, and the strip scrolls. `getBoundingClientRect` is the only answer
+   * that survives all of that, and the overlay is measured the same way so the
+   * readings share one coordinate space.
+   */
+  /**
+   * Drop the link outlines from whatever currently carries them.
+   *
+   * Found by selector rather than kept in a list: the shapes a previous draw
+   * marked are routinely destroyed and rebuilt by `_refreshSVG` between two
+   * draws, so a remembered element can be one that is no longer in the
+   * document while its replacement sits there still outlined.
+   */
+  _clearGotoMarks() {
+    this.shadowRoot?.querySelectorAll(".pages-list [goto-link]")
+      .forEach((el) => el.removeAttribute("goto-link"));
+  },
+
+  _drawGotoLink() {
+    const layer = this.shadowRoot?.querySelector(".goto-link-layer");
+    if (!layer) return;
+    const list = this.shadowRoot?.querySelector(".pages-list");
+    const specs = this._gotoLinkSpecs(list);
+    if (!specs.length) {
+      this._clearGotoMarks();
+      // Emptied rather than hidden: a stale path left in the DOM would flash
+      // back at its old coordinates the moment anything made the layer visible
+      // again, and there is nothing here worth keeping to redraw.
+      if (layer.innerHTML) layer.innerHTML = "";
+      // Cleared alongside it, or the cache below would recognise the paths that
+      // are no longer drawn and decline to draw them again.
+      delete layer.dataset.linkPath;
+      return;
+    }
+
+    // Sized to the scrollable content, not to the visible box: a target may be
+    // scrolled out of view, and a layer cut to the viewport would clip the link
+    // exactly when it is most needed -- pointing off-screen is how the user is
+    // told to scroll. `clientWidth` is the floor for the case where nothing
+    // overflows and `scrollWidth` is the smaller of the two.
+    const w = Math.max(list.scrollWidth, list.clientWidth);
+    const h = Math.max(list.scrollHeight, list.clientHeight);
+    layer.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    layer.style.width = `${w}px`;
+    layer.style.height = `${h}px`;
+
+    // Measured after the resize above, so the overlay is already the size the
+    // coordinates below are expressed in.
+    const base = layer.getBoundingClientRect();
+    const rel = (el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left - base.left, top: r.top - base.top, width: r.width, height: r.height };
+    };
+
+    let marks = "";
+    const paths = [];
+    const ends = [];
+    for (const { shape, thumb } of specs) {
+      const box = rel(shape);
+      const cx = box.left + box.width / 2;
+      const cy = box.top + box.height / 2;
+      // Aimed from the button's centre, then pulled back to its own border, so
+      // the line leaves the outline rather than starting under it.
+      const end = gotoLinkEnd(rel(thumb), cx, cy);
+      const start = gotoLinkEnd(box, end.x, end.y);
+      const d = gotoLinkPath(start.x, start.y, end.x, end.y);
+      paths.push(d);
+      ends.push(shape, thumb);
+      marks += `<path class="goto-link-path" d="${d}" marker-end="url(#goto-link-head)"/>`;
+    }
+
+    // Outline both ends, before the cache check below rather than after: a
+    // rebuilt face carries no attributes, and its shapes land at the very
+    // coordinates they had, so the paths match and the draw is skipped while
+    // the outlines are gone. Re-marking costs an attribute write per link.
+    this._clearGotoMarks();
+    for (const el of ends) el.setAttribute("goto-link", "");
+
+    // Nothing moved: rewriting identical markup would restart the draw-in
+    // animation on every pointer twitch and every unrelated render.
+    const signature = paths.join("|");
+    if (layer.dataset.linkPath === signature) return;
+    layer.dataset.linkPath = signature;
+    // The arrowhead is a marker so it stays on each curve's own end tangent
+    // without the angle being computed here, and so that any number of links
+    // share one definition. `markerUnits="strokeWidth"` ties its size to the
+    // line's, so the two cannot drift apart.
+    layer.innerHTML = `
+      <defs>
+        <marker id="goto-link-head" markerWidth="5" markerHeight="5" refX="4.4" refY="2.5"
+                orient="auto" markerUnits="strokeWidth">
+          <path class="goto-link-head" d="M0,0 L5,2.5 L0,5 Z"/>
+        </marker>
+      </defs>${marks}`;
+  },
+
+  /**
+   * Listen for the pointer crossing the open page's controls.
+   *
+   * Delegated to the strip rather than bound per shape: `_refreshSVG` rebuilds
+   * every face from scratch whenever anything about a page changes, so listeners
+   * on the shapes themselves would be dropped by the next repaint while the
+   * strip itself survives until the whole view is re-rendered.
+   *
+   * `mouseover` alone, with no `mouseout` to match: it fires for the background
+   * the pointer lands on when it leaves a button, which resolves to no key and
+   * clears the link. The one gap that leaves is the pointer leaving the strip
+   * entirely without crossing anything else, which `mouseleave` closes.
+   *
+   * Two readings are taken from the same event because the overlay asks two
+   * questions of the pointer -- which button it is on, and which page -- and a
+   * second listener would see the same crossings and answer half of each.
+   */
+  _wireGotoLinks() {
+    const list = this.shadowRoot?.querySelector(".pages-list");
+    if (!list) return;
+    // What the pointer is over is deliberately *not* reset here, though the
+    // markup it named has just been replaced. Both readings are a key and an
+    // id, never an element: `_gotoLinkSpecs` looks the shape and the thumbnail
+    // up by selector on every draw, so they survive a rebuild that destroys
+    // everything they refer to. Forgetting them instead made the link flicker
+    // out and stay out -- Home Assistant pushes `hass` on every state change in
+    // the house, each one re-renders this view, and no mouse event fires again
+    // until the pointer moves, so a link only lasted until the next unrelated
+    // entity changed. A key whose shape is genuinely gone resolves to no spec
+    // and draws nothing, which is the same thing forgetting it would have done.
+
+    list.addEventListener("mouseover", (e) => {
+      const shape = e.target?.closest?.(".page-thumb.active .button[data-key]");
+      const key = shape?.getAttribute?.("data-key") || null;
+      // Read even with a button in hand, so that leaving the button for the
+      // page around it needs no further event to fall back to.
+      const pageId = e.target?.closest?.(".page-thumb[data-page-id]")
+        ?.getAttribute?.("data-page-id") ?? null;
+      if (key === this._gotoHoverKey && pageId === this._gotoHoverPageId) return;
+      this._gotoHoverKey = key;
+      this._gotoHoverPageId = pageId;
+      this._drawGotoLink();
+    });
+    list.addEventListener("mouseleave", () => {
+      if (!this._gotoHoverKey && this._gotoHoverPageId == null) return;
+      this._gotoHoverKey = null;
+      this._gotoHoverPageId = null;
+      this._drawGotoLink();
+    });
+
+    // Window-level and registered once for the life of the element, in the same
+    // shape as `_pageDeleteKey`: the strip is rebuilt by every render and a
+    // listener re-added per render would accumulate. Removed in
+    // `disconnectedCallback`.
+    if (!this._gotoLinkResize) {
+      this._gotoLinkResize = () => this._drawGotoLink();
+      window.addEventListener?.("resize", this._gotoLinkResize);
+    }
+
+    this._drawGotoLink();
+    // Again after layout settles. `_render` restores the strip's scroll offset
+    // in a frame of its own and the faces are sized by CSS, so the first pass
+    // above can measure a row that is still moving.
+    requestAnimationFrame(() => this._drawGotoLink());
   },
 
   _refreshSVG() {
     const bp = this._blueprint;
     if (!bp) return;
+    // The shape the card describes is one of the ones about to be discarded.
+    this._hideButtonTip?.();
     // The tiles below are about to be rebuilt, so what the icon pass learned
     // from the previous ones no longer describes anything on screen.
     this._invalidateFaceCaches();
@@ -2855,7 +3328,7 @@ export const ButtonsViewMixin = {
       // a title carrying its own fg= has already said what it wants.
       // A bare word is drawn as text, so it tints like `text:` does.
       const tintable = isIconSource(rawTitle) || rawTitle.startsWith("text:")
-        || (!!rawTitle && !this._isMediaSource(rawTitle));
+        || rawTitle.startsWith("history:") || (!!rawTitle && !this._isMediaSource(rawTitle));
       const fgSlider = pgColor && tintable && !rawTitle.includes("fg=") ? `&fg=${pgColor}` : "";
       let sliderImageUrl = null;
       if (!rawTitle) {
@@ -2868,6 +3341,9 @@ export const ButtonsViewMixin = {
         sliderImageUrl = `/api/imgserv/${rawTitle}?size=title&mode=${mode}${fgSlider}&alpha=1`;
       } else if (isIconSource(rawTitle)) {
         // phu: and the extra icon sets (hue:, ...), drawn from their uploaded shapes.
+        const sep = rawTitle.includes("?") ? "&" : "?";
+        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
+      } else if (rawTitle.startsWith("history:")) {
         const sep = rawTitle.includes("?") ? "&" : "?";
         sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
       } else if (rawTitle.startsWith("logo:")) {
@@ -2897,10 +3373,6 @@ export const ButtonsViewMixin = {
       drawSVG(container, bp, selectedIdx, hasAction, onSelect, {
         // Only the open page exposes its forty shapes as controls. See drawSVG.
         interactive: isActive,
-        // The open page's hover tooltip, taken from the thumbnail that used to
-        // carry it on its own wrapper. Only the open page has one: a closed
-        // thumbnail's tooltip sits on its button.
-        faceTitle: isActive ? this._pageFillLabel(page, pageIdx, bp) : "",
         // The face says "configured" with colour, which a screen reader cannot
         // report, so the state joins the name instead.
         nameFor: (btn, { configured }) => {
@@ -2929,6 +3401,9 @@ export const ButtonsViewMixin = {
         // page, and clearing a button on a page the user is not editing is not
         // a gesture anyone reaches for by accident.
         onContext: isActive ? (idx, ev) => this._showFaceMenu(bp.buttons[idx], ev) : null,
+        // Only the open page, like `onContext`: the card reads the edit slot,
+        // so a thumbnail would describe its shapes with another page's config.
+        onHover: isActive ? (key, el, on) => this._onButtonHover(key, el, on) : null,
         // Only the open page, for the reason `onContext` is: a move reads the
         // open page's assignments, and a thumbnail is a picture of another.
         canDrag: isActive ? (key) => this._canMoveButton(key) : null,
@@ -3214,17 +3689,14 @@ export const ButtonsViewMixin = {
       return this._imgservUrl(`media:${target}`, 'tile', mode) + pct;
     }
     if (icon.startsWith('/') || icon.startsWith('data:')) return icon;
-    const tintable = isIconSource(icon) || icon.startsWith('text:') || !icon.includes(':');
+    const tintable = isIconSource(icon) || icon.startsWith('text:') || icon.startsWith('history:')
+      || !icon.includes(':');
     const fgParam = color && isTinted && tintable && !icon.includes('fg=') ? `&fg=${color}` : '';
-    if (isIconSource(icon) || icon.startsWith('logo:') || icon.startsWith('text:') || icon.startsWith('file:')) {
+    if (isIconSource(icon) || ['logo:', 'text:', 'file:', 'history:'].some((p) => icon.startsWith(p))) {
       const sep = icon.includes('?') ? '&' : '?';
       return `/api/imgserv/${icon}${sep}size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
     }
     return `/api/imgserv/mdi:${icon}?size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
-  },
-
-  _updateActiveGridCell() {
-    this._refreshSVG();
   },
 
   // --- Wiring ---
@@ -3265,6 +3737,17 @@ export const ButtonsViewMixin = {
           this._switchPageTo(idx);
         }
       });
+    });
+
+    // The strip's hover card. On the thumb rather than the picture inside it,
+    // because the thumbs are small and a card that only answers over the drawn
+    // pixels is one the user has to aim for. Focus too, for the keyboard.
+    this.shadowRoot.querySelectorAll(".page-thumb").forEach(el => {
+      const idx = parseInt(el.dataset.pageIdx);
+      el.addEventListener("mouseenter", () => this._onPageHover(idx, el, true));
+      el.addEventListener("mouseleave", () => this._onPageHover(idx, el, false));
+      el.addEventListener("focusin", () => this._onPageHover(idx, el, true, true));
+      el.addEventListener("focusout", () => this._onPageHover(idx, el, false));
     });
 
     // Right-click, and the long-press that stands in for it on touch. Same
@@ -3327,6 +3810,9 @@ export const ButtonsViewMixin = {
     this._wirePageReorder();
 
     this._refreshSVG();
+
+    // After the faces exist: the link starts at a shape `_refreshSVG` draws.
+    this._wireGotoLinks();
 
     // Config panel wiring
     if (this._selectedButtonIdx >= 0) {
@@ -3823,19 +4309,13 @@ export const ButtonsViewMixin = {
         if (!control) {
           // Empty field, or an entity with nothing a slider can drive. Either
           // way there is no default — and no half of one.
-          //
-          // The delete is not optional: `sa` may have arrived from disk with a
-          // legacy spelling, and leaving `last_touched_or_entity` on a blob
-          // whose entity was just stripped would send the executor down the
-          // default branch with no mechanics to find there.
           if (pinned) sa.target = SLIDER_TARGET_ENTITY;
           else delete sa.target;
           return;
         }
         sa.target_entity = id;
         applyControl(sa, control, st);
-        // Same rule with the entity present, which is the only thing that
-        // distinguished the two following spellings in the first place.
+        // Following is the absence of `target`; only a pin is ever stored.
         if (!pinned) delete sa.target;
       };
 

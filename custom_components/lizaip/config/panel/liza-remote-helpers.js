@@ -367,6 +367,12 @@ export function iconQuery(value, providers = iconProviders()) {
   return m && providers.includes(m[1]) ? { set: m[1], term: m[2].trim().toLowerCase() } : null;
 }
 
+/** The entity being typed after `history:` (lowercased, maybe ""), or null. */
+export function historyQuery(value) {
+  const m = /^history:([^?]*)$/.exec(String(value ?? "").trimStart());
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
 /** Names containing *term*, those starting with it first, at most a screenful. */
 export function matchIconNames(names, term, limit = ICON_SUGGESTION_LIMIT) {
   if (!term) return names.slice(0, limit);
@@ -508,6 +514,37 @@ const findFieldError = (host) =>
   Array.prototype.find.call(host.children, (n) => n.classList?.contains("field-error")) || null;
 
 export const HelpersMixin = {
+  /**
+   * What to show a user for a rejected `hass.callWS`.
+   *
+   * Home Assistant's websocket client does not always reject with an error
+   * object. When the browser's connection to Home Assistant drops, every
+   * command still in flight is rejected with a bare *number* from
+   * `home-assistant-js-websocket`'s `errors.ts` -- `ERR_CONNECTION_LOST` is
+   * literally `3`. `e?.message || String(e)` therefore wrote a red "3" into
+   * the panel, which names neither what failed nor what to do about it, and
+   * did so in every card at once because every card shares that idiom.
+   *
+   * The numeric codes are translated; anything carrying a message keeps it,
+   * since a backend error already says more than this could.
+   */
+  _wsErrorText(e) {
+    const CODES = {
+      1: "ws_err_cannot_connect",
+      2: "ws_err_invalid_auth",
+      3: "ws_err_connection_lost",
+      4: "ws_err_host_required",
+      5: "ws_err_https_to_http",
+      6: "ws_err_auth_callback",
+    };
+    // `e.code` as well as `e` itself: a rejection is sometimes the bare code
+    // and sometimes an object carrying it, and the object form arrives without
+    // a message exactly when it is one of these.
+    const code = typeof e === "number" ? e : (typeof e?.code === "number" ? e.code : null);
+    if (code != null && CODES[code]) return this._t(CODES[code]);
+    return e?.message || e?.code || String(e);
+  },
+
   /** Say what went wrong, next to the thing that went wrong (WCAG 3.3.1).
    *  `role="alert"` because it answers what the user just did; the id is
    *  *appended* to `aria-describedby` so the field's hint survives. */
@@ -604,26 +641,6 @@ export const HelpersMixin = {
   },
 
   /**
-   * A page `default_color` as a CSS colour.
-   *
-   * Colours are stored the way imgserv wants them in a `fg=` query parameter —
-   * bare hex, no leading `#` — so CSS needs the `#` put back. A non-hex value is
-   * passed through as a colour keyword. Anything else returns "" rather than
-   * being interpolated into a style attribute.
-   *
-   * Only the lengths CSS actually accepts count as hex — 3, 4, 6 or 8 digits.
-   * `update_page` takes `default_color` as a bare `str` with no validation, so a
-   * 5- or 7-digit value can reach here, and `#12345` would be a declaration the
-   * browser silently drops.
-   */
-  _cssColor(color) {
-    const raw = String(color ?? "").trim().replace(/^#/, "");
-    if (!raw) return "";
-    if (/^(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(raw)) return `#${raw}`;
-    return /^[A-Za-z]+$/.test(raw) ? raw : "";
-  },
-
-  /**
    * @param {string} val   Icon source spec (`mdi:`, `text:`, a URL, …).
    * @param {number} size  Rendered size in px.
    * @param {string} color Page `default_color`, or "" to leave the icon untinted.
@@ -649,7 +666,7 @@ export const HelpersMixin = {
     // Only monochrome sources take a tint; a logo or a photo must keep its own
     // colours. A value carrying its own fg= has been coloured deliberately.
     const tintable = !!color && !val.includes("fg=") && (
-      isIconSource(val) || val.startsWith("text:") || !val.includes(":")
+      isIconSource(val) || val.startsWith("text:") || val.startsWith("history:") || !val.includes(":")
     );
 
     // Every icon this panel draws is fetched from imgserv, whatever its source
@@ -747,7 +764,7 @@ export const HelpersMixin = {
     const v = String(value ?? "").trim();
     const low = v.toLowerCase();
     return ["http://", "https://", "ha://", "imgserv://", "local://", "data:"].some(p => low.startsWith(p))
-      || ["mdi:", "phu:", "logo:", "text:", "file:", "media:", "/"].some(p => v.startsWith(p))
+      || ["mdi:", "phu:", "logo:", "text:", "file:", "media:", "history:", "/"].some(p => v.startsWith(p))
       || !!customIconSet(v);
   },
 
@@ -838,6 +855,8 @@ export const HelpersMixin = {
    *
    * Once the text starts with a registered icon prefix (`mdi:`, `phu:`, ...) a list of matching names
    * opens under it. Picking one commits at once -- the choice is complete.
+   * After `history:` the list offers entities to graph, and picking one
+   * commits `history:<entity>` the same way.
    * The one other time it opens is inside an unclosed `${`: entities while the
    * id is typed (or a function name such as `round(`), then the entity's attributes
    * after a second dot; the same inside `${round(…)}`. A field given a
@@ -959,9 +978,23 @@ export const HelpersMixin = {
       input.value = done.value;
       try { input.setSelectionRange?.(done.caret, done.caret); } catch (e) { /* not a text input here */ }
     };
+    // After `history:`, the entity to graph; picking one is the whole value.
+    const openHistory = (term) => {
+      seq += 1;
+      const found = matchEntities(this._hass?.states || {}, term);
+      if (!found.length || !list) return close();
+      matches = found.map((f) => `history:${f.id}`);
+      variable = null;
+      list.innerHTML = found.map((f, i) =>
+        `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(matches[i])}" aria-selected="false"><span>${this._esc(f.id)}</span>${f.name ? `<span class="liza-media-note">${this._esc(f.name)}</span>` : ""}</li>`,
+      ).join("");
+      show();
+    };
     const open = async () => {
       const typing = this._variablesEnabled === false ? null : variableQuery(input.value, input.selectionStart);
       if (typing) return openVariables(typing);
+      const graphed = historyQuery(input.value);
+      if (graphed !== null) return openHistory(graphed);
       const query = iconQuery(input.value);
       if (!query || !list) return close();
       const mine = ++seq;
@@ -1078,37 +1111,6 @@ export const HelpersMixin = {
   /** Tint applied to previews of the page being edited; "" when none is set. */
   _currentPageColor() {
     return this._pages?.[this._currentPageIdx]?.default_color || "";
-  },
-
-  // `color` is the page's default_color. It is applied under exactly the rule the
-  // device uses (_refreshSVG): only monochrome sources take a tint, and a title
-  // carrying its own fg= was coloured deliberately, so it wins.
-  _renderPageIconPreview(icon, height = 20, color = "") {
-    icon = String(icon ?? "").trim();
-    if (!icon) return "";
-    let src;
-    const mode = this._getThemeMode();
-    const tintable = !!color && !icon.includes("fg=") && (isIconSource(icon) || icon.startsWith("text:"));
-    const fg = tintable ? `&fg=${encodeURIComponent(color)}` : "";
-    if (isIconSource(icon) || icon.startsWith("text:") || icon.startsWith("logo:") || icon.startsWith("file:") || icon.startsWith("media:")) {
-      src = this._imgservUrl(icon, "title", mode) + fg
-        + (icon.startsWith("text:") ? this._titleTextStyle(icon) : "");
-    } else if (icon.startsWith("imgserv://")) {
-      src = `/api/imgserv/${icon.slice(10)}${icon.includes("?") ? "&" : "?"}alpha=1`;
-    } else if (this._isExternalUrl(icon)) {
-      src = this._imgservUrl(`media:${icon}`, "title", mode);
-    } else if (this._isImageUrl(icon)) {
-      src = icon;
-    } else {
-      // A bare word is rendered as text, so it is tintable like an explicit text:.
-      // Encoded because it lands in the URL path: a title with a space or a `?`
-      // would otherwise malform the request or graft on query structure of its
-      // own. Matches the slider's identical construction in _refreshSVG.
-      const bareFg = color && !icon.includes("fg=") ? `&fg=${encodeURIComponent(color)}` : "";
-      src = `/api/imgserv/text:${encodeURIComponent(icon)}?size=title&mode=${mode}&alpha=1${bareFg}`
-        + this._titleTextStyle(icon);
-    }
-    return `<img src="${this._esc(src)}" alt="" style="height:${height}px;object-fit:contain;border-radius:2px" />`;
   },
 
   /**
@@ -1771,7 +1773,7 @@ export const HelpersMixin = {
     raw = raw.trim();
     if (!raw) return "";
 
-    const SCHEMES = ["text:", "mdi:", "logo:", "phu:", "file:", "media:",
+    const SCHEMES = ["text:", "mdi:", "logo:", "phu:", "file:", "media:", "history:",
                      "imgserv://", "http://", "https://", "data:"];
     const low = raw.toLowerCase();
     const scheme = SCHEMES.find(s => low.startsWith(s))
@@ -1780,6 +1782,10 @@ export const HelpersMixin = {
 
     if (scheme === "imgserv://") return this._pageTitle({ image: value });
     if (scheme === "data:") return "";
+    if (scheme === "history:") {
+      const id = value.split("?")[0].trim();
+      return this._hass?.states?.[id]?.attributes?.friendly_name || id;
+    }
 
     value = value.split("?")[0];
     try { value = decodeURIComponent(value); } catch (e) { /* keep it raw */ }
@@ -1837,7 +1843,7 @@ export const HelpersMixin = {
 
   /**
    * Which page this is, as the user sees it shown anywhere a page is named:
-   * "Page 3/9 (24)" -- its place in the run and the id the backend and the
+   * "Page 3/9 (#24)" -- its place in the run and the id the backend and the
    * debug tools know it by. The title is deliberately left out; it goes on a
    * line of its own (`_pageTitle`), or after a separator where only one line
    * fits (`_pageDisplayLine`). Not for matching: names are resolved by
@@ -1849,7 +1855,7 @@ export const HelpersMixin = {
     const t = (key, vars, fallback) => (this._t ? this._t(key, vars) : fallback);
     if (i < 0) return t("page_fallback", { n: page?.id }, `Page ${page?.id}`);
     return t("page_position", { n: i + 1, m: pages.length, id: page?.id },
-      `Page ${i + 1}/${pages.length} (${page?.id})`);
+      `Page ${i + 1}/${pages.length} (#${page?.id})`);
   },
 
   /** `_pagePosition` and the title on one line, for places that have only one
@@ -2202,11 +2208,16 @@ export const HelpersMixin = {
   _substituteLabelTokens(text, values) {
     if (!text || !text.includes("${")) return text;
     text = this._expandPageDevice?.(text) ?? text;
+    const lookup = {};
+    for (const [k, v] of Object.entries(values)) lookup[k.toLowerCase()] = v;
+    // A picture keeps its entity variables for the picture rules (see
+    // `_resolveLabel`); only the button's own words are filled in.
+    if (this._isMediaSource(text)) {
+      return text.replace(/\$\{\s*(\w*)\s*\}/g, (_, name) => lookup[name.toLowerCase()] ?? "");
+    }
     // Entity variables are the backend's (liza-remote-variables.js); ${_state} and
     // friends are filled in below.
     if (this._hasEntityToken?.(text)) text = this._substituteEntityTokens(text);
-    const lookup = {};
-    for (const [k, v] of Object.entries(values)) lookup[k.toLowerCase()] = v;
     // `\w*`, not `\w+`: `${}` and `${ }` must be consumed too, or a brace
     // survives into the rendered label.
     const out = text.replace(/\$\{\s*(\w*)\s*\}/g, (_, name) => lookup[name.toLowerCase()] ?? "");
@@ -2498,9 +2509,12 @@ export const HelpersMixin = {
    * Display only. `tests/label_parity_cases.json` pins this against the Python.
    */
   _resolveLabel(action, entityId, config, storedName = "", assign = null) {
-    return this._cleanLabelText(
+    const out = this._cleanLabelText(
       this._resolveLabelLadder(action, entityId, config, storedName, assign)
     );
+    // A tooltip naming a picture goes through the same steps as a button's
+    // image and a page's title, as `finish_tooltip` does for the remote.
+    return out && this._isMediaSource(out) ? (this._resolveImageVariables(out) ?? "") : out;
   },
 
   /**
@@ -2535,7 +2549,8 @@ export const HelpersMixin = {
    * into "Vor".
    */
   _cleanLabelText(text) {
-    if (!text) return text;
+    // A picture is finished by the picture rules, not tidied as words.
+    if (!text || this._isMediaSource(text)) return text;
     let out = text;
     const hadToken = out.includes("${");
     // A whole unfilled variable goes first, calculation and all, as in
@@ -2810,9 +2825,10 @@ export const HelpersMixin = {
   },
 
   /** WCAG 3.3.4: confirm a destructive action. Built on `_openModal`, so the
-   *  focus trap, Escape and focus-return are the platform's. Cancel takes
-   *  initial focus so a dialog appearing under a finger on Enter cannot
-   *  confirm itself, and every path that is not Confirm resolves false. */
+   *  focus trap, Escape and focus-return are the platform's. The confirm
+   *  button takes initial focus, so a deletion started from the keyboard
+   *  (the Delete key on a page) is confirmed with Enter; Escape still
+   *  cancels, and every path that is not Confirm resolves false. */
   _confirmDestructive({ title, subtitle = "", message, confirmText }) {
     return new Promise((resolve) => {
       // The subtitle is part of the heading (it names what the title asks
@@ -2849,7 +2865,19 @@ export const HelpersMixin = {
       });
       dlg.querySelector(".confirm-cancel-btn")?.addEventListener("click", () => { settle(false); close(); });
       dlg.querySelector(".confirm-danger-btn")?.addEventListener("click", () => { settle(true); close(); });
-      dlg.querySelector(".confirm-cancel-btn")?.focus?.();
+      // Left/Right move between the two buttons, as Tab does. Not wrapped:
+      // the arrow points at the button it moves to.
+      const buttons = [...dlg.querySelectorAll(".layout-dialog-actions button")];
+      dlg.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        const at = buttons.indexOf(e.target);
+        if (at < 0) return;
+        const next = buttons[at + (e.key === "ArrowRight" ? 1 : -1)];
+        if (!next) return;
+        e.preventDefault();
+        next.focus();
+      });
+      dlg.querySelector(".confirm-danger-btn")?.focus?.();
     });
   },
 

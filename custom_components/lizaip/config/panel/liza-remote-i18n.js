@@ -141,6 +141,53 @@ export const STRINGS = {
   click_action: {
     en: "Click", de: "Klick", fr: "Clic", it: "Clic", es: "Clic",
   },
+  // The face's hover card. "Opens" rather than the command's own "Go to
+  // page", which the registry already carries: the row names the kind of
+  // fact, and the page is the value beside it.
+  tip_opens: {
+    en: "Opens", de: "Öffnet", fr: "Ouvre", it: "Apre", es: "Abre",
+  },
+  // Why a press will do nothing, from `_internalCommandProblem`. Headed as a
+  // problem rather than folded into the row above, because the row above is
+  // still true — the button does point at that page; the page is just gone.
+  tip_problem: {
+    en: "Problem", de: "Problem", fr: "Problème", it: "Problema", es: "Problema",
+  },
+  // How the slider is pointed, not what it is. "Slider" heads the row that
+  // names a device, and one word cannot be the question on one card and the
+  // answer on another.
+  tip_slider_mode: {
+    en: "Mode", de: "Modus", fr: "Mode", it: "Modalità", es: "Modo",
+  },
+  // The tail of a long cycle, which is counted rather than listed: a card
+  // taller than the face stops being a glance.
+  tip_more: {
+    en: "+{n} more", de: "+{n} weitere", fr: "+{n} autres",
+    it: "+{n} altri", es: "+{n} más",
+  },
+  // The vertical slider's normal arrangement: pinned to nothing, taking
+  // whichever device the selected grid button lends it. Stated outright,
+  // because silence here would read as "nothing assigned".
+  tip_slider_follows: {
+    en: "Follows the selected button", de: "Folgt der ausgewählten Taste",
+    fr: "Suit le bouton sélectionné", it: "Segue il pulsante selezionato",
+    es: "Sigue al botón seleccionado",
+  },
+  // The other arrangement: a slider pinned to one device, which only a
+  // hand-written page YAML can spell and which therefore needs saying out
+  // loud, since every slider the panel itself writes follows.
+  tip_slider_fixed: {
+    en: "Fixed to one device", de: "Fest auf ein Gerät eingestellt",
+    fr: "Fixé sur un seul appareil", it: "Fissato su un solo dispositivo",
+    es: "Fijado a un solo dispositivo",
+  },
+  // The empty card for a shape with no actions to be missing — a slider, or
+  // the page title strip, of which "No action assigned" is true and useless.
+  tip_not_configured: {
+    en: "Nothing configured here", de: "Hier ist nichts eingerichtet",
+    fr: "Rien n'est configuré ici", it: "Qui non è configurato nulla",
+    es: "Aquí no hay nada configurado",
+  },
   longtouch_action: {
     en: "Long touch (2 s)", de: "Langes Berühren (2 s)", fr: "Appui long (2 s)",
     it: "Tocco lungo (2 s)", es: "Toque largo (2 s)",
@@ -434,6 +481,23 @@ export const STRINGS = {
     it: "Consente a un pulsante di contenere più azioni e di passare alla successiva a ogni pressione. Aggiunge una sezione Alternanza a ogni pulsante della griglia. Disattivandola i passaggi restano salvati, ma i pulsanti tornano a eseguire la loro azione normale.",
     es: "Permite que un botón lleve varias acciones y avance a la siguiente en cada pulsación. Añade una sección Alternar a cada botón de la cuadrícula. Al desactivarlo los pasos siguen guardados, pero esos botones vuelven a ejecutar su acción normal.",
   },
+  settings_editor: {
+    en: "Editor", de: "Editor", fr: "Éditeur", it: "Editor", es: "Editor",
+  },
+  settings_page_links: {
+    en: "Show page links",
+    de: "Seitenverbindungen anzeigen",
+    fr: "Afficher les liens entre pages",
+    it: "Mostra i collegamenti tra pagine",
+    es: "Mostrar enlaces entre páginas",
+  },
+  settings_page_links_hint: {
+    en: "While the pointer rests on a button, draws a line to the page that button opens. Resting it on a page instead draws every link that reaches that page. This editor only — the remote itself is unchanged.",
+    de: "Steht der Zeiger auf einer Taste, wird eine Linie zu der Seite gezeichnet, die sie öffnet. Steht er stattdessen auf einer Seite, werden alle Verbindungen gezeichnet, die auf diese Seite führen. Nur in diesem Editor; die Fernbedienung selbst bleibt unverändert.",
+    fr: "Tant que le pointeur repose sur un bouton, trace une ligne vers la page qu'il ouvre. S'il repose sur une page, trace tous les liens qui mènent à cette page. Dans cet éditeur seulement : la télécommande elle-même ne change pas.",
+    it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono. Solo in questo editor: il telecomando non cambia.",
+    es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella. Solo en este editor; el mando en sí no cambia.",
+  },
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
   },
@@ -532,6 +596,51 @@ export const STRINGS = {
   // missing key would render as its own name.
   tab_debug: {
     en: "Debug", de: "Diagnose", fr: "Diagnostic", it: "Diagnostica", es: "Diagnóstico",
+  },
+  // Rejections from `hass.callWS` that arrive as a bare numeric code rather
+  // than an error object -- see `_wsErrorText`. Worded as what the user can do
+  // about it, because the code itself tells them nothing.
+  ws_err_cannot_connect: {
+    en: "No connection to Home Assistant.",
+    de: "Keine Verbindung zu Home Assistant.",
+    fr: "Pas de connexion à Home Assistant.",
+    it: "Nessuna connessione a Home Assistant.",
+    es: "Sin conexión con Home Assistant.",
+  },
+  ws_err_invalid_auth: {
+    en: "Not signed in to Home Assistant any more — reload the page.",
+    de: "Nicht mehr bei Home Assistant angemeldet — Seite neu laden.",
+    fr: "Vous n'êtes plus connecté à Home Assistant — rechargez la page.",
+    it: "Non più autenticato in Home Assistant: ricarica la pagina.",
+    es: "Ya no hay sesión iniciada en Home Assistant: recarga la página.",
+  },
+  ws_err_connection_lost: {
+    en: "Connection to Home Assistant lost before an answer arrived — try again.",
+    de: "Verbindung zu Home Assistant ging verloren, bevor eine Antwort kam — bitte erneut versuchen.",
+    fr: "Connexion à Home Assistant perdue avant la réponse — réessayez.",
+    it: "Connessione a Home Assistant persa prima della risposta: riprova.",
+    es: "Se perdió la conexión con Home Assistant antes de la respuesta: inténtalo de nuevo.",
+  },
+  ws_err_host_required: {
+    en: "No Home Assistant address configured.",
+    de: "Keine Home-Assistant-Adresse konfiguriert.",
+    fr: "Aucune adresse Home Assistant configurée.",
+    it: "Nessun indirizzo Home Assistant configurato.",
+    es: "No hay ninguna dirección de Home Assistant configurada.",
+  },
+  ws_err_https_to_http: {
+    en: "A secure page cannot reach Home Assistant over plain HTTP.",
+    de: "Eine sichere Seite kann Home Assistant nicht über unverschlüsseltes HTTP erreichen.",
+    fr: "Une page sécurisée ne peut pas joindre Home Assistant en HTTP simple.",
+    it: "Una pagina sicura non può raggiungere Home Assistant via HTTP non cifrato.",
+    es: "Una página segura no puede acceder a Home Assistant por HTTP sin cifrar.",
+  },
+  ws_err_auth_callback: {
+    en: "Sign-in to Home Assistant did not complete.",
+    de: "Die Anmeldung bei Home Assistant wurde nicht abgeschlossen.",
+    fr: "La connexion à Home Assistant ne s'est pas terminée.",
+    it: "L'accesso a Home Assistant non è stato completato.",
+    es: "El inicio de sesión en Home Assistant no se completó.",
   },
   debug_reachability: {
     en: "Reachability", de: "Erreichbarkeit", fr: "Accessibilité",
@@ -1934,20 +2043,9 @@ export const STRINGS = {
     en: "Page title", de: "Seitentitel", fr: "Titre de la page",
     it: "Titolo della pagina", es: "Título de la página",
   },
-  // Both the thumbnail's tooltip and its accessible name. It was English-only
-  // while it was "just a tooltip"; naming the control with it made that a
-  // real barrier rather than an inconsistency.
-  page_fill: {
-    en: "{name}\n{filled} of {total} buttons assigned",
-    de: "{name}\n{filled} von {total} Tasten belegt",
-    fr: "{name}\n{filled} touches sur {total} attribuées",
-    it: "{name}\n{filled} di {total} tasti assegnati",
-    es: "{name}\n{filled} de {total} botones asignados",
-  },
-  // The name a reader hears: which page, and where it sits. The fill count is
-  // deliberately NOT here -- it is supplementary, so it rides on
-  // aria-describedby instead and a reader can skip past it. `page_fill` above
-  // stays whole because a hover tooltip has no way to offer that choice.
+  // The name a reader hears: which page, and where it sits. The fill count
+  // rides on aria-describedby instead, being supplementary, and the hover card
+  // gives a sighted user the same two facts on two lines.
   page_name_pos: {
     en: "{name}, page {n} of {m}",
     de: "{name}, Seite {n} von {m}",
@@ -1966,8 +2064,8 @@ export const STRINGS = {
   // How a page is named wherever it is shown: its place in the run and its
   // id, with the title on a line of its own (see `_pagePosition`).
   page_position: {
-    en: "Page {n}/{m} ({id})", de: "Seite {n}/{m} ({id})", fr: "Page {n}/{m} ({id})",
-    it: "Pagina {n}/{m} ({id})", es: "Página {n}/{m} ({id})",
+    en: "Page {n}/{m} (#{id})", de: "Seite {n}/{m} (#{id})", fr: "Page {n}/{m} (#{id})",
+    it: "Pagina {n}/{m} (#{id})", es: "Página {n}/{m} (#{id})",
   },
   // "Open {name}", not "Open page {name}": the name already carries the word
   // when it falls back to page_fallback, and said "Open page Page 1".

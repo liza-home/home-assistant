@@ -19,6 +19,9 @@ icon set the browser registered, ``phu:`` among them (``render_custom.py``).
 ``font``                font ID, ``text:`` only
 ``font_size``           size in pixels, ``text:`` only (default: the symbolic
                         ``size``'s font size, else the image height)
+``hours``/``days``      the period a ``history:`` graph covers, up to a week
+``start_time``,         an absolute period for a ``history:`` graph, instead
+``end_time``            of the moving one ``hours``/``days`` ask for
 ======================  ==================================================
 
 The query is parsed once into :class:`_Options`, each handler answers only
@@ -30,6 +33,7 @@ from __future__ import annotations
 import io
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -38,8 +42,10 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util import dt as dt_util
 from PIL import Image
 
+from ..shared.history import is_servable
 from . import media_refs
 from .const import (
     COLOR_NAMES,
@@ -54,6 +60,13 @@ from .const import (
 )
 from .fonts import user_fonts_dir
 from .render import finalize_png
+from .render_history import (
+    DEFAULT_HOURS,
+    MAX_DAYS,
+    MAX_HOURS,
+    async_history_points,
+    render_history,
+)
 from .render_logo import render_logo
 from .render_mdi import render_mdi_icon
 from .render_static import load_static_image
@@ -167,6 +180,74 @@ def _parse_percent(raw: str | None) -> int | None:
     return percent
 
 
+def _parse_span(query) -> timedelta:
+    """How long a ``history:`` graph covers, from ``hours`` or ``days``.
+
+    The two spell the same thing, so asking for both is a mistake rather than a
+    question of precedence. Either way the period stays within ``MAX_HOURS``.
+    """
+    hours_raw, days_raw = query.get("hours"), query.get("days")
+    has_hours = hours_raw is not None and hours_raw.strip() != ""
+    has_days = days_raw is not None and days_raw.strip() != ""
+    if has_hours and has_days:
+        raise ValueError("use hours or days, not both")
+    if has_days:
+        try:
+            days = int(days_raw)
+        except (ValueError, TypeError) as err:
+            raise ValueError("days must be an integer") from err
+        if not 1 <= days <= MAX_DAYS:
+            raise ValueError(f"days must be between 1 and {MAX_DAYS}")
+        return timedelta(days=days)
+    if not has_hours:
+        return timedelta(hours=DEFAULT_HOURS)
+    try:
+        hours = int(hours_raw)
+    except (ValueError, TypeError) as err:
+        raise ValueError("hours must be an integer") from err
+    if not 1 <= hours <= MAX_HOURS:
+        raise ValueError(f"hours must be between 1 and {MAX_HOURS}")
+    return timedelta(hours=hours)
+
+
+def _parse_time(raw: str | None, name: str) -> datetime | None:
+    """An absolute ``start_time``/``end_time`` in UTC, or ``None`` when absent.
+
+    A time written without a zone is read in Home Assistant's own time zone,
+    which is what someone typing ``start_time=2026-10-10T08:00:00`` means.
+    """
+    if raw is None or raw.strip() == "":
+        return None
+    parsed = dt_util.parse_datetime(raw.strip())
+    if parsed is None:
+        raise ValueError(f"{name} must be a date and time (e.g. 2026-10-10T08:00:00Z)")
+    return dt_util.as_utc(parsed)
+
+
+def _parse_period(query) -> tuple[datetime, datetime]:
+    """The period a ``history:`` graph covers, as UTC start and end.
+
+    ``start_time``/``end_time`` name a period outright; whichever end is
+    missing is filled in from the span (``hours``/``days``), and with neither
+    the period is that span up to now -- the moving graph a remote's page asks
+    for. An absolute period stands still, so its picture no longer changes.
+    """
+    span = _parse_span(query)
+    start = _parse_time(query.get("start_time"), "start_time")
+    end = _parse_time(query.get("end_time"), "end_time")
+
+    if end is None:
+        end = dt_util.utcnow()
+    if start is None:
+        start = end - span
+
+    if end <= start:
+        raise ValueError("end_time must be after start_time")
+    if end - start > timedelta(hours=MAX_HOURS):
+        raise ValueError(f"the period must not be longer than {MAX_HOURS} hours")
+    return start, end
+
+
 def _parse_flag(raw: str | None, default: bool) -> bool:
     """Parse a boolean query flag. Absent *or empty* means *default*."""
     if raw is None or raw.strip() == "":
@@ -212,6 +293,7 @@ class _Options:
     font_size: int | None
     mode: str
     explicit_fg: bool
+    period: tuple[datetime, datetime]
 
     @classmethod
     def from_query(cls, query) -> _Options:
@@ -221,6 +303,7 @@ class _Options:
 
         try:
             percent = _parse_percent(query.get("percent"))
+            period = _parse_period(query)
         except ValueError as err:
             raise _ImgservError(400, str(err)) from err
 
@@ -240,16 +323,14 @@ class _Options:
             ),
             mode=mode,
             explicit_fg=bool(query.get("fg") or query.get("color")),
+            period=period,
         )
 
 
-def _split_source(source: str, query) -> tuple[str, str]:
-    """Split ``type:value``, falling back to the legacy bare ``?text=`` form."""
+def _split_source(source: str) -> tuple[str, str]:
+    """Split ``type:value``."""
     if not source:
-        text = query.get("text")
-        if not text:
-            raise _ImgservError(400, "Provide a source (mdi:name, text:string, file:path)")
-        source = f"text:{text}"
+        raise _ImgservError(400, "Provide a source (mdi:name, text:string, file:path)")
 
     if ":" not in source:
         raise _ImgservError(400, "Source must be type:value (e.g. mdi:home)")
@@ -276,13 +357,16 @@ def _png_response(data: bytes, content_type: str = "image/png") -> web.Response:
 class LizaIPImageView(HomeAssistantView):
     """Serve dynamically generated PNG images.
 
-    URL:  /api/imgserv/{source_type}:{value}?size=&fg=&bg=&crop=&alpha=&percent=&font=
+    URL:  /api/imgserv/{source_type}:{value}?size=&fg=&bg=&crop=&alpha=&percent=&font=&hours=
     Examples:
         /api/imgserv/mdi:play-circle?fg=FFFFFF&size=100x200
         /api/imgserv/mdi:battery?fg=green&percent=40&size=tile
         /api/imgserv/text:22°C?fg=FF8800&size=64x64&font=filson-light&font_size=28
         /api/imgserv/logo:spotify?size=60
         /api/imgserv/file:icons/play.png?size=64x64&alpha=1
+        /api/imgserv/history:sensor.outdoor_temperature?hours=24&size=title&fg=FF8800
+        /api/imgserv/history:sensor.outdoor_temperature?days=7&size=title
+        /api/imgserv/history:sensor.house_power?start_time=2026-10-10T08:00:00Z&end_time=2026-10-10T20:00:00Z
     """
 
     url = IMG_PATH + "/{source:.+}"
@@ -297,7 +381,7 @@ class LizaIPImageView(HomeAssistantView):
 
         try:
             options = _Options.from_query(request.query)
-            source_type, value = _split_source(source, request.query)
+            source_type, value = _split_source(source)
             source_def = _SOURCES.get(source_type)
             if source_def is None and source_type in custom_icon_prefixes():
                 source_def = _Source(partial(_handle_custom, source_type=source_type))
@@ -425,6 +509,22 @@ async def _handle_file(hass, value, options: _Options):
     return img
 
 
+async def _handle_history(hass, value, options: _Options):
+    entity_id = value.strip().lower()
+    if not entity_id:
+        raise _ImgservError(400, "Missing entity (e.g. history:sensor.temperature)")
+    # Only what a remote's page or the admin panel asked for (shared/history.py).
+    if not is_servable(entity_id):
+        raise _ImgservError(403, f"No history image uses '{entity_id}'")
+    try:
+        points, start, end = await async_history_points(hass, entity_id, *options.period)
+    except KeyError as err:
+        raise _ImgservError(503, "The recorder is not running") from err
+    return await hass.async_add_executor_job(
+        render_history, points, start, end, options.width, options.height, options.fg,
+    )
+
+
 _upstream_failures_logged: set[str] = set()
 
 
@@ -516,4 +616,6 @@ _SOURCES: dict[str, _Source] = {
     "file": _Source(_handle_file),
     "media": _Source(_handle_media),
     "ref": _Source(_handle_ref),
+    # Not croppable: trimming would stretch the time axis to the drawn part.
+    "history": _Source(_handle_history, croppable=False),
 }

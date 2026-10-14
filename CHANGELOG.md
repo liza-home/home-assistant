@@ -6,6 +6,55 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.3b1] - 2026-10-14
+
+### Added
+
+- **Pointing at a button explains it.** Resting the mouse on a shape on the open
+  face — or tabbing to it — raises a small card beside it summarising that
+  button: its label and icon, every press it runs, its long touch and other
+  gestures, the entity it acts on, and the page it opens. A goto whose page is
+  gone is flagged, since the remote ignores such a press while the face goes on
+  drawing a confident glyph for it. A button with nothing on it says so.
+  <kbd>Esc</kbd> dismisses the card. A slider is described in its own terms:
+  how it is pointed, and which device and property it moves.
+
+- **The editor can draw the links between pages.** Switch *Page links* on under
+  Settings → Editor and pointing at a button that opens another page draws a
+  curved arrow from it to that page's thumbnail, which lights up. Pointing at a
+  thumbnail shows everything that leads to it. Off by default, and remembered
+  per browser.
+
+- **A history graph can show any period.** Next to `hours`, a `history:` picture
+  takes `days` (1 to 7) and the pair `start_time`/`end_time` for one fixed
+  stretch, for example
+  `history:sensor.house_power?start_time=2026-10-10T08:00:00Z&end_time=2026-10-10T20:00:00Z`.
+  `start_time` on its own runs up to now, `end_time` on its own ends an
+  `hours`/`days`-long stretch there, and a time written without a zone is read
+  in your own. A fixed stretch stands still instead of moving with the clock;
+  no period may be longer than a week.
+
+### Changed
+
+- **Both hover tooltips in the editor are now the same card.** The open face
+  carried the page's label as an SVG tooltip and the page thumbnails carried
+  theirs as a native one — each drawn by the browser in its own style, after
+  its own delay, so pointing at something answered twice at once. The face no
+  longer has one at all, and a thumbnail now raises the themed card instead:
+  the page's title, where it sits in the strip, and how many of its buttons are
+  assigned.
+
+- **The "Go to page" action is now "goto page", and asks for the page's id.**
+  It used to ask for the page *name*, with the id as a second, optional field.
+  Two pages may share a name and a name can be renamed, so the id — the number
+  the panel prints beside every page — is now the only thing the action asks
+  for. Automations written against the old `page` field keep working.
+
+- **A page's id is printed as `#id`.** Wherever a page is named — the title
+  banner, the page lists in the action editor, messages and tooltips — it now
+  reads "Page 3/9 (#24)". The number was easy to read as a third count beside
+  the position; the hash says it is the id.
+
 ## [2026.10.2] - 2026-10-09
 
 The second stable release of October. It includes everything since 2026.10.1;

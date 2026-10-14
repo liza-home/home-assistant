@@ -37,8 +37,9 @@ import time
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant, State
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-from .const import PREDICTED_UPDATE_EVENT
+from .const import SIGNAL_PREDICTED_UPDATE
 
 # How long a prediction may stand unconfirmed.
 #
@@ -104,13 +105,13 @@ def _expire(hass: HomeAssistant, entity_id: str) -> None:
     _expiry_handles.pop(entity_id, None)
     if _predictions.pop(entity_id, None) is None:
         return
-    hass.bus.async_fire(PREDICTED_UPDATE_EVENT, {"entity_id": entity_id})
+    async_dispatcher_send(hass, SIGNAL_PREDICTED_UPDATE, entity_id)
 
 
 def predict(hass: HomeAssistant, entity_id: str, brightness: float) -> None:
     """Record that *entity_id* was just commanded to *brightness*.
 
-    Fires :data:`PREDICTED_UPDATE_EVENT` so the icon path wakes on the command
+    Sends :data:`SIGNAL_PREDICTED_UPDATE` so the icon path wakes on the command
     rather than on the lamp's eventual reply -- the whole point being that the
     reply is the slow part.
     """
@@ -130,7 +131,7 @@ def predict(hass: HomeAssistant, entity_id: str, brightness: float) -> None:
     _expiry_handles[entity_id] = hass.loop.call_later(
         PREDICTION_TTL_SECONDS, lambda: _expire(hass, entity_id),
     )
-    hass.bus.async_fire(PREDICTED_UPDATE_EVENT, {"entity_id": entity_id})
+    async_dispatcher_send(hass, SIGNAL_PREDICTED_UPDATE, entity_id)
 
 
 def predicted_brightness(entity_id: str) -> float | None:

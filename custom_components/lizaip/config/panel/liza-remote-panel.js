@@ -15,6 +15,7 @@
  *   - liza-remote-variables.js — ${…} variables in the previews, answered by the backend
  *   - liza-remote-states.js    — state derivation & states editor
  *   - liza-remote-buttons-view.js — Buttons tab HTML + wiring
+ *   - liza-remote-button-tip.js — the hover card over a shape on the face
  *   - liza-remote-actions-view.js — Actions tab HTML + wiring
  *   - liza-remote-styles.js    — CSS styles
  *   - liza-remote-stylesheet.js — adopts those styles onto the shadow root
@@ -37,6 +38,7 @@ import {
 } from "./liza-remote-buttons-view.js";
 import { ActionsViewMixin } from "./liza-remote-actions-view.js";
 import { SettingsViewMixin } from "./liza-remote-settings-view.js";
+import { ButtonTipMixin } from "./liza-remote-button-tip.js";
 
 
 class LizaRemotePanel extends HTMLElement {
@@ -221,6 +223,12 @@ class LizaRemotePanel extends HTMLElement {
       window.removeEventListener?.("keydown", this._pageDeleteKey);
       this._pageDeleteKey = null;
     }
+    // Registered once by `_wireGotoLinks` and so not dropped by the render that
+    // replaces the strip it draws over — this is the only place it can go.
+    if (this._gotoLinkResize) {
+      window.removeEventListener?.("resize", this._gotoLinkResize);
+      this._gotoLinkResize = null;
+    }
     // The subscription outlives the element otherwise, and its callback would
     // keep re-rendering a panel that is no longer in the document.
     if (this._configChangedUnsub) {
@@ -330,15 +338,24 @@ class LizaRemotePanel extends HTMLElement {
     // Not filtered by `_currentEntry` the way the other two handlers are: every
     // remote is on the list, not just the selected one. A bare event with no
     // entry_id says nothing about any of them.
-    //
-    // Nor is it filtered against the list before refetching. Comparing first
-    // looks cheaper, but it silently drops the two cases that matter most — an
-    // event for a device the list has not learned about yet, and one that
-    // arrives while the list is stale for some other reason. The refresh below
-    // is the one that decides whether anything actually changed, and it does so
-    // against the backend rather than against a snapshot.
-    if (!ev?.data?.entry_id) return;
-    await this._refreshAvailability();
+    const entryId = ev?.data?.entry_id;
+    if (!entryId) return;
+
+    // The event carries the new state, so a remote already on the list is
+    // updated in place. Only what the event cannot answer goes back to the
+    // backend: a remote the list has not learned about yet, an event without
+    // a state, or a panel mid-load whose list is about to be replaced.
+    const connected = ev.data.connected;
+    const known = (this._devices || []).find(d => d?.entry_id === entryId);
+    if (typeof connected !== "boolean" || !known || this._loading || !this._initDone) {
+      await this._refreshAvailability();
+      return;
+    }
+    // Tells a refetch already in flight that its answer predates this edge.
+    this._availabilityEdges = (this._availabilityEdges || 0) + 1;
+    if (Boolean(known.available) === connected) return;
+    this._devices = this._devices.map(d => (d === known ? { ...d, available: connected } : d));
+    this._render();
   }
 
   /**
@@ -358,9 +375,16 @@ class LizaRemotePanel extends HTMLElement {
       this._availabilityStale = true;
       return;
     }
+    const edgesBefore = this._availabilityEdges || 0;
     const devices = await this._fetchDevices();
     // A failed refetch is not evidence that every remote went away.
     if (!devices) return;
+    // An edge applied while this was in flight is newer than the answer, which
+    // would otherwise put the badge back. Ask again instead.
+    if ((this._availabilityEdges || 0) !== edgesBefore) {
+      await this._refreshAvailability();
+      return;
+    }
 
     const before = this._availabilityKey(this._devices);
     this._devices = devices;
@@ -420,13 +444,9 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   async _onConfigChanged(ev) {
-    const entryId = ev?.data?.entry_id;
-    // An event with no entry_id is not "ours by default": the backend fires a
-    // bare `{}` when it cannot resolve the device (`build_full_config_payload`),
-    // which carries no config and says nothing about this entry. Treating it as
-    // a match reloaded every open panel — and, now, could defer a reload that
-    // was never asked for. `panel.py` already ignores these; match it.
-    if (!this._currentEntry || entryId !== this._currentEntry) return;
+    // The event carries only `entry_id` (and `order_only`); the reload below
+    // reads everything else from the backend.
+    if (!this._currentEntry || ev?.data?.entry_id !== this._currentEntry) return;
     if (this._loading) return;
 
     // A page add/delete/reorder fires this event from the backend *before* it
@@ -1654,58 +1674,6 @@ class LizaRemotePanel extends HTMLElement {
     this._revalidateContext();
   }
 
-  async _testButton(buttonKey) {
-    const testingOverride = this._editingOverride(buttonKey);
-    // `_hasRunnableAction`, not `_isAssignedRecord`: an icon-only button is
-    // "assigned" enough to show ✕, but there is nothing here to run. The card
-    // already hides Test in that case; this is the same rule asked at the point
-    // of firing, so any other route to it reports the truth rather than
-    // dispatching a click the device drops and toasting success.
-    const record = testingOverride ? this._editAssign(buttonKey) : this._assignments[buttonKey];
-    if (!this._hasRunnableAction(record)) { this._toast(this._t("no_action_assigned")); return; }
-    const deviceId = (this._devices.find(d => d.entry_id === this._currentEntry) || {}).device_id;
-    const event = (extra) => this._hass.callApi("POST", "events/lizaip_event", {
-      device_id: deviceId, entry_id: this._currentEntry,
-      type: "button", page_id: this._currentPageId, ...extra,
-    });
-    try {
-      // Testing an override means testing the pair, so the context is
-      // established the way the user would establish it: by touching the grid
-      // button first. Anything else would run the page default and report it as
-      // the override — the executor resolves against the *device's* selection,
-      // which the panel's `_contextKey` does not set. This also leaves the
-      // device selected exactly where a real touch would leave it.
-      if (testingOverride && this._contextKey) {
-        await event({ button_name: this._contextKey, button: this._contextKey, interaction: "touch" });
-      } else if (OVERRIDABLE_FIXED_BUTTONS.has(buttonKey)) {
-        // ...and testing a page default means testing it with *no* context, so
-        // the device's selection has to be cleared first. It is not implied:
-        // nothing in the panel clears it, so a selection left behind by an
-        // earlier override test (or by "Page default", which only clears the
-        // panel's own `_contextKey`) survives on the device. Without this, a
-        // second Test on the same fixed button sends no `touch`, the device
-        // still holds the old selection, and the *override* runs while the card
-        // shows the page default and the toast says "Action executed ✓" —
-        // the panel confidently reporting the one thing that did not happen.
-        //
-        // Spelled as a click on a blank grid button because that is the gesture
-        // `_record_selection` already treats as "deselect", rather than by
-        // inventing a clear-selection command the device would then have two
-        // ways to reach. A blank button dispatches nothing, so the click is
-        // inert beyond the clearing. If the page has no blank button there is
-        // nothing safe to press, and the test proceeds — the pre-existing
-        // behaviour, now the rare case rather than the usual one.
-        const blank = (this._blueprint?.buttons ?? [])
-          .find(b => isGridBtn(b.key) && !this._mayBeContext(b.key));
-        if (blank) {
-          await event({ button_name: blank.key, button: blank.key, interaction: "click" });
-        }
-      }
-      await event({ button_name: buttonKey, button: buttonKey, interaction: "click" });
-      this._toast(testingOverride ? "Override executed ✓" : "Action executed ✓");
-    } catch (e) { this._toast(this._t("failed", { error: e.message || e })); }
-  }
-
   _isButtonAssigned(buttonKey) {
     // Deliberately the *page slot*, not the edit slot. This is the question
     // "does this position on the page do anything", and its answers feed
@@ -1751,72 +1719,6 @@ class LizaRemotePanel extends HTMLElement {
     // which hid its own Test and ✕ controls, so it could not be cleared at all.
     if (Array.isArray(assign.config) && assign.config.length) return true;
     return !!(assign.action_id && this._actions.find(a => a.id === assign.action_id));
-  }
-
-  // Assign, or clear, the action a button runs.
-  //
-  // Every read and write goes through the edit slot, never
-  // `this._assignments[btnKey]`. This was the one writer that did not, and it
-  // is the writer that matters most: under a context it wrote the *page
-  // default* while the card, the badge and the face all reported an override.
-  // The override stayed the bare `{}` that `_editAssignEnsure` had scaffolded,
-  // and `_sanitize_overrides` drops an empty entry — so the config the user
-  // had just written vanished at the save and `button_power` kept doing the
-  // page default on the device.
-  //
-  // The vertical slider hid this for weeks: it needs nothing stored, because
-  // absence is how "follow the selection" is spelled. So the one fixed control
-  // that worked was the one that never had to survive a save.
-  _assignActionToButton(btnKey, actionId) {
-    if (!actionId) {
-      const assign = this._editAssign(btnKey);
-      if (assign) {
-        delete assign.action_id;
-        delete assign.config;
-        // `before` is the prelude belonging to the action just cleared, and
-        // `after` its verification. Left behind they survive the save (the WS
-        // schema only validates `assignments` as a dict) and resurrect around
-        // whatever action is assigned to this slot next.
-        delete assign.before;
-        delete assign.after;
-        // An override earns its place by having an action to run:
-        // `_sanitize_override_entry` keeps an entry only for its `action_id`,
-        // so once that is gone this record cannot survive the save whatever
-        // else it holds. Deleting it — and pruning a table that empties with
-        // it — is what keeps `hasOverride` telling the truth in the meantime,
-        // since that is a presence test and the bare `{}` left here is truthy
-        // in JS. Without this the face reads "overridden" until the next
-        // reload silently replaces it with the page default.
-        //
-        // Unconditional rather than a second emptiness test: `action_id` is
-        // the whole of the store's rule, so re-deriving one here is how the
-        // panel and the executor drift apart.
-        if (this._editingOverride(btnKey)) this._editAssignDelete(btnKey);
-      }
-    } else {
-      const assign = this._editAssignEnsure(btnKey);
-      assign.action_id = actionId;
-      const action = this._actions.find(a => a.id === actionId);
-      if (action && !assign.config) {
-        const target = {};
-        if (action.service && this._hass) {
-          const svcDomain = action.service.split(".")[0];
-          if (svcDomain && svcDomain !== "homeassistant") {
-            const domainEntities = Object.keys(this._hass.states).filter(e => e.startsWith(svcDomain + "."));
-            if (domainEntities.length === 1) target.entity_id = domainEntities[0];
-          }
-        }
-        assign.config = [{ action: action.service, target, data: {} }];
-      }
-      if (!assign._labelEdited && !assign.label_edited) {
-        const entity = assign.config ? this._getTargetEntityFromConfig(assign.config) : null;
-        const autoLabel = this._computeLabel(action, entity, assign.config);
-        if (autoLabel) assign.label = autoLabel;
-      }
-    }
-    this._scheduleAutoSave();
-    this._revalidateContext();
-    this._render();
   }
 
   // =================== PAGES ===================
@@ -1867,10 +1769,6 @@ class LizaRemotePanel extends HTMLElement {
     // stale `_pageCache` above, so the flush has to come after the switch, not
     // before it. The reload re-reads those entries rather than dropping them.
     this._flushPendingConfigReload();
-  }
-
-  async _switchPage(dir) {
-    await this._switchPageTo(this._currentPageIdx + dir);
   }
 
   async _addPage() {
@@ -2316,7 +2214,7 @@ class LizaRemotePanel extends HTMLElement {
     const idx = pageIdx !== undefined ? pageIdx : this._currentPageIdx;
     const page = this._pages[idx];
     // Which page by position and id in the title, its name on the line under
-    // it: two pages can share a title, and "Page 3/9 (24)" cannot be confused.
+    // it: two pages can share a title, and "Page 3/9 (#24)" cannot be confused.
     // `_pageTitle`, not `page.image`: `image` is a title-*image* spec and
     // reads back as "mdi:sofa" rather than as a name.
     const pageName = this._pagePosition(page);
@@ -2770,11 +2668,18 @@ class LizaRemotePanel extends HTMLElement {
     };
 
     const plan = registered.map((cmd) => {
+      const declared = hass.services.lizaip[(cmd.service || "").split(".")[1]]?.fields || {};
       const params = cmd.target_params || [];
       const idKey = params.find((p) => p.type === "page_id")?.key;
       const nameKey = params.find((p) => p.type === "page_name")?.key;
-      const inUse = storedKey(cmd.service, [idKey, nameKey].filter(Boolean));
-      return { cmd, idKey, picker: inUse || idKey || nameKey };
+      // A spelling the service no longer declares cannot be the picker: the
+      // dropdown is grafted onto a field of the schema, so choosing one that
+      // is not there would leave the step with no target control at all. A
+      // button stored against a withdrawn spelling falls back to the one that
+      // is still offered.
+      const offered = [idKey, nameKey].filter((k) => k && declared[k]);
+      const inUse = storedKey(cmd.service, offered);
+      return { cmd, idKey, picker: inUse || offered[0] || null };
     });
 
     // Keyed on what the dropdowns are made of, not on `hass`.
@@ -2798,7 +2703,7 @@ class LizaRemotePanel extends HTMLElement {
     }
 
     // Two spellings of the same list: ids to store, names to read. Both show
-    // "Page 3/9 (24) · Title" -- an HA dropdown option is one line, so the
+    // "Page 3/9 (#24) · Title" -- an HA dropdown option is one line, so the
     // title follows the position rather than sitting under it. The by-name
     // value stays the bare name: that is what gets stored and resolved.
     const byId = pages.map((page) => ({ value: String(page.id), label: this._pageDisplayLine(page) }));
@@ -3288,6 +3193,7 @@ Object.assign(LizaRemotePanel.prototype, HelpersMixin);
 Object.assign(LizaRemotePanel.prototype, VariablesMixin);
 Object.assign(LizaRemotePanel.prototype, StatesMixin);
 Object.assign(LizaRemotePanel.prototype, ButtonsViewMixin);
+Object.assign(LizaRemotePanel.prototype, ButtonTipMixin);
 Object.assign(LizaRemotePanel.prototype, ActionsViewMixin);
 Object.assign(LizaRemotePanel.prototype, SettingsViewMixin);
 Object.assign(LizaRemotePanel.prototype, A11yMixin);
