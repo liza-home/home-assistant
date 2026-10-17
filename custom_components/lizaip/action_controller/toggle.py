@@ -348,7 +348,11 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
             step.get("data") or {},
         ),
     }
-    return clean_label_text(substitute_label_tokens(text, values, hass))
+    return clean_label_text(
+        substitute_label_tokens(
+            text, values, hass, getattr(state_obj, "entity_id", None),
+        )
+    )
 
 
 def sanitize_toggle(value: Any) -> dict:

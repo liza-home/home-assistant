@@ -3,8 +3,10 @@
  * HTML generation and wiring for the Buttons tab (pages, SVG, button config).
  */
 
-import { drawSVG, getPathBounds, armSuppress, suppressedNow } from "./liza-remote-svg.js";
-import { badNumber, isIconSource, isMovableSlot, NON_BUTTON_KEYS } from "./liza-remote-helpers.js";
+import {
+  drawSVG, getPathBounds, cropFace, overlayStyle, titleFit, armSuppress, suppressedNow,
+} from "./liza-remote-svg.js";
+import { badNumber, isMovableSlot, NON_BUTTON_KEYS } from "./liza-remote-helpers.js";
 
 const capitalize = (s) => s.replace(/\b\w/g, c => c.toUpperCase());
 
@@ -2016,7 +2018,13 @@ ${pagesHtml}
     // current answer is the difference between a field that looks broken and
     // one that is visibly live.
     const labelShowsVariable = this._hasEntityToken(labelFieldValue);
-    const labelResolved = (labelShowsState || labelShowsName || labelShowsVariable)
+    // Discovery, not only explanation: the track tokens are worth a sentence
+    // wherever they *could* be used, not just where they already are. On a
+    // lamp the same sentence would be noise, so the target decides.
+    const labelHasMedia = this._labelHasMediaToken(labelFieldValue);
+    const labelShowsMedia = labelHasMedia
+      || (labelShowsState && this._targetsMediaPlayer(selAssign.config));
+    const labelResolved = (labelShowsState || labelShowsName || labelShowsVariable || labelShowsMedia)
       ? this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign)
       : "";
     // A device-local command whose target the device cannot resolve is sent
@@ -2198,7 +2206,13 @@ ${pagesHtml}
             const pressShowsName = this._labelHasNameToken(rule.label || "")
               && !!this._displayLabel("${_name}", pressAction, pressEntity, rule.config);
             const pressShowsVariable = this._hasEntityToken(rule.label || "");
-            const pressNowReads = (pressShowsState || pressShowsName || pressShowsVariable)
+            // Same discovery rule as the Label field: the two track tokens are
+            // only meaningful on a media player, so the press's own target
+            // decides whether naming them is help or noise.
+            const pressHasMedia = this._labelHasMediaToken(rule.label || "");
+            const pressShowsMedia = pressHasMedia
+              || (pressShowsState && this._targetsMediaPlayer(rule.config));
+            const pressNowReads = (pressShowsState || pressShowsName || pressShowsVariable || pressShowsMedia)
               ? pressResolved
               : "";
             // <details> rather than a div with a click handler, and native
@@ -2289,6 +2303,7 @@ ${pagesHtml}
                   state: pressShowsState,
                   name: pressShowsName,
                   variable: pressShowsVariable,
+                  media: pressShowsMedia,
                 }),
               })}
             </details>`;
@@ -2313,19 +2328,22 @@ ${pagesHtml}
     // the stored tooltip resolved, and the default it offers when blank. A
     // glyph caption is skipped -- it is drawn as the glyph, and a heading
     // reading `mdi:battery-50` is a filename read as a sentence.
+    // What the remote prints, tokens read. A value that reads as nothing is
+    // nothing -- not the field's raw `${…}` text drawn as a picture of words;
+    // only a picture value (`mdi:…`) stands for itself.
+    const labelPreview = labelFieldValue
+      ? (this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign)
+        || (this._isMediaSource?.(labelFieldValue) ? labelFieldValue : ""))
+      : "";
     const pressOneTitle = (
-      (labelFieldValue && !this._isMediaSource?.(labelFieldValue)
-        ? (this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign) || labelFieldValue)
-        : "")
+      (labelFieldValue && !this._isMediaSource?.(labelFieldValue) ? labelPreview : "")
       || selDefault || pressTitles[0] || ""
     );
     const labelFieldHtml = labelIsDead ? '' : this._htmlIconField({
       label: this._t("tooltip"),
       // The preview draws what the remote prints, tokens read; the field
       // holds the stored text, tokens and all.
-      value: labelFieldValue
-        ? (this._resolveLabel(selAction, selEntity, selAssign.config, rawLabel, selAssign) || labelFieldValue)
-        : "",
+      value: labelPreview,
       inputValue: labelFieldValue,
       inputClass: "config-label-input",
       placeholder: selDefault,
@@ -2343,6 +2361,7 @@ ${pagesHtml}
           state: labelShowsState,
           name: labelShowsName,
           variable: labelShowsVariable,
+          media: labelShowsMedia,
         }),
     });
 
@@ -2652,18 +2671,28 @@ ${pagesHtml}
    * first page's image. A mismatched `src` drops the entry -- the picture has
    * genuinely changed and there is nothing to reuse.
    */
-  _tileImg(pageIdx, key, src) {
+  _tileImg(pageIdx, key, img) {
+    const { src, key: devKey } = typeof img === "string" ? { src: img, key: "" } : img;
     const cache = (this._tileImgCache ||= new Map());
     const id = `${pageIdx}:${key}`;
     const hit = cache.get(id);
-    if (hit && hit.getAttribute("src") === src) {
+    if (hit && src && (hit.getAttribute("data-img-src") ?? hit.getAttribute("src")) === src) {
       // Carried over from the container it was just detached from, which may
       // have styled it for a different role.
       hit.removeAttribute("style");
+      this._retryBrokenImg(hit);
       return hit;
     }
     const el = document.createElement("img");
-    el.setAttribute("src", src);
+    if (src) {
+      el.setAttribute("src", src);
+      // The URL the retry goes back to, kept apart from `src` because a retry
+      // appends a nonce to it -- compared above so a reused tile is still
+      // recognised as carrying the picture the caller asked for.
+      el.setAttribute("data-img-src", src);
+    }
+    // Not known yet: `_applyDeviceUrls` sets `src` once the URL arrives.
+    if (devKey) el.setAttribute("data-dev-key", devKey);
     // Decoration: the shape underneath already names it, and these are
     // `pointer-events: none`. Unnamed, a reader would announce the imgserv
     // src once per button.
@@ -2671,6 +2700,59 @@ ${pagesHtml}
     el.setAttribute("data-key", key);
     cache.set(id, el);
     return el;
+  },
+
+  /**
+   * Ask again for an image whose load never produced pixels.
+   *
+   * `drawSVG` empties every container to redraw, which detaches these overlays.
+   * A browser aborts a load that was still in flight when that happened --
+   * Safari reliably, which is where this showed -- and because the same node is
+   * reused with the same `src` it never starts the request again: the tile sits
+   * as the browser's broken-image glyph until the page is reloaded. The icons
+   * hit hardest were the ones imgserv had to render for the first time, being
+   * the slowest to arrive and so the likeliest to still be in flight.
+   *
+   * A *complete* image with no intrinsic width is exactly that case (and also a
+   * genuine 404). The nonce is what makes it a request the browser has not
+   * made -- an unchanged `src` would repaint the failure it already has, the
+   * same trick `_repaintCustomIcon` plays -- and imgserv ignores options it
+   * does not know. Capped, so a picture that really is missing is asked for
+   * twice and then left alone.
+   */
+  _retryBrokenImg(el) {
+    // `complete` is undefined outside a browser, so the harness never retries.
+    if (!el?.complete || el.naturalWidth) return;
+    const tries = Number(el.getAttribute?.("data-img-retry") || 0);
+    if (tries >= 2) return;
+    const base = el.getAttribute("data-img-src") || el.getAttribute("src") || "";
+    if (!base) return;
+    // Recorded for a preview, which arrives as markup and so carries no base of
+    // its own: without it a second retry would append its nonce to the first
+    // one's URL rather than replace it.
+    el.setAttribute("data-img-src", base);
+    el.setAttribute("data-img-retry", String(tries + 1));
+    el.setAttribute("src", `${base}${base.includes("?") ? "&" : "?"}_retry=${tries + 1}`);
+  },
+
+  /**
+   * Look over everything imgserv drew, once the faces have had time to load.
+   *
+   * `_tileImg` only sees a broken tile if something draws the face again, so a
+   * load aborted by the *last* redraw would stay broken forever. This sweep is
+   * the backstop, and it reaches the previews in the editor card too -- they
+   * are rebuilt from markup rather than cached, but a detached preview loses
+   * its load the same way.
+   *
+   * Debounced because a burst of redraws is normal (a page switch, then the
+   * state updates that follow it) and only the last one is worth checking.
+   */
+  _scheduleBrokenImgSweep() {
+    clearTimeout(this._brokenImgTimer);
+    this._brokenImgTimer = setTimeout(() => {
+      this.shadowRoot?.querySelectorAll?.('img[src*="/api/imgserv/"]')
+        .forEach((img) => this._retryBrokenImg(img));
+    }, 1500);
   },
 
   // What the hover card says about a slider, answered here because
@@ -3324,48 +3406,11 @@ ${pagesHtml}
       const rawTitle = this._pageTitleImage(page);
       const mode = this._getThemeMode();
       const pgColor = page.default_color || "";
-      // Only tint monochrome sources; logos/photos keep their natural colors, and
-      // a title carrying its own fg= has already said what it wants.
-      // A bare word is drawn as text, so it tints like `text:` does.
-      const tintable = isIconSource(rawTitle) || rawTitle.startsWith("text:")
-        || rawTitle.startsWith("history:") || (!!rawTitle && !this._isMediaSource(rawTitle));
-      const fgSlider = pgColor && tintable && !rawTitle.includes("fg=") ? `&fg=${pgColor}` : "";
-      let sliderImageUrl = null;
-      if (!rawTitle) {
-        sliderImageUrl = null;
-      } else if (rawTitle.startsWith("text:")) {
-        const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`
-          + this._titleTextStyle(rawTitle);
-      } else if (rawTitle.startsWith("mdi:")) {
-        sliderImageUrl = `/api/imgserv/${rawTitle}?size=title&mode=${mode}${fgSlider}&alpha=1`;
-      } else if (isIconSource(rawTitle)) {
-        // phu: and the extra icon sets (hue:, ...), drawn from their uploaded shapes.
-        const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
-      } else if (rawTitle.startsWith("history:")) {
-        const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}${fgSlider}&alpha=1`;
-      } else if (rawTitle.startsWith("logo:")) {
-        const sep = rawTitle.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/${rawTitle}${sep}size=title&mode=${mode}&alpha=1`;
-      } else if (rawTitle.startsWith("media:")) {
-        sliderImageUrl = this._imgservUrl(rawTitle, "title", mode);
-      } else if (rawTitle.startsWith("imgserv://")) {
-        const inner = rawTitle.slice(10);
-        const sep = inner.includes("?") ? "&" : "?";
-        sliderImageUrl = `/api/imgserv/${inner}${sep}size=title&mode=${mode}&alpha=1`;
-      } else if (this._isExternalUrl(rawTitle)) {
-        sliderImageUrl = this._imgservUrl(`media:${rawTitle}`, "title", mode);
-      } else if (rawTitle.startsWith("file:")) {
-        sliderImageUrl = this._imgservUrl(rawTitle, "title", mode);
-      } else if (rawTitle.startsWith("/")) {
-        sliderImageUrl = rawTitle;
-      } else {
-        // Encoded, so the words never carry a "?" of their own.
-        sliderImageUrl = `/api/imgserv/text:${encodeURIComponent(rawTitle)}?size=title&mode=${mode}${fgSlider}&alpha=1`
-          + this._titleTextStyle(rawTitle);
-      }
+      // The colour is sent as soon as one part can spend it; imgserv decides
+      // which do. A title carrying its own fg= has already said what it wants.
+      // The title strip the remote is sent, colour and text style included.
+      const sliderImage = rawTitle ? this._deviceImg(rawTitle, "title", pgColor) : null;
+      const sliderImageUrl = sliderImage && sliderImage.src !== "" ? sliderImage : null;
 
       // Draw clickable button shapes only — icon/title images are HTML overlays
       // below. `markFor` rides along because the nesting mark styles the SVG
@@ -3411,94 +3456,36 @@ ${pagesHtml}
         onDrop: isActive ? (from, to) => this._dropButtonOn(from, to) : null,
       });
 
-      // Crop to the main button area
-      const svg = container.querySelector("svg");
-      if (svg) {
-        svg.style.width = "100%";
-        svg.style.height = "auto";
-        svg.setAttributeNS(null, "viewBox", "32 33 108 295");
-        svg.setAttributeNS(null, "width", "108");
-        svg.setAttributeNS(null, "height", "295");
-      }
+      cropFace(container.querySelector("svg"));
 
-      // --- HTML <img> overlays: actual imgserv PNGs positioned over the SVG shapes ---
-      // Coordinates expressed as % of the cropped region (x=32,y=33,w=108,h=295) so
-      // they scale correctly at any container pixel size.
-      const CROP_X = 32, CROP_Y = 33, CROP_W = 108, CROP_H = 295;
-      const pX = (cx, sz) => ((cx - sz / 2 - CROP_X) / CROP_W * 100).toFixed(1) + '%';
-      const pY = (cy, sz) => ((cy - sz / 2 - CROP_Y) / CROP_H * 100).toFixed(1) + '%';
-      const pW = (sz) => (sz / CROP_W * 100).toFixed(1) + '%';
-      const pH = (sz) => (sz / CROP_H * 100).toFixed(1) + '%';
-
-      // Title PNG (slider_horizontal area)
+      // Title PNG (slider_horizontal area). `titleFit` draws it at the size
+      // the device does; the clip bounds a title too long for the bar, which
+      // would otherwise be painted across the grid below it.
       //
-      // Sized from the PNG's own pixels, not from the bar's bounds. The bar is
-      // drawn as 104x26 user units (4:1) while the device's title area is
-      // TITLE_W x TITLE_H px (10:3), so handing the element the raw bounds and
-      // letting `object-fit: contain` do the work scaled every title up until
-      // it filled the bar: a cropped four-letter label came out exactly as
-      // large as a full-width logo, which is the one thing the preview must not
-      // say.
-      //
-      // `s` converts device pixels to user units, uniformly, so the whole title
-      // area maps inside the bar with its proportions intact. Multiplying the
-      // image's natural size by it reproduces what the hardware does - draw the
-      // PNG at the size it actually is. render_text now autocrops to the glyph
-      // bounding box, so that size is the real measure of the text, and short
-      // labels stay small.
-      //
-      // A title too long for the title area is *meant* to overflow, so nothing
-      // shrinks it back to fit: at `s` it simply runs past the bar and is cut
-      // off, which is the honest preview of a label that will not fit on the
-      // device either. The wrapper exists only to bound where that cut happens
-      // - without it the overflow would be painted across the button grid
-      // below, which is a rendering artefact rather than the device's
-      // behaviour.
-      //
-      // The natural size is only known once the image has loaded, hence the
-      // `load` listener; the first call runs with the full title area as a
-      // placeholder so the element is still positioned if the load never fires.
-      //
-      // That placeholder is why the title used to flicker on every page switch.
-      // `_render()` rewrites the shadow root, so each switch builds a *new*
-      // `img` whose `naturalWidth` is 0 until it loads -- even when the bytes
-      // are already in the HTTP cache, `load` is a task, so one frame is
-      // painted at the full title area and the next at the real size. A short
-      // label visibly snapped in from bar-width.
-      //
-      // So natural sizes are remembered per URL for the life of the panel. The
-      // same title drawn a second time is sized correctly in its first frame
-      // and never moves. The cache is keyed by the URL, which already carries
-      // the text, the colour and the size -- change any of them and it is a
-      // different key, so a stale entry cannot be applied to a new picture.
+      // Natural sizes are remembered per URL because `_render()` builds a new
+      // `img` on every page switch, whose `naturalWidth` is 0 until `load`
+      // fires even from cache -- without the cache a short label snapped in
+      // from bar-width on every switch.
       if (sliderImageUrl) {
         const sliderBtn = bp.buttons.find(b => b.key === 'slider_horizontal');
         if (sliderBtn) {
           const b = getPathBounds(sliderBtn.d);
           if (b) {
-            const TITLE_W = 200, TITLE_H = 60;   // device title area, px
-            const s = Math.min(b.w / TITLE_W, b.h / TITLE_H);
-
             const clip = document.createElement('div');
             clip.className = 'pg-title-clip';
-            clip.style.cssText = `left:${pX(b.cx, b.w)};top:${pY(b.cy, b.h)};width:${pW(b.w)};height:${pH(b.h)};`;
+            clip.style.cssText = overlayStyle(b, b.w, b.h);
 
             const el = this._tileImg(pageIdx, 'slider_horizontal', sliderImageUrl);
             el.className = 'pg-btn-img pg-title-img';
             const natural = (this._titleNaturalByUrl ||= new Map());
             const applySize = () => {
               if (el.naturalWidth) {
-                natural.set(sliderImageUrl, { w: el.naturalWidth, h: el.naturalHeight });
+                natural.set(sliderImageUrl.key, { w: el.naturalWidth, h: el.naturalHeight });
               }
-              const known = natural.get(sliderImageUrl);
-              const w = (el.naturalWidth || known?.w || TITLE_W) * s;
-              const h = (el.naturalHeight || known?.h || TITLE_H) * s;
-              // Percentages of the clip box, so an oversized title yields a
-              // negative offset and overflows evenly on both sides.
-              el.style.left = ((b.w - w) / 2 / b.w * 100).toFixed(2) + '%';
-              el.style.top = ((b.h - h) / 2 / b.h * 100).toFixed(2) + '%';
-              el.style.width = (w / b.w * 100).toFixed(2) + '%';
-              el.style.height = (h / b.h * 100).toFixed(2) + '%';
+              const known = natural.get(sliderImageUrl.key);
+              Object.assign(el.style, titleFit(
+                b, el.naturalWidth || known?.w, el.naturalHeight || known?.h,
+              ));
             };
             // One listener per element, however many times it is reused: it
             // calls whatever `applySize` the latest pass installed, so a stale
@@ -3539,19 +3526,24 @@ ${pagesHtml}
         // tile the device is drawing. Falls back to the page colour like
         // everything else.
         const tileStyle = this._buttonIconStyle(overlayAssign, pgColor);
-        const src = this._buildTileImgUrl(
+        const tile = this._buildTileImgUrl(
           icon, mode, tileStyle.color, isConfigured(overlayAssign), tileStyle.percent,
         );
-        if (!src) return;
-        const el = this._tileImg(pageIdx, btn.key, src);
+        // "" is nothing to draw; null is a URL still being asked for.
+        if (tile.src === "") return;
+        const el = this._tileImg(pageIdx, btn.key, tile);
         el.className = 'pg-btn-img';
-        el.style.cssText = `left:${pX(b.cx,sz)};top:${pY(b.cy,sz)};width:${pW(sz)};height:${pH(sz)};pointer-events:none;`;
+        el.style.cssText = overlayStyle(b, sz) + 'pointer-events:none;';
         if (DEFAULT_BUTTON_ICONS[btn.key] && !overlayAssign?.action_id) {
           el.style.opacity = '0.3';
         }
         container.appendChild(el);
       });
     });
+
+    // Last word on the tiles just drawn: whatever this redraw interrupted has
+    // no other chance to notice.
+    this._scheduleBrokenImgSweep();
   },
 
   // Which shape on the face carries the selection highlight.
@@ -3640,10 +3632,28 @@ ${pagesHtml}
         const newIcon = this._resolveButtonIcon(assign, action);
         if (!newIcon) return;
         const tileStyle = this._buttonIconStyle(assign, pageColor);
-        const newSrc = this._buildTileImgUrl(
+        const tile = this._buildTileImgUrl(
           newIcon, mode, tileStyle.color, true, tileStyle.percent,
         );
-        if (img.getAttribute('src') !== newSrc) img.setAttribute('src', newSrc);
+        if (tile.src === null) {
+          // Asked for; `_applyDeviceUrls` fills it in when the answer comes.
+          if (img.getAttribute('data-dev-key') !== tile.key) {
+            img.removeAttribute('src');
+            img.removeAttribute('data-img-src');
+            img.setAttribute('data-dev-key', tile.key);
+          }
+          return;
+        }
+        if (!tile.src) return;
+        // `data-img-src` alongside it: it is what `_tileImg` compares a
+        // reused tile against and what a retry goes back to, so a state-driven
+        // icon change has to move both or the next draw builds a new element.
+        if ((img.getAttribute('data-img-src') ?? img.getAttribute('src')) !== tile.src) {
+          img.setAttribute('src', tile.src);
+          img.setAttribute('data-img-src', tile.src);
+          img.setAttribute('data-dev-key', tile.key);
+          img.removeAttribute('data-img-retry');
+        }
       });
     });
 
@@ -3678,25 +3688,13 @@ ${pagesHtml}
     this._svgIconDeps = null;
   },
 
-  /** Build an imgserv tile URL for a button icon. */
+  /**
+   * `{src, key}` for a button face: the tile the remote is sent (`_deviceImg`).
+   * An untinted tile -- a default the page leaves unassigned -- is asked for
+   * without the colour.
+   */
   _buildTileImgUrl(icon, mode, color, isTinted, percent = null) {
-    icon = String(icon ?? '').trim();
-    if (!icon) return '';
-    // Nulled rather than defaulted to 0: no fill is not a fill of nothing.
-    const pct = percent === null || percent === undefined ? '' : `&percent=${percent}`;
-    if (this._isExternalUrl(icon) || icon.startsWith('media:')) {
-      const target = this._isExternalUrl(icon) ? icon : icon.slice(6);
-      return this._imgservUrl(`media:${target}`, 'tile', mode) + pct;
-    }
-    if (icon.startsWith('/') || icon.startsWith('data:')) return icon;
-    const tintable = isIconSource(icon) || icon.startsWith('text:') || icon.startsWith('history:')
-      || !icon.includes(':');
-    const fgParam = color && isTinted && tintable && !icon.includes('fg=') ? `&fg=${color}` : '';
-    if (isIconSource(icon) || ['logo:', 'text:', 'file:', 'history:'].some((p) => icon.startsWith(p))) {
-      const sep = icon.includes('?') ? '&' : '?';
-      return `/api/imgserv/${icon}${sep}size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
-    }
-    return `/api/imgserv/mdi:${icon}?size=tile&mode=${mode}${fgParam}&alpha=1${pct}`;
+    return this._deviceImg(icon, "tile", isTinted ? color : "", percent);
   },
 
   // --- Wiring ---
@@ -4207,7 +4205,13 @@ ${pagesHtml}
         labelInput,
         labelInput.parentElement?.querySelector?.(".liza-media-suggest") || null,
         commit,
-        this._pageDeviceOption(),
+        {
+          ...this._pageDeviceOption(),
+          ...this._labelTokenOptions(
+            this._editAssign(selBtn.key)?.config,
+            this._actions.find(a => a.id === this._editAssign(selBtn.key)?.action_id)?.service || "",
+          ),
+        },
       );
     }
     this.shadowRoot.querySelector(".config-label-reset")?.addEventListener("click", () => {
@@ -4900,7 +4904,11 @@ ${pagesHtml}
     const lang = this._lang?.() || undefined;
     menu.innerHTML = items.map(it => it.separator
       ? `<div role="separator" class="face-menu-sep"></div>`
-      : `<button type="button" role="menuitem" class="face-menu-item ${it.cls}">`
+      // `cls` stays the one class the click wiring below looks the item up by;
+      // how an item looks, and whether it can be pressed at all, rides on a
+      // flag -- `danger`, `disabled` -- rather than on a second class name.
+      : `<button type="button" role="menuitem" class="face-menu-item ${it.cls}`
+        + `${it.danger ? " face-menu-item-danger" : ""}"${it.disabled ? " disabled" : ""}>`
         + (it.icon ? `<ha-icon icon="${it.icon}" aria-hidden="true"></ha-icon>` : "")
         + `<span>${keepCase ? String(it.label) : String(it.label).toLocaleLowerCase(lang)}</span></button>`).join("");
     // Measured rather than guessed. A fixed width allowance has to be wrong
@@ -4920,18 +4928,28 @@ ${pagesHtml}
     // menu hangs off its button's right edge, which is where a ⋮ in a toolbar
     // puts it; everything else opens at the pointer.
     const rect = anchor?.getBoundingClientRect?.();
-    const x = rect ? rect.right - width : Number(ev?.clientX) || 0;
-    const y = rect ? rect.bottom + 4 : Number(ev?.clientY) || 0;
-    // Nudged back inside near an edge: the face sits in a scrolling column, and
-    // a menu opened on the last row would otherwise extend the page.
     const vw = Number(window?.innerWidth) || 0;
     const vh = Number(window?.innerHeight) || 0;
-    menu.style.left = `${Math.max(4, vw ? Math.min(x, vw - width - 4) : x)}px`;
+    const y = rect ? rect.bottom + 4 : Number(ev?.clientY) || 0;
+    if (rect) {
+      // Pinned rather than placed at the measured width: the icons are custom
+      // elements and may still be empty here, so a menu grows after the
+      // measurement and the toolbar's ⋮ pushed its labels off the window.
+      menu.style.left = "auto";
+      menu.style.right = `${Math.max(4, vw ? vw - rect.right : 0)}px`;
+    } else {
+      // Nudged back inside near an edge: the face sits in a scrolling column,
+      // and a menu opened on the last row would otherwise extend the page.
+      const x = Number(ev?.clientX) || 0;
+      menu.style.right = "auto";
+      menu.style.left = `${Math.max(4, vw ? Math.min(x, vw - width - 4) : x)}px`;
+    }
     menu.style.top = `${Math.max(4, vh ? Math.min(y, vh - height - 4) : y)}px`;
     menu.style.visibility = "";
 
     const dismiss = () => this._closeFaceMenu();
     for (const it of items) {
+      if (it.disabled) continue;
       menu.querySelector(`.${it.cls}`)?.addEventListener("click", () => {
         this._closeFaceMenu();
         it.run();
@@ -4948,7 +4966,7 @@ ${pagesHtml}
       // hands those keys to the menu rather than the page. Without this the
       // roles promised navigation the markup did not implement; Tab worked
       // only because these are native buttons.
-      const items = Array.from(menu.querySelectorAll(".face-menu-item"));
+      const items = Array.from(menu.querySelectorAll(".face-menu-item:not([disabled])"));
       if (!items.length) return;
       const cur = items.indexOf(root.activeElement);
       let next;
@@ -4962,7 +4980,7 @@ ${pagesHtml}
     });
 
     this._faceMenuEl = menu;
-    menu.querySelector(".face-menu-item")?.focus?.();
+    menu.querySelector(".face-menu-item:not([disabled])")?.focus?.();
   },
 
   /** Put the tile menu away, if one is open. Safe to call when none is. */
@@ -5512,8 +5530,12 @@ ${pagesHtml}
   // and drifted -- same three rungs, same order, two copies to keep in step --
   // which is the whole reason the two fields once explained themselves
   // differently.
-  _tokenHint(resolved, { state, name, variable } = {}) {
-    const lesson = state ? "label_state_hint" : name ? "label_name_hint" : variable ? "variable_hint" : "";
+  _tokenHint(resolved, { state, name, variable, media } = {}) {
+    // Media first: in "${_state} - ${_device.media_title}", `${_state}` is
+    // pre-written by auto-labelling, so it is the half the user already has.
+    // The track is the half worth a sentence, whether or not it is there yet.
+    const lesson = media ? "label_media_hint"
+      : state ? "label_state_hint" : name ? "label_name_hint" : variable ? "variable_hint" : "";
     if (!lesson) return "";
     const reads = resolved ? this._t("label_now_reads", { text: this._esc(resolved) }) : "";
     return `${reads}${this._t(lesson)}`;
@@ -5566,7 +5588,13 @@ ${pagesHtml}
             if (text) rule.label = text; else delete rule.label;
           });
         },
-        this._pageDeviceOption(),
+        {
+          ...this._pageDeviceOption(),
+          // The press's own config decides, exactly as `pressShowsMedia` above
+          // decides whether to explain these tokens: a cycle step pointed at a
+          // speaker gets the track tokens, one pointed at a lamp does not.
+          ...this._labelTokenOptions((this._toggleRules(key)[idx] || {}).config),
+        },
       );
     });
 

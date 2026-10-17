@@ -3,62 +3,6 @@
  * Icon resolution, label computation, rendering helpers.
  */
 
-/**
- * Percent-encode a URL into a single `media:` path segment.
- *
- * imgserv splits the request path on the first `:` and reads its own options
- * (`size`, `fg`, …) from the query string, so a URL carrying `?token=…` has to be
- * encoded or it loses everything after the `?`. Mirrors `encode_media_source()` in
- * `const.py`, and is idempotent so an already-encoded value is left alone.
- *
- * The already-encoded test ignores hex case: `encodeURIComponent` emits uppercase
- * escapes, so a hand-written `%2f` would otherwise be re-encoded to `%252f` and
- * survive the server's single unquote still escaped.
- */
-export function mediaSource(url) {
-  const val = String(url ?? "").trim();
-  let alreadyEncoded = false;
-  try {
-    alreadyEncoded = encodeURIComponent(decodeURIComponent(val)).toLowerCase() === val.toLowerCase();
-  } catch (e) {
-    alreadyEncoded = false;
-  }
-  return `media:${alreadyEncoded ? val : encodeURIComponent(val)}`;
-}
-
-/** imgserv options a picture may carry after a `|`. Mirrors `MEDIA_OPTION_KEYS`. */
-export const MEDIA_OPTION_KEYS = ["size", "mode", "fg", "bg", "crop", "alpha"];
-
-/**
- * `[url, options]` for `<url>|key=value&key=value`; mirrors `split_media_options`.
- * A tail without a single known key is part of the URL. A numeric `size=` in
- * the URL's own query is taken out of it and read as imgserv's too; `|size=`
- * wins over it.
- */
-export function splitMediaOptions(value) {
-  const val = String(value ?? "");
-  const at = val.lastIndexOf("|");
-  const options = {};
-  if (at >= 0) {
-    for (const part of val.slice(at + 1).split("&")) {
-      const eq = part.indexOf("=");
-      if (eq < 0) continue;
-      const key = part.slice(0, eq).trim().toLowerCase();
-      const v = part.slice(eq + 1).trim();
-      if (MEDIA_OPTION_KEYS.includes(key) && v) options[key] = v;
-    }
-  }
-  let url = Object.keys(options).length ? val.slice(0, at).trim() : val;
-  const m = /([?&])size=(\d+(?:x\d+)?)(?=&|#|$)/i.exec(url);
-  if (m) {
-    if (!("size" in options)) options.size = m[2].toLowerCase();
-    const rest = url.slice(m.index + m[0].length);
-    url = url.slice(0, m.index)
-      + (m[1] === "?" ? (rest.startsWith("&") ? `?${rest.slice(1)}` : rest) : rest);
-  }
-  return [url, options];
-}
-
 /** True for URLs the device cannot fetch itself — these go through imgserv's media: proxy. */
 export function isExternalUrl(val) {
   const low = String(val ?? "").trim().toLowerCase();
@@ -361,6 +305,71 @@ export async function syncCustomIcons(hass) {
   } catch (e) { /* an older backend, or none: nothing to keep in step */ }
 }
 
+/**
+ * The source types imgserv draws itself; mirrors `PART_SOURCE_TYPES` in
+ * `imgserv/const.py`. Only one of these, or a registered icon set, starts a
+ * part -- "Go to page: Sonos" is one phrase, not a `page:` source.
+ */
+const PART_SOURCE_TYPES = new Set(["mdi", "logo", "text", "file", "media", "ref", "history", "phu"]);
+
+/** Whether *word* names a source, and so starts a part of its own. */
+const isPartStart = (word) => {
+  const m = /^([a-z][a-z0-9_]*):/.exec(word);
+  return !!m && (PART_SOURCE_TYPES.has(m[1]) || !!customIconSet(word));
+};
+
+/** Whether *part* is a slug subject still holding nothing but its slug. */
+const isSlugPart = (part) =>
+  (part.startsWith("logo:") || part.startsWith("mdi:")) && !part.includes(" ");
+
+/**
+ * Where each part of a composite *value* begins and ends, in order.
+ *
+ * The panel's reading of `split_source_parts` in `imgserv/const.py`, kept as
+ * spans because the suggestion list must know which part the caret is in to
+ * replace that one and leave the rest of the title standing.
+ */
+export function sourcePartSpans(value) {
+  const text = String(value ?? "");
+  const words = [...text.matchAll(/\S+/g)].map((m) => ({ text: m[0], start: m.index }));
+  if (!words.length) return [];
+  const spans = [{ start: words[0].start, end: words[0].start + words[0].text.length }];
+  const textOf = (span) => text.slice(span.start, span.end);
+  for (let i = 1; i < words.length; i++) {
+    const { text: word, start } = words[i];
+    const next = words[i + 1]?.text || "";
+    const last = spans[spans.length - 1];
+    if ((word === "-" || word === "+")
+      && (isPartStart(next) || isSlugPart(textOf(last)))) continue;
+    if (isPartStart(word) || isSlugPart(textOf(last))) {
+      spans.push({ start, end: start + word.length });
+    } else {
+      last.end = start + word.length;
+    }
+  }
+  return spans.map((s) => ({ ...s, text: textOf(s) }));
+}
+
+/**
+ * The span of the part *caret* sits in, or null when it sits in none: between
+ * two parts, or past the last, is a part not typed yet and nothing to offer.
+ */
+export function partSpanAt(value, caret) {
+  const text = String(value ?? "");
+  const at = Number.isInteger(caret) ? caret : text.length;
+  return sourcePartSpans(text).find((s) => at >= s.start && at <= s.end) || null;
+}
+
+/**
+ * Split *value* into the parts drawn side by side, in order -- the mirror of
+ * `split_source_parts` in `imgserv/const.py`, which states the rule.
+ */
+export function splitSourceParts(value) {
+  return sourcePartSpans(value).map(
+    (part, i) => (i > 0 && !isPartStart(part.text) ? `text:${part.text}` : part.text),
+  );
+}
+
 /** `{set, term}` once *value* starts with a registered icon prefix, else null. */
 export function iconQuery(value, providers = iconProviders()) {
   const m = /^([a-z0-9_-]+):([^?]*)$/.exec(String(value ?? "").trimStart());
@@ -467,16 +476,58 @@ export function matchAttributes(states, entity, term, limit = ICON_SUGGESTION_LI
 }
 
 /**
+ * The panel-side label tokens offered for *term*, as list entries.
+ *
+ * `${_state}`, `${_queue.…}` and friends are not the backend's variables: they are
+ * filled in here, by `_substituteLabelTokens`, which is why they were missing
+ * from this list for as long as it was built out of `hass.states`. *tokens* is
+ * the already-gated set the field was wired with — which token can say
+ * anything depends on the button, not on the text being typed, so that verdict
+ * is reached once at the call site rather than re-derived per keystroke.
+ */
+export function matchLabelTokens(term, tokens) {
+  if (!Array.isArray(tokens) || !tokens.length) return [];
+  const needle = String(term || "").toLowerCase();
+  return tokens
+    .filter((t) => typeof t?.id === "string" && t.id.toLowerCase().startsWith(needle))
+    .map((t) => ({ id: t.id, name: t.name || "" }));
+}
+
+/**
  * `${_device}` and `${_device.attribute}` matching *term*, for a field that
  * knows its page's device (*device*: `{entity, name}`); else nothing. The
  * attributes are the page entity's, under the alias.
  */
+/**
+ * `${_device.media_title_prev}` and friends: the page player's queue, read as
+ * if the neighbouring tracks were attributes of the player. Mirrors
+ * `DEVICE_QUEUE_ATTRIBUTES` in `media_queue/alias.py`.
+ */
+export const DEVICE_QUEUE_ATTRIBUTES = {
+  media_title_prev: "prev_song",
+  media_title_next: "next_song",
+  media_artist_prev: "prev_artist",
+  media_artist_next: "next_artist",
+};
+
+/** `entity.attribute` -- or, for a queue name above, its queue sensor's. */
+export function deviceAttribute(entity, attribute) {
+  const mapped = DEVICE_QUEUE_ATTRIBUTES[String(attribute).toLowerCase()];
+  return mapped ? `sensor.${entity.split(".").slice(1).join(".")}_queue.${mapped}` : `${entity}.${attribute}`;
+}
+
 export function matchDeviceAlias(states, device, term, limit = ICON_SUGGESTION_LIMIT) {
   if (!device) return [];
   const alias = "_device";
   if (term.startsWith(`${alias}.`)) {
     if (!device.entity) return [];
-    return matchAttributes(states, device.entity, term.slice(alias.length + 1), limit)
+    const typed = term.slice(alias.length + 1);
+    // The queue names are offered on a player whose queue the integration reads.
+    const queue = states[deviceAttribute(device.entity, "media_title_prev").split(".").slice(0, 2).join(".")]
+      ? Object.keys(DEVICE_QUEUE_ATTRIBUTES).filter((a) => a.startsWith(typed.toLowerCase()))
+      : [];
+    return [...matchAttributes(states, device.entity, typed, limit), ...queue]
+      .slice(0, limit)
       .map((attr) => ({ id: `${alias}.${attr}`, name: "" }));
   }
   return alias.startsWith(term) ? [{ id: alias, name: device.name || device.entity || "" }] : [];
@@ -621,39 +672,18 @@ export const HelpersMixin = {
     return isExternalUrl(val);
   },
 
-  /** Mixin access to {@link mediaSource} for call sites that only have `this`. */
-  _mediaSource(url) {
-    return mediaSource(url);
-  },
-
-  /**
-   * The `<img>` src `_renderIconHtml` uses for an image-ish value.
-   *
-   * External URLs are routed through imgserv's `media:` proxy; HA-relative paths and
-   * `data:` URIs are used verbatim. Kept separate so refresh paths can compare against
-   * the src that would be rendered instead of the raw config value.
-   */
-  _iconImgSrc(val, size = 20) {
-    if (this._isExternalUrl(val)) {
-      return this._imgservUrl(`media:${val}`, size, this._getThemeMode());
-    }
-    return val;
-  },
-
   /**
    * @param {string} val   Icon source spec (`mdi:`, `text:`, a URL, …).
-   * @param {number} size  Rendered size in px.
+   * @param {number|string} size  Rendered size in px, or `title` / `tooltip`.
    * @param {string} color Page `default_color`, or "" to leave the icon untinted.
    *
-   * `color` is applied at render time, mirroring the grid's rule in _refreshSVG,
-   * so a preview cannot disagree with the tile the device draws.
+   * The picture is the remote's: a numeric *size* asks for the `tile` it
+   * draws, `title` and `tooltip` for those strips, and *color* is spent by
+   * the integration's rule, not this panel's.
    */
-  // `size` is handed to imgserv verbatim, so it may be a number, a `WxH` pair or
-  // a named size such as `title`; `box` is the space the preview occupies on
-  // screen and defaults to the square a numeric size implies. The two are
-  // separate because a title is not square: asking for `size=28` would have
-  // imgserv pick the mark that suits a square, which is precisely the mark the
-  // device will not draw there.
+  // `box` is the space the preview occupies on screen and defaults to the
+  // square a numeric size implies. The two are separate because a title is not
+  // square: the strip the remote draws is shown whole, at the box's size.
   _renderIconHtml(val, size = 20, color = "", box = null) {
     const boxW = box?.w ?? size;
     const boxH = box?.h ?? size;
@@ -663,39 +693,23 @@ export const HelpersMixin = {
     val = String(val ?? "").trim();
     if (!val) return `<ha-icon icon="mdi:radiobox-blank" style="--mdc-icon-size:${boxH}px"></ha-icon>`;
 
-    // Only monochrome sources take a tint; a logo or a photo must keep its own
-    // colours. A value carrying its own fg= has been coloured deliberately.
-    const tintable = !!color && !val.includes("fg=") && (
-      isIconSource(val) || val.startsWith("text:") || val.startsWith("history:") || !val.includes(":")
-    );
-
-    // Every icon this panel draws is fetched from imgserv, whatever its source
-    // type: imgserv is what the page and the remote ask, so anything drawn
-    // another way here is a preview of a picture they may not get. `ha-icon`
-    // used to draw `mdi:` and the browser's own sets from the plugins loaded in
+    // Every picture this panel draws is the one the remote is sent: the URL
+    // comes from the integration (`_deviceImg`), so a colour, a text style or
+    // a source type is turned into a URL in one place for both. `ha-icon` used
+    // to draw `mdi:` and the browser's own sets from the plugins loaded in
     // *this* tab -- a vector, tinted by CSS, that looked right while the remote
     // showed nothing. An extra set (`phu:`, `hue:`) shows it plainest: its
     // shapes reach imgserv only by upload.
-    //
-    // A value with no source type at all is read as `mdi:`, the same assumption
-    // `_buildTileImgUrl` makes for the face.
     const customKey = customIconKey(val);
     if (customKey) this._ensureCustomIcon(val);
-    const source = val.includes(":") ? val : `mdi:${val}`;
-
-    // External images go through imgserv so the preview matches what the device renders
-    // (same proxy, same resize); HA-relative paths and data: URIs load directly.
-    // _isExternalUrl is tested first because it also lowercases, so it catches an
-    // `HTTPS://` paste that _isImageUrl's case-sensitive startsWith would miss.
-    let src;
-    if (this._isExternalUrl(val) || this._isImageUrl(val)) {
-      src = this._iconImgSrc(val, size);
-    } else {
-      src = this._imgservUrl(source, size, this._getThemeMode()) + (tintable ? `&fg=${encodeURIComponent(color)}` : "")
-        + (size === "title" && val.startsWith("text:") ? this._titleTextStyle(val) : "")
-        + (size === "tooltip" && val.startsWith("text:") && !/font(_size)?=/.test(val) ? this._textStyleQuery("tooltip") : "");
-    }
-    return `<img src="${this._esc(src)}" alt=""${customKey ? ` data-icon-key="${this._esc(customKey)}"` : ""} style="width:${boxW}px;height:${boxH}px;object-fit:contain;border-radius:4px" />`;
+    const kind = size === "title" || size === "tooltip" ? size : "tile";
+    const { src, key } = this._deviceImg(val, kind, color);
+    const attrs = [
+      src ? `src="${this._esc(src)}" data-img-src="${this._esc(src)}"` : "",
+      key ? `data-dev-key="${this._esc(key)}"` : "",
+      customKey ? `data-icon-key="${this._esc(customKey)}"` : "",
+    ].filter(Boolean).join(" ");
+    return `<img ${attrs} alt="" style="width:${boxW}px;height:${boxH}px;object-fit:contain;border-radius:4px" />`;
   },
 
   /** Teach imgserv this value's shape, and repaint what asked for it too early. */
@@ -746,10 +760,8 @@ export const HelpersMixin = {
     let icon = String(imageVal || autoIcon || "").trim();
     const size = shape?.size ?? 28;
     const glyph = shape?.box?.h ?? 28;
-    // Words are drawn as words, as the device draws them: `text:` is implied
-    // for anything imgserv would not take as a picture. Encoded because it
-    // lands in the URL path, where a `?` would start a query of its own.
-    if (icon && !this._isMediaSource(icon)) icon = `text:${encodeURIComponent(icon)}`;
+    // Words are drawn as words, as the device draws them: the integration
+    // reads anything that is not a picture as `text:`, so the value goes as is.
     if (icon) return this._renderIconHtml(icon, size, color, shape?.box ?? null);
     return `<span class="cch-preview-empty"><ha-icon icon="mdi:image-off-outline" style="--mdc-icon-size:${glyph}px;"></ha-icon></span>`;
   },
@@ -866,13 +878,17 @@ export const HelpersMixin = {
    * The list never opens for anything else, so typing words or pasting a URL
    * is never interrupted by suggestions that cannot apply.
    */
-  _wireMediaInput(input, list, onCommit, { device = null } = {}) {
+  _wireMediaInput(input, list, onCommit, { device = null, tokens = null } = {}) {
     let pristine = input.value.trim();
     let matches = [];
     let active = -1;
     // The `${…` being completed while the list shows entities or attributes;
     // null while it shows icon names.
     let variable = null;
+    // The span of the part being completed, when the field holds more than
+    // one: a pick replaces that span and leaves the other parts standing.
+    // null while the whole field is the one thing being named.
+    let part = null;
     // Bumped by every open and close, so a slow answer for text that has
     // since changed is dropped rather than shown.
     let seq = 0;
@@ -902,6 +918,7 @@ export const HelpersMixin = {
       matches = [];
       active = -1;
       variable = null;
+      part = null;
       unfollow();
       if (list) {
         try { if (list.matches?.(":popover-open")) list.hidePopover(); } catch (e) { /* not a popover here */ }
@@ -917,9 +934,13 @@ export const HelpersMixin = {
       if (val === pristine) return;
       pristine = val;
       // An extra icon set's shape goes to imgserv first, so the preview the
-      // save repaints -- and the remote -- find it there.
-      if (customIconSet(val)) uploadCustomIcon(this._hass, val).finally(() => onCommit(val));
-      else onCommit(val);
+      // save repaints -- and the remote -- find it there. Every part is
+      // offered: one imgserv was never given is a blank in the picture.
+      const shapes = this._splitSourceParts(val).filter((p) => customIconSet(p));
+      if (shapes.length) {
+        Promise.all(shapes.map((shape) => uploadCustomIcon(this._hass, shape)))
+          .finally(() => onCommit(val));
+      } else onCommit(val);
     };
     const highlight = (idx) => {
       active = idx;
@@ -949,16 +970,23 @@ export const HelpersMixin = {
     // A variable is not a finished value: picking completes the `${…}` in the
     // text and leaves the field being edited, with the caret before the `}`
     // so `.attribute` can follow. Nothing is committed until the user is done.
-    const openVariables = (query) => {
+    const openVariables = (query, tokensOnly = false) => {
       const states = this._hass?.states || {};
       seq += 1;
+      // Not inside a calculation: `${round(_state)}` is not a thing a label
+      // token can be part of, where `_device.attribute` genuinely is.
+      const plain = query.stage === "entity" && query.entityStart === undefined;
+      const label = plain ? matchLabelTokens(query.term, tokens) : [];
       // Offered inside a calculation too, where `_device.attribute` is a variable.
       const alias = query.stage === "entity" ? matchDeviceAlias(states, device, query.term) : [];
-      const found = query.stage === "attribute"
+      const found = tokensOnly ? label : query.stage === "attribute"
         ? matchAttributes(states, query.entity, query.term).map((id) => ({ id, name: "" }))
         : [
+          // First: a short, exact list of what this button can say, ahead of
+          // hundreds of entities that merely start with the same letter.
+          ...label,
           ...alias,
-          ...(query.term.startsWith("_device.") ? [] : [
+          ...(query.term.startsWith("_device.") || query.term.startsWith("_queue.") ? [] : [
             ...matchFunctions(query.term),
             ...matchEntities(states, query.term),
           ]),
@@ -966,10 +994,22 @@ export const HelpersMixin = {
       if (!found.length || !list) return close();
       matches = found.map((f) => f.id);
       variable = query;
+      part = null;
       list.innerHTML = found.map((f, i) =>
         `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(f.id)}" aria-selected="false"><span>${this._esc(f.id)}</span>${f.name ? `<span class="liza-media-note">${this._esc(f.name)}</span>` : ""}</li>`,
       ).join("");
       show();
+    };
+    // A part is not the whole value: picking replaces that part and leaves
+    // the field being edited, so the next part can be typed. The same
+    // bargain a variable pick strikes.
+    const pickPart = (pick) => {
+      const span = part;
+      close();
+      const text = input.value;
+      input.value = text.slice(0, span.start) + pick + text.slice(span.end);
+      const caret = span.start + pick.length;
+      try { input.setSelectionRange?.(caret, caret); } catch (e) { /* not a text input here */ }
     };
     const pickVariable = (pick) => {
       const q = variable;
@@ -991,11 +1031,25 @@ export const HelpersMixin = {
       show();
     };
     const open = async () => {
-      const typing = this._variablesEnabled === false ? null : variableQuery(input.value, input.selectionStart);
-      if (typing) return openVariables(typing);
-      const graphed = historyQuery(input.value);
-      if (graphed !== null) return openHistory(graphed);
-      const query = iconQuery(input.value);
+      // The Variables switch governs *backend* variables; `${_state}` and the
+      // other tokens are filled in by the panel and the device, so with the
+      // switch off the list narrows to them rather than refusing to open.
+      const typing = variableQuery(input.value, input.selectionStart);
+      if (typing) {
+        return this._variablesEnabled === false
+          ? openVariables(typing, true)
+          : openVariables(typing);
+      }
+      // The part being typed is the one the caret is in: `logo:hue mdi:li`
+      // offers lightbulbs. A field holding a single part is completed whole,
+      // so the common case behaves exactly as it always did.
+      const spans = sourcePartSpans(input.value);
+      const here = spans.length > 1 ? partSpanAt(input.value, input.selectionStart) : null;
+      if (spans.length > 1 && !here) return close();
+      const subject = here ? here.text : input.value;
+      const graphed = historyQuery(subject);
+      if (graphed !== null) { part = here; return openHistory(graphed); }
+      const query = iconQuery(subject);
       if (!query || !list) return close();
       const mine = ++seq;
       let names = [];
@@ -1003,6 +1057,7 @@ export const HelpersMixin = {
       if (mine !== seq) return;
       matches = matchIconNames(names, query.term).map(n => `${query.set}:${n}`);
       variable = null;
+      part = here;
       if (!matches.length) return close();
       list.innerHTML = matches.map((v, i) =>
         `<li class="liza-media-option" role="option" id="${listId}-${i}" data-value="${this._esc(v)}" aria-selected="false">${this._renderIconHtml(v, 20)}<span>${this._esc(v)}</span></li>`,
@@ -1029,6 +1084,7 @@ export const HelpersMixin = {
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (isOpen && active >= 0 && variable) return pickVariable(matches[active]);
+        if (isOpen && active >= 0 && part) return pickPart(matches[active]);
         if (isOpen && active >= 0) input.value = matches[active];
         commit(input.value);
       } else if (e.key === "Escape") {
@@ -1046,66 +1102,109 @@ export const HelpersMixin = {
       const li = e.target?.closest?.(".liza-media-option");
       if (!li) return;
       if (variable) return pickVariable(li.dataset.value);
+      if (part) return pickPart(li.dataset.value);
       input.value = li.dataset.value;
       commit(input.value);
     });
   },
 
-  /** Build a safe /api/imgserv URL, correctly joining params when `icon` already contains `?`.
+  // ── Pictures as the remote is sent them ──────────────────────────────
+  //
+  // Every preview of something the remote shows is drawn from the URL the
+  // remote is sent, built by the integration's own `resolve_*_url`
+  // (`lizaip_config/image_urls`): the panel adds only what a browser needs --
+  // `alpha=1`, and `mode=light` on a light theme -- so preview and remote can
+  // only differ in those two.
+  //
+  // The answer is asynchronous, so a picture not yet known is drawn without a
+  // `src` and carries `data-dev-key`; `_applyDeviceUrls` fills it in.
+
+  /**
+   * `{src, key}` for *value* drawn as the remote draws a *kind* picture
+   * (`tile`, `title` or `tooltip`); `src` is null while the URL is asked for,
+   * and "" when there is nothing to draw.
    *
-   * Always requests `alpha=1` — this is the config panel (browser preview), which
-   * composites the PNG over its own background and needs true transparency.
-   * The device itself gets flattened RGB by default (no `alpha` param).
+   * *opts.keepMode* leaves `mode=dark` alone, for a preview drawn on black.
    */
-  _imgservUrl(icon, size, mode) {
-    icon = String(icon ?? "").trim();
-    // A raw media: value is a URL of its own — encode it so its query string does
-    // not collide with imgserv's.
-    let extra = "";
-    if (icon.startsWith("media:")) {
-      // `|size=200x200` and friends are imgserv's, over the field's defaults.
-      const [url, { size: ownSize, mode: ownMode, alpha: _alpha, ...rest }] = splitMediaOptions(icon.slice(6));
-      icon = this._mediaSource(url);
-      if (ownSize) size = encodeURIComponent(ownSize);
-      if (ownMode) mode = encodeURIComponent(ownMode);
-      extra = Object.entries(rest).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
+  _deviceImg(value, kind = "tile", color = "", percent = null, opts = {}) {
+    const v = String(value ?? "").trim();
+    if (!v || !this._currentEntry) return { src: "", key: "" };
+    const style = JSON.stringify(this._textSettings?.settings ?? null);
+    const key = JSON.stringify([
+      this._currentEntry, style, kind, v, String(color || "").replace(/^#/, "").toUpperCase(),
+      percent ?? null,
+    ]);
+    const cache = (this._deviceUrlCache ||= new Map());
+    if (cache.has(key)) return { src: this._browserImgSrc(cache.get(key), opts), key };
+    (this._deviceUrlQueue ||= new Map()).set(key, {
+      value: v, kind, color: String(color || "").replace(/^#/, ""),
+      ...(percent === null || percent === undefined ? {} : { percent }),
+    });
+    if (!this._deviceUrlTimer) {
+      this._deviceUrlTimer = setTimeout(() => this._flushDeviceUrls(), 0);
     }
-    const sep = icon.includes("?") ? "&" : "?";
-    const modeStr = mode ? `&mode=${mode}` : "";
-    return `/api/imgserv/${icon}${sep}size=${size}${modeStr}${extra}&alpha=1`;
+    return { src: null, key };
   },
 
-  /**
-   * `&font_size=…&font=…` for a text preview of *kind*, or "" on defaults.
-   *
-   * *kind* is "title" or "tooltip"; the style is the remote's text settings
-   * (`_loadTextSettings`), which are absent until loaded and then read as
-   * defaults.
-   *
-   * imgserv already draws a `size=title` request in the default font at the
-   * default size, so a remote on default settings asks for the same preview URLs
-   * it always did.
-   */
-  _textStyleQuery(kind) {
-    const s = this._textSettings;
-    const style = s?.settings?.[kind];
-    const def = s?.defaults?.[kind];
-    if (!style || !def) return "";
-    let q = "";
-    if (style.font_size !== def.font_size) q += `&font_size=${encodeURIComponent(style.font_size)}`;
-    if (style.font !== def.font) q += `&font=${encodeURIComponent(style.font)}`;
-    return q;
+  /** What a browser asks for the remote's *url*: transparent, and legible on the theme. */
+  _browserImgSrc(url, opts = {}) {
+    if (!url) return "";
+    if (!url.startsWith("imgserv://")) return url;
+    let src = `/api/imgserv/${url.slice("imgserv://".length)}`;
+    const q = src.indexOf("?");
+    if (!opts.keepMode && this._getThemeMode() === "light") {
+      // A light page under white glyphs would show nothing at all.
+      if (/[?&]mode=/.test(src)) src = src.replace(/([?&]mode=)dark\b/, "$1light");
+      else src += `${q >= 0 ? "&" : "?"}mode=light`;
+    }
+    return `${src}${src.includes("?") ? "&" : "?"}alpha=1`;
   },
 
-  /**
-   * The title style for a preview of a text title *value*, the rule
-   * `resolve_title_url` applies on the way to the device: a title naming its
-   * own `font_size=` or `font=` keeps all of it.
-   */
-  _titleTextStyle(value) {
-    const v = String(value ?? "");
-    if (v.includes("font_size=") || v.includes("font=")) return "";
-    return this._textStyleQuery("title");
+  /** Ask for every URL queued since the last ask, in one call per 400. */
+  async _flushDeviceUrls() {
+    this._deviceUrlTimer = null;
+    const queue = this._deviceUrlQueue;
+    if (!queue?.size || !this._hass) return;
+    this._deviceUrlQueue = new Map();
+    const entries = [...queue.entries()];
+    const entry = this._currentEntry;
+    for (let i = 0; i < entries.length; i += 400) {
+      const chunk = entries.slice(i, i + 400);
+      let urls;
+      try {
+        ({ urls } = await this._hass.callWS({
+          type: "lizaip_config/image_urls", entry_id: entry,
+          items: chunk.map(([, item]) => item),
+        }));
+      } catch (e) {
+        console.warn("lizaip: image_urls failed", e);
+        continue;
+      }
+      const cache = (this._deviceUrlCache ||= new Map());
+      chunk.forEach(([key], n) => cache.set(key, urls?.[n] ?? ""));
+      this._applyDeviceUrls();
+    }
+  },
+
+  /** Give every picture drawn before its URL was known the URL it now has. */
+  _applyDeviceUrls() {
+    const cache = this._deviceUrlCache;
+    this.shadowRoot?.querySelectorAll?.("img[data-dev-key]").forEach((img) => {
+      const key = img.getAttribute("data-dev-key");
+      if (!cache?.has(key) || img.getAttribute("src")) return;
+      const src = this._browserImgSrc(cache.get(key), { keepMode: img.hasAttribute("data-keep-mode") });
+      if (!src) {
+        img.style.visibility = "hidden";
+        return;
+      }
+      img.setAttribute("src", src);
+      img.setAttribute("data-img-src", src);
+    });
+  },
+
+  /** `splitSourceParts`, for the templates and callers that reach it as a method. */
+  _splitSourceParts(value) {
+    return splitSourceParts(value);
   },
 
   /** Tint applied to previews of the page being edited; "" when none is set. */
@@ -2210,6 +2309,15 @@ export const HelpersMixin = {
     text = this._expandPageDevice?.(text) ?? text;
     const lookup = {};
     for (const [k, v] of Object.entries(values)) lookup[k.toLowerCase()] = v;
+    // Ahead of everything, where the remote's `expand_queue_alias` runs: a
+    // dotted token looks like an entity variable, so the entity pass would
+    // look `_queue.next_song` up as an entity and strip it.
+    if (text.toLowerCase().includes("_queue.")) {
+      text = text.replace(
+        /\$\{\s*(_queue\.[A-Za-z0-9_]+)\s*\}/gi,
+        (_, name) => lookup[name.toLowerCase()] ?? "",
+      );
+    }
     // A picture keeps its entity variables for the picture rules (see
     // `_resolveLabel`); only the button's own words are filled in.
     if (this._isMediaSource(text)) {
@@ -2314,6 +2422,12 @@ export const HelpersMixin = {
     const lang = this._labelLang();
     const values = {
       _state: this._stateTokenLabel(svc, stateVal, lang, attributes, data),
+      // `${_queue.…}` aliases the target's queue sensor, which only the remote
+      // can resolve. Blank rather than absent, for the separator reason above.
+      "_queue.next_song": "",
+      "_queue.next_artist": "",
+      "_queue.prev_song": "",
+      "_queue.prev_artist": "",
     };
     // `${_name}` belongs to device-local commands and nobody else. The key is
     // only added when the button carries one, so on a plain HA action the
@@ -2345,7 +2459,11 @@ export const HelpersMixin = {
     const device = this._resolveLabel(action, entityId, config, shownText || "", assign);
     if (!device) return "";
     const literal = this._displayLabel(shownText || "", action, entityId, config);
-    if (!literal) return device;
+    // Words the user typed that read as nothing right now -- `${_device.media_title}`
+    // with nothing playing -- are not the tail of what the remote prints, which
+    // is then its fallback. Taking all of that as the prefix wrote "Wohnzimmer
+    // Play ${_device.media_title}" into their field, and the next edit stored it.
+    if (!literal) return assign?.label_edited && shownText?.trim() ? "" : device;
     return device.endsWith(` ${literal}`) ? device.slice(0, -(literal.length + 1)) : "";
   },
 
@@ -2385,6 +2503,74 @@ export const HelpersMixin = {
   },
 
   /**
+   * Does this text name a track? `${_device.media_title}` or
+   * `${_device.media_artist}`, with the same tolerance for case and inner
+   * whitespace as `_substituteLabelTokens`, and the same reason as
+   * `_labelHasStateToken`: the hint under the field names these two, so some
+   * other token shape must not claim their lesson.
+   */
+  _labelHasMediaToken(text) {
+    return !!text && /\$\{[^{}]*(?<![\w.])_device\.media_(title|artist)\b/i.test(text);
+  },
+
+  /**
+   * Does *config* point at a media player? Read off the resolved target rather
+   * than the first step's raw `entity_id`, so an area or a label target answers
+   * the same way the tooltip preview does — `_getTargetStateObj` is what reads
+   * the track in the first place.
+   */
+  _targetsMediaPlayer(config) {
+    const stateObj = this._getTargetStateObj(config);
+    return String(stateObj?.entity_id || "").startsWith("media_player.");
+  },
+
+  /**
+   * Does *config* point at a player whose queue can be read?
+   *
+   * The gate for `${_queue.…}`: the integration keeps a queue sensor
+   * (`sensor.<speaker>_queue`, see `media_queue/alias.py`) for exactly those
+   * speakers, so its existence is the answer -- no list of integrations to
+   * keep in step here.
+   */
+  _targetsQueue(config) {
+    if (!this._targetsMediaPlayer(config)) return false;
+    const eid = this._getTargetStateObj(config)?.entity_id || "";
+    return !!this._hass?.states?.[`sensor.${eid.split(".").slice(1).join(".")}_queue`];
+  },
+
+  /**
+   * The label tokens worth offering on *config*, for `_wireMediaInput`.
+   *
+   * Gated, not a fixed list: a token that cannot say anything on this button
+   * would complete into text that silently collapses, which teaches the wrong
+   * thing about a feature most people meet through this list. `${_queue.…}`
+   * only off a player whose queue can be read, `${_name}` only on a
+   * device-local command, `${_state}` wherever there is a service whose press
+   * has a state to name.
+   *
+   * The notes are translated here because this is the mixin; `matchLabelTokens`
+   * stays a pure filter over what it is handed.
+   */
+  _labelTokenOptions(config, fallbackService = "") {
+    const svc = this._stepService?.(config) || fallbackService;
+    const tokens = [];
+    if (svc) tokens.push({ id: "_state", name: this._t("token_state_note") });
+    // Nothing is pushed for the playing track: `${_device.media_title}` is an
+    // ordinary variable the `_device` completion already offers after its dot,
+    // and the dotted list below is for the values no entity carries.
+    if (this._targetsQueue(config)) {
+      tokens.push({ id: "_queue.next_song", name: this._t("token_queue_next_song_note") });
+      tokens.push({ id: "_queue.next_artist", name: this._t("token_queue_next_artist_note") });
+      tokens.push({ id: "_queue.prev_song", name: this._t("token_queue_prev_song_note") });
+      tokens.push({ id: "_queue.prev_artist", name: this._t("token_queue_prev_artist_note") });
+    }
+    if (this._internalCommandFor(config, fallbackService)) {
+      tokens.push({ id: "_name", name: this._t("token_name_note") });
+    }
+    return { tokens };
+  },
+
+  /**
    * The title image the remote draws for *page*, trimmed. Entity variables
    * read as they do there; one with no value leaves the strip blank, exactly
    * as `device_sync` sends it.
@@ -2407,7 +2593,7 @@ export const HelpersMixin = {
     let out = text.replace(/\$\{([^{}]*)\}/g, (whole, body) => {
       if (!/(?<![\w.])_device\.[A-Za-z0-9_]/.test(body)) return whole;
       if (!entity) return "";
-      return `\${${body.replace(/(?<![\w.])_device\.([A-Za-z0-9_]+)/g, (_, attr) => `${entity}.${attr}`).trim()}}`;
+      return `\${${body.replace(/(?<![\w.])_device\.([A-Za-z0-9_]+)/g, (_, attr) => deviceAttribute(entity, attr)).trim()}}`;
     });
     if (/\$\{\s*_device\s*\}/.test(out)) {
       const name = this._layoutDeviceName(page) || "";
@@ -2461,8 +2647,15 @@ export const HelpersMixin = {
   /** True when a label is nothing but placeholders. Mirrors `is_token_only_label`. */
   _isTokenOnlyLabel(text) {
     if (!text || !text.includes("${")) return false;
-    // Leftover braces are wreckage, not words. Mirrors the Python.
-    return !text.replace(/\$\{\s*(\w*)\s*\}/g, "").replace(/[{}]/g, "").trim();
+    // Leftover braces are wreckage and a separator between two placeholders
+    // is shape, not a name: "${_state} - ${_device.media_title}" is as unnamed
+    // as "${_state}". The dotted tokens count as placeholders too.
+    return !text
+      .replace(/\$\{\s*(\w*)\s*\}/g, "")
+      .replace(/\$\{\s*(?:_queue|_device)\.[A-Za-z0-9_]+\s*\}/gi, "")
+      .replace(/[{}]/g, "")
+      .replace(/[\s:;,/\-–—]+/g, "")
+      .trim();
   },
 
   /**
@@ -2601,9 +2794,11 @@ export const HelpersMixin = {
     // prefix straight back — the label could not be changed at all.
     if (stored && (userNamed || !tokenOnly) && !boundToggle && (userNamed || stored !== (action?.name || ""))) {
       // Empty means the label was nothing but a damaged placeholder. Falling
-      // through leaves the button with its derived name instead of blank.
+      // through leaves the button with its derived name instead of blank --
+      // unless the user typed it: their words read as they read, empty
+      // included, as on the remote.
       const resolved = this._displayLabel(stored, action, entityId, config, assign);
-      if (resolved) return resolved;
+      if (resolved || userNamed) return resolved;
     }
 
     const payload = this._getPayloadDisplay(config);
@@ -2772,7 +2967,9 @@ export const HelpersMixin = {
    *  Escape, the scrim, and being pushed aside by the next modal. A caller
    *  that owns state behind the dialog should tear it down here rather than
    *  on the `close` event, which a re-render also fires and fires late. */
-  _openModal(innerHtml, { labelledBy = "", describedBy = "", role = "", onClose = null } = {}) {
+  _openModal(innerHtml, {
+    labelledBy = "", describedBy = "", role = "", onClose = null, canClose = null,
+  } = {}) {
     const sr = this.shadowRoot;
     // One at a time: these dialogs open each other. Closed before it is
     // removed, for the reason `close` gives below.
@@ -2811,13 +3008,22 @@ export const HelpersMixin = {
       owner?.();
     };
 
-    // Escape. Prevented so the browser does not also close it underneath us
-    // and skip the teardown.
-    dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+    // Escape. Prevented so the browser does not close it underneath us and
+    // skip the teardown. `canClose` holds it back for a window covered by a
+    // file chooser, whose own Escape is delivered here too.
+    dlg.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      if (canClose && !canClose()) return;
+      close();
+    });
     // Click outside the card. The dialog element fills the viewport and
     // centres the card inside it, so anything that lands on the dialog itself
     // was a click on the scrim.
-    dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
+    dlg.addEventListener("click", (e) => {
+      if (e.target !== dlg) return;
+      if (canClose && !canClose()) return;
+      close();
+    });
 
     sr.appendChild(dlg);
     dlg.showModal();

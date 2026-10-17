@@ -1,7 +1,8 @@
 """Commands about a remote as a whole.
 
 The device list, its blueprint, the build's optional features, navigating and
-wiping its pages, and the diagnostics bundle.
+wiping its pages, the diagnostics bundle, and putting a downloaded
+configuration back.
 """
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import io
 import json
 import logging
 import zipfile
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Final
 
@@ -19,6 +21,10 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
+from ...config_restore import (
+    async_restore_files,
+    async_take_upload,
+)
 from ...const import DOMAIN
 from ...diagnostics_bundle import (
     BUNDLE_URL_BASE,
@@ -29,11 +35,18 @@ from ...diagnostics_bundle import (
     async_store_bundle,
     steps_for_scope,
 )
-from ...runtime import debug_available, entry_connection, remember_panel_language
+from ...runtime import (
+    _resolve_device_id,
+    debug_available,
+    entry_connection,
+    find_store,
+    remember_panel_language,
+)
 from ..blueprint import async_get_blueprint
 from ..const import PAGE_ID_SCHEMA
 from ..device_sync import sync_config_to_device
-from .common import live_connection
+from ..events import fire_config_changed
+from .common import live_connection, refresh_state_listener
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -305,3 +318,104 @@ async def ws_clear_device_pages(hass: HomeAssistant, connection, msg: dict) -> N
     entry = hass.config_entries.async_get_entry(msg["entry_id"])
     rebuilt = await sync_config_to_device(hass, entry)
     connection.send_result(msg["id"], {"success": True, "rebuilt": rebuilt})
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/restore_config",
+    vol.Required("entry_id"): str,
+    vol.Required("token"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_restore_config(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Put a previously downloaded configuration back, and re-sync the remote.
+
+    The archive arrived over HTTP and was parsed and parked there; `token` is
+    what the panel got back, and reaching this command means the user has seen
+    what the archive holds and said yes. The upload is single-use: a confirmed
+    restore cannot be replayed by a stale tab.
+
+    The order matters. Files first, because they are the configuration and
+    everything else is a consequence of them. Then the store's caches, which
+    still describe what was on disk a moment ago. Then the announcement, so the
+    panel and the variable listener reread. The remote comes last, and a remote
+    that cannot be reached does not fail the restore -- the configuration *is*
+    restored at that point, and the user is told the device will catch up rather
+    than that nothing happened.
+    """
+    device_id = _resolve_device_id(hass, msg["entry_id"])
+    if not device_id:
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+
+    parsed = async_take_upload(hass, msg["token"])
+    if parsed is None:
+        connection.send_error(
+            msg["id"], "expired", "That upload has expired; choose the file again"
+        )
+        return
+
+    await _apply_restore(hass, connection, msg, device_id, parsed)
+
+
+async def _apply_restore(
+    hass: HomeAssistant, connection, msg: dict, device_id: str, parsed: dict
+) -> None:
+    """Write a checked configuration, answer the panel, and rebuild the remote.
+
+    Split out from the command so the parsing and the confirmation stay there
+    and everything after "these are the files" reads as one sequence.
+    """
+    store = find_store(hass)
+    # The swap and the forgetting are one change: a save that slipped between
+    # them would write the configuration this is replacing back out, or sweep
+    # away the pages it just put there using the page ids it read before.
+    lock = store.device_lock(device_id) if store is not None else nullcontext()
+    try:
+        async with lock:
+            await async_restore_files(hass, device_id, parsed["files"])
+            if store is not None:
+                store.async_forget_device(device_id)
+    except OSError as err:
+        _LOGGER.exception("Restoring the configuration of %s failed", device_id)
+        connection.send_error(msg["id"], "failed", str(err))
+        return
+    # The sync this would otherwise start would race the wipe below, which is
+    # the one thing an event-driven sync cannot do for itself.
+    fire_config_changed(hass, msg["entry_id"], sync_handled=True)
+    # The buttons point at different entities now, and the listener's watch
+    # list was read when the panel loaded.
+    await refresh_state_listener(hass, msg["entry_id"])
+
+    _LOGGER.info(
+        "Restored %d configuration file(s) for %s", parsed["file_count"], device_id,
+    )
+
+    # A full re-sync, because the page set changed wholesale -- started rather
+    # than awaited, as it costs a device round trip per page and the panel needs
+    # none of it. A failure out here is logged; the next hello re-syncs anyway.
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    conn = entry_connection(entry)
+    # A remote that is away is not told anything: the files are on disk and
+    # the next hello syncs them, which is the same outcome by a slower road.
+    if conn is not None and conn.connected:
+        async def _resync() -> None:
+            try:
+                async with conn.page_cache.lock:
+                    await conn.clear_all()
+                    # `forget` keeps the pages the device refused before, and a
+                    # remote with nothing on it has no reason to refuse them.
+                    conn.page_cache.reset()
+                await sync_config_to_device(hass, entry)
+            except Exception as err:  # noqa: BLE001 — the files are already restored
+                _LOGGER.warning("Re-syncing %s after a restore failed: %s", device_id, err)
+
+        hass.async_create_task(_resync(), f"lizaip restore re-sync {device_id}")
+
+    connection.send_result(msg["id"], {
+        "success": True,
+        "device_id": device_id,
+        "source_device_id": parsed.get("device_id"),
+        "pages": parsed["pages"],
+        "files": parsed["file_count"],
+    })

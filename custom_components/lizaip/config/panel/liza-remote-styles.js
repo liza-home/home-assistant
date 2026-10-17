@@ -53,6 +53,7 @@ export const STYLES = `
        they track --ha-font-size-scale identically instead of staying frozen
        while the tokenised sizes around them grow. */
     --liza-font-11: calc(11px * var(--ha-font-size-scale, 1));
+    --liza-font-12: calc(12px * var(--ha-font-size-scale, 1));
     --liza-font-13: calc(13px * var(--ha-font-size-scale, 1));
     --liza-font-15: calc(15px * var(--ha-font-size-scale, 1));
     --liza-font-18: calc(18px * var(--ha-font-size-scale, 1));
@@ -118,6 +119,28 @@ export const STYLES = `
   .title-text {
     overflow-wrap: anywhere;
   }
+  /* Empty (and so invisible) unless the memory switch is on. */
+  .toolbar-memory {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    margin-left: 16px;
+    font-size: var(--liza-font-13);
+  }
+  .mem-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .mem-bar {
+    display: inline-block;
+    width: 56px; height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--app-header-text-color, #fff) 25%, transparent);
+  }
+  .mem-fill { display: block; height: 100%; background: var(--app-header-text-color, #fff); }
+  /* The percentage beside each bar carries the value; colour only adds to it. */
+  .mem-bar.warn .mem-fill { background: #ffb300; }
+  .mem-bar.crit .mem-fill { background: #ff5252; }
+  .mem-item:has(.mem-bar.unknown) { opacity: 0.6; }
   .toolbar-tabs {
     display: flex;
     gap: 4px;
@@ -2033,6 +2056,13 @@ export const STYLES = `
     position: fixed;
     z-index: 20;
     min-width: 168px;
+    /* As wide as its longest label: a row is one phrase, and one that wraps
+       reads as two items. A column, so the rows stretch to that width rather
+       than asking for a percentage of it. Capped at the viewport. */
+    display: flex;
+    flex-direction: column;
+    width: max-content;
+    max-width: calc(100vw - 16px);
     padding: 4px;
     background: var(--card-background-color, #fff);
     border: 1px solid var(--divider-color);
@@ -2045,22 +2075,29 @@ export const STYLES = `
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 100%;
+    /* Home Assistant's own menu row: 40px tall, a 24px icon, a 14px label.
+       The fallbacks are what the panel used before a theme defines them. */
+    min-height: var(--ha-space-10, 40px);
     padding: 8px 12px;
     border: none;
     background: transparent;
     border-radius: 6px;
-    font-size: var(--liza-font-13);
+    font-size: var(--ha-font-size-m, var(--liza-font-13));
     font-family: inherit;
     text-align: left;
     cursor: pointer;
     color: var(--primary-text-color);
   }
   .face-menu-item ha-icon {
-    --mdc-icon-size: 20px;
+    --mdc-icon-size: 24px;
     flex: 0 0 auto;
-    color: var(--liza-muted-text);
+    color: var(--ha-color-on-neutral-normal, var(--liza-muted-text));
   }
+  .face-menu-item[disabled] {
+    cursor: default;
+    opacity: .5;
+  }
+  .face-menu-item[disabled]:hover { background: transparent; }
   .face-menu-item:hover, .face-menu-item:focus-visible {
     background: var(--secondary-background-color);
     outline: none;
@@ -2069,6 +2106,15 @@ export const STYLES = `
     height: 1px;
     margin: 4px 8px;
     background: var(--divider-color);
+  }
+  /* An item that cannot be taken back, kept legible rather than alarming: the
+     colour is a warning to read the row, not a reason to avoid it. */
+  .face-menu-item-danger, .face-menu-item-danger ha-icon {
+    color: var(--ha-color-on-danger-quiet, var(--liza-danger-text));
+  }
+  .face-menu-item-danger:not([disabled]):hover,
+  .face-menu-item-danger:focus-visible {
+    background: color-mix(in srgb, var(--liza-danger-text) 12%, transparent);
   }
 
   /* --- Inline accordion editor --- */
@@ -2996,6 +3042,243 @@ export const STYLES = `
     transition: opacity .2s;
   }
   .confirm-danger-btn:hover { opacity: .85; }
+
+  /* Restoring a configuration. One window walks the three steps -- choose a
+     file, look at what is in it, watch it go in -- so its body changes under
+     a header that says which of them is being taken. */
+  .restore-dialog { max-width: 460px; }
+  .restore-line {
+    font-size: var(--liza-font-m);
+    line-height: 1.5;
+    margin: 0 0 12px;
+    color: var(--primary-text-color, #fff);
+  }
+  .restore-line.note {
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+  }
+  /* The warning is marked by its border and its words, never by colour alone
+     (WCAG 1.4.1): the sentence says outright what is about to be replaced. */
+  .restore-line.warn {
+    border-left: 3px solid var(--warning-color, #f9a825);
+    padding: 2px 0 2px 12px;
+  }
+  .restore-drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 30px 16px;
+    margin: 4px 0 10px;
+    border: 1px dashed var(--divider-color, #444);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--primary-text-color, #fff) 3%, transparent);
+    transition: border-color .15s ease, background .15s ease;
+    text-align: center;
+    cursor: pointer;
+    position: relative;
+  }
+  .restore-drop:hover {
+    border-color: var(--liza-accent-fill);
+    background: color-mix(in srgb, var(--liza-accent-fill) 5%, transparent);
+  }
+  /* The input is the only focusable thing in here, so the box wears its ring. */
+  .restore-drop:focus-within {
+    outline: 2px solid var(--liza-accent-fill);
+    outline-offset: 2px;
+  }
+  .restore-drop.over {
+    border-color: var(--liza-accent-fill);
+    background: color-mix(in srgb, var(--liza-accent-fill) 10%, transparent);
+  }
+  /* The icon in a disc of its own: a bare glyph floating over a dashed box
+     read as a stray mark rather than as the thing being asked for. */
+  .restore-drop > ha-icon {
+    --mdc-icon-size: 26px;
+    display: flex; align-items: center; justify-content: center;
+    width: 52px; height: 52px; border-radius: 50%;
+    background: color-mix(in srgb, var(--liza-accent-fill) 12%, transparent);
+    color: var(--liza-accent-fill);
+  }
+  /* A label wrapping a real file input rather than a button calling click()
+     on a detached one: the browser's own picker, opened by the user's own
+     click, is the only version every browser reports back from reliably. */
+  .restore-pick-btn {
+    padding: 9px 22px;
+    background: var(--liza-accent-fill);
+    border-radius: 8px;
+    color: #fff;
+    font-size: var(--liza-font-m);
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .restore-drop:hover .restore-pick-btn { opacity: .85; }
+  .restore-drop .restore-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .restore-drop-hint {
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+  }
+  .restore-dialog { position: relative; }
+  .restore-dialog .add-page-dialog-title { padding-right: 32px; }
+  .restore-dialog-close {
+    position: absolute; top: 12px; right: 12px;
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0;
+    border: none; border-radius: 50%;
+    background: transparent; cursor: pointer;
+    color: var(--ha-color-on-neutral-normal, var(--liza-muted-text));
+  }
+  .restore-dialog-close:hover { background: var(--secondary-background-color); }
+  .restore-dialog-close ha-icon { --mdc-icon-size: 20px; }
+  /* The three steps across the top. Numbered, and a tick for the ones that
+     are behind: the user can see how much of the road is left. */
+  .restore-steps {
+    display: flex; align-items: center;
+    list-style: none; margin: 16px 0; padding: 0;
+  }
+  /* The labels take the room they need and the rules between them take all
+     the rest, so the three steps span the window however wide it is. */
+  .restore-steps-item {
+    display: flex; align-items: center; gap: 6px;
+    min-width: 0;
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+  }
+  /* The rule lives inside the step it follows, so the slack has to be handed
+     to the step first; the last one carries no rule and keeps its own width. */
+  .restore-steps-item:not(:last-child) { flex: 1 1 auto; }
+  .restore-steps-item:last-child { flex: 0 0 auto; }
+  .restore-steps-item.current { color: var(--primary-text-color, #fff); font-weight: 500; }
+  /* box-sizing and line-height both matter here: the border otherwise grows
+     the disc past the 20px the row is laid out for, and an inherited 1.5
+     line box is taller than the disc, which rides the digit off its centre.
+     Tabular figures keep 1, 2 and 3 on the same middle. */
+  .restore-steps-mark {
+    flex: none;
+    box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 1px solid var(--divider-color, #444);
+    font-size: var(--liza-font-11); line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .restore-steps-mark ha-icon { display: block; line-height: 0; }
+  /* The step being taken is marked by weight and a filled disc, not by colour
+     alone (WCAG 1.4.1), and the ones behind it carry a tick. */
+  .restore-steps-item.current .restore-steps-mark {
+    background: var(--liza-accent-fill); border-color: transparent; color: #fff;
+  }
+  .restore-steps-item.done .restore-steps-mark {
+    border-color: var(--liza-accent-fill); color: var(--liza-accent-fill);
+  }
+  .restore-steps-item.done .restore-steps-mark ha-icon { --mdc-icon-size: 14px; }
+  .restore-steps-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The rule between one step and the next, so the three read as a road
+     rather than as three separate labels. Drawn after each but the last. */
+  .restore-steps-item::after {
+    content: ""; flex: 1 0 auto; min-width: 12px;
+    height: 1px; margin: 0 8px;
+    background: var(--divider-color, #444);
+  }
+  .restore-steps-item:last-child::after { content: none; }
+  .restore-steps-item.done::after { background: var(--liza-accent-fill); }
+  /* The archive leads the review step, as a card headed by its own name. */
+  .restore-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px; margin: 0 0 16px;
+    border: 1px solid var(--divider-color, #444); border-radius: 12px;
+    background: color-mix(in srgb, var(--primary-text-color, #fff) 4%, transparent);
+  }
+  .restore-card-icon {
+    flex: none; --mdc-icon-size: 24px;
+    color: var(--liza-accent-fill);
+  }
+  .restore-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .restore-line.file {
+    font-weight: 500; margin: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .restore-card-meta {
+    font-size: var(--liza-font-11); color: var(--liza-muted-text);
+  }
+  /* The sentences under the card keep the icon and the text apart rather than
+     letting one wrap under the other. */
+  .restore-line.warn { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+  .restore-line.warn ha-icon {
+    flex: none; --mdc-icon-size: 18px; margin-top: 1px;
+    color: var(--warning-color, #f9a825);
+  }
+  /* The pages in the archive, as the faces the remote will show. A row that
+     scrolls sideways rather than a growing stack: twenty pages must not push
+     the Restore button off the screen. */
+  .restore-pages {
+    display: flex; gap: 12px;
+    list-style: none; margin: 0 0 16px; padding: 2px;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+  .restore-page {
+    flex: 0 0 auto; width: 68px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 6px 4px;
+    border: 1px solid var(--divider-color, #444); border-radius: 10px;
+    background: color-mix(in srgb, var(--primary-text-color, #fff) 4%, transparent);
+  }
+  /* A picture of a page that does not exist yet: nothing on it answers a
+     press, and the shapes must not offer the editor's hover affordance.
+
+     No padding of its own, ever: the icon overlays are placed in per cent of
+     this box, so anything between it and the face shifts every one of them. */
+  .restore-face {
+    width: 100%; flex: none; padding: 0;
+    pointer-events: none;
+  }
+  .restore-face .button { cursor: default; }
+  .restore-page-title {
+    max-width: 100%;
+    font-size: var(--liza-font-11);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .restore-page-count {
+    font-size: var(--liza-font-11); color: var(--liza-muted-text);
+  }
+  .restore-bar {
+    height: 6px; border-radius: 3px; overflow: hidden;
+    background: color-mix(in srgb, var(--liza-accent-fill) 18%, transparent);
+  }
+  .restore-bar-fill {
+    height: 100%; width: 0;
+    background: var(--liza-accent-fill);
+    transition: width .2s ease;
+  }
+  .restore-bar.sweeping .restore-bar-fill {
+    width: 40%;
+    animation: liza-restore-sweep 1.1s ease-in-out infinite;
+  }
+  @keyframes liza-restore-sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
+  }
+  /* It worked, said with a mark and a sentence rather than only a colour. */
+  .restore-done {
+    display: flex; align-items: center; gap: 10px;
+    margin: 8px 0; font-size: var(--liza-font-m);
+    color: var(--primary-text-color, #fff);
+  }
+  .restore-done-icon { --mdc-icon-size: 28px; color: var(--success-color, #43a047); }
+  @media (prefers-reduced-motion: reduce) {
+    .restore-bar-fill { transition: none; }
+    .restore-bar.sweeping .restore-bar-fill { animation-duration: 3s; }
+  }
+  /* The dialog's own buttons need the same air every other dialog gives them;
+     without it they sat on whatever the body ended with. */
+  .restore-dialog > .layout-dialog-actions { margin-top: 20px; }
+  .restore-status {
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+    margin: 0 0 14px;
+  }
+  .restore-status.error { color: var(--error-color, #db4437); }
   /* Its own cancel rather than .add-page-cancel, which is "margin: 0 auto"
      because the Add Page dialog puts it alone on its row. Inside this flex
      row that auto margin centred Cancel and stranded Delete at the far right,

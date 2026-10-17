@@ -37,10 +37,14 @@ LONGTOUCH_SECTION: Final = "longtouch"
 #: configured earlier stays on disk and comes back the moment this is on again.
 TOGGLE_SECTION: Final = "toggle"
 
+#: Off by default: showing memory use costs the remote two HTTP requests per
+#: refresh, which is not worth paying for a screen nobody asked to see.
+MEMORY_SECTION: Final = "memory"
+
 #: The feature switches, which share one shape: a section holding only
 #: ``enabled``. Listed once so the three places that must agree on the set --
 #: defaults, the file reader and the editor's validator -- cannot drift apart.
-FEATURE_SECTIONS: Final = (LONGTOUCH_SECTION, TOGGLE_SECTION)
+FEATURE_SECTIONS: Final = (LONGTOUCH_SECTION, TOGGLE_SECTION, MEMORY_SECTION)
 
 # Smaller than this is unreadable on the remote's screen.
 MIN_FONT_SIZE: Final = 6
@@ -53,6 +57,7 @@ def default_settings() -> dict[str, dict[str, Any]]:
     }
     settings[LONGTOUCH_SECTION] = {"enabled": False}
     settings[TOGGLE_SECTION] = {"enabled": False}
+    settings[MEMORY_SECTION] = {"enabled": False}
     return settings
 
 
@@ -111,6 +116,8 @@ def normalize_settings(raw: Any) -> dict[str, dict[str, Any]]:
         settings[LONGTOUCH_SECTION]["enabled"] = True
     if toggle_enabled(raw):
         settings[TOGGLE_SECTION]["enabled"] = True
+    if _feature_enabled(raw, MEMORY_SECTION):
+        settings[MEMORY_SECTION]["enabled"] = True
     return settings
 
 

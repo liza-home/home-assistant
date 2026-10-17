@@ -26,7 +26,11 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
-from ..action_controller.helpers import _get_store, _resolve_device_id
+from ..action_controller.helpers import (
+    _get_store,
+    _resolve_device_id,
+    resolve_target_entities,
+)
 from ..action_controller.toggle import rule_icon, rule_label, toggle_rules
 from ..variables_calc import (
     _EXPR_ENTITY_RE,
@@ -35,6 +39,7 @@ from ..variables_calc import (
     DEFAULT_VARIABLES_INTERVAL,
     read_variables_interval,
 )
+from ..media_queue.alias import expand_queue_alias
 from ..shared.history import history_entity
 from ..shared.tokens import (
     DEVICE_TOKEN_RE,
@@ -60,7 +65,7 @@ _VARIABLE_FIELDS = ("label", "image")
 _Reads = dict[str, set[str | None]]
 
 
-def _token_reads(text) -> _Reads:
+def _token_reads(text, subjects: tuple[str, ...] = ()) -> _Reads:
     graphed = history_entity(text)
     if graphed is not None:
         # A graph moves when its entity's state does.
@@ -70,12 +75,19 @@ def _token_reads(text) -> _Reads:
     if "_device" in text:
         # `${_device.attr}` is the entity of the page in scope.
         text = expand_device_alias(text, current_page_layout())
+    # `${_queue.x}` is an attribute of the queue sensor of whichever speaker
+    # the button points at, so each of them is a separate text to scan. Read
+    # as the literal id `_queue.x`, nothing subscribed to what it named.
+    texts = [text]
+    if "_queue" in text:
+        texts = [expand_queue_alias(text, subject) for subject in subjects or (None,)]
     found: _Reads = {}
-    for m in ENTITY_TOKEN_RE.finditer(text):
-        found.setdefault(m.group(1).lower(), set()).add(m.group(2))
-    for m in FUNCTION_TOKEN_RE.finditer(text):
-        for e in _EXPR_ENTITY_RE.finditer(m.group(1)):
-            found.setdefault(e.group(1).lower(), set()).add(e.group(2))
+    for candidate in texts:
+        for m in ENTITY_TOKEN_RE.finditer(candidate):
+            found.setdefault(m.group(1).lower(), set()).add(m.group(2))
+        for m in FUNCTION_TOKEN_RE.finditer(candidate):
+            for e in _EXPR_ENTITY_RE.finditer(m.group(1)):
+                found.setdefault(e.group(1).lower(), set()).add(e.group(2))
     return found
 
 
@@ -85,26 +97,38 @@ def _merge(into: _Reads, more: _Reads) -> _Reads:
     return into
 
 
-def _button_reads(button: dict) -> _Reads:
+def _queue_subjects(config, hass) -> tuple[str, ...]:
+    """The speakers a step points at, whose queue sensors its label may read."""
+    if hass is None or not isinstance(config, list) or not config:
+        return ()
+    return tuple(
+        entity_id
+        for entity_id in resolve_target_entities(config[0], hass)
+        if entity_id.startswith("media_player.")
+    )
+
+
+def _button_reads(button: dict, subjects: tuple[str, ...] = ()) -> _Reads:
     found: _Reads = {}
     for key in _VARIABLE_FIELDS:
-        _merge(found, _token_reads(button.get(key)))
+        _merge(found, _token_reads(button.get(key), subjects))
     state_icons = button.get("state_icons")
     if isinstance(state_icons, dict):
         for icon in state_icons.values():
-            _merge(found, _token_reads(icon))
+            _merge(found, _token_reads(icon, subjects))
     return found
 
 
-def _assignment_reads(assign) -> _Reads:
+def _assignment_reads(assign, hass=None) -> _Reads:
     if not isinstance(assign, dict):
         return {}
-    found = _button_reads(assign)
+    subjects = _queue_subjects(assign.get("config"), hass)
+    found = _button_reads(assign, subjects)
     overrides = assign.get("overrides")
     if isinstance(overrides, dict):
         for override in overrides.values():
             if isinstance(override, dict):
-                _merge(found, _button_reads(override))
+                _merge(found, _button_reads(override, subjects))
     # A toggle's press rules count too. They are not an override of the
     # button's fields but a replacement for them -- a cycle paints the step
     # that is next, so whichever press is up *is* the button's face -- and
@@ -118,8 +142,11 @@ def _assignment_reads(assign) -> _Reads:
     # `icon`/`label` rather than `image`/`label`: a rule names its glyph the
     # way an action does, not the way an assignment does.
     for rule in toggle_rules(assign):
-        _merge(found, _token_reads(rule_icon(rule)))
-        _merge(found, _token_reads(rule_label(rule)))
+        # A rule's own target, not the button's: a cycle step may point at a
+        # different speaker, and its label reads that one's queue.
+        rule_subjects = _queue_subjects(rule.get("config"), hass)
+        _merge(found, _token_reads(rule_icon(rule), rule_subjects))
+        _merge(found, _token_reads(rule_label(rule), rule_subjects))
     return found
 
 
@@ -168,7 +195,7 @@ async def async_variable_uses(hass: HomeAssistant, device_id: str) -> dict[str, 
         with page_scope(layouts[page_id]):
             _note(_token_reads(page.get("image")), page_id)
             for assign in (assignments or {}).values():
-                _note(_assignment_reads(assign), page_id)
+                _note(_assignment_reads(assign, hass), page_id)
                 if isinstance(assign, dict) and assign.get("action_id"):
                     actions_by_page.setdefault(page_id, set()).add(assign["action_id"])
     if actions_by_page:

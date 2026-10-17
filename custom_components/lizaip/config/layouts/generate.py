@@ -38,7 +38,7 @@ from ...shared.services import (
 )
 from ...shared.icon_defaults import icon_defaults
 from ..const import ASSIGNMENT_BLANKED_KEY, drop_redundant_subject, payload_identity
-from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
+from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_LABEL_EDITED_KEY
 from .resolver import (
     DYNAMIC_KEY,
     config_step,
@@ -416,6 +416,12 @@ def _register_action(
     One action library is built across the layout. Unnamed hand-written buttons
     keep their button key as the action-list label; dormant generated slots use
     the service because ``button_9`` says nothing about the future item.
+
+    ``action_name`` names the library entry when the label cannot: a label built
+    out of placeholders (``"${_state} - ${_device.media_title}"``) is a shape to
+    fill in, and reading it back as the action's name would put raw token text in
+    the Action Library. The key is generation-time only — it never reaches the
+    stored page.
     """
     dedup_key = f"{action_str}|{payload_identity(data)}"
     if dedup_key in seen_actions:
@@ -447,9 +453,12 @@ def _register_action(
     actions.append({
         "id": action_id,
         "name": (
-            btn_def.get("label") or fallback_name
-            if fallback_name is not None
-            else btn_def.get("label", button_key)
+            btn_def.get("action_name")
+            or (
+                btn_def.get("label") or fallback_name
+                if fallback_name is not None
+                else btn_def.get("label", button_key)
+            )
         ),
         "icon": page_field(btn_def, "icon") or "",
         "service": action_str,
@@ -609,6 +618,11 @@ def _action_button_assignment(
         "image": page_field(btn_def, "icon") or "",
         "state_icons": {},
     }
+    # `label_written: true`: the label is printed as written, as if typed --
+    # no room name in front of a label that is only placeholders, and empty
+    # when they read as nothing.
+    if btn_def.get("label_written") and btn_def.get("label"):
+        assignment[ASSIGNMENT_LABEL_EDITED_KEY] = True
 
     # Store [] too: before's absence is what allows wake inference.
     prelude = _button_prelude(btn_def, button_key)

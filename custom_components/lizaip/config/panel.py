@@ -110,6 +110,11 @@ def needs_device_sync(event_data: dict, entry_id: str) -> bool:
     if event_data.get("order_only"):
         _LOGGER.debug("Page order already pushed, skipping the full sync")
         return False
+    if event_data.get("sync_handled"):
+        # A restore wipes the remote and rebuilds it, which a diffing sync
+        # cannot do; two of them at once would undo each other's work.
+        _LOGGER.debug("The caller is syncing the device itself, skipping")
+        return False
     return True
 
 

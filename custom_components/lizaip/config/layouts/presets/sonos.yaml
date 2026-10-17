@@ -12,6 +12,8 @@
 
 name: Sonos
 icon: logo:sonos
+# The page title: the Sonos mark and the speaker's name.
+page_image: "logo:sonos + ${_device.friendly_name}"
 description: Control your Sonos speaker — favorites and volume
 
 target_selector:
@@ -34,25 +36,39 @@ buttons:
   button_8: "@playlist[8]"
 
   button_9:
-    label: Previous
+    # The track the press lands on, not the one playing. These three labels are
+    # printed as written (`label_written`): just the track, and nothing at all
+    # where there is none -- shuffle, radio, either end of the queue.
+    label: "${_device.media_title_prev}"
+    label_written: true
+    action_name: Previous
     image: mdi:skip-previous
     config:
       - action: media_player.media_previous_track
 
   button_10:
-    label: Play/Pause
+    # ``${_device.media_artist}`` is left out of all three -- title plus artist
+    # measures 511px against the strip's 512px cap, so it would be cut off.
+    label: "${_device.media_title}"
+    label_written: true
+    action_name: Play/Pause
     image: mdi:play-pause
     config:
       - action: media_player.media_play_pause
 
   button_11:
-    label: Next
+    # The counterpart to button_9.
+    label: "${_device.media_title_next}"
+    label_written: true
+    action_name: Next
     image: mdi:skip-next
     config:
       - action: media_player.media_next_track
 
   button_12:
-    label: Mute
+    label: "${_state}"
+    label_written: true
+    action_name: Mute
     image: mdi:volume-mute
     config:
       - action: media_player.volume_mute

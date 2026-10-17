@@ -1,4 +1,4 @@
-"""``${_state}`` / ``${_name}`` placeholders in user-typed button labels."""
+"""``${_state}`` and ``${_name}`` placeholders in button labels."""
 
 from __future__ import annotations
 
@@ -25,8 +25,22 @@ from .services import (
 # and put a brace into the imgserv URL.
 LABEL_TOKEN_RE = re.compile(r"\$\{\s*(\w*)\s*\}")
 
+#: Characters that only ever join two halves of a label, never name anything
+#: by themselves. Decides whether a label is nothing but placeholders, and
+#: strips a separator left dangling by one (:data:`DANGLING_SEPARATOR_RE`).
+SEPARATOR_CHARS: Final = r"\s:;,/\-–—"
+
+_SEPARATORS_ONLY_RE = re.compile(rf"[{SEPARATOR_CHARS}]+")
+
 # The spelling the panel writes into a label it fills in for the user.
 STATE_TOKEN: Final = "${_state}"
+
+# Out of ``LABEL_TOKEN_RE`` because its ``\w`` excludes the dot, and widening
+# that would swallow ``${media_player.kitchen.volume_level}``. Named rather
+# than a general ``_namespace.key``, which would strip real entity variables.
+DOTTED_TOKEN_RE = re.compile(
+    r"\$\{\s*((?:_queue|_device)\.[A-Za-z0-9_]+)\s*\}", re.IGNORECASE,
+)
 
 # The target of a device-local command, named in the user's label. Scoped to
 # those commands on purpose: a plain HA action has no "target" distinct from
@@ -45,13 +59,33 @@ def is_token_only_label(text: str) -> bool:
     That is what keeps a two-way button's stored label the same shape as its
     neighbours: ``Previous`` / ``${_state}`` / ``Next``, all three of which the
     device renders behind the room name.
+
+    A separator between two placeholders is part of the shape, not a word:
+    ``"${_state} - ${_device.media_title}"`` is as unnamed as ``"${_state}"``,
+    and the dash only has something to join once both tokens resolve.
+
+    ``${_queue.next_song}`` and ``${_device.media_title}`` count as placeholders
+    too, though their dot keeps them out of :data:`LABEL_TOKEN_RE`. Without
+    that, the Sonos preset's ``"${_state} - ${_device.media_title}"`` would be
+    read as a name the layout chose, and a preset's name is the one case the
+    tooltip ladder resolves no tokens in — the placeholder would reach
+    ``clean_label_text`` and be thrown away as wreckage, taking the device
+    prefix with it. The button read "Pause" where it should read
+    "Sonos Pause - Bohemian Rhapsody".
+
+    This decides tooltips only — :func:`is_token_only_label` is called from the
+    label ladders in ``button_rendering.py`` and ``icons.py`` and from nowhere
+    else. A page title is never classified, so what ``${_device.x}`` means
+    there is untouched.
     """
     if not text or "${" not in text:
         return False
     # Leftover braces are wreckage, not words: "${_state}}" is still a shape, and
     # counting the stray brace as a name cost the label its entity prefix -- the
     # tooltip read "Off" instead of "Schreibtischlampe Off".
-    return not LABEL_TOKEN_RE.sub("", text).replace("{", "").replace("}", "").strip()
+    stripped = DOTTED_TOKEN_RE.sub("", LABEL_TOKEN_RE.sub("", text))
+    remainder = stripped.replace("{", "").replace("}", "")
+    return not _SEPARATORS_ONLY_RE.sub("", remainder).strip()
 
 
 def state_token_label(
@@ -122,4 +156,4 @@ def state_token_label(
 #: mark is left joining nothing — a goto whose page was deleted printed a
 #: dangling "Go to page:" on the device. Stripped only on a label that *held* a
 #: placeholder, so a name the user genuinely ended in a colon is left alone.
-DANGLING_SEPARATOR_RE = re.compile(r"^[\s:;,/\-–—]+|[\s:;,/\-–—]+$")
+DANGLING_SEPARATOR_RE = re.compile(rf"^[{SEPARATOR_CHARS}]+|[{SEPARATOR_CHARS}]+$")

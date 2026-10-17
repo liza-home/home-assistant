@@ -458,6 +458,144 @@ export const STRINGS = {
   diagnostics_step_done: {
     en: "Done", de: "Fertig", fr: "Terminé", it: "Fatto", es: "Hecho",
   },
+  restore_config: {
+    en: "Restore configuration", de: "Konfiguration wiederherstellen",
+    fr: "Restaurer la configuration", it: "Ripristina configurazione",
+    es: "Restaurar configuración",
+  },
+  restore_page_buttons: {
+    en: "{n} buttons", de: "{n} Tasten", fr: "{n} boutons",
+    it: "{n} pulsanti", es: "{n} botones",
+  },
+  restore_page_buttons_one: {
+    en: "1 button", de: "1 Taste", fr: "1 bouton",
+    it: "1 pulsante", es: "1 botón",
+  },
+  restore_pick_file: {
+    en: "Choose ZIP file…", de: "ZIP-Datei wählen…", fr: "Choisir le fichier ZIP…",
+    it: "Scegli il file ZIP…", es: "Elegir archivo ZIP…",
+  },
+  restore_drop_hint: {
+    en: "or drop the downloaded ZIP here",
+    de: "oder die heruntergeladene ZIP hierher ziehen",
+    fr: "ou déposez ici le ZIP téléchargé",
+    it: "oppure trascina qui lo ZIP scaricato",
+    es: "o suelta aquí el ZIP descargado",
+  },
+  restore_checking: {
+    en: "Checking {filename}…", de: "{filename} wird geprüft…",
+    fr: "Vérification de {filename}…", it: "Controllo di {filename}…",
+    es: "Comprobando {filename}…",
+  },
+  restore_running: {
+    en: "restoring…", de: "wird wiederhergestellt…",
+    fr: "restauration…", it: "ripristino…", es: "restaurando…",
+  },
+  restore_working: {
+    en: "Restoring {filename}…", de: "{filename} wird wiederhergestellt…",
+    fr: "Restauration de {filename}…", it: "Ripristino di {filename}…",
+    es: "Restaurando {filename}…",
+  },
+  restore_confirm_body: {
+    en: "Replaces every page, button and action of this remote.",
+    de: "Ersetzt alle Seiten, Tasten und Aktionen dieser Fernbedienung.",
+    fr: "Remplace toutes les pages, tous les boutons et toutes les actions de cette télécommande.",
+    it: "Sostituisce tutte le pagine, i pulsanti e le azioni di questo telecomando.",
+    es: "Sustituye todas las páginas, botones y acciones de este mando.",
+  },
+  restore_step_choose: {
+    en: "Choose", de: "Wählen", fr: "Choisir", it: "Scegli", es: "Elegir",
+  },
+  restore_step_review: {
+    en: "Check", de: "Prüfen", fr: "Vérifier", it: "Verifica", es: "Revisar",
+  },
+  restore_step_apply: {
+    en: "Restore", de: "Wiederherstellen", fr: "Restaurer",
+    it: "Ripristina", es: "Restaurar",
+  },
+  restore_saved_on: {
+    en: "Saved {when}", de: "Gespeichert {when}", fr: "Enregistré {when}",
+    it: "Salvato {when}", es: "Guardado {when}",
+  },
+  restore_pages_heading: {
+    en: "{pages} pages", de: "{pages} Seiten", fr: "{pages} pages",
+    it: "{pages} pagine", es: "{pages} páginas",
+  },
+  restore_pages_heading_one: {
+    en: "1 page", de: "1 Seite", fr: "1 page",
+    it: "1 pagina", es: "1 página",
+  },
+  restore_confirm_action: {
+    en: "Restore", de: "Wiederherstellen", fr: "Restaurer",
+    it: "Ripristina", es: "Restaurar",
+  },
+  restore_done: {
+    en: "{pages} pages restored.", de: "{pages} Seiten wiederhergestellt.",
+    fr: "{pages} pages restaurées.", it: "{pages} pagine ripristinate.",
+    es: "{pages} páginas restauradas.",
+  },
+  restore_done_one: {
+    en: "1 page restored.", de: "1 Seite wiederhergestellt.",
+    fr: "1 page restaurée.", it: "1 pagina ripristinata.",
+    es: "1 página restaurada.",
+  },
+  restore_failed: {
+    en: "Restore failed: {error}", de: "Wiederherstellen fehlgeschlagen: {error}",
+    fr: "Échec de la restauration : {error}", it: "Ripristino non riuscito: {error}",
+    es: "Error al restaurar: {error}",
+  },
+  restore_error_not_a_zip: {
+    en: "That file is not a ZIP archive.", de: "Diese Datei ist kein ZIP-Archiv.",
+    fr: "Ce fichier n’est pas une archive ZIP.", it: "Questo file non è un archivio ZIP.",
+    es: "Ese archivo no es un archivo ZIP.",
+  },
+  restore_error_not_lizaip: {
+    en: "That archive is not a lizaIP configuration.",
+    de: "Dieses Archiv ist keine lizaIP-Konfiguration.",
+    fr: "Cette archive n’est pas une configuration lizaIP.",
+    it: "Questo archivio non è una configurazione lizaIP.",
+    es: "Ese archivo no es una configuración lizaIP.",
+  },
+  restore_error_no_config: {
+    en: "That archive holds no configuration files.",
+    de: "Dieses Archiv enthält keine Konfigurationsdateien.",
+    fr: "Cette archive ne contient aucun fichier de configuration.",
+    it: "Questo archivio non contiene file di configurazione.",
+    es: "Ese archivo no contiene archivos de configuración.",
+  },
+  restore_error_bad_yaml: {
+    en: "A file in that archive is damaged, so nothing was changed.",
+    de: "Eine Datei in diesem Archiv ist beschädigt, daher wurde nichts geändert.",
+    fr: "Un fichier de cette archive est endommagé ; rien n’a été modifié.",
+    it: "Un file dell’archivio è danneggiato, quindi non è stato cambiato nulla.",
+    es: "Un archivo del paquete está dañado, así que no se cambió nada.",
+  },
+  restore_error_bad_page: {
+    en: "A page in that archive cannot be read, so nothing was changed.",
+    de: "Eine Seite in diesem Archiv kann nicht gelesen werden, daher wurde nichts geändert.",
+    fr: "Une page de cette archive est illisible ; rien n’a été modifié.",
+    it: "Una pagina dell’archivio non è leggibile, quindi non è stato cambiato nulla.",
+    es: "Una página del archivo no se puede leer, así que no se cambió nada.",
+  },
+  restore_error_unsafe_path: {
+    en: "That archive holds file paths that are not allowed.",
+    de: "Dieses Archiv enthält unzulässige Dateipfade.",
+    fr: "Cette archive contient des chemins de fichiers non autorisés.",
+    it: "Questo archivio contiene percorsi di file non consentiti.",
+    es: "Ese archivo contiene rutas de archivo no permitidas.",
+  },
+  restore_error_too_large: {
+    en: "That archive is too large.", de: "Dieses Archiv ist zu groß.",
+    fr: "Cette archive est trop volumineuse.", it: "Questo archivio è troppo grande.",
+    es: "Ese archivo es demasiado grande.",
+  },
+  restore_error_expired: {
+    en: "The upload expired. Choose the file again.",
+    de: "Der Upload ist abgelaufen. Bitte die Datei erneut auswählen.",
+    fr: "Le téléversement a expiré. Choisissez à nouveau le fichier.",
+    it: "Il caricamento è scaduto. Seleziona di nuovo il file.",
+    es: "La subida ha caducado. Elija el archivo de nuevo.",
+  },
   settings_buttons: {
     en: "Buttons", de: "Tasten", fr: "Boutons", it: "Pulsanti", es: "Botones",
   },
@@ -471,15 +609,75 @@ export const STRINGS = {
     it: "Tenere il dito su un pulsante per 2 secondi esegue la sua azione di tocco lungo. Sui pulsanti che ne hanno una, il clic parte quando si solleva il dito.",
     es: "Mantener el dedo 2 segundos sobre un botón ejecuta su acción de toque largo. En los botones que tienen una, el clic se ejecuta al levantar el dedo.",
   },
+  // Named for what it builds -- a button that carries several actions -- and
+  // not for the word on the section it adds. "Toggle" alone read as the
+  // `toggle` service, which every lamp button already runs.
   settings_toggle: {
-    en: "Toggle", de: "Umschalten", fr: "Bascule", it: "Alternanza", es: "Alternar",
+    en: "Multi toggle button", de: "Mehrfach-Umschalttaste",
+    fr: "Bouton à bascule multiple", it: "Pulsante a commutazione multipla",
+    es: "Botón de conmutación múltiple",
   },
   settings_toggle_hint: {
-    en: "Lets a button carry several actions and step through them, one per press. Adds a Toggle section to every grid button. Switching this off leaves the steps stored but makes those buttons run their normal action again.",
-    de: "Lässt eine Taste mehrere Aktionen tragen und bei jedem Druck zur nächsten springen. Fügt jeder Rastertaste einen Bereich „Umschalten“ hinzu. Beim Ausschalten bleiben die Schritte gespeichert, die Tasten führen aber wieder ihre normale Aktion aus.",
-    fr: "Permet à un bouton de porter plusieurs actions et de passer à la suivante à chaque appui. Ajoute une section Bascule à chaque bouton de la grille. En désactivant, les étapes restent enregistrées mais ces boutons relancent leur action normale.",
-    it: "Consente a un pulsante di contenere più azioni e di passare alla successiva a ogni pressione. Aggiunge una sezione Alternanza a ogni pulsante della griglia. Disattivandola i passaggi restano salvati, ma i pulsanti tornano a eseguire la loro azione normale.",
-    es: "Permite que un botón lleve varias acciones y avance a la siguiente en cada pulsación. Añade una sección Alternar a cada botón de la cuadrícula. Al desactivarlo los pasos siguen guardados, pero esos botones vuelven a ejecutar su acción normal.",
+    en: "Lets a button carry several actions and step through them, one per press. Adds a Multi toggle button section to every grid button. Switching this off leaves the steps stored but makes those buttons run their normal action again.",
+    de: "Lässt eine Taste mehrere Aktionen tragen und bei jedem Druck zur nächsten springen. Fügt jeder Rastertaste einen Bereich „Mehrfach-Umschalttaste“ hinzu. Beim Ausschalten bleiben die Schritte gespeichert, die Tasten führen aber wieder ihre normale Aktion aus.",
+    fr: "Permet à un bouton de porter plusieurs actions et de passer à la suivante à chaque appui. Ajoute une section Bouton à bascule multiple à chaque bouton de la grille. En désactivant, les étapes restent enregistrées mais ces boutons relancent leur action normale.",
+    it: "Consente a un pulsante di contenere più azioni e di passare alla successiva a ogni pressione. Aggiunge una sezione Pulsante a commutazione multipla a ogni pulsante della griglia. Disattivandola i passaggi restano salvati, ma i pulsanti tornano a eseguire la loro azione normale.",
+    es: "Permite que un botón lleve varias acciones y avance a la siguiente en cada pulsación. Añade una sección Botón de conmutación múltiple a cada botón de la cuadrícula. Al desactivarlo los pasos siguen guardados, pero esos botones vuelven a ejecutar su acción normal.",
+  },
+  settings_memory_card: {
+    en: "Device memory", de: "Gerätespeicher",
+    fr: "Mémoire de l’appareil", it: "Memoria del dispositivo",
+    es: "Memoria del dispositivo",
+  },
+  settings_memory: {
+    en: "Show memory use", de: "Speicherauslastung anzeigen",
+    fr: "Afficher l’utilisation de la mémoire", it: "Mostra l’uso della memoria",
+    es: "Mostrar el uso de memoria",
+  },
+  settings_memory_hint: {
+    en: "Shows bars next to the device name for RAM, heap fragmentation and flash. Read from the device after every transfer and at least every 5 minutes.", de: "Zeigt neben dem Gerätenamen Balken für RAM, Heap-Fragmentierung und Flash. Wird nach jeder Übertragung zum Gerät und mindestens alle 5 Minuten aktualisiert.",
+    fr: "Affiche à côté du nom de l’appareil des barres pour la RAM, la fragmentation du tas et la flash. Mis à jour après chaque transfert vers l’appareil et au moins toutes les 5 minutes.", it: "Mostra accanto al nome del dispositivo barre per RAM, frammentazione dell’heap e flash. Aggiornato dopo ogni trasferimento al dispositivo e almeno ogni 5 minuti.",
+    es: "Muestra junto al nombre del dispositivo barras de RAM, fragmentación del heap y flash. Se actualiza tras cada transferencia al dispositivo y al menos cada 5 minutos.",
+  },
+  memory_group: {
+    en: "Device memory", de: "Gerätespeicher",
+    fr: "Mémoire de l’appareil", it: "Memoria del dispositivo",
+    es: "Memoria del dispositivo",
+  },
+  memory_ram: {
+    en: "RAM", de: "RAM",
+    fr: "RAM", it: "RAM",
+    es: "RAM",
+  },
+  memory_frag: {
+    en: "Frag.", de: "Frag.",
+    fr: "Frag.", it: "Framm.",
+    es: "Frag.",
+  },
+  memory_flash_images: {
+    en: "Flash images", de: "Flash Bilder",
+    fr: "Flash images", it: "Flash immagini",
+    es: "Flash imágenes",
+  },
+  memory_flash_files: {
+    en: "Flash files", de: "Flash Dateien",
+    fr: "Flash fichiers", it: "Flash file",
+    es: "Flash archivos",
+  },
+  memory_used_of: {
+    en: "{used} of {total} used", de: "{used} von {total} belegt",
+    fr: "{used} sur {total} utilisés", it: "{used} di {total} usati",
+    es: "{used} de {total} usados",
+  },
+  memory_unknown: {
+    en: "not read yet — the device did not report it", de: "noch nicht gelesen — das Gerät hat es nicht gemeldet",
+    fr: "pas encore lu — l’appareil ne l’a pas signalé", it: "non ancora letto — il dispositivo non l’ha segnalato",
+    es: "aún no leído — el dispositivo no lo ha informado",
+  },
+  memory_frag_tip: {
+    en: "Heap fragmentation: largest free block {largest} of {free} free", de: "Heap-Fragmentierung: größter freier Block {largest} von {free} frei",
+    fr: "Fragmentation du tas : plus grand bloc libre {largest} sur {free} libres", it: "Frammentazione heap: blocco libero più grande {largest} su {free} liberi",
+    es: "Fragmentación del heap: bloque libre mayor {largest} de {free} libres",
   },
   settings_editor: {
     en: "Editor", de: "Editor", fr: "Éditeur", it: "Editor", es: "Editor",
@@ -497,6 +695,23 @@ export const STRINGS = {
     fr: "Tant que le pointeur repose sur un bouton, trace une ligne vers la page qu'il ouvre. S'il repose sur une page, trace tous les liens qui mènent à cette page. Dans cet éditeur seulement : la télécommande elle-même ne change pas.",
     it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono. Solo in questo editor: il telecomando non cambia.",
     es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella. Solo en este editor; el mando en sí no cambia.",
+  },
+  // One switch for both cards: a shape's and a thumbnail's are the same card
+  // and the same interruption, and two switches would have to be found and
+  // flipped together.
+  settings_button_tips: {
+    en: "Show button and page details",
+    de: "Tasten- und Seitendetails anzeigen",
+    fr: "Afficher les détails des boutons et des pages",
+    it: "Mostra i dettagli di pulsanti e pagine",
+    es: "Mostrar detalles de botones y páginas",
+  },
+  settings_button_tips_hint: {
+    en: "While the pointer rests on a button, raises a card describing it: its label, what each press runs, its long touch, and the entity or page it acts on. Resting it on a page names that page and says how full it is. This editor only — the remote itself is unchanged.",
+    de: "Steht der Zeiger auf einer Taste, erscheint eine Karte, die sie beschreibt: Beschriftung, was jeder Druck ausführt, die lange Berührung und das Gerät oder die Seite, auf die sie wirkt. Steht er auf einer Seite, nennt die Karte deren Namen und wie voll sie ist. Nur in diesem Editor; die Fernbedienung selbst bleibt unverändert.",
+    fr: "Tant que le pointeur repose sur un bouton, affiche une carte qui le décrit : son libellé, ce que lance chaque appui, son appui long et l'entité ou la page concernée. S'il repose sur une page, la carte la nomme et indique son remplissage. Dans cet éditeur seulement : la télécommande elle-même ne change pas.",
+    it: "Finché il puntatore resta su un pulsante, mostra una scheda che lo descrive: l'etichetta, ciò che esegue ogni pressione, il tocco prolungato e l'entità o la pagina su cui agisce. Se resta su una pagina, la scheda la nomina e indica quanto è piena. Solo in questo editor: il telecomando non cambia.",
+    es: "Mientras el puntero descansa sobre un botón, muestra una tarjeta que lo describe: su etiqueta, lo que ejecuta cada pulsación, su toque largo y la entidad o página sobre la que actúa. Si descansa sobre una página, la tarjeta la nombra e indica cuán llena está. Solo en este editor; el mando en sí no cambia.",
   },
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
@@ -1773,6 +1988,55 @@ export const STRINGS = {
     fr: "<code>${_state}</code> suit l'entité — remplacez-le pour corriger la formulation.",
     it: "<code>${_state}</code> segue l'entità — sostituiscilo per correggere la formulazione.",
     es: "<code>${_state}</code> sigue a la entidad — sustitúyalo para corregir la redacción.",
+  },
+  label_media_hint: {
+    en: "<code>${_device.media_title}</code> and <code>${_device.media_artist}</code> name the track — blank without a page player, or while nothing plays.",
+    de: "<code>${_device.media_title}</code> und <code>${_device.media_artist}</code> nennen Titel und Interpret — ohne Player der Seite oder solange nichts läuft bleiben sie leer.",
+    fr: "<code>${_device.media_title}</code> et <code>${_device.media_artist}</code> nomment le morceau — vides sans lecteur de page, ou tant que rien ne joue.",
+    it: "<code>${_device.media_title}</code> e <code>${_device.media_artist}</code> indicano il brano — vuoti senza lettore della pagina o finché non suona nulla.",
+    es: "<code>${_device.media_title}</code> y <code>${_device.media_artist}</code> nombran la pista — vacíos sin reproductor de página o mientras no suene nada.",
+  },
+  token_state_note: {
+    en: "what the press does",
+    de: "was der Druck bewirkt",
+    fr: "ce que fait l'appui",
+    it: "cosa fa la pressione",
+    es: "lo que hace la pulsación",
+  },
+  token_name_note: {
+    en: "the command's target",
+    de: "das Ziel des Befehls",
+    fr: "la cible de la commande",
+    it: "il bersaglio del comando",
+    es: "el objetivo del comando",
+  },
+  token_queue_next_song_note: {
+    en: "the track Next moves to",
+    de: "der Titel, zu dem Weiter springt",
+    fr: "le morceau vers lequel Suivant passe",
+    it: "il brano a cui passa Avanti",
+    es: "la pista a la que salta Siguiente",
+  },
+  token_queue_next_artist_note: {
+    en: "who plays it",
+    de: "wer ihn spielt",
+    fr: "qui le joue",
+    it: "chi lo suona",
+    es: "quién la toca",
+  },
+  token_queue_prev_song_note: {
+    en: "the track Previous moves to",
+    de: "der Titel, zu dem Zurück springt",
+    fr: "le morceau vers lequel Précédent passe",
+    it: "il brano a cui passa Indietro",
+    es: "la pista a la que salta Anterior",
+  },
+  token_queue_prev_artist_note: {
+    en: "who plays it",
+    de: "wer ihn spielt",
+    fr: "qui le joue",
+    it: "chi lo suona",
+    es: "quién la toca",
   },
   debug_pages: {
     en: "Debug", de: "Debug", fr: "Débogage", it: "Debug", es: "Depuración",

@@ -27,6 +27,10 @@ from ..shared.services import normalise_payload, service_name
 
 CONFIG_CHANGED_EVENT = "lizaip_config_config_changed"
 
+#: Fired once a page sync has reached the device, as opposed to
+#: ``CONFIG_CHANGED_EVENT`` which fires when the edit is saved.
+DEVICE_SYNCED_EVENT = "lizaip_config_device_synced"
+
 # The blueprint used when nothing better is known: the face of the only
 # hardware variant that exists today. Blueprints are named by product SKU
 # (``3029-000.yaml`` / ``.png``) rather than by product name, because the SKU

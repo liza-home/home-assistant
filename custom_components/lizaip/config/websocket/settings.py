@@ -15,6 +15,7 @@ from ...imgserv.fonts import list_fonts, user_fonts_dir
 from ...runtime import _get_store
 from ...shared.i18n import action_labels, get_ui_language
 from ...shared.icon_defaults import icon_defaults
+from ...shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ...state_brightness import (
     CONF_ICON_FILL_ENABLED,
     CONF_ICON_FILL_STEP,
@@ -248,6 +249,52 @@ async def ws_get_settings(hass: HomeAssistant, connection, msg: dict, device_id:
     settings = await _get_store(hass).async_get_settings(device_id)
     fonts = await async_list_fonts(hass)
     connection.send_result(msg["id"], _settings_reply(settings, fonts))
+
+
+#: How many pictures one ``image_urls`` call may ask for: a full face is 40
+#: tiles and their tooltips, plus the title and the open editor's fields.
+_MAX_IMAGE_URLS = 400
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/image_urls",
+    "entry_id": str,
+    vol.Required("items"): vol.All(
+        [{
+            vol.Required("value"): str,
+            vol.Required("kind"): vol.In(("tile", "title", "tooltip")),
+            vol.Optional("color", default=""): vol.Any(None, str),
+            vol.Optional("percent"): vol.Any(None, vol.All(int, vol.Range(min=0, max=100))),
+        }],
+        vol.Length(max=_MAX_IMAGE_URLS),
+    ),
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+@requires_device
+async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+    """The URL the remote is sent for each picture, built by the code that builds it.
+
+    The panel draws its previews from these, so a preview and the remote
+    can only differ in what the panel adds for the browser -- never in how a
+    value, a colour or a text style becomes a URL. Values come with their
+    ``${…}`` variables already read: the panel reads them live, and this
+    stays a pure translation.
+    """
+    settings = await _get_store(hass).async_get_settings(device_id)
+    urls = []
+    for item in msg["items"]:
+        value, color = item["value"], item.get("color") or ""
+        if item["kind"] == "title":
+            urls.append(resolve_title_url(value, color, settings["title"]))
+        elif item["kind"] == "tooltip":
+            urls.append(resolve_tooltip_url(value, color, settings["tooltip"]))
+        else:
+            urls.append(
+                resolve_icon_url(value, color=color, percent=item.get("percent"))
+                if value.strip() else ""
+            )
+    connection.send_result(msg["id"], {"urls": urls})
 
 
 @websocket_api.websocket_command({

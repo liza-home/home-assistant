@@ -116,6 +116,10 @@ export const DebugViewMixin = {
              NB: no backticks in this comment; it sits in a template. -->
         ${this._htmlDebugTrafficCard()}
 
+        <!-- How full the remote's memories are, as bars in the header.
+             NB: no backticks in this comment; it sits in a template. -->
+        ${this._htmlSettingsMemoryCard?.() || ""}
+
         <ha-card outlined class="debug-card">
           <div class="actions-card-header">
             <h2 class="actions-card-title">${this._t("debug_report")}</h2>
@@ -900,6 +904,19 @@ export const DebugViewMixin = {
 
   _wireDebugView() {
     const root = this.shadowRoot;
+    // The memory-bars switch, which lives on this tab. Its row is the settings
+    // tab's, so its label needs the same help: `ha-switch` is not a native
+    // input, and `<label for>` does not reach it.
+    root.querySelectorAll(".settings-feature-switch").forEach((el) =>
+      el.addEventListener("change", (ev) =>
+        this._changeTextSetting(el.dataset.section, "enabled", ev.target.checked)));
+    root.querySelectorAll(".settings-switch-text label").forEach((el) =>
+      el.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const sw = root.querySelector(`#${el.getAttribute("for")}`);
+        if (!sw || sw.disabled) return;
+        this._changeTextSetting(sw.dataset.section, "enabled", !sw.checked);
+      }));
     root.querySelector(".debug-probe-btn")?.addEventListener("click", () => this._runDebugProbe());
     root.querySelector(".debug-port-toggle")
         ?.addEventListener("click", () => this._setDebugPort(!this._debugPortOn));

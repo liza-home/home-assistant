@@ -7,12 +7,14 @@
 # renaming or reordering one in the Sonos app refreshes the buttons. Slots
 # without a favourite stay empty.
 #
-# The page's title image is the layout icon, the Sonos logo.
+# The page title is the Sonos mark and the page's name (`page_image`).
 #
 # Reference: https://www.home-assistant.io/integrations/sonos
 
 name: Sonos Radio
 icon: logo:sonos
+# The page title: the Sonos mark and what the page holds.
+page_image: "logo:sonos + radio"
 description: Your favourite Sonos radio stations, one per button
 
 target_selector:

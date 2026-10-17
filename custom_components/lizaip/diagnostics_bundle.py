@@ -47,6 +47,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .config.store import YAML_DIR
@@ -241,9 +242,9 @@ def _read_yaml_tree(base: str, limit: int | None = _MAX_YAML_BYTES) -> dict[str,
     decoding and truncating are both fine in a report and both fatal in a file
     somebody will put back.
 
-    Backup siblings (``<device_id>.bak.*``) are outside ``base`` and so are
-    never walked: they are previous copies of the same thing, and multiplying
-    the bundle's size by the number of times someone pressed save adds nothing.
+    Scratch siblings a restore can leave behind (``<device_id>.conflict.*``)
+    are outside ``base`` and so are never walked: they are a copy of the same
+    thing, and a bundle is about the configuration that is live.
     """
     out: dict[str, bytes] = {}
     for root, dirs, names in os.walk(base):
@@ -1115,7 +1116,10 @@ async def async_build_zip(
     files = await async_build_bundle(
         hass, entry, scope=scope, progress=progress, should_stop=should_stop,
     )
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # The clock the user reads, not UTC: a file named two hours before the
+    # download that made it looks like the wrong one. `created` inside the
+    # bundle stays UTC, where the offset is written out and nothing is lost.
+    stamp = dt_util.now().strftime("%Y%m%d-%H%M%S")
     name = f"{_ZIP_PREFIX[scope]}-{_slug(entry.title)}-{stamp}"
     # A configuration download unpacks into the device id, which is the name
     # the folder has to carry to be dropped back into `<config>/lizaip/`. The

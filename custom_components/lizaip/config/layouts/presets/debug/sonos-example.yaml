@@ -9,7 +9,7 @@
 
 name: Sonos example
 icon: logo:sonos
-page_image: "${_device.friendly_name}"
+page_image: "logo:sonos + ${_device.friendly_name}"
 description: Device variables in tiles — cover art, volume and what's playing
 
 target_selector:
@@ -27,7 +27,7 @@ buttons:
     image: "text:${round(_device.volume_level*100)}%"
 
   button_9:
-    label: "${_device.media_artist}"
+    label: "${_device.media_title_prev}"
     image: mdi:skip-previous
     config:
       - action: media_player.media_previous_track
@@ -39,7 +39,7 @@ buttons:
       - action: media_player.media_play_pause
 
   button_11:
-    label: Next
+    label: "${_device.media_title_next}"
     image: mdi:skip-next
     config:
       - action: media_player.media_next_track

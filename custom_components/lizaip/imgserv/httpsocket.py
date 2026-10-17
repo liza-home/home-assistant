@@ -12,7 +12,7 @@ icon set the browser registered, ``phu:`` among them (``render_custom.py``).
 ``fg`` (alias ``color``)  foreground: ``RRGGBB``, ``RRGGBBAA`` or a name
 ``bg``                  background mounted behind it; default transparent
 ``mode``                ``dark``/``light`` — a default ``fg``, never a ``bg``
-``crop``                trim the transparent margin (on; ignored by text)
+``crop``                trim the transparent margin (on; text: to the font's band; off with a bg)
 ``alpha``               keep the alpha channel instead of flattening to black
 ``percent``             0–100 fill level via alpha: bottom stays opaque,
                         upper remainder is dimmed to ``PERCENT_TINT_ALPHA``
@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import io
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -56,10 +56,13 @@ from .const import (
     MAX_SIZE,
     MODE_DEFAULTS,
     SIZE_IDS,
+    TRANSPARENT,
     custom_icon_prefixes,
+    split_source_parts,
 )
 from .fonts import user_fonts_dir
 from .render import finalize_png
+from .render_caption import compose_parts
 from .render_history import (
     DEFAULT_HOURS,
     MAX_DAYS,
@@ -255,6 +258,14 @@ def _parse_flag(raw: str | None, default: bool) -> bool:
     return raw.strip().lower() not in _FALSE_VALUES
 
 
+def _first_param(query, *names: str) -> str | None:
+    """The first non-empty value among ``names``, in query-string order."""
+    for key, value in query.items():
+        if key in names and value:
+            return value
+    return None
+
+
 def _resolve_colors(
     mode: str,
     fg_raw: str | None,
@@ -299,7 +310,9 @@ class _Options:
     def from_query(cls, query) -> _Options:
         """Parse a query mapping. Raises ``_ImgservError`` (400) on bad input."""
         mode = query.get("mode", "").lower()
-        fg, bg = _resolve_colors(mode, query.get("fg"), query.get("color"), query.get("bg"))
+        fg, bg = _resolve_colors(
+            mode, _first_param(query, "fg", "color"), None, _first_param(query, "bg")
+        )
 
         try:
             percent = _parse_percent(query.get("percent"))
@@ -322,9 +335,37 @@ class _Options:
                 or _default_font_size(query.get("size"))
             ),
             mode=mode,
-            explicit_fg=bool(query.get("fg") or query.get("color")),
+            explicit_fg=bool(_first_param(query, "fg", "color")),
             period=period,
         )
+
+    def untinted(self) -> _Options:
+        """The same options with nothing said about colour.
+
+        What a part is given when it must keep its own colours although the
+        picture around it was asked for in one: the ask is still on record for
+        the parts that spend it.
+        """
+        return replace(self, explicit_fg=False, mode="")
+
+
+def _split_parts(source: str) -> tuple[str, ...]:
+    """`split_source_parts`, with the cap every part of it is held to.
+
+    The rule lives in `imgserv/const.py` so that the device's URL builder and
+    the panel's preview can read a title the same way; only the refusal is
+    this module's business, because only this module renders.
+    """
+    parts = split_source_parts(source)
+    if not parts:
+        raise _ImgservError(400, "Provide a source (mdi:name, text:string, file:path)")
+    for part in parts:
+        if part.startswith("text:") and len(part) - len("text:") > _MAX_TEXT_LENGTH:
+            # The same cap as a lone `text:`, and for the same reason: the
+            # words are laid out by the very same renderer, repeatedly, as
+            # they are shrunk to fit.
+            raise _ImgservError(400, f"text exceeds {_MAX_TEXT_LENGTH} characters")
+    return parts
 
 
 def _split_source(source: str) -> tuple[str, str]:
@@ -343,6 +384,16 @@ def _split_source(source: str) -> tuple[str, str]:
             value = value[1:-1]
 
     return source_type, value
+
+
+def _source_def_for(source_type: str) -> _Source:
+    """The renderer for *source_type*, custom icon prefixes included."""
+    source_def = _SOURCES.get(source_type)
+    if source_def is None and source_type in custom_icon_prefixes():
+        source_def = _Source(partial(_handle_custom, source_type=source_type))
+    if source_def is None:
+        raise _ImgservError(400, f"Unknown source type: '{source_type}'")
+    return source_def
 
 
 def _png_response(data: bytes, content_type: str = "image/png") -> web.Response:
@@ -381,26 +432,72 @@ class LizaIPImageView(HomeAssistantView):
 
         try:
             options = _Options.from_query(request.query)
-            source_type, value = _split_source(source)
-            source_def = _SOURCES.get(source_type)
-            if source_def is None and source_type in custom_icon_prefixes():
-                source_def = _Source(partial(_handle_custom, source_type=source_type))
-            if source_def is None:
-                raise _ImgservError(400, f"Unknown source type: '{source_type}'")
-            image = await source_def.handler(hass, value, options)
+            parts = _split_parts(source)
+            resolved = []
+            for part in parts:
+                stype, value = _split_source(part)
+                resolved.append((stype, value, _source_def_for(stype)))
+            # Words beside a picture are rendered by the compositor, not by
+            # the `text:` handler: only there is there a size to draw them at,
+            # because a mark is sized from the words it stands next to.
+            rendered: list = []
+            for stype, value, source_def in resolved:
+                if len(resolved) > 1:
+                    if stype == "text":
+                        rendered.append(value)
+                        continue
+                    if stype == "logo":
+                        # A colour asked for a title is spent on its words and
+                        # its marks; a brand beside them keeps its own.
+                        rendered.append(
+                            await source_def.handler(hass, value, options.untinted())
+                        )
+                        continue
+                rendered.append(await source_def.handler(hass, value, options))
         except _ImgservError as err:
             return web.Response(status=err.status, text=err.message)
 
-        if isinstance(image, web.Response):
-            return image  # media: passthrough of bytes Pillow could not decode
+        passthrough = [p for p in rendered if isinstance(p, web.Response)]
+        if passthrough:
+            # media: passthrough of bytes Pillow could not decode. There is
+            # nothing to compose such a part *with*, so it may only stand alone.
+            if len(rendered) > 1:
+                return web.Response(
+                    status=400, text="This source cannot be drawn beside another",
+                )
+            return passthrough[0]
 
+        if len(rendered) > 1:
+            # Before `finalize_png`, so the composed picture is cropped,
+            # dimmed, mounted and encoded as one subject -- the same five
+            # steps every single-part image walks.
+            try:
+                image = await hass.async_add_executor_job(
+                    partial(
+                        compose_parts,
+                        rendered,
+                        options.width,
+                        options.height,
+                        options.fg,
+                        options.font_size,
+                        options.font_id,
+                        user_fonts_dir(hass),
+                    )
+                )
+            except Exception:
+                _LOGGER.error("Composite render error for %r", source, exc_info=True)
+                return web.Response(status=500, text="Render error")
+        else:
+            image = rendered[0]
+
+        image = _fill_requested_size(image, options)
         return _png_response(
             *finalize_png(
                 image,
                 options.keep_alpha,
                 options.percent,
                 options.bg,
-                crop=options.crop and source_def.croppable,
+                crop=_crop_mode(options, resolved),
             )
         )
 
@@ -584,18 +681,54 @@ async def _handle_media(hass, value, options: _Options):
         return _png_response(img_bytes, content_type)
 
 
+def _fill_requested_size(image, options: _Options):
+    """*image* centred on the whole size asked for, when a ``bg=`` paints it.
+
+    A background is meant to fill the picture asked for, but some renderers
+    size their canvas to the subject -- ``text:`` to its words -- and the
+    background would cover only that. Never shrinks: words wider than the
+    strip keep their width, as the device scrolls them.
+    """
+    if options.bg[3] == 0:
+        return image
+    width, height = max(image.width, options.width), max(image.height, options.height)
+    if (width, height) == image.size:
+        return image
+    canvas = Image.new("RGBA", (width, height), TRANSPARENT)
+    canvas.paste(
+        image.convert("RGBA"), ((width - image.width) // 2, (height - image.height) // 2),
+    )
+    return canvas
+
+
+def _crop_mode(options: _Options, resolved) -> bool | str:
+    """What ``finalize_png`` crops: the most careful mode among the parts.
+
+    Nothing when a ``bg=`` paints something: the background is meant to fill
+    the whole picture asked for, and a crop would shrink it to the subject.
+    """
+    if not options.crop or options.bg[3] > 0:
+        return False
+    modes = {d.crop for _, _, d in resolved}
+    if "none" in modes:
+        return False
+    return "vertical" if "vertical" in modes else True
+
+
 @dataclass(frozen=True)
 class _Source:
     """One source type: how to render it, and whether ``?crop=`` means anything.
 
-    ``text`` is not croppable: ``render_text`` already sizes the canvas to the
-    string, and trimming the remaining vertical margin would make the height
-    depend on which glyphs the label happens to contain — "Hi" and "Hg" would
-    come back different sizes and a row of tiles would jitter.
+    ``crop`` is what ``?crop=`` does to it: ``"full"`` trims every transparent
+    margin, ``"vertical"`` cuts top and bottom only, ``"none"`` leaves it alone.
+
+    ``text`` crops vertically, to the band ``render_text`` records: the font's
+    full reach above and below the baseline, not the ink -- so "Hi" and "Hg"
+    still come back the same size on the same line across a row of tiles.
     """
 
     handler: object
-    croppable: bool = True
+    crop: str = "full"
 
 
 async def _handle_ref(hass, value, options: _Options):
@@ -612,10 +745,10 @@ async def _handle_ref(hass, value, options: _Options):
 _SOURCES: dict[str, _Source] = {
     "mdi": _Source(_handle_mdi),
     "logo": _Source(_handle_logo),
-    "text": _Source(_handle_text, croppable=False),
+    "text": _Source(_handle_text, crop="vertical"),
     "file": _Source(_handle_file),
     "media": _Source(_handle_media),
     "ref": _Source(_handle_ref),
     # Not croppable: trimming would stretch the time axis to the drawn part.
-    "history": _Source(_handle_history, croppable=False),
+    "history": _Source(_handle_history, crop="none"),
 }

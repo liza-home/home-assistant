@@ -36,7 +36,7 @@ from .helpers import (
     resolve_target_entities,
 )
 from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
-from .toggle import runtime_assign
+from .toggle import runtime_assign, toggle_rules
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +66,15 @@ async def setup_state_listener(
             config = assign.get("config", [])
             step = config[0] if isinstance(config, list) and config else {}
             watched_entities.update(resolve_target_entities(step, hass))
+            # A cycle rule may point at a different entity from the assignment
+            # it sits on, and its label reads that one. Unwatched, the tooltip
+            # would be computed once and never repainted.
+            for rule in toggle_rules(assign):
+                rule_config = rule.get("config")
+                if isinstance(rule_config, list) and rule_config:
+                    watched_entities.update(
+                        resolve_target_entities(rule_config[0], hass),
+                    )
 
     if not watched_entities:
         _LOGGER.debug("State listener: nothing to watch")
@@ -162,6 +171,10 @@ async def setup_state_listener(
                                 eid.split(".")[0], hass=hass,
                             )
                             tooltip: str | None
+                            # A label with a placeholder reads the entity, so
+                            # it must be recomputed whenever that entity moves,
+                            # even when the glyph never changes.
+                            dynamic_label = "${" in str(assign.get("label") or "")
                             if rule_glyph or action_icon:
                                 state_icons = assign.get("state_icons") or {}
                                 override = state_icons.get(state.state) or catchall_state_icon(
@@ -185,7 +198,7 @@ async def setup_state_listener(
                                 tooltip = _compute_next_state_tooltip(
                                     action, assign, state, hass, entry,
                                 )
-                            elif is_styleable(eid):
+                            elif is_styleable(eid) or dynamic_label:
                                 # Colour-only: resolve the glyph through the *same*
                                 # function the sync used, so a recolour cannot
                                 # become a redraw.
@@ -196,12 +209,16 @@ async def setup_state_listener(
                                 )
                                 if not icon:
                                     continue
-                                # Absent, so the consumer omits img_tooltip and the
-                                # device keeps the label the sync gave it.
-                                tooltip = None
+                                # Absent for a pure recolour, so the device
+                                # keeps the label the sync gave it. Present
+                                # when the label itself reads the entity.
+                                tooltip = _compute_next_state_tooltip(
+                                    action, assign, state, hass, entry,
+                                ) if dynamic_label else None
                             else:
-                                # Nothing to say: no rule, no state glyph, and no
-                                # tint this entity could carry.
+                                # Nothing to say: no rule, no state glyph, no
+                                # tint this entity could carry, and a label that
+                                # reads nothing from it.
                                 continue
                             # Only the tile is styled; the tooltip keeps the page
                             # colour, as a tinted label is only harder to read.

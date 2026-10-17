@@ -318,7 +318,7 @@ Every request walks the same four steps, whatever the source type:
 ### Query parameters
 
 Every parameter works with every source type, except `font` and `font_size`
-which only mean something for `text:`.
+which only mean something for `text:` and for the words of a pair.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -327,7 +327,7 @@ which only mean something for `text:`.
 | `color` | Alias for `fg`. If both are given, `fg` wins | — |
 | `bg` | Background color mounted behind the subject: same format as `fg` | transparent |
 | `mode` | `dark` (white default fg) or `light` (black default fg) — sets the default **foreground only**, never the background | — |
-| `crop` | Trim the transparent margin: `1`/`true` or `0`/`false`/`no`. Ignored for `text:` | `1` (enabled) |
+| `crop` | Trim the transparent margin: `1`/`true` or `0`/`false`/`no`. `text:` is cut to the font's full reach above and below the baseline, whatever the letters, and keeps its sides. Never cropped when `bg` paints a colour: the background fills the whole requested size, and a picture drawn smaller (`text:` is as wide as its words) is centred on it | `1` (enabled) |
 | `alpha` | Keep the alpha channel (`1`) instead of flattening onto black (`0`). Use `1` for browser previews, `0` for the device | `0` |
 | `percent` | Fill level `0`–`100`: the band holding N % of the icon's ink stays fully opaque; the upper remainder is dimmed via alpha (`70%`), with the boundary feathered across ~8 % of the height so it reads as a level rather than a cut. Measured in ink rather than rows so transparent gaps cost nothing — see **Fill is measured in ink** below. `0` and `100` are uniform, having no boundary | — |
 | `font` | Font ID for `text:` source (see [Available Fonts](#available-fonts)) | `filson-light` |
@@ -336,6 +336,45 @@ which only mean something for `text:`.
 | `days` | The same period in days, `1`–`7`. Cannot be combined with `hours` | — |
 | `start_time` | Start of an absolute `history:` period, ISO 8601 (`2026-10-10T08:00:00Z`). Without a zone it is read in Home Assistant's time zone | — |
 | `end_time` | End of an absolute `history:` period, same format. Given alone, the period is `hours`/`days` long and ends there | now |
+
+### Several things in one picture
+
+A source may name any number of parts, drawn side by side in the order they
+were written:
+
+```
+logo:sonos Küche
+logo:sonos - Küche
+mdi:television + text:Wohnzimmer
+logo:hue text:Hue mdi:lightbulb
+```
+
+A new part starts at any word shaped like a source — `logo:`, `text:`, `mdi:`,
+`file:` — so no separator is needed between two of them. A `logo:` value is a
+shipped filename and an `mdi:` value is a hyphenated slug, so neither can hold
+a space: after one of those, plain words start a part too and are read as the
+`text:` they would have to be spelled as anywhere else. A lone `-` or `+`
+between parts is punctuation and is dropped, but one that would otherwise
+change a value is kept, so `file:my + photo.png` is still one filename.
+
+**Words set the scale.** A mark beside a name is drawn at the name's own font
+size, so `logo:hue Wohnzimmer` is a roundel as tall as the W next to it rather
+than a badge of a fixed size. When the row is too wide the font shrinks, and
+the marks shrink with it. Marks on their own have no font to follow and share
+the box between them instead.
+
+Parts stand side by side on a wide size; the classic pairing of one mark and
+one line of words stacks on a square one, so a tile can carry both.
+
+On a title strip the words shrink only as far as stays readable and then let
+the picture grow wider than the strip, which the remote scrolls; on a square
+tile, which nothing scrolls, they shrink further and are cut short with `…`.
+They are drawn in `fg`, or white — never in `mode`'s colour, a title strip
+being black whoever is looking at it — and they take `font`/`font_size` like
+any other words.
+
+Spaces around a `+` are part of the separator, so a file called
+`file:my + photo.png` still addresses its file and `text:1+1` is still a sum.
 
 A `percent` outside `0`–`100` is answered with `400 Bad Request` before any
 rendering work is done.
@@ -417,9 +456,11 @@ font lacks a glyph, the emoji font is used automatically.
 | `font` | Font ID (see below) | `filson-light` |
 | `font_size` | Size in pixels | `title` 48, `tooltip` 24, otherwise the requested image height |
 
-The height is never trimmed, and `crop` is ignored here on purpose: otherwise
-`Hi` and `Hg` would come back different sizes and a row of labels would jitter
-as its text changed.
+The font size is reduced until the font's full reach -- from the top of an
+accented capital (`Ä`) to the bottom of a tail (`g`) -- fits the height, and that
+band is centred. `crop` cuts the image to exactly that band and leaves the sides:
+the band is the font's, not the ink's, so `Hi`, `Hg` and `xx` come back the same
+size with the baseline in the same row, and a row of labels stands on one line.
 
 ```
 imgserv://text:22°C?size=tile&fg=FF8800
@@ -536,6 +577,17 @@ imgserv://history:sensor.house_power?start_time=2026-10-10T08:00:00Z&end_time=20
 The integration provides a sidebar panel (**lizaIP Config**) for configuring button
 assignments, pages, and the Action Library.
 
+### Previews are the device's pictures
+
+Every picture the panel previews -- a button face, the title strip, a tooltip,
+the image fields -- is drawn from the URL the device is sent: the panel asks
+`lizaip_config/image_urls` for it rather than building one itself, so a colour,
+a text style or a source type becomes a URL in one place for both. The panel
+adds only what a browser needs: `alpha=1`, so the picture sits on the panel's
+own background, and `mode=light` on a light theme, where the device's white
+glyphs would not show. Which picture a button shows is still worked out by the
+panel; how that picture becomes a URL is not.
+
 ### Action Library
 
 Actions are defined once in a shared library and referenced by buttons. Each action has:
@@ -555,6 +607,163 @@ entities. When their state changes, the device button icon is updated in real ti
 3. When `light.living_room` turns on/off, the button icon updates automatically
 
 State changes are debounced (500 ms) and deduplicated to avoid unnecessary device updates.
+
+### Now playing: `${_device.media_title}`
+
+Not a token of its own. `${_device.attribute}` already named the page's device for a
+layout page title; it now survives a Tooltip field too, so
+`play:5 ${_state} - ${_device.media_title}` reaches the device as
+"play:5 Pause - Bohemian Rhapsody".
+
+- **What actually changed.** `DOTTED_TOKEN_RE` in `shared/labels.py` widened from
+  `_queue\.` to `(?:_queue|_device)\.`, so `is_token_only_label` strips the token and
+  sees a label made only of placeholders. Without that, `"${_state} - ${_device.media_title}"`
+  counted as a name the user chose: the entity-name prefix was dropped and
+  `clean_label_text` threw the unresolved `${…}` away. The classification decides
+  *tooltips* only — page titles never call it.
+- **The page, not the target.** This is the cost of reusing the page device. The
+  removed `${_song}` resolved against the *button's* own target and worked anywhere;
+  `${_device.media_title}` resolves against the page's layout entity through the
+  `page_scope` ContextVar, so it says nothing on a hand-made page. Accepted
+  deliberately: one reader of `media_title` beats two spellings to keep in step.
+  Pinned by `test_the_same_label_off_the_page_says_only_the_state`.
+- **It obeys the Variables switch.** Being an ordinary variable cuts both ways — a
+  remote with **Variables** off blanks it along with everything else.
+- **No state gate.** The attribute's presence is the test, not the state word. A paused
+  Sonos still reports its track, and so does one Home Assistant calls `idle` while the
+  app shows a loaded queue; gating on `playing`/`paused` blanked tooltips that had a
+  perfectly good title in hand.
+- **An empty title takes its separator with it.** `_format_value` renders a missing or
+  blank attribute as `""`, and `DANGLING_SEPARATOR_RE` then trims the dash, so
+  `${_state} - ${_device.media_title}` on a silent speaker reads "Play". A
+  whitespace-only title collapses the same way, because `SEPARATOR_CHARS` includes `\s`.
+- **One consequence on the picture branch.** In a `text:` picture a blank value reaches
+  `resolve_image_tokens`, which treats it as missing and falls back to the button's
+  default icon.
+- **Panel**: `_expandPageDevice` in `liza-remote-helpers.js` rewrites the token to the
+  page entity before `_substituteEntityTokens` resolves it, so the Tooltip preview shows
+  the real current track — a beat late, because that resolution is an async websocket
+  round-trip. `_labelHasMediaToken` and `_targetsMediaPlayer` gate the
+  `label_media_hint` under the field, which is shown whenever the button targets a media
+  player — discovery, not just explanation.
+- **Suggestion list**: `matchLabelTokens` (`liza-remote-helpers.js`) puts the
+  panel-side tokens at the head of the `${…}` completion list, which until then
+  offered only the backend's variables. `_labelTokenOptions` builds the gated set
+  per button — `${_state}` wherever there is a service, `${_queue.…}` only off a
+  readable queue, `${_name}` only on a device-local command. The track is absent on
+  purpose: the `_device` completion already offers it after the dot.
+
+### Up next: `${_queue.next_song}` and friends
+
+The same four values are also readable off the page's player as
+`${_device.media_title_prev}`, `${_device.media_title_next}`,
+`${_device.media_artist_prev}` and `${_device.media_artist_next}`:
+`expand_device_alias` (and the panel's `_expandPageDevice`) rewrite those names to the
+player's queue sensor (`media_queue.alias.DEVICE_QUEUE_ATTRIBUTES`), and the page's own
+player gets a queue sensor even before a button points at it.
+
+Four more label tokens — `${_queue.next_song}`, `${_queue.next_artist}`,
+`${_queue.prev_song}`, `${_queue.prev_artist}` — naming the track **Next** or
+**Previous** would actually move to, so `⏭` can say where it is going rather than
+repeating what is already playing. `sonos.yaml`'s `button_9` and `button_11` ship
+them: `"${_state} - ${_queue.next_song}"` reaches the device as
+"Sonos Next - Stairway to Heaven".
+
+These are the only placeholders here that cannot be answered from a state object:
+Home Assistant publishes no queue property, and every integration that has one
+exposes it its own way. So `custom_components/lizaip/media_queue/` makes the queue
+into an entity, and the token into an alias for one of its attributes.
+
+- **`sensor.<speaker>_queue`.** One sensor per Sonos speaker a button points at. Its state is the next track's title (`None` when there is
+  none — an absence, not an empty string HA would happily keep), and its attributes
+  are the four values. It subscribes to its speaker and recomputes on every change.
+  The set of speakers is rebuilt from the config on `CONFIG_CHANGED_EVENT`, so a
+  sensor appears as soon as a button targets a speaker and goes away when the last
+  one stops. Membership is keyed on the *target*, not on whether a `${_queue.x}`
+  token is present, so the sensor exists before the user types the token.
+- **`${_queue.x}` is an alias.** `expand_queue_alias` rewrites it to
+  `${sensor.<speaker>_queue.x}`. The sensor's entity id is set to exactly that, so the
+  alias needs no lookup (renaming the sensor's entity id breaks it). From there it is an ordinary
+  variable: watched by the state listener, silenced by the **Variables** switch,
+  visible in Developer Tools, and none of that had to be written. The bespoke
+  substitution pass this feature used to need is gone.
+- **Sonos only, in one file.** `media_queue/queue.py` calls `sonos.get_queue`
+  (`SupportsResponse.ONLY`), reads `queue_position`/`queue_size`, and works out the
+  neighbours (pure, no `hass`). A second integration gets its own reader when one is
+  needed; there is deliberately no provider abstraction for a single provider.
+- **The regex stays narrow.** `_queue.next_song` is shaped exactly like an entity id,
+  so the alias has to run before the entity pass or `ENTITY_TOKEN_RE` would strip it
+  as an unknown entity. `DOTTED_TOKEN_RE` is spelt `_queue\.` plus the four names
+  rather than a general `_namespace.key` — a general one would also match
+  `${_device.volume_level}`, which is an entity variable in disguise and has always
+  classified as a *name*, so page titles everywhere would change meaning.
+- **The queue is identified by its length**, not by `media_content_id` — that names
+  the *current* track, so it changes on every skip and would refetch on exactly the
+  button that reads it. The one case a length cannot tell apart, a different queue of
+  the same length, is narrowed by cross-checking the held title at the current
+  position against the live `media_title`; a mismatch drops the copy. That proves the
+  playing slot only — a same-length edit leaving the current track in place goes
+  unnoticed until the next refresh. `MIN_REFRESH_INTERVAL` (30 s, per speaker) bounds
+  every path into a fetch; a request arriving inside it is held for the remainder
+  rather than dropped, because the state change that spotted the stale copy is
+  consumed once.
+- **Empty on purpose**, in every case where the honest answer is "no": no queue
+  position at all (radio, TV, line-in publish none), **shuffle** on (a fetched queue is
+  in *stored* order while the speaker plays it shuffled, so the neighbouring entry is
+  simply not the next track), either end of a queue without `repeat: all`, and a
+  position past `MAX_TRACKS`. `repeat: one` is not blank: the next track genuinely is
+  this one again. A confident wrong title is worse than no title — that is the whole
+  reason these exist instead of printing `${_device.media_title}` beside the word "Next".
+- **All four keys are always returned**, blank rather than absent: an absent key is
+  stripped as wreckage and that path keeps the separator, so
+  `"${_state} - ${_queue.next_song}"` on a radio stream would reach the device reading
+  "Next -".
+- **Two remotes.** The sensors describe speakers, not remotes, so there is one per
+  speaker across every remote, added through whichever entry is loaded. When that entry
+  unloads its sensors go with it, and the next sync adds them back through another.
+- **A fixed glyph is not a fixed label.** The live rung in `state_listener.py` used to
+  ask only "does the picture change?" — a toggle rule, a state-keyed glyph, or a tint.
+  `media_next_track` is one-way so it has no state glyph, and a media_player is
+  neither tintable nor fillable, so the button fell out of the flush entirely. A label
+  containing `${` is now its own reason to repaint.
+- **Panel**: `_targetsQueue` offers the four entries in `_labelTokenOptions` when the
+  target's `sensor.<speaker>_queue` exists -- the backend keeps one for exactly the
+  speakers it can read, so there is no list of integrations to mirror. `_displayLabel`
+  adds the keys as blanks, since only the backend can read a queue.
+
+### A label made of tokens is a shape
+
+`is_token_only_label` decides whether a stored tooltip is a *name* the user chose
+or a *shape* for the device to fill in. A shape gets the entity in front of it
+("Sonos Pause"); a name is printed as typed.
+
+A separator left between two placeholders is part of the shape, not a word:
+`"${_state} - ${_device.media_title}"` is as unnamed as `"${_state}"`. The same character class
+decides both this and which dangling separator `DANGLING_SEPARATOR_RE` takes away
+when a token resolves to nothing — `SEPARATOR_CHARS` in `shared/labels.py` is the
+one definition.
+
+This matters for **layout presets specifically**. A preset's label is not
+user-named, and `generate.py` mints the action library entry from that same label,
+so the stored-name rung's two guards (`user_named or not token_only`,
+`stored_name != action_def["name"]`) both refuse it. The only rung left that
+resolves tokens is the `token_only` one — which is why classifying
+`"${_state} - ${_device.media_title}"` as a name meant the label fell through to the static path
+and `clean_label_text` threw the unresolved `${…}` away as wreckage. The Sonos
+play/pause button read "Sonos Pause", song silently missing.
+
+A label the user typed is untouched by this: the rung above short-circuits on
+`label_edited`, so it is still printed verbatim and unprefixed. `_isTokenOnlyLabel`
+in `liza-remote-helpers.js` is the panel's twin, held to the same answers by
+`tests/label_parity_cases.json`.
+
+#### `action_name:` on a preset button
+
+With the label holding placeholders, the minted library entry would be named
+`"${_state} - ${_device.media_title}"`. The optional `action_name:` key (read in
+`generate.py → _register_action`) names the entry instead, so the Action Library
+still reads "Play/Pause". It is generation-time only and never reaches the stored
+page.
 
 ### Entity variables
 
@@ -648,6 +857,7 @@ The frontend panel communicates with HA via these WebSocket commands (admin-only
 | `lizaip_config/update_page` | Update a page's title image and/or default colour |
 | `lizaip_config/get_settings` | Get a device's title/tooltip text settings, with the defaults, the installed fonts and the size limits |
 | `lizaip_config/set_settings` | Validate and save the text settings and push them to the device |
+| `lizaip_config/image_urls` | The `imgserv://` URL the device is sent for each `{value, kind: tile\|title\|tooltip, color, percent}`, built by the same `resolve_icon_url` / `resolve_title_url` / `resolve_tooltip_url` as the page sync |
 | `lizaip_config/sync_custom_icons` | Report the browser's extra icon sets (`window.customIcons`); answers the names the remote asked for that imgserv has no shape for yet |
 | `lizaip_config/store_custom_icons` | Upload icon shapes from those sets (`getIcon()`), which imgserv then draws |
 | `lizaip_config/get_action_labels` | Translated action wordings for a device's language |

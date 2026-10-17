@@ -20,6 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from ..device import debug
+from ..device.memory import async_read_memory
 from ..imgserv.render_mdi import _load_mdi_paths
 from ..runtime import _get_store, _resolve_device_id, entry_connection
 from .blueprint import async_get_blueprint
@@ -318,10 +319,29 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
     })
 
 
+@websocket_api.websocket_command({
+    "type": "lizaip_config/device_memory",
+    vol.Required("entry_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_device_memory(hass: HomeAssistant, connection, msg: dict) -> None:
+    """How full the remote's RAM and flash are (see ``device/memory.py``).
+
+    A debug tool: the bars it feeds, and ``device/memory.py`` behind it, are
+    stripped from a stable release with the rest of the debug tab.
+    """
+    conn = entry_connection(hass.config_entries.async_get_entry(msg["entry_id"]))
+    if conn is None:
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+    connection.send_result(msg["id"], await async_read_memory(conn))
+
+
 def register_debug_commands(hass: HomeAssistant) -> None:
     """Register the debug commands."""
     for handler in (ws_debug_probe, ws_set_debug_port, ws_debug_report,
                     ws_debug_logging, ws_set_log_level,
                     ws_debug_port_state, ws_reset_log_levels, ws_debug_traffic,
-                    ws_debug_random_pages):
+                    ws_debug_random_pages, ws_device_memory):
         websocket_api.async_register_command(hass, handler)

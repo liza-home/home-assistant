@@ -51,6 +51,7 @@ from .const import (
     PERCENT_FEATHER_FRACTION,
     PERCENT_FEATHER_MIN_ROWS,
     PERCENT_TINT_ALPHA,
+    TEXT_BAND_INFO,
     TRANSPARENT,
 )
 
@@ -219,7 +220,7 @@ def finalize_png(
     keep_alpha: bool = False,
     percent: int | None = None,
     bg_color: tuple | None = None,
-    crop: bool = False,
+    crop: bool | str = False,
 ) -> tuple[bytes, str]:
     """Steps 2–5: crop, percent, mount, encode. **The one exit from every render path.**
 
@@ -228,7 +229,10 @@ def finalize_png(
     order:
 
     1. *(the caller's renderer produced the image)*
-    2. ``autocrop`` — only when *crop* is set
+    2. ``autocrop`` — only when *crop* is set; ``"vertical"`` (text) keeps the
+       width and cuts to the band ``render_text`` recorded in the image's
+       ``info`` -- the font's full reach above and below the baseline, whatever
+       the letters -- or, without one, evenly at top and bottom
     3. ``apply_percent_tint`` — when ``percent`` is set, upper rows are dimmed
        via alpha to :data:`PERCENT_TINT_ALPHA`
     4. ``mount`` onto ``bg_color``
@@ -237,7 +241,13 @@ def finalize_png(
     That is why the renderers carry none of these parameters in their
     signatures: they never needed to know.
     """
-    if crop:
+    if crop == "vertical":
+        band = img.info.get(TEXT_BAND_INFO)
+        if band:
+            img = img.crop((0, band[0], img.width, band[2]))
+        else:
+            img = autocrop(img, TRANSPARENT, vertical_only=True)
+    elif crop:
         img = autocrop(img, TRANSPARENT)
     img = apply_percent_tint(img, percent)
     img = mount(img, bg_color)
@@ -249,6 +259,7 @@ def autocrop(
     bg_color: tuple = TRANSPARENT,
     symmetric_vertical: bool = True,
     horizontal_only: bool = False,
+    vertical_only: bool = False,
 ) -> Image.Image:
     """Step 2: crop an image to its content bounding box.
 
@@ -264,6 +275,9 @@ def autocrop(
     equalises the vertical crop: the smaller of the top and bottom margins is
     applied to both sides so the content stays vertically centred.  Pass
     ``False`` to get tight cropping on both axes.
+
+    *vertical_only* keeps the width and crops top and bottom by the same
+    amount.
     """
     bg = Image.new("RGBA", img.size, bg_color)
     diff = np.array(img.convert("RGBA")) != np.array(bg)
@@ -275,6 +289,9 @@ def autocrop(
 
     if horizontal_only:
         return img.crop((x0, 0, x1, img.height))
+    if vertical_only:
+        x0, x1 = 0, img.width
+        symmetric_vertical = True
 
     rows = mask.any(axis=1)
     y0, y1 = int(rows.argmax()), int(rows.size - rows[::-1].argmax())

@@ -10,6 +10,7 @@ metadata plus button assignments keyed by blueprint button id.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -63,6 +64,23 @@ class LizaRemoteStore:
         # Keyed by path and only ever populated by a successful write, so an
         # entry also means "this process wrote that file".
         self._written_page_digests: dict[str, str] = {}
+        self._device_locks: dict[str, asyncio.Lock] = {}
+
+    def device_lock(self, device_id: str) -> asyncio.Lock:
+        """The lock every change to *device_id* is made under.
+
+        A change here is several awaits long -- read, write the page lists,
+        write each page file, sweep the folder -- and two of them interleaving
+        leaves the folder holding half of each. A restore is the sharpest case:
+        it moves the whole folder aside, and a save that resumed afterwards
+        would sweep away the pages it just put there using the page ids it read
+        before. Public writers take this; readers do not, as a half-written
+        page is a question the cache answers from memory.
+        """
+        lock = self._device_locks.get(device_id)
+        if lock is None:
+            lock = self._device_locks[device_id] = asyncio.Lock()
+        return lock
 
     def _base_dir(self) -> str:
         return self._hass.config.path(YAML_DIR)
@@ -674,29 +692,46 @@ class LizaRemoteStore:
         self._loaded.add(device_id)
 
     async def async_save_device(self, device_id: str) -> None:
-        await self._write_device_to_disk(device_id)
+        async with self.device_lock(device_id):
+            await self._write_device_to_disk(device_id)
 
     async def async_ensure_default(self, device_id: str) -> None:
-        await self._ensure_loaded(device_id)
-        if not self._data.get(device_id):
-            self._data[device_id] = {
-                "pages": [],
-                "action_library": [],
-                "assignments": {},
-            }
-            await self.async_save_device(device_id)
+        async with self.device_lock(device_id):
+            await self._ensure_loaded(device_id)
+            if not self._data.get(device_id):
+                self._data[device_id] = {
+                    "pages": [],
+                    "action_library": [],
+                    "assignments": {},
+                }
+                await self._write_device_to_disk(device_id)
 
-    async def async_remove_device(self, device_id: str) -> None:
+    def async_forget_device(self, device_id: str) -> None:
+        """Drop everything cached about *device_id*, leaving the files alone.
+
+        What a restore needs: the YAML under the device folder has been replaced
+        behind the cache's back, so the next read has to come from disk. The
+        page digests matter as much as the data — a digest says "this file holds
+        that payload", and a restored file whose payload happens to match the
+        last one this process wrote would otherwise never be rewritten.
+
+        Not a coroutine; it only touches dictionaries. The ``async_`` prefix
+        marks it as belonging to the loop, like the rest of the store's API.
+        """
         self._data.pop(device_id, None)
         self._settings.pop(device_id, None)
         self._loaded.discard(device_id)
         self._forget_page_digests(self._pages_dir(device_id))
-        device_dir = self._device_dir(device_id)
-        if await self._hass.async_add_executor_job(os.path.isdir, device_dir):
-            try:
-                await self._hass.async_add_executor_job(shutil.rmtree, device_dir)
-            except OSError as exc:
-                _LOGGER.warning("Failed to remove %s: %s", device_dir, exc)
+
+    async def async_remove_device(self, device_id: str) -> None:
+        async with self.device_lock(device_id):
+            self.async_forget_device(device_id)
+            device_dir = self._device_dir(device_id)
+            if await self._hass.async_add_executor_job(os.path.isdir, device_dir):
+                try:
+                    await self._hass.async_add_executor_job(shutil.rmtree, device_dir)
+                except OSError as exc:
+                    _LOGGER.warning("Failed to remove %s: %s", device_dir, exc)
 
     def _ensure_device(self, device_id: str) -> dict[str, Any]:
         if device_id not in self._data:
@@ -724,35 +759,38 @@ class LizaRemoteStore:
         writes to persist what is really two lists of integers, and the panel
         waits on all of them before the thumbnail visibly lands.
         """
-        await self._ensure_loaded(device_id)
-        entry = self._ensure_device(device_id)
-        entry["pages"] = pages
-        await self._async_write_page_lists(device_id, pages)
+        async with self.device_lock(device_id):
+            await self._ensure_loaded(device_id)
+            entry = self._ensure_device(device_id)
+            entry["pages"] = pages
+            await self._async_write_page_lists(device_id, pages)
 
     async def async_set_pages(self, device_id: str, pages: list[dict]) -> None:
-        await self._ensure_loaded(device_id)
-        entry = self._ensure_device(device_id)
-        old_page_ids = {p["id"] for p in entry.get("pages", []) if isinstance(p, dict) and "id" in p}
-        entry["pages"] = pages
-        page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
-        await self._async_write_page_lists(device_id, pages)
-        assignments = entry.get("assignments", {})
-        for rid in old_page_ids - set(page_ids):
-            assignments.pop(rid, None)
-        await self._write_page_files(device_id, pages, assignments)
-        # Sweep the directory rather than deleting only the ids this call
-        # happens to have dropped. The in-memory diff can see a page file only
-        # while the page is still listed in memory, and `_async_write_page_lists`
-        # above has already dropped the removed ids from `page_order.yaml`: if
-        # the process stops between those two points the file is left behind and
-        # becomes invisible to every later diff, so it can never be deleted.
-        # Listing the directory and removing whatever is not an active page is
-        # authoritative, costs one executor job instead of two per removal, and
-        # heals orphans left by earlier interruptions.
-        await self._hass.async_add_executor_job(
-            self._cleanup_stale_pages, self._pages_dir(device_id), set(page_ids),
-        )
-        self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
+        async with self.device_lock(device_id):
+            await self._ensure_loaded(device_id)
+            entry = self._ensure_device(device_id)
+            old_page_ids = {p["id"] for p in entry.get("pages", []) if isinstance(p, dict) and "id" in p}
+            entry["pages"] = pages
+            page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
+            await self._async_write_page_lists(device_id, pages)
+            assignments = entry.get("assignments", {})
+            for rid in old_page_ids - set(page_ids):
+                assignments.pop(rid, None)
+            await self._write_page_files(device_id, pages, assignments)
+            # Sweep the directory rather than deleting only the ids this call
+            # happens to have dropped. The in-memory diff can see a page file
+            # only while the page is still listed in memory, and
+            # `_async_write_page_lists` above has already dropped the removed
+            # ids from `page_order.yaml`: if the process stops between those
+            # two points the file is left behind and becomes invisible to every
+            # later diff, so it can never be deleted. Listing the directory and
+            # removing whatever is not an active page is authoritative, costs
+            # one executor job instead of two per removal, and heals orphans
+            # left by earlier interruptions.
+            await self._hass.async_add_executor_job(
+                self._cleanup_stale_pages, self._pages_dir(device_id), set(page_ids),
+            )
+            self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
 
     @staticmethod
     def compute_page_hash(image: str, assignments: dict[str, dict]) -> int:
@@ -800,18 +838,20 @@ class LizaRemoteStore:
         return int(digest[:8], 16)
 
     async def async_recompute_page_hash(self, device_id: str, page_id: int) -> int:
-        await self._ensure_loaded(device_id)
-        pages = await self.async_get_pages(device_id)
-        assignments = await self.async_get_assignments(device_id, page_id)
-        page = next((p for p in pages if p.get("id") == page_id), None)
-        if not page:
-            return 0
-        new_hash = self.compute_page_hash(page.get("image", ""), assignments)
-        if page.get("hash") != new_hash:
-            page["hash"] = new_hash
-            page_path = self._page_path(device_id, page_id)
-            await self._async_write_page(page_path, page, assignments)
-        return new_hash
+        async with self.device_lock(device_id):
+            await self._ensure_loaded(device_id)
+            data = self._data.get(device_id, {})
+            pages = data.get("pages", [])
+            assignments = data.get("assignments", {}).get(page_id, {})
+            page = next((p for p in pages if p.get("id") == page_id), None)
+            if not page:
+                return 0
+            new_hash = self.compute_page_hash(page.get("image", ""), assignments)
+            if page.get("hash") != new_hash:
+                page["hash"] = new_hash
+                page_path = self._page_path(device_id, page_id)
+                await self._async_write_page(page_path, page, assignments)
+            return new_hash
 
     async def async_get_action_library(self, device_id: str) -> list[dict]:
         await self._ensure_loaded(device_id)
@@ -820,16 +860,17 @@ class LizaRemoteStore:
         return lib if isinstance(lib, list) else []
 
     async def async_set_action_library(self, device_id: str, actions: list[dict]) -> None:
-        await self._ensure_loaded(device_id)
-        entry = self._ensure_device(device_id)
-        entry["action_library"] = actions
-        clean_actions = []
-        for a in actions:
-            cleaned = {k: v for k, v in a.items()
-                       if v is not None and not (isinstance(v, list) and not v) and not (isinstance(v, dict) and not v)}
-            clean_actions.append(cleaned)
-        path = self._action_library_path(device_id)
-        await self._hass.async_add_executor_job(self._write_yaml, path, clean_actions)
+        async with self.device_lock(device_id):
+            await self._ensure_loaded(device_id)
+            entry = self._ensure_device(device_id)
+            entry["action_library"] = actions
+            clean_actions = []
+            for a in actions:
+                cleaned = {k: v for k, v in a.items()
+                           if v is not None and not (isinstance(v, list) and not v) and not (isinstance(v, dict) and not v)}
+                clean_actions.append(cleaned)
+            path = self._action_library_path(device_id)
+            await self._hass.async_add_executor_job(self._write_yaml, path, clean_actions)
 
     async def async_get_assignments(self, device_id: str, page_id: int) -> dict[str, dict]:
         await self._ensure_loaded(device_id)
@@ -837,13 +878,14 @@ class LizaRemoteStore:
         return data.get("assignments", {}).get(page_id, {})
 
     async def async_set_assignments(self, device_id: str, page_id: int, assignments: dict[str, dict]) -> None:
-        await self._ensure_loaded(device_id)
-        entry = self._ensure_device(device_id)
-        entry.setdefault("assignments", {})[page_id] = assignments
-        pages = entry.get("pages", [])
-        page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), {"id": page_id})
-        path = self._page_path(device_id, page_id)
-        await self._async_write_page(path, page_meta, assignments)
+        async with self.device_lock(device_id):
+            await self._ensure_loaded(device_id)
+            entry = self._ensure_device(device_id)
+            entry.setdefault("assignments", {})[page_id] = assignments
+            pages = entry.get("pages", [])
+            page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), {"id": page_id})
+            path = self._page_path(device_id, page_id)
+            await self._async_write_page(path, page_meta, assignments)
 
     async def async_get_all_assignments(self, device_id: str) -> dict[int, dict[str, dict]]:
         await self._ensure_loaded(device_id)
@@ -877,8 +919,9 @@ class LizaRemoteStore:
     async def async_set_settings(self, device_id: str, settings: dict) -> dict[str, dict[str, Any]]:
         """Save the text settings; returns them as stored."""
         clean = normalize_settings(settings)
-        await self._hass.async_add_executor_job(
-            self._write_yaml, self._settings_path(device_id), clean,
-        )
-        self._settings[device_id] = clean
+        async with self.device_lock(device_id):
+            await self._hass.async_add_executor_job(
+                self._write_yaml, self._settings_path(device_id), clean,
+            )
+            self._settings[device_id] = clean
         return deepcopy(clean)

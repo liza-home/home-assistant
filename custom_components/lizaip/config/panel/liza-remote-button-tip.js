@@ -28,6 +28,46 @@ const TIP_MAX_PRESS_ROWS = 4;
 
 export const ButtonTipMixin = {
 
+  // ===================== whether the card appears =====================
+
+  // Where the switch on the gear tab remembers itself. Browser-local, like the
+  // page-links preference beside it: it changes what this editor draws and
+  // nothing the remote does.
+  BUTTON_TIPS_PREF: "liza.remote.buttonTips",
+
+  /**
+   * Whether a hover raises a card at all -- over a shape on the face or over a
+   * page in the strip. Off until switched on.
+   *
+   * Both are the same card and the same interruption, so they answer to one
+   * switch rather than to two that would have to be found and flipped
+   * together. Off by default, like the page links beside it: the editor says
+   * nothing on hover unless asked to. Read once and kept: this is asked on
+   * every hover.
+   *
+   * Storage is wrapped: a browser with site data blocked throws on access
+   * rather than returning null, and an unreadable preference is not a reason
+   * for the face to stop rendering.
+   */
+  _buttonTipsEnabled() {
+    if (this._buttonTipsOn === undefined) {
+      let stored = null;
+      try { stored = window.localStorage?.getItem(this.BUTTON_TIPS_PREF); } catch (e) { stored = null; }
+      this._buttonTipsOn = stored === "1";
+    }
+    return this._buttonTipsOn;
+  },
+
+  _setButtonTipsEnabled(on) {
+    this._buttonTipsOn = !!on;
+    try {
+      window.localStorage?.setItem(this.BUTTON_TIPS_PREF, this._buttonTipsOn ? "1" : "0");
+    } catch (e) { /* Blocked storage: the switch still works for this session. */ }
+    // Switched off while a card is up -- the pointer may be resting on a shape
+    // on another tab -- it goes now rather than at the next pointer move.
+    if (!this._buttonTipsOn) this._hideButtonTip();
+  },
+
   // ===================== what the card says =====================
 
   // Everything the card knows about one shape, as data. Split from the markup
@@ -230,6 +270,8 @@ export const ButtonTipMixin = {
   // focus, which is deliberate and has nothing to wait out.
   _onButtonHover(key, pathEl, on, instant) {
     if (!on) { this._hideButtonTip(); return; }
+    // Switched off on the gear tab: a shape says nothing on hover.
+    if (!this._buttonTipsEnabled()) return;
     // Mid-drag the card would sit over the shape the user is aiming at, and
     // the ghost is already saying what is being moved.
     if (this.classList?.contains?.("face-dragging")) return;
@@ -374,6 +416,8 @@ export const ButtonTipMixin = {
   // card about the page is the thing the face's own tooltip was removed for.
   _onPageHover(pageIdx, thumbEl, on, instant) {
     if (!on) { this._hideButtonTip(); return; }
+    // The same switch as the shapes: one card, one preference.
+    if (!this._buttonTipsEnabled()) return;
     if (pageIdx === this._currentPageIdx) return;
     const page = this._pages?.[pageIdx];
     const bp = this._blueprint;

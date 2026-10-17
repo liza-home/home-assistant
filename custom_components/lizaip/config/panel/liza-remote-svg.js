@@ -647,6 +647,52 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
   container.appendChild(svg);
 }
 
+/** The button area of a face, without the casing around it. */
+const CROP = { x: 32, y: 33, w: 108, h: 295 };
+
+/** The device title area in its own pixels, which is not the bar's shape. */
+const TITLE = { w: 200, h: 60 };
+
+/** Crop a drawn face to its button area, in place. */
+export function cropFace(svg) {
+  if (!svg) return;
+  svg.style.width = "100%";
+  svg.style.height = "auto";
+  svg.setAttributeNS(null, "viewBox", `${CROP.x} ${CROP.y} ${CROP.w} ${CROP.h}`);
+  svg.setAttributeNS(null, "width", String(CROP.w));
+  svg.setAttributeNS(null, "height", String(CROP.h));
+}
+
+/**
+ * Where an HTML overlay goes over a shape, in per cent of the cropped face,
+ * so it holds at whatever pixel size the face is drawn.
+ */
+export function overlayStyle(b, w, h = w) {
+  return `left:${((b.cx - w / 2 - CROP.x) / CROP.w * 100).toFixed(1)}%;`
+    + `top:${((b.cy - h / 2 - CROP.y) / CROP.h * 100).toFixed(1)}%;`
+    + `width:${(w / CROP.w * 100).toFixed(1)}%;`
+    + `height:${(h / CROP.h * 100).toFixed(1)}%;`;
+}
+
+/**
+ * A title picture at the size the device draws it, in per cent of its bar.
+ *
+ * Sized from the picture's own pixels: the bar is 4:1 while the title area is
+ * 10:3, so fitting a short label to the bar made it as large as a full-width
+ * logo. One too long overflows, which is what the device does with it too.
+ */
+export function titleFit(b, naturalWidth, naturalHeight) {
+  const scale = Math.min(b.w / TITLE.w, b.h / TITLE.h);
+  const w = (naturalWidth || TITLE.w) * scale;
+  const h = (naturalHeight || TITLE.h) * scale;
+  return {
+    left: ((b.w - w) / 2 / b.w * 100).toFixed(2) + "%",
+    top: ((b.h - h) / 2 / b.h * 100).toFixed(2) + "%",
+    width: (w / b.w * 100).toFixed(2) + "%",
+    height: (h / b.h * 100).toFixed(2) + "%",
+  };
+}
+
 /**
  * Compute bounding box center + dimensions of an SVG path.
  * Exported so callers can position HTML <img> overlays at the same locations.

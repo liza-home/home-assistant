@@ -38,6 +38,7 @@ from .const import (
 )
 from .config.panel import async_setup_panel, async_setup_config_entry, async_unload_config_entry
 from .config.store import LizaRemoteStore
+from .config_restore import async_setup_config_restore
 from .diagnostics_bundle import async_setup_diagnostics_bundle
 from .imgserv import async_setup_imgserv
 from .shared.numbers import to_float
@@ -73,6 +74,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     # Where a built support bundle is collected from by the browser.
     async_setup_diagnostics_bundle(hass)
+
+    # And where a downloaded configuration is posted back to.
+    async_setup_config_restore(hass)
 
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
@@ -202,7 +206,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
     _watch_server_language(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _watch_queue_targets(hass, entry)
     return True
+
+
+def _watch_queue_targets(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Keep a queue sensor for every speaker the buttons point at.
+
+    After the platforms, not before: the sensor platform is what can add
+    them, and nothing can be added until it is set up.
+    """
+    from .config.const import CONFIG_CHANGED_EVENT
+    from .media_queue import async_sync_sensors
+
+    async def _sync(_event=None) -> None:
+        await async_sync_sensors(hass)
+
+    entry.async_on_unload(hass.bus.async_listen(CONFIG_CHANGED_EVENT, _sync))
+    hass.async_create_task(_sync())
 
 
 def _watch_server_language(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -251,6 +272,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> b
     """Unload a lizaIP config entry."""
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
+        from .media_queue import async_sync_sensors
+        from .media_queue.sensor import async_release
+
+        # The queue sensors this entry added went with its platform; another
+        # loaded entry adds them back.
+        async_release(hass, entry.entry_id)
+        await async_sync_sensors(hass)
         await async_unload_config_entry(hass, entry)
         # Before `disconnect()`: the cache lives on `runtime_data`, and Scripts
         # register themselves in `hass.data` with a strong reference, so nothing

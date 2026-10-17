@@ -42,11 +42,11 @@ export const SettingsViewMixin = {
     });
   },
 
-  _settingsPreviewUrl(kind) {
+  /** The sample words as the remote draws them in the *kind* strip, `{src, key}`. */
+  _settingsPreview(kind) {
     const sample = this._t(kind === "title" ? "settings_sample_title" : "settings_sample_tooltip");
-    return `/api/imgserv/text:${encodeURIComponent(sample)}?size=${kind}`
-      // Dark whatever the theme: the preview sits on black, like the remote.
-      + `&mode=dark&alpha=1${this._textStyleQuery(kind)}`;
+    // Dark whatever the theme: the preview sits on black, like the remote.
+    return this._deviceImg(`text:${sample}`, kind, "", null, { keepMode: true });
   },
 
   _htmlSettingsFontOptions(current) {
@@ -89,8 +89,11 @@ export const SettingsViewMixin = {
             <span class="config-field-hint" id="${sizeHintId}">${this._esc(this._t("settings_font_size_hint", { min: limits.min, max: limits.max }))}</span>
           </div>
           <div class="settings-preview">
-            <img src="${this._esc(this._settingsPreviewUrl(kind))}"
-                 alt="${this._esc(this._t("settings_preview"))}">
+            ${(() => {
+              const { src, key } = this._settingsPreview(kind);
+              return `<img ${src ? `src="${this._esc(src)}"` : ""} data-dev-key="${this._esc(key)}" data-keep-mode
+                 alt="${this._esc(this._t("settings_preview"))}">`;
+            })()}
           </div>
         </div>
       </ha-card>`;
@@ -266,6 +269,9 @@ export const SettingsViewMixin = {
     const id = "liza-settings-page-links";
     const hintId = `${id}-hint`;
     const labelId = `${id}-label`;
+    const tipId = "liza-settings-button-tips";
+    const tipHintId = `${tipId}-hint`;
+    const tipLabelId = `${tipId}-label`;
     return `
       <ha-card outlined>
         <div class="actions-card-header">
@@ -281,6 +287,15 @@ export const SettingsViewMixin = {
               <ha-switch id="${id}" class="settings-pagelinks-switch"
                          ${this._pageLinksEnabled() ? "checked" : ""}
                          aria-labelledby="${labelId}" aria-describedby="${hintId}"></ha-switch>
+            </div>
+            <div class="settings-switch-row">
+              <div class="settings-switch-text">
+                <label id="${tipLabelId}" for="${tipId}">${this._esc(this._t("settings_button_tips"))}</label>
+                <span class="config-field-hint" id="${tipHintId}">${this._esc(this._t("settings_button_tips_hint"))}</span>
+              </div>
+              <ha-switch id="${tipId}" class="settings-buttontips-switch"
+                         ${this._buttonTipsEnabled() ? "checked" : ""}
+                         aria-labelledby="${tipLabelId}" aria-describedby="${tipHintId}"></ha-switch>
             </div>
           </div>
         </div>
@@ -451,7 +466,8 @@ export const SettingsViewMixin = {
   },
 
   /**
-   * The ⋮ menu: the two downloads, from one place on every screen.
+   * The ⋮ menu: a configuration out, a configuration back in, and the
+   * diagnostics report, from one place on every screen.
    *
    * `entryId` is passed rather than read from `_currentEntry`, because the
    * device list offers the same menu per row and no device is open there.
@@ -464,6 +480,30 @@ export const SettingsViewMixin = {
     const running = this._diagJob?.state === "running";
     const items = [
       {
+        cls: "diag-menu-config",
+        icon: this._configBusy ? "mdi:progress-download" : "mdi:download",
+        label: this._configBusy
+          ? `${this._t("diagnostics_scope_config")} — ${this._t("diagnostics_menu_busy")}`
+          : this._t("diagnostics_scope_config"),
+        run: () => this._downloadConfig(entryId),
+      },
+      {
+        cls: "diag-menu-restore",
+        // Nothing to open while one is being written: the window would only
+        // refuse, so the row says why and cannot be pressed.
+        disabled: !!this._restoreBusy,
+        // Not an upload arrow: nothing is leaving. A configuration is coming
+        // back in from a file the user downloaded earlier.
+        icon: this._restoreBusy ? "mdi:progress-upload" : "mdi:backup-restore",
+        label: this._restoreBusy
+          ? `${this._t("restore_config")} — ${this._t("restore_running")}`
+          : this._t("restore_config"),
+        run: () => this._openRestoreDialog(entryId),
+      },
+      // Set apart from the pair above it: those two are a configuration going
+      // out and coming back, this one is a report for support.
+      { separator: true },
+      {
         cls: "diag-menu-standard",
         // The arrow becomes the progress ring while the build runs: the item
         // is the only thing on screen once the window has been put away.
@@ -474,14 +514,6 @@ export const SettingsViewMixin = {
             })}`
           : this._t("diagnostics_scope_standard"),
         run: () => (running ? this._openDiagnosticsDialog() : this._downloadDiagnostics(entryId)),
-      },
-      {
-        cls: "diag-menu-config",
-        icon: this._configBusy ? "mdi:progress-download" : "mdi:download",
-        label: this._configBusy
-          ? `${this._t("diagnostics_scope_config")} — ${this._t("diagnostics_menu_busy")}`
-          : this._t("diagnostics_scope_config"),
-        run: () => this._downloadConfig(entryId),
       },
     ];
     this._openMenu(ev, items, { keepCase: true, anchor: anchor || ev?.currentTarget });
@@ -832,6 +864,8 @@ export const SettingsViewMixin = {
     // busy state to wait on or failure to report.
     root.querySelector(".settings-pagelinks-switch")?.addEventListener("change", (ev) =>
       this._setPageLinksEnabled(ev.currentTarget.checked === true));
+    root.querySelector(".settings-buttontips-switch")?.addEventListener("change", (ev) =>
+      this._setButtonTipsEnabled(ev.currentTarget.checked === true));
     // `ha-switch` is not a native input, so `<label for>` does not reach it.
     // `preventDefault` so that a browser which *does* forward the click cannot
     // toggle the switch as well and have the two handlers undo each other.
@@ -852,6 +886,9 @@ export const SettingsViewMixin = {
           // control is moved here or it does not move at all.
           sw.checked = next;
           this._setPageLinksEnabled(next);
+        } else if (sw.classList.contains("settings-buttontips-switch")) {
+          sw.checked = next;
+          this._setButtonTipsEnabled(next);
         } else if (sw.classList.contains("settings-feature-switch")) {
           this._changeTextSetting(sw.dataset.section, "enabled", next);
         } else if (sw.classList.contains("settings-icon-switch")) {

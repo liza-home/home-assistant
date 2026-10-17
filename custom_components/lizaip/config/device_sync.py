@@ -29,6 +29,7 @@ from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError, is_valid_p
 from ..runtime import entry_connection, entry_device_id, _get_store
 from ..variables_calc import variables_scope
 from .const import is_subpage
+from .events import fire_device_synced
 from .page_payload import build_page_payload, build_sync_context, compute_page_hash
 from .panel_entry import get_panel_entry
 
@@ -676,10 +677,12 @@ def _note_sync_failure(
 
 
 def _note_sync_success(hass: HomeAssistant, entry: ConfigEntry, conn: Any) -> None:
-    """Clear the failure count."""
+    """Clear the failure count, and tell the panel the device has the change."""
     if conn.page_cache.failures >= MAX_SYNC_FAILURES:
         _LOGGER.info("Pages are in sync with %s again", entry.title)
     conn.page_cache.failures = 0
+    # What the panel's memory bars wait for: a transfer is what moves them.
+    fire_device_synced(hass, entry.entry_id)
 
 
 #: The parts of a button an entity variable can move. Anything else differing

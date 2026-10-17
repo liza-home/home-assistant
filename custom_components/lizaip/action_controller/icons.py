@@ -28,7 +28,11 @@ from ..shared.icon_defaults import icon_defaults
 from ..shared.labels import is_token_only_label, state_token_label
 from ..shared.assignment import name_is_source_owned, name_is_user_written
 from ._state import cycle_index
-from .helpers import first_step, resolve_step_entity, subject_for_assign
+from .helpers import (
+    first_step,
+    resolve_step_entity,
+    subject_for_assign,
+)
 from .toggle import (
     MODE_CYCLE,
     rule_icon,
@@ -117,6 +121,14 @@ def _compute_next_state_tooltip_inner(
     # and three copies of the call is three places to forget an argument --
     # `step_data` was already missing from one of them once.
     token_state = state_token_label(svc, state.state if state else "", lang, attrs, step_data)
+    # The same reasoning, and the same dict, as `_fill_label_tokens` builds at
+    # sync time. Both rungs below fill from `label_values`, so the live tooltip
+    # and the synced one resolve `${_state}` identically.
+    label_values = {"_state": token_state}
+    # `${_device.media_title}` and `${_queue.next_song}` are aliases for
+    # attributes of the subject -- the player itself, or its queue sensor --
+    # so they travel as an entity rather than in the dict above.
+    subject_entity = getattr(state, "entity_id", None)
 
     # A label the user typed wins here exactly as it does in `button_rendering`'s
     # tooltip ladder. Without this the two producers disagree: the initial sync
@@ -143,16 +155,20 @@ def _compute_next_state_tooltip_inner(
         and not bound_toggle
         and (user_named or stored_name != (action.get("name") or ""))
     ):
-        # Empty after cleaning means the label was only wreckage; fall through
-        # rather than blanking the tooltip. Mirrors `button_rendering`'s rung.
+        # Empty after cleaning: the user's own label is printed as it reads,
+        # empty included -- `${_device.media_title_prev}` with nothing before
+        # it must not turn into "Wohnzimmer Previous". Only a label nobody
+        # typed, which was nothing but wreckage, falls through to a derived
+        # name. Mirrors `button_rendering`'s rung.
         resolved = clean_label_text(
             substitute_label_tokens(
                 stored_name,
-                {"_state": token_state},
+                label_values,
                 hass,
+                subject_entity,
             )
         )
-        if resolved:
+        if resolved or user_named:
             return resolved
 
     entity_name = subject_name
@@ -178,8 +194,9 @@ def _compute_next_state_tooltip_inner(
     if token_only:
         resolved = substitute_label_tokens(
             stored_name,
-            {"_state": token_state},
+            label_values,
             hass,
+            subject_entity,
         )
         if resolved:
             return f"{entity_name} {resolved}" if entity_name else resolved

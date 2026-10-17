@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont
 from PIL.features import check as _pil_check
@@ -27,6 +28,7 @@ from .const import (
     FALLBACK_FONT_PATHS,
     FONTS_DIR,
     MAX_SIZE,
+    TEXT_BAND_INFO,
     TRANSPARENT,
     find_font,
     font_has_all_glyphs,
@@ -226,6 +228,50 @@ def grapheme_iter(text: str):
 
 # ── Text rendering ────────────────────────────────────────────────────────
 
+# What a line of this font can reach above and below its baseline: accented
+# capitals go higher than the font's own ascent, and these tails lower.
+_ASCENDER_PROBE = "ÄÖÜÅÉÎ"
+_DESCENDER_PROBE = "gjpqyÇ"
+
+
+def _extents(font: ImageFont.FreeTypeFont) -> tuple[int, int]:
+    """How far *font* reaches above and below its baseline, in pixels."""
+    ascent, descent = font.getmetrics()
+    draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    up = -draw.textbbox((0, 0), _ASCENDER_PROBE, font=font, anchor="ls")[1]
+    down = draw.textbbox((0, 0), _DESCENDER_PROBE, font=font, anchor="ls")[3]
+    return max(ascent, up, 0), max(descent, down, 0)
+
+
+@lru_cache(maxsize=64)
+def _line(path: str | None, height: int, requested: int) -> tuple[int, int, int, int]:
+    """``(font_size, top, baseline, bottom)`` of the line drawn in *height*.
+
+    The font size is *requested*, shrunk until everything the font can reach
+    above and below its baseline fits *height*; that band is centred.
+    """
+    size = max(1, requested)
+    while True:
+        up, down = _extents(_load_font(path, size))
+        if up + down <= height or size == 1:
+            break
+        size = min(size - 1, max(1, int(size * height / max(up + down, 1))))
+    top = max(0, (height - up - down) // 2)
+    return size, top, top + up, min(height, top + up + down)
+
+
+def text_line(
+    height: int,
+    font_size: int | None = None,
+    font_id: str | None = None,
+    user_fonts_dir: str | None = None,
+) -> tuple[int, int, int]:
+    """``(top, baseline, bottom)`` of what ``render_text`` draws at *height*."""
+    height = min(height, MAX_SIZE)
+    path = _resolve_fonts(font_id, user_fonts_dir)[0]
+    return _line(path, height, font_size or height)[1:]
+
+
 def render_text(
     text: str,
     width: int,  # accepted for API compatibility; image width is derived from text
@@ -240,11 +286,13 @@ def render_text(
     Step 1 of the pipeline in ``render.py``: the background and the PNG encode
     belong to ``finalize_png``.
 
-    Font size defaults to *height* (no shrink-to-fit loop).  The image width is
-    sized to fit the text at the chosen font size; the *width* argument is
-    ignored for the output dimensions. The height is *not* trimmed to the
-    glyphs — the canvas keeps the requested height so that "Hi" and "Hg" come
-    out the same size and sit on a common baseline.
+    The font size -- *height* unless given -- is reduced until everything the
+    font can reach above its baseline (accented capitals) and below it (tails)
+    fits *height*, and that band is centred. The image width is sized to fit
+    the text; the *width* argument is ignored for the output dimensions. The
+    band does not depend on the text: "Hi" and "Hg" stand on the same line,
+    and ``finalize_png`` crops a text image to the band (:data:`TEXT_BAND_INFO`),
+    never to the ink.
 
     Characters whose glyphs are missing from the primary font are drawn with
     the NotoEmoji fallback font so only those characters switch fonts — the
@@ -252,10 +300,8 @@ def render_text(
     """
     height = min(height, MAX_SIZE)
 
-    if font_size is None:
-        font_size = height
-
     primary_path, emoji_path, color_emoji_path = _resolve_fonts(font_id, user_fonts_dir)
+    font_size, top, baseline, bottom = _line(primary_path, height, font_size or height)
     primary_font = _load_font(primary_path, font_size)
     emoji_font = _load_font(emoji_path, font_size) if emoji_path else primary_font
 
@@ -281,16 +327,14 @@ def render_text(
 
     if not needs_emoji:
         # Fast path: whole string in the primary font.
-        bbox = draw.textbbox((0, 0), text, font=primary_font)
+        bbox = draw.textbbox((0, 0), text, font=primary_font, anchor="ls")
         text_w = max(bbox[2] - bbox[0], 0)
-        text_h = max(bbox[3] - bbox[1], 0)
         img_width = min(max(text_w + 2 * TEXT_PADDING, 1), MAX_SIZE)
 
         img = Image.new("RGBA", (img_width, height), TRANSPARENT)
         draw = ImageDraw.Draw(img)
         x = TEXT_PADDING - bbox[0]
-        y = (height - text_h) / 2 - bbox[1]
-        draw.text((x, y), text, font=primary_font, fill=fg_color)
+        draw.text((x, baseline), text, font=primary_font, fill=fg_color, anchor="ls")
     else:
         # Slow path: per-cluster font selection.
         # For emoji clusters with a color font available, we render at the
@@ -299,58 +343,52 @@ def render_text(
 
         # First pass: measure each cluster. For color emoji we pre-render
         # to get the final (scaled) dimensions.
-        segments: list[tuple[str, bool, int, int]] = []  # (cluster, is_emoji, w, h)
+        # A colour emoji is a bitmap, not a glyph on the line: it is drawn as
+        # tall as the line reaches, from the top of the ascenders down.
+        up, down = _extents(primary_font)
+        emoji_h = max(1, up + down)
+
+        segments: list[tuple[str, Image.Image | None]] = []
         total_w = 0
-        max_h = 0
-        y_min_text = 0
-        y_max_text = 0
-
         for cl in clusters:
-            is_emoji = _char_needs_emoji(cl, primary_path)
-            if is_emoji and color_emoji_font:
-                # Pre-render color emoji to get scaled dimensions
-                emoji_img = _render_color_emoji(cl, font_size, color_emoji_font)
-                segments.append((cl, True, emoji_img.width, emoji_img.height))
-                total_w += emoji_img.width
-                max_h = max(max_h, emoji_img.height)
-            elif is_emoji:
-                bb = draw.textbbox((0, 0), cl, font=emoji_font)
-                w = bb[2] - bb[0]
-                h = bb[3] - bb[1]
-                segments.append((cl, True, w, h))
-                total_w += w
-                y_min_text = min(y_min_text, bb[1])
-                y_max_text = max(y_max_text, bb[3])
+            if _char_needs_emoji(cl, primary_path):
+                if color_emoji_font:
+                    emoji_img = _render_color_emoji(cl, emoji_h, color_emoji_font)
+                    segments.append((cl, emoji_img))
+                    total_w += emoji_img.width
+                    continue
+                font = emoji_font
             else:
-                bb = draw.textbbox((0, 0), cl, font=primary_font)
-                w = bb[2] - bb[0]
-                segments.append((cl, False, w, 0))
-                total_w += w
-                y_min_text = min(y_min_text, bb[1])
-                y_max_text = max(y_max_text, bb[3])
+                font = primary_font
+            bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
+            segments.append((cl, None))
+            total_w += bb[2] - bb[0]
 
-        text_h = max(y_max_text - y_min_text, max_h)
         img_width = min(max(total_w + 2 * TEXT_PADDING, 1), MAX_SIZE)
-
         img = Image.new("RGBA", (img_width, height), TRANSPARENT)
         draw = ImageDraw.Draw(img)
         cursor_x = float(TEXT_PADDING)
-        baseline_y = (height - (y_max_text - y_min_text)) / 2 - y_min_text
 
-        for cl, is_emoji, seg_w, seg_h in segments:
-            if is_emoji and color_emoji_font:
-                # Render color emoji and paste as image
-                emoji_img = _render_color_emoji(cl, font_size, color_emoji_font)
-                paste_y = int((height - emoji_img.height) / 2)
-                img.paste(emoji_img, (int(cursor_x), paste_y), emoji_img)
+        for cl, emoji_img in segments:
+            if emoji_img is not None:
+                img.paste(emoji_img, (int(cursor_x), baseline - up), emoji_img)
                 cursor_x += emoji_img.width
-            elif is_emoji:
-                bb = draw.textbbox((0, 0), cl, font=emoji_font)
-                draw.text((cursor_x - bb[0], baseline_y), cl, font=emoji_font, fill=fg_color)
-                cursor_x += bb[2] - bb[0]
-            else:
-                bb = draw.textbbox((0, 0), cl, font=primary_font)
-                draw.text((cursor_x - bb[0], baseline_y), cl, font=primary_font, fill=fg_color)
-                cursor_x += bb[2] - bb[0]
+                continue
+            font = emoji_font if _char_needs_emoji(cl, primary_path) else primary_font
+            bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
+            draw.text((cursor_x - bb[0], baseline), cl, font=font, fill=fg_color, anchor="ls")
+            cursor_x += bb[2] - bb[0]
 
+    img.info[TEXT_BAND_INFO] = (top, baseline, bottom)
     return img
+
+
+def text_baseline(
+    text: str,
+    height: int,
+    font_size: int | None = None,
+    font_id: str | None = None,
+    user_fonts_dir: str | None = None,
+) -> int:
+    """The line *text* sits on in what `render_text` draws; the same for any text."""
+    return text_line(height, font_size, font_id, user_fonts_dir)[1]

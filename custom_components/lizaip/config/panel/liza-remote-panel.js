@@ -38,6 +38,7 @@ import {
 } from "./liza-remote-buttons-view.js";
 import { ActionsViewMixin } from "./liza-remote-actions-view.js";
 import { SettingsViewMixin } from "./liza-remote-settings-view.js";
+import { RestoreViewMixin } from "./liza-remote-restore-view.js";
 import { ButtonTipMixin } from "./liza-remote-button-tip.js";
 
 
@@ -132,6 +133,12 @@ class LizaRemotePanel extends HTMLElement {
     // A configuration download in flight. No window -- it copies local files
     // and is over at once -- so this is only here to swallow a double click.
     this._configBusy = false;
+    // A restore being written. Only the applying half: the reading half
+    // happens inside the restore window, which says so itself, and the ⋮ has
+    // nothing to add while a window is open in front of it.
+    this._restoreBusy = null;
+    // The open restore window, so a second ⋮ click does not stack another.
+    this._restoreDialog = null;
     this._debugProbe = null;
     this._debugReport = null;
     // Loaded by the debug tab itself when it is opened, rather than on demand:
@@ -219,6 +226,10 @@ class LizaRemotePanel extends HTMLElement {
 
   disconnectedCallback() {
     this._a11yStop();
+    // Nothing on a detached panel is worth re-requesting, and the sweep would
+    // walk a shadow root the document has let go of.
+    clearTimeout(this._brokenImgTimer);
+    this._brokenImgTimer = null;
     if (this._pageDeleteKey) {
       window.removeEventListener?.("keydown", this._pageDeleteKey);
       this._pageDeleteKey = null;
@@ -239,6 +250,7 @@ class LizaRemotePanel extends HTMLElement {
       Promise.resolve(this._helloUnsub).then(u => u && u()).catch(() => {});
       this._helloUnsub = null;
     }
+    this._unsubscribeDeviceSynced?.();
     if (this._availabilityUnsub) {
       Promise.resolve(this._availabilityUnsub).then(u => u && u()).catch(() => {});
       this._availabilityUnsub = null;
@@ -299,6 +311,7 @@ class LizaRemotePanel extends HTMLElement {
     if (this._loading) return;
     // A reconnect is often a reboot, which closes the log port.
     this._recheckDebugPort?.();
+    if (this._memoryEnabled?.()) this._memoryFetchSoon();
     // Re-rendered only on a real change: every reconnect lands here, and the
     // usual case is a device whose model the backend already knew. Safe to run
     // mid-edit, unlike `_reloadFromBackend` — nothing the user has typed lives
@@ -596,6 +609,9 @@ class LizaRemotePanel extends HTMLElement {
       if (!features?.debug_tools) return;
       const mod = await import("./liza-remote-debug-view.js");
       Object.assign(LizaRemotePanel.prototype, mod.DebugViewMixin);
+      // The memory bars are a debug tool too, and stripped with the tab.
+      const memory = await import("./liza-remote-memory.js");
+      Object.assign(LizaRemotePanel.prototype, memory.MemoryViewMixin);
       this._debugTools = true;
     } catch (e) {
       console.debug("[LIZA] debug tools unavailable:", e);
@@ -685,6 +701,7 @@ class LizaRemotePanel extends HTMLElement {
       this._render();
       this._subscribeConfigChanged();
       this._subscribeDeviceHello();
+      this._subscribeDeviceSynced?.();
       this._initDone = true;
       this._flushAvailability();
     } catch (e) {
@@ -886,7 +903,10 @@ class LizaRemotePanel extends HTMLElement {
     this._assignments = {};
     this._currentPageIdx = 0;
     this._loading = true;
-    this._loadAll().then(() => {
+    // Returned, not just started: a caller that has *changed* the device's
+    // configuration -- a restore -- has to know when the screen it is
+    // describing is actually the restored one.
+    return this._loadAll().then(() => {
       this._loading = false;
       // The debug readings were cleared above; on the debug tab, read them
       // for the remote now shown, or its log-stream switch stays at "off".
@@ -2983,6 +3003,10 @@ class LizaRemotePanel extends HTMLElement {
       const focus = this._a11yCaptureFocus();
       if (!this._currentEntry) this._renderDeviceList();
       else this._renderDeviceConfig();
+      // After every render, whichever view: switching the bars on and the
+      // device coming online both end in one, and each must start the poll
+      // with a reading at once rather than five minutes later.
+      this._memorySync?.();
       // Before focus is restored: the control being returned to may be one of
       // the ones whose tab stop is written here.
       this._a11yNormalizeTabStops();
@@ -3123,6 +3147,7 @@ class LizaRemotePanel extends HTMLElement {
           <span class="toolbar-status-text">${this._esc(status.label)}</span>
         </span>
         <h1 class="main-title">${titleInner}</h1>
+        ${!this._htmlMemoryBars ? "" : `<div class="toolbar-memory" role="group" aria-label="${this._esc(this._t("memory_group"))}">${this._htmlMemoryBars()}</div>`}
         <!-- No aria-label: it read "Buttons / Actions", which is just the two
              tabs' own names concatenated, so a reader heard "Buttons" twice
              before reaching anything. A tablist's name is optional and there is
@@ -3196,6 +3221,7 @@ Object.assign(LizaRemotePanel.prototype, ButtonsViewMixin);
 Object.assign(LizaRemotePanel.prototype, ButtonTipMixin);
 Object.assign(LizaRemotePanel.prototype, ActionsViewMixin);
 Object.assign(LizaRemotePanel.prototype, SettingsViewMixin);
+Object.assign(LizaRemotePanel.prototype, RestoreViewMixin);
 Object.assign(LizaRemotePanel.prototype, A11yMixin);
 
 if (!customElements.get("liza-remote-panel")) {

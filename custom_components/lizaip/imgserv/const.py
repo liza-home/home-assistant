@@ -48,6 +48,91 @@ SIZE_IDS: Final = {
 DEFAULT_SIZE_ID: Final = "tile"
 DEFAULT_SIZE: Final = SIZE_IDS[DEFAULT_SIZE_ID][:2]
 
+# The sources whose value is a slug and so can never hold a space: a logo is a
+# file we ship (`hue`, `netflix_wide`) and an mdi glyph is a hyphenated name
+# (`play-circle`). After one of those the first space starts something else.
+SLUG_SOURCES: Final = ("logo:", "mdi:")
+
+# What may stand between two parts once a space has already divided them. A
+# bare hyphen cannot be a separator on its own -- `mdi:play-circle` holds one
+# -- but a spaced hyphen can, as can the plus that used to be the spelling.
+_PART_LEAD_INS: Final = ("-", "+")
+
+# What a part looks like from the outside: a scheme, then a colon. A word not
+# shaped like that belongs to the part it follows, so `text:Hello world` is
+# one phrase and `file:my photo.png` is one filename.
+_PART_START = re.compile(r"^([a-z][a-z0-9_]*):")
+
+# The source types imgserv draws itself. Only one of these -- or a registered
+# extra icon set -- starts a part: words that merely end in a colon do not, or
+# a label like "Go to page: Sonos" would ask imgserv for a `page:` source.
+PART_SOURCE_TYPES: Final = frozenset(
+    ("mdi", "logo", "text", "file", "media", "ref", "history", "phu"),
+)
+
+
+def _is_part_start(word: str) -> bool:
+    """Whether *word* names a source, and so starts a part of its own."""
+    m = _PART_START.match(word)
+    return bool(m) and (m.group(1) in PART_SOURCE_TYPES or m.group(1) in _custom_icon_prefixes)
+
+
+def split_source_parts(source: str) -> tuple[str, ...]:
+    """Split *source* into the parts drawn side by side, in order.
+
+    A part ends where the next one starts, and a part starts at a word naming
+    a source (``logo:``, ``text:``, ``mdi:``, ``file:``..., or a registered
+    icon set) -- not at any word ending in a colon, which is just punctuation. After a slug
+    subject plain words start a part too, and are read as the ``text:`` they
+    would have to be spelled as anywhere else, so all of these draw the hue
+    mark beside the word "Wohnzimmer"::
+
+        logo:hue Wohnzimmer
+        logo:hue - Wohnzimmer
+        logo:hue + Wohnzimmer
+        logo:hue + text:Wohnzimmer
+        logo:hue text:Wohnzimmer
+
+    A lone ``-`` or ``+`` between two parts is punctuation and is dropped,
+    except where dropping it would change what a part means: a ``file:my +
+    photo.png`` whose next word is not a part of its own is one filename.
+
+    One part is the common case and comes back as a tuple of one. The rule is
+    the whole rule: `_draws_words` and the panel's `_splitSourceParts` read a
+    title by it, so preview and device cannot drift apart.
+    """
+    text = (source or "").strip()
+    if not text or " " not in text:
+        return (text,) if text else ()
+
+    words = text.split(" ")
+    parts: list[str] = [words[0]]
+    i = 1
+    while i < len(words):
+        word = words[i]
+        if not word:
+            i += 1
+            continue
+        nxt = next((w for w in words[i + 1:] if w), "")
+        if word in _PART_LEAD_INS and (
+            _is_part_start(nxt) or _is_slug_part(parts[-1])
+        ):
+            # Punctuation between two parts, not a part and not a value.
+            i += 1
+            continue
+        if _is_part_start(word) or _is_slug_part(parts[-1]):
+            parts.append(word if _is_part_start(word) else f"text:{word}")
+        else:
+            parts[-1] = f"{parts[-1]} {word}"
+        i += 1
+    return tuple(p for p in (p.strip() for p in parts) if p)
+
+
+def _is_slug_part(part: str) -> bool:
+    """Whether *part* is a slug subject still holding nothing but its slug."""
+    return part.startswith(SLUG_SOURCES) and " " not in part
+
+
 # Symbolic color names → (R, G, B, A)
 COLOR_NAMES: Final = {
     "yellow": (254, 212, 48, 255),
@@ -62,6 +147,11 @@ COLOR_NAMES: Final = {
 
 
 # ── Transparency and alpha ────────────────────────────────────────────────
+
+#: Where ``render_text`` records the rows of its line, ``(top, baseline,
+#: bottom)`` in ``Image.info``: from the highest any glyph of the font reaches to the
+#: lowest. ``?crop=`` cuts a text image to exactly that band, never to its ink.
+TEXT_BAND_INFO: Final = "lizaip_text_band"
 
 # The canvas every renderer draws on, and the colour ``autocrop`` trims away.
 # Renderers never paint a background, so "empty" always means exactly this —

@@ -11,6 +11,7 @@ from ..imgserv import media_refs
 from ..imgserv.const import (
     SIZE_IDS,
     _custom_icon_prefixes,
+    split_source_parts,
 )
 from ..imgserv.fonts import DEFAULT_FONT_ID
 
@@ -136,6 +137,10 @@ def _ascii_safe_path(value: str) -> str:
     against the device. If it is wrong, ``%C2%A0`` would arrive doubled as
     ``%25C2%25A0`` and render as literal text rather than failing.
     """
+    # A literal ``#`` starts the URL fragment, which the HTTP request drops, so
+    # ``fg=#112233`` would reach imgserv as ``fg=``. Written as ``%23`` it
+    # arrives intact, and imgserv's colour parser reads either form.
+    value = value.replace("#", "%23")
     if value.isascii():
         return value
     return "".join(c if c.isascii() else quote(c, safe="") for c in value)
@@ -146,7 +151,7 @@ def resolve_icon_url(
 ) -> str:
     """Convert an icon value to a fetchable URL.
 
-    - MDI strings (mdi:lightbulb) → imgserv://mdi:lightbulb?size={size}&fg={color|FFFFFF}
+    - MDI strings (mdi:lightbulb) → imgserv://mdi:lightbulb?size={size}[&fg={color}]
     - imgserv source types (logo:hue, text:foo, phu:bar, file:img.png) → imgserv://{icon}?size={size}&mode=dark[&fg={color}]
     - External URLs (http://, https://) and HA paths (/…) → imgserv://media:{encoded}?size={size}&mode=dark
     - imgserv:// / ha:// / local:// / data: → passed through unchanged
@@ -214,8 +219,12 @@ def resolve_icon_url(
         return _media_url(icon, size, pct)
     fg = color.lstrip("#") if color else ""
     if icon.startswith("mdi:"):
-        mdi_fg = fg or "FFFFFF"
-        return f"imgserv://mdi:{icon[4:]}?size={size}&fg={mdi_fg}{pct}"
+        # The value may carry its own query (`mdi:lightbulb?color=blue`): join
+        # with `&`, and only add the page colour when the value has none of its own.
+        sep = "&" if "?" in icon else "?"
+        own = re.search(r"[?&](fg|color)=", icon)
+        fg_part = f"&fg={fg}" if fg and not own else ""
+        return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}{fg_part}{pct}"
     if icon.startswith("media:"):
         # The value is a URL in its own right — encode it so its query survives.
         return _media_url(icon[6:], size, pct)
@@ -225,12 +234,25 @@ def resolve_icon_url(
     if icon.startswith(("logo:", "text:", "phu:", "file:", "history:")) or custom:
         sep = "&" if "?" in icon else "?"
         # Tint monochrome sources (text:, icons, a graph's line); leave
-        # logos/photos untouched
-        tintable = icon.startswith(("text:", "phu:", "history:")) or bool(custom)
-        color_suffix = f"&fg={fg}" if fg and tintable and "fg=" not in icon else ""
+        # logos/photos untouched. A composite is tinted as soon as one of its
+        # parts can take it -- imgserv is what decides which parts spend it.
+        tintable = any(
+            part.startswith(("text:", "phu:", "history:", "mdi:")) or custom_icon_scheme(part)
+            for part in split_source_parts(icon)
+        )
+        color_suffix = f"&fg={fg}" if fg and tintable and not re.search(r"[?&](fg|color)=", icon) else ""
         return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}&mode=dark{color_suffix}{pct}"
 
-    return resolve_icon_url(f"text:{icon}", size, color, percent)
+    return resolve_icon_url(_words_source(icon), size, color, percent)
+
+
+def _words_source(words: str) -> str:
+    """Plain *words* as the ``text:`` source drawing them.
+
+    Their own ``?`` is part of what they say, not the start of a query:
+    unescaped, "What?" reached imgserv as the text "What".
+    """
+    return "text:" + words.replace("?", "%3F")
 
 
 def _text_style_query(kind: str, style: Mapping[str, Any] | None) -> str:
@@ -278,24 +300,37 @@ def is_media_source(value: str) -> bool:
     )
 
 
+def _draws_words(url: str) -> bool:
+    """True when *url* prints words, as ``text:`` or as part of a composite.
+
+    Both take the font settings: the words should look like every other word
+    on the screen. The reading is `split_source_parts`, so a file called
+    ``text:summary.png`` is a file and a ``logo:hue Küche`` is words.
+    """
+    if not url.startswith("imgserv://"):
+        return False
+    path = url[len("imgserv://"):].partition("?")[0]
+    return any(part.startswith("text:") for part in split_source_parts(path))
+
+
 def resolve_tooltip_url(
     text: str, color: str = "", style: Mapping[str, Any] | None = None,
 ) -> str:
     """The URL for what is printed under a button; ``""`` clears it.
 
     The tooltip takes the same values as a button's image and a page's title:
-    anything imgserv can draw, with plain words drawn as ``text:``. Only text
-    takes the tooltip font, and a ``text:`` value naming its own ``font_size=``
-    or ``font=`` keeps it -- the rule `resolve_title_url` applies.
+    anything imgserv can draw, with plain words drawn as ``text:``. Only words
+    take the tooltip font, and a value naming its own ``font_size=`` or
+    ``font=`` keeps it -- the rule `resolve_title_url` applies.
     """
     value = text.strip() if text else ""
     if not value:
         return ""
     explicit = is_media_source(value)
     if not explicit:
-        value = f"text:{value}"
+        value = _words_source(value)
     url = resolve_icon_url(value, size="tooltip", color=color)
-    if not url.startswith("imgserv://text:") or (
+    if not _draws_words(url) or (
         explicit and (
             value.lower().startswith("imgserv://")
             or "font_size=" in value
@@ -311,15 +346,16 @@ def resolve_title_url(
 ) -> str:
     """The URL for a page's title strip; ``""`` when the page has none.
 
-    Only a title drawn as text takes the ``title`` font size: an icon, logo
-    or picture has no font. A ready-made ``imgserv://`` URL is passed on as
-    written, and a title that names its own ``font_size=`` or ``font=``
-    keeps all of it: the settings are a default, not an override.
+    Only a title that draws words takes the ``title`` font size: an icon, logo
+    or picture has no font, unless a ``+ text:`` has given it one. A ready-made
+    ``imgserv://`` URL is passed on as written, and a title that names its own
+    ``font_size=`` or ``font=`` keeps all of it: the settings are a default,
+    not an override.
     """
     value = image.strip() if image else ""
     url = resolve_icon_url(value, size="title", color=color)
     if (
-        not url.startswith("imgserv://text:")
+        not _draws_words(url)
         or value.lower().startswith("imgserv://")
         or "font_size=" in value
         or "font=" in value

@@ -6,6 +6,163 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+## [2026.10.3b2] - 2026-10-18
+
+### Fixed
+
+- **The ⋮ menu in the toolbar had its labels cut off at the right.** The menu is
+  now placed from its right edge and is as wide as its longest entry, so
+  "Download configuration" fits on one line wherever the menu is opened from.
+- **A downloaded configuration or report was named in UTC.** The time in the
+  file name is now the time your Home Assistant shows, so a download taken at
+  09:46 is named `-0946`.
+
+- **Icons on the remote faces no longer come up as broken-image question
+  marks.** Redrawing a face interrupted whichever pictures were still arriving,
+  and the browser — Safari above all — never asked for them again, so a handful
+  of buttons sat empty until the page was reloaded. The editor now notices a
+  picture that arrived with nothing in it and asks once more.
+
+- **A placeholder in a layout's own tooltip did nothing.** Only tooltips *you*
+  had typed could use `${_state}` and friends — the ones a layout ships with
+  dropped them silently. That is why the Sonos change above was not possible
+  before.
+
+- **"Go to page: Sonos" showed no tooltip.** Words ending in a colon were taken
+  for the start of a picture (`page:` like `mdi:`), and the remote got nothing.
+  Only real picture types start a new part now.
+
+- **Words with a question mark lost everything after it.** A title or tooltip
+  such as "What?" reached the remote as "What". The question mark now travels
+  with the words.
+
+- **A colour written in an image value was ignored on the remote.**
+  `mdi:lightbulb?color=blue` showed blue in the editor but white on the remote,
+  because the page colour was added behind it. Your own colour now wins, the
+  first one written counts when there are several (`color=` and `fg=`), and a
+  hex colour may be written with `#` (`fg=#112233`).
+
+- **The editor's pictures are the remote's pictures.** Every preview — button
+  faces, the title bar, tooltips, the image fields — is now drawn from exactly
+  the address the remote is sent, so a colour, a font or a picture type can no
+  longer look one way in the editor and another on the remote.
+
+### Added
+
+- **A title can show a logo and a name side by side.** Separate parts with a
+  space: `logo:sonos Küche`, `mdi:lightbulb Wohnzimmer` or
+  `logo:hue text:Hue mdi:lightbulb` draw each part in the order written. After
+  `logo:` and `mdi:` plain words need no `text:`. The icon or logo stands on
+  the line the letters sit on and is as tall as the tallest letter; beside one,
+  the words are drawn at a fixed size, and a title wider than the bar scrolls
+  on the remote. On a square button, one mark and its words are stacked
+  instead. See the user guide, *Combining several things in one picture*.
+
+- **Text keeps room for accents and tails.** Text pictures are cut to
+  everything the font can reach — from the top of an `Ä` to the bottom of a
+  `g` — whether or not the words contain such letters, so "Hi" and "Hg" come
+  out the same size and a row of buttons does not jitter.
+
+- **A background colour fills the whole picture.** With `bg=` set, a picture
+  is no longer trimmed to its content, and words are centred on the full size
+  asked for, so `text:sub?bg=red` gives a red bar the width of the title.
+
+- **Memory bars for the remote (beta releases only).** The Debug tab has a
+  switch, *Show memory use*, that puts bars beside the device name for the
+  remote's RAM, how fragmented it is, and its two flash areas. They are read
+  after every transfer to the remote and at least every five minutes, and keep
+  their last reading when the remote does not answer.
+
+- **A configuration can be restored from a download.** The panel's ⋮ menu now
+  offers **Restore configuration**, right under the download it undoes. One window
+  walks you through it in three steps — choose, review, apply — so you can see
+  how much is left to do. Pick the file or drop it in, and watch it go up. Give
+  it a configuration ZIP — or a diagnostics bundle, which carries the same files
+  — and the pages, buttons and action library come back, so a configuration lost
+  to a mishap does not have to be built a second time. The file is checked
+  before anything is touched, and the second step names it, says when it was
+  downloaded, draws every page it holds the way the remote will show it --
+  the real faces, with the icons on their buttons. An archive from another
+  remote is accepted without a word about it: copying one remote's pages onto
+  another is a thing you are allowed to do. You can step back to pick a
+  different file right up to the moment you press Restore. The last step runs
+  the work, then says it is done and waits for you to close it. A
+  restore replaces rather than merges, and what it replaces is gone — so
+  download the configuration you have now before putting an older one back. The
+  remote is updated straight away, or catches up when it is next reachable
+  if it happens to be away.
+  Connection settings, icon options and uploaded fonts are not part of a
+  configuration download and stay as they are.
+
+- **The hover cards can be switched off, and start off.** Settings → Editor
+  gained *Show button and page details* beside *Show page links*. With it on,
+  resting the pointer on a button raises the card describing that button, and
+  resting it on a page names the page and says how full it is; with it off the
+  editor says nothing on hover. Off by default, like the page links beside it,
+  and remembered per browser.
+
+- **Next and Previous name the track they would play.** On a new Sonos page
+  the Previous, Play/Pause and Next tooltips are simply the tracks: the one
+  before, the one playing, and the one after — "Endless Summer", "Bohemian
+  Rhapsody", "Babylon". Write them anywhere on a layout page as
+  `${_device.media_title_prev}`, `${_device.media_title}` and
+  `${_device.media_title_next}` (and `media_artist_prev`, `media_artist`,
+  `media_artist_next` for the artists); type `${_device.` and the editor
+  offers them. They read the player the page is built around. Today the
+  neighbouring tracks work for Sonos only, because no other kind of player
+  tells Home Assistant what is in its queue. They stay quiet rather than
+  guess: on radio, with shuffle on, or at the end of a queue that does not
+  repeat, the tooltip is empty. They combine with other words and
+  placeholders — `${_state} - ${_device.media_title}` reads "Pause - Bohemian
+  Rhapsody", and loses the dash when nothing plays. Like every placeholder
+  that reads an entity, they need the remote's **Variables** switch on.
+
+  `${_queue.next_song}`, `${_queue.next_artist}`, `${_queue.prev_song}` and
+  `${_queue.prev_artist}` say the same for the speaker a *button* points at,
+  on any page.
+
+  To make this work, LizaIP adds one sensor per Sonos speaker a button or a
+  layout page points at, named after the speaker and ending in "queue"
+  (`sensor.kitchen_queue`). It holds the next and previous track, and you can
+  use it anywhere you would use any other sensor. It appears on its own and
+  disappears when nothing points at that speaker any more.
+
+- **The placeholders are in the suggestion list now.** Type `${` in a Tooltip
+  field and `_state`, the `_queue` values and `_name` appear at the top of the
+  list with a word explaining each. Only the ones that can say something on
+  that button are offered — the queue values on a Sonos speaker, `_name` on a
+  "go to page" button — so a suggestion is never one that would come out blank.
+
+### Changed
+
+- **The ⋮ menu reads in the order you use it.** Download configuration, then
+  Restore configuration under it, then the diagnostics report on its own below a
+  line. The restore is no longer red in the menu: the warning belongs on the
+  button inside its window, which is the one that actually replaces anything.
+  The menu now reads like Home Assistant's own menus —
+  the same row height, icon size and colours, which follow your theme — and a
+  choice that cannot be made right now, such as restoring while a restore is
+  already running, is greyed out instead of simply not answering.
+
+- **"Toggle" in the gear menu is now "Multi toggle button".** The switch turns
+  on buttons that carry several actions and step through them one per press.
+  Called just "Toggle", it read as the `toggle` service that half the buttons
+  in a house already run.
+
+- **A new Sonos page names its tracks and itself.** Its Previous, Play/Pause
+  and Next tooltips are the tracks (see above) instead of "Kitchen Previous",
+  "Kitchen Play/Pause" and "Kitchen Next", and Mute reads "Kitchen Mute". The
+  page titles show the Sonos logo with the speaker's name — or "playlist" and
+  "radio" on the two favourites pages. Pages you already have keep what they
+  were made with.
+
+- **A tooltip you typed that reads as nothing is empty.** A tooltip of only
+  `${_device.media_title_prev}` used to fall back to "Kitchen Previous" when
+  there was no previous track; now it shows nothing, as written. The editor's
+  tooltip field and its preview show the same: your text, without the room
+  name put in front, and an empty preview when the remote shows nothing.
+  Tooltips nobody typed still fall back to the name the remote works out.
+
 ## [2026.10.3b1] - 2026-10-14
 
 ### Added

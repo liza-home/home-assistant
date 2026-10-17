@@ -17,6 +17,7 @@ from ..variables_calc import (
 from .history import versioned_history_image
 from .icon_urls import is_media_source
 from .i18n import get_ui_language
+from ..media_queue.alias import device_attribute, expand_queue_alias
 from .labels import DANGLING_SEPARATOR_RE, LABEL_TOKEN_RE
 
 if TYPE_CHECKING:
@@ -241,7 +242,9 @@ def expand_device_alias(text: Any, layout: Any) -> Any:
     """*text* with ``${_device.attribute}`` spelled out as the page's entity.
 
     ``${_device.volume_level}`` becomes ``${media_player.tv.volume_level}``, an
-    ordinary entity variable from then on -- read, formatted and watched like
+    ordinary entity variable from then on (``${_device.media_title_prev}`` and
+    its three siblings read the player's queue sensor instead, see
+    ``media_queue.alias``) -- read, formatted and watched like
     one; inside a calculation (``${_device.volume_level * 100}``) likewise. A
     page with no entity (a hub, or no layout) reads nothing there.
     """
@@ -256,7 +259,7 @@ def expand_device_alias(text: Any, layout: Any) -> Any:
             return match.group(0)
         if not entity_id:
             return ""
-        body = DEVICE_ATTRIBUTE_RE.sub(lambda m: f"{entity_id}.{m.group(1)}", body)
+        body = DEVICE_ATTRIBUTE_RE.sub(lambda m: device_attribute(entity_id, m.group(1)), body)
         return f"${{{body.strip()}}}"
 
     return _VARIABLE_BODY_RE.sub(_expand, text)
@@ -368,6 +371,7 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
 
 def substitute_label_tokens(
     text: str, values: dict[str, str], hass: HomeAssistant | None = None,
+    subject: str | None = None,
 ) -> str:
     """Replace ``${TOKEN}`` placeholders in *text* from *values*.
 
@@ -378,9 +382,16 @@ def substitute_label_tokens(
     with no value — unknown name, or a state the button cannot predict —
     collapses to nothing, and the whitespace it leaves behind is collapsed with
     it so the result never has a doubled or trailing space.
+
+    *subject* is the entity the button points at, which turns
+    ``${_queue.next_song}`` and its three siblings into variables on that
+    entity's queue sensor. Expanded before anything else reads the text,
+    because the picture branch below returns early and would otherwise hand an
+    unexpanded alias to ``finish_tooltip``.
     """
     if not text or "${" not in text:
         return text
+    text = expand_queue_alias(text, subject)
     lookup = {k.lower(): v for k, v in values.items()}
     if is_media_source(text):
         # A picture keeps its entity variables for `finish_tooltip`, which

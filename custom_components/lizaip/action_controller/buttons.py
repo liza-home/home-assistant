@@ -33,7 +33,6 @@ from ..shared.tokens import (
     clean_label_text,
     page_scope,
     resolve_image_tokens,
-    substitute_label_tokens,
 )
 from ..shared.i18n import action_labels, get_ui_language
 from ..shared.assignment import longtouch_steps
@@ -406,26 +405,21 @@ async def _fire_cycle_update_in_scope(
     # A cycle step's name can only come from the user: there is no state to
     # phrase and an IR command is a key code, not a sentence. Falling back to
     # the button's own label keeps the tooltip truthful rather than blank.
-    #
-    # Resolved, not merely cleaned. This used to go straight to
-    # `clean_label_text`, which *strips* a `${sensor.x}` instead of filling it
-    # in -- so a press tooltip of "Battery ${sensor.foo_battery}" reached the
-    # device as the bare word "Battery", while press 1's own tooltip, which
-    # goes through `icons.py` and `substitute_label_tokens`, read "Battery
-    # 87 %". One field, two behaviours, and the panel offered the same syntax
-    # in both.
-    #
-    # `${_state}` and `${_name}` used to be the surviving half of that same
-    # split: an empty value map here collapsed them, so the one syntax the
-    # Tooltip field advertises most prominently was the one a press could not
-    # use. `resolve_rule_label` fills them from the press's own target, which
-    # is the subject a cycle step actually speaks about.
+
+    # Resolved, not merely cleaned: `clean_label_text` *strips* a `${sensor.x}`
+    # instead of filling it in, so a press tooltip read "Battery" where press
+    # 1's own -- via `icons.py` -- read "Battery 87 %".
+
+    # Both halves now go through `resolve_rule_label`, which fills them from
+    # the target of whichever config it is handed: the step's for a rule, the
+    # button's own for this fallback.
+
     # The device's own language option, so a press resolving `${_state}` reads
     # the same word the rest of its tile does. Only `entry_id` reaches here.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
     tooltip = clean_label_text(
         resolve_rule_label(rules[index], hass, entry)
-        or substitute_label_tokens(assign.get("label") or "", {}, hass)
+        or resolve_rule_label(assign, hass, entry)
     )
 
     _LOGGER.debug(

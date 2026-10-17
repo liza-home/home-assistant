@@ -82,7 +82,11 @@ The Buttons tab shows the remote face, with that remote's pages beside it.
 - Give it a **Tooltip** — what is shown when a button is touched: usually words, but
   any picture the Image field takes works too.
   `${_state}` is replaced by what pressing the button does, `${_name}`
-  by what it opens, and the hint under the field shows what it currently reads.
+  by what it opens, and on a layout page `${_device.media_title}` and
+  `${_device.media_artist}` by what is
+  playing right now. Typing `${` offers the ones that fit that button, each with
+  a word explaining it, alongside your entities. The hint under the field shows
+  what it currently reads.
   A tooltip can also show a live value from Home Assistant, such as a
   temperature or a battery level — see [Live values on the remote](#live-values-on-the-remote).
 
@@ -136,6 +140,16 @@ refills itself when you change them. **Sonos Radio** and **Sonos Playlists** do 
 with only your favourite radio stations or only your favourite playlists, twelve to a page. Editing such a button by hand detaches it from the
 source.
 
+A new Sonos page is titled with the Sonos logo and the speaker's name, and its
+**Previous**, **Play/Pause** and **Next** tooltips name the tracks — the one
+before, the one playing, the one after — so you can see where you are going
+before you press. The neighbouring tracks are Sonos only: no other kind of
+player tells Home Assistant what is in its queue. They stay quiet rather than
+guess — on radio, with shuffle on, or at the end of a queue that does not
+repeat, the tooltip is empty. Pages you already have keep the tooltips they were
+made with; type `${_device.media_title_prev}`, `${_device.media_title}` or
+`${_device.media_title_next}` into them to get the same.
+
 To let a button switch pages, give it the built-in **Go to page** action and choose the
 destination.
 
@@ -168,6 +182,12 @@ editor stops suggesting them.
 | Tooltip | `Battery ${sensor.lizaip_1c63499a7193_battery}` | Battery 85 % |
 | Tooltip | `${media_player.living_room.media_title}` | the song that is playing |
 | Tooltip | `${_state} · ${sensor.desk_lamp_power}` | Off · 12 W |
+| Tooltip (layout page) | `${_device.media_title}` | Bohemian Rhapsody |
+| Tooltip (layout page) | `play:5 ${_state} - ${_device.media_title}` | play:5 Pause - Bohemian Rhapsody |
+| Tooltip (layout page) | `${_device.media_title} – ${_device.media_artist}` | Bohemian Rhapsody – Queen |
+| Tooltip (Sonos page) | `${_device.media_title_prev}` | the track before this one, e.g. Endless Summer |
+| Tooltip (Sonos page) | `${_device.media_title_next}` – `${_device.media_artist_next}` | Babylon – David Gray |
+| Tooltip (any page) | `${_queue.next_song}` | the next track of the speaker the button points at |
 | Image | `${sensor.outdoor_temperature}` | the value drawn as the button's picture |
 | Image | `text:${weather.home.temperature}°` | 18° |
 | Image | `${weather.home}` | the current weather icon (sun, clouds, rain, …) |

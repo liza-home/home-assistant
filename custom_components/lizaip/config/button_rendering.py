@@ -11,6 +11,14 @@ and the order matters, so the candidates are written as a ladder of small
 branching function. Each rung answers only for the cases it owns and returns
 ``None`` otherwise, which keeps "why did this button get that icon?" answerable
 by reading one short function instead of unwinding a chain of conditionals.
+
+The tooltip is a ladder too, in :func:`_resolve_button_tooltip_ladder`. It has
+a twin in :func:`action_controller.icons._compute_next_state_tooltip_inner` —
+this one answers while a page is being built, that one on every state change —
+and the two must return the same string for the same button or the tooltip
+changes under the user the first time the entity moves. Rungs that need to
+agree therefore call one shared helper rather than each deriving the answer:
+:func:`shared.labels.state_token_label` is one such.
 """
 from __future__ import annotations
 
@@ -53,7 +61,11 @@ from ..shared.services import (
 from ..shared.history import history_entity
 from ..shared.icon_defaults import icon_defaults
 from ..shared.i18n import action_labels, get_ui_language
-from ..shared.labels import STATE_TOKEN, is_token_only_label, state_token_label
+from ..shared.labels import (
+    STATE_TOKEN,
+    is_token_only_label,
+    state_token_label,
+)
 from ..shared.assignment import (
     name_is_source_owned,
     name_is_user_written,
@@ -181,7 +193,9 @@ def _fill_label_tokens(
             internal_service, data, internal_context, _internal_target_hint(assign)
         )
 
-    return substitute_label_tokens(text, values, hass)
+    return substitute_label_tokens(
+        text, values, hass, getattr(state_obj, "entity_id", None),
+    )
 
 
 def _resolve_button_tooltip(
@@ -284,7 +298,9 @@ def _resolve_button_tooltip_ladder(
         # A label that is nothing but a damaged placeholder ("${STATE") cleans
         # away to nothing. Returning it would blank the tooltip *and* stop the
         # ladder, so the button loses the name it would otherwise have derived.
-        if resolved:
+        # Not so for the user's own words: a typed `${_device.media_title_prev}`
+        # with nothing before it reads as nothing, not as "Wohnzimmer Previous".
+        if resolved or user_named:
             return resolved
 
     # An internal command has no entity, so none of the state machinery below
