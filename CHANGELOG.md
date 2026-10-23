@@ -6,6 +6,236 @@ covers internal work.
 
 The format is based on Keep a Changelog. Versions are calendar versions: `YYYY.MM.N`, where `N` counts the releases made in that month and starts at 1.
 
+Each release starts with **⚠ Breaking changes**: anything that makes something
+you set up stop working or look different, each with a **What to do:** line
+that says how to get it working again. Features
+that were removed are always listed under **Removed**, new ones under **Added**.
+
+## [2026.10.3] - 2026-10-23
+
+### ⚠ Breaking changes
+
+- **Pictures from Home Assistant must come from a picture address.** A
+  picture written as an HA path now has to start with `/local/` (your `www`
+  folder) or be an entity's picture (`${…entity_picture}`); other HA
+  addresses are refused.
+  **What to do:** move the file into Home Assistant's `www` folder and use
+  `/local/<name>`.
+- **Unusual picture formats are no longer shown.** Pictures must be JPEG,
+  PNG, WebP, GIF or BMP, at most 10 MB.
+  **What to do:** convert the picture to one of those formats.
+- **After updating the remote's firmware to 11.4.1, some pictures may be
+  missing on the remote.** The remote may still hold pages from before the
+  update that it no longer draws completely.
+  **What to do:** in the lizaIP panel, open the **gear menu** of that remote
+  and choose **Clear and rebuild pages**. The remote is emptied and every
+  page is sent to it again.
+- **Layouts are now called templates.** Pages you added from a layout before
+  this update still open, but they keep the old buttons and labels and do not
+  get what the templates gained since (key repeat, artist names, the cover
+  pictures).
+  **What to do:** delete each page you made from a layout and add it again
+  with **Add page → Template**, choosing the same device. If you call
+  lizaIP's websocket commands yourself, use the new names: the `…layout…`
+  commands are now `…template…` (for example `lizaip_config/list_templates`).
+- **`file:` pictures are no longer supported.** A `file:` value is now shown
+  as plain text.
+  **What to do:** replace `file:my-picture.png` with `/local/my-picture.png`
+  (the same file in Home Assistant's `www` folder).
+- **Pictures keep their shape.** A cover in a title or on a tile is no longer
+  stretched; it is drawn as large as fits.
+  **What to do:** if you want the old stretched look, write the size on the
+  picture (`?size=200x60`, or add `&fit=fill`).
+- **A space ends a picture's address.** In a title made of several parts,
+  `/local/my photo.png` is now read as the picture `/local/my` followed by the
+  words "photo.png".
+  **What to do:** write a space inside an address as `%20`:
+  `/local/my%20photo.png`.
+- **The Variables switch is gone.** Variables are always filled in now.
+  **What to do:** nothing. If you had switched variables off, text such as
+  `${sensor.x}` is now replaced by its value; write it differently if you
+  wanted it shown literally.
+- **The panel's files were renamed.**
+  **What to do:** reload the lizaIP panel once in every browser tab that was
+  open during the update.
+
+### Added
+
+- **Templates come in folders, and adding a page is one dialog.** The four
+  Sonos templates are behind a single **Sonos** card: choose it, then which
+  Sonos page. Every step of adding a page — blank or template, the folder,
+  the device — happens in the same window, with a **Back** button at each
+  step. Pages you already made from a Sonos template are not affected.
+- **`${_device.friendly_name}` is suggested again** when you type a variable.
+  It shows the name of the page's device, the same as `${_device}`; use
+  whichever reads better. The device details are now suggested in
+  alphabetical order.
+- **Showcase pages.** **Add page → Showcase** offers ready-made pages that
+  show what a button can do: *This remote* (its own battery, charging state,
+  address and firmware), *Weather*, *Picture lab*, *Light studio* (Hue,
+  HomeKit or Nanoleaf lights) and *Media wall* (Sonos). Some need no device
+  at all.
+- **An LG webOS TV template.**
+- **Key repeat.** Turn on **Key repeat** for a button and its action repeats
+  while you hold it — for cursor keys and volume. How soon it starts and how
+  fast it repeats can be set per remote in the settings. The TV templates
+  and the Sonos volume buttons have it on already.
+- **A picture next to a logo and words in a title**, for example
+  `${_device.entity_picture} + logo:sonos + ${_device.friendly_name}`: the
+  cover now playing, the Sonos logo and the speaker's name.
+- **`fit=contain` or `fit=fill`** on a picture keeps or drops its proportions.
+- **A better Action Library.** Actions are grouped, show which buttons and
+  pages use them, and can be filtered to *in use*, *unused* or *duplicates*.
+  Delete every unused action, or merge duplicates, in one step.
+- **Colours named after a state:** `fg=enabled`, `fg=disabled` and
+  `fg=unavailable`.
+- **UniFi and Dreame logos:** `logo:unifi`, `logo:dreame`.
+
+- **The user guide is now in the panel.** Press the **?** button in the
+  **lizaIP** panel's toolbar: the whole illustrated walkthrough -- pages,
+  button actions, the image schemes, variables -- slides in beside the
+  configuration. It sits next to your remote rather than on top of it, so you
+  can follow a step and do it at the same time. The **Contents** line at the
+  top always shows the section you are reading and drops the full list when
+  you press it; drag the guide's inner edge to make it as wide as you like
+  (the panel always keeps enough of itself to stay usable, the text keeps a
+  comfortable line length however wide you go, and the screenshots grow to
+  fill the rest). Give it enough room and the contents list stops being a
+  drop-down and sits permanently down the side; either way there is a box to
+  search the whole guide when twenty sections is more than you want to read
+  through. It looks inside the text, not just the section titles, highlights
+  what it finds, counts the hits in each section, and **Enter** walks them
+  one by one (**Shift+Enter** walks back). The whole guide works from the
+  keyboard: **↓** from the search box steps into the contents, the arrow keys
+  walk it, **Home** and **End** jump to either end, and **Enter** opens the
+  section. Click any screenshot to see it full size with its caption, step
+  between all of them with **←** and **→**, and click the picture again to
+  magnify it — twice, then three times the size — when the small print
+  matters, dragging it about to see the rest. **+**, **-** and **0** do the
+  same from the keyboard. **Escape** or a click on the background puts it
+  back. The contents list
+  folds away with the button beside its **Contents** heading when you would
+  rather have the room, and stays folded next time. The guide opens underneath the toolbar
+  now, so dragging its edge no longer shuffles the buttons above it, and it
+  stops widening once the pictures have stopped growing rather than letting
+  you drag out an empty margin. Press **Escape** or the **?**
+  again to put it away, and it comes back where
+  you left it next time. On a narrow screen it opens as a full window instead.
+  No connection to GitHub is needed. The same guide is still on GitHub, and
+  Home Assistant's own **Documentation** link on the lizaIP integration page
+  now goes straight to it rather than to the repository front page.
+
+### Changed
+
+- **The panel shows buttons the way the remote does:** oval cells that
+  touch, tiles in the remote's 50×52 size, square icons kept square.
+- **The Sonos templates show the artist** beside the title, and the cover
+  template shows artist and album.
+- **Choosing a template is fast again.** The list could take close to a
+  minute to appear.
+
+- **The remote needs less memory for its pages.** Pictures are sent to it as
+  short references instead of full addresses, and when it connects its pages
+  are simply written again instead of first being listed by the remote. Both
+  were large allocations on the remote and the first things to fail when its
+  memory ran short.
+
+### Removed
+
+- **`file:` pictures** — use `/local/…` instead.
+- **The Variables switch** in the settings; variables are always on.
+- **Automatic merging of actions.** The Action Library used to merge actions
+  with the same service on its own, sometimes ones that only looked alike.
+  It now merges only when you ask it to.
+
+### Fixed
+
+- **Stable releases no longer contain the debug tools.** A stable version
+  installed through HACS could still include the debug tools and debug pages
+  of the beta before it. They are now removed.
+- **Sonos cover pictures were blank on pages made from an older layout.**
+- **Pictures on the panel's remote no longer go blank** when you switch
+  between pages.
+- **Pages added several at a time are all drawn,** not only the selected one.
+- **An edit made while a save was still running is no longer lost.**
+- **A failed save is reported** instead of looking as if it had worked.
+
+- **The guide's screenshots show the panel as it is today.** They were taken
+  from an older version; all of them have been photographed again, and five
+  screens the guide only described now have a picture: a device being
+  discovered, the toolbar's tabs, the guide itself, the ⋮ menu and the Restore
+  configuration window. The memory gauges and the Debug tab are left out of
+  the pictures — the gauges took up most of the toolbar and pushed it onto
+  three rows in every shot. Both are still there in the panel itself.
+
+- **Every picture in the guide now matches the text beside it.** Some did not:
+  the Config chapter showed the Reconfigure form rather than the options it
+  describes, the chapter on automatic discovery showed the *manual* "Add
+  integration" picker, the device page was photographed on the wrong remote,
+  and the chapter on variables used a tooltip with no variable in it. The
+  slider and gear tab pictures stopped just above the settings they promised.
+  All of these have been retaken.
+
+- **A zoomed screenshot can be dragged around.** Magnifying a picture showed
+  the middle of it with no way to reach the rest: the pointer moved it once
+  and then stopped, because the browser's own picture-dragging took over.
+  Press and drag now moves the picture as far as it goes.
+
+- **A screenshot narrower than the guide sat against the left edge.** Small
+  pictures are centred in the column now, like everything else in the guide.
+
+- **The guide called the restore steps by the wrong names.** It said "Choose,
+  Review, Apply"; the window says **Choose**, **Check**, **Restore**. It also
+  still spoke of the panel's two tabs when there are four, and never described
+  the Debug tab.
+
+- **The guide's screenshots are shown at the size they were taken.** They were
+  being squeezed into the width of a paragraph of text — under half the
+  picture — while the lines between sections ran the full width beside them.
+  The pictures, tables and code now use the whole width of the guide, and the
+  text is centred in it rather than sitting against one edge.
+
+- **Clicking a screenshot to zoom it now does something.** On a wide screen
+  the "full size" it offered was the size it was already showing, so nothing
+  happened. It magnifies properly now.
+
+- **Scaling a `media:` picture needs only `?`.** Write
+  `media:${_device.entity_picture}?size=200x200&bg=black` — the picture's own
+  address may already have a `?`; a second one is read as `&`. All of `size`,
+  `mode`, `fg`, `bg`, `crop`, `alpha` and `percent` work this way; the `|` form
+  is gone. Put the address in quotes to keep its own query for its server:
+  `media:'https://host/logo.png?size=2000'?size=200x200`.
+
+- **A value shown on a button now reads the same as in a tooltip.** A battery
+  or temperature variable lost its `%` or `°C` as soon as anything before it
+  held a colon -- `Out: ${sensor.x}` or a variable written beside an icon,
+  such as `mdi:battery ${sensor.lizaip_…_battery}`. Words drawn on a button
+  now keep the unit, exactly as the same text does in a tooltip. A variable
+  written *inside* an icon's name (`mdi:battery-${sensor.x}`) still has none,
+  since a unit there is not an icon.
+
+- **A graph inside a combined picture now updates on the remote.** A tooltip
+  or image such as `Battery ${sensor.battery} + history:sensor.battery` kept
+  showing the graph it was first drawn with, because the remote keeps a
+  picture until its address changes. The address now changes with the graph.
+
+- **The remote's record of a page follows live values.** When a value in a
+  tooltip or icon changed, the remote got the new picture but kept the page's
+  old fingerprint, so a later comparison could believe the page was up to
+  date when it was not. The fingerprint now travels with every live change.
+
+### Security
+
+- **The picture service is harder to misuse.** It only reads Home
+  Assistant's own picture addresses, always answers with a picture, does not
+  follow redirects into your network, limits how much one request may
+  download and draw, and keeps access tokens of cover pictures out of the
+  log.
+- **Note: the picture service is open to anyone who can reach Home Assistant
+  on port 8123,** by design — the remote has no way to log in — and it will
+  fetch pictures from any web address it is given. Do not expose port 8123 to
+  networks you do not trust.
+
 ## [2026.10.3b2] - 2026-10-18
 
 ### Fixed

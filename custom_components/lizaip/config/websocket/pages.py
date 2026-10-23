@@ -13,12 +13,20 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import _get_store, entry_connection
+from ...shared.logs import device_id_logger
 from ..blueprint import async_get_blueprint
-from ..const import PAGE_ID_SCHEMA, PAGE_SUBPAGE_KEY, generate_page_id, is_subpage
+from ..const import (
+    PAGE_ID_SCHEMA,
+    PAGE_SUBPAGE_KEY,
+    PAGES_SCHEMA,
+    generate_page_id,
+    is_subpage,
+)
 from ..device_sync import is_ready
 from ..events import fire_config_changed
 from .common import (
     EMPTY_BUTTON,
+    entry_log,
     refresh_state_listener,
     requires_device,
     reserved_page_ids,
@@ -147,7 +155,9 @@ async def _reorder_pages_fast(
             conn.page_cache.main_pages = list(deliverable)
             order_only = _device_holds_every_page(conn, pages)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("set_main_pages after reorder failed: %s", err)
+            device_id_logger(_LOGGER, hass, device_id).warning(
+                "set_main_pages after reorder failed: %s", err,
+            )
             # Forgetting the order is what makes the next sync notice it is
             # wrong and resend it; remembering a value we failed to write
             # would make the device's real order invisible. The page contents
@@ -166,7 +176,7 @@ async def _reorder_pages_fast(
 @websocket_api.websocket_command({
     "type": "lizaip_config/set_pages",
     "entry_id": str,
-    vol.Required("pages"): list,
+    vol.Required("pages"): PAGES_SCHEMA,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -203,7 +213,7 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
             reserved_ids.add(new_id)
             minted_ids.add(new_id)
 
-    # Preserve page fields the client did not send (layout/default_color/etc.):
+    # Preserve page fields the client did not send (template/default_color/etc.):
     # async_set_pages is handed the whole list, so a field missing here would
     # be read as removed. The store writes only the files whose content moved,
     # so a pure reorder touches none of them. Reuses the read the reorder check
@@ -256,13 +266,16 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
     try:
         await _push_page_list(hass, msg["entry_id"], pages, order_only)
     except Exception:  # noqa: BLE001 - the reply has gone; a raise would send a second one
-        _LOGGER.exception("Pushing the page list after set_pages failed")
+        device_id_logger(_LOGGER, hass, device_id).exception(
+            "Pushing the page list after set_pages failed",
+        )
 
 
 async def _push_page_list(
     hass: HomeAssistant, entry_id: str, pages: list, order_only: bool
 ) -> None:
     """Tell the device and the other panels about a page list already stored."""
+    log = entry_log(_LOGGER, hass, entry_id)
     conn = entry_connection(hass.config_entries.async_get_entry(entry_id))
     order_pushed = False
     page_ids = None
@@ -281,7 +294,7 @@ async def _push_page_list(
             page_ids = None
             order_pushed = _device_holds_every_page(conn, pages)
     if page_ids is None:
-        _LOGGER.debug(
+        log.debug(
             "Leaving the page order to the full sync: the device does not "
             "hold every page yet",
         )
@@ -293,7 +306,7 @@ async def _push_page_list(
                 conn.page_cache.main_pages = list(page_ids)
                 order_pushed = _device_holds_every_page(conn, pages)
             except Exception as err:
-                _LOGGER.warning("set_main_pages after set_pages failed: %s", err)
+                log.warning("set_main_pages after set_pages failed: %s", err)
                 # Both, not just the order: a half-remembered device state is
                 # what made the next sync diff against pages it no longer knew
                 # the device held.
@@ -348,7 +361,10 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
     pages = await store.async_get_pages(device_id)
     fire_config_changed(hass, msg["entry_id"])
 
-    _LOGGER.debug("Updated page %s: image=%s, default_color=%s", page_id, page.get("image", ""), page.get("default_color", ""))
+    device_id_logger(_LOGGER, hass, device_id).debug(
+        "Updated page %s: image=%s, default_color=%s",
+        page_id, page.get("image", ""), page.get("default_color", ""),
+    )
     connection.send_result(msg["id"], {"success": True, "pages": pages})
 
 
@@ -404,7 +420,9 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
     schedule_push_rescan(hass, entry_id)
 
     pages = await store.async_get_pages(device_id)
-    _LOGGER.info("Duplicated page %s as %s for device %s", source_id, new_page_id, device_id)
+    device_id_logger(_LOGGER, hass, device_id).info(
+        "Duplicated page %s as %s", source_id, new_page_id,
+    )
     connection.send_result(msg["id"], {
         "success": True,
         "page_id": new_page_id,

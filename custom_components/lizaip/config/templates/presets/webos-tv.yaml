@@ -1,0 +1,117 @@
+# LG webOS TV Template — the TV's own remote keys
+#
+# Home Assistant's LG webOS integration gives a TV a `media_player` and no
+# `remote` entity, so the keys are pressed with its own service,
+# `webostv.button`, which acts on that media player: `button:` names the key
+# (UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME, MENU, INFO, EXIT, MUTE, …).
+# Transport and volume use the media player's ordinary services.
+#
+# Power toggles the TV with `media_player.toggle`. Off always works; on needs
+# the integration's "turn on" trigger answered by a Wake-on-LAN automation of
+# your own (see the integration's documentation), since webOS cannot be woken
+# over the network the integration talks to.
+#
+# Reference: https://www.home-assistant.io/integrations/webostv
+
+name: LG webOS TV
+icon: mdi:television
+page_image: "mdi:television ${_device}"
+description: Remote-control keys for an LG TV (LG webOS TV integration)
+
+target_selector:
+  device:
+    integration: webostv
+    primary_domain: media_player
+
+buttons:
+  button_power:
+    label: Power
+    image: mdi:power
+    config:
+      - action: media_player.toggle
+
+  button_2:
+    label: Up
+    repeat: true
+    image: mdi:arrow-up-bold
+    config:
+      - action: webostv.button
+        data:
+          button: UP
+
+  button_5:
+    label: Left
+    repeat: true
+    image: mdi:arrow-left-bold
+    config:
+      - action: webostv.button
+        data:
+          button: LEFT
+
+  button_6:
+    label: OK
+    image: mdi:circle
+    config:
+      - action: webostv.button
+        data:
+          button: ENTER
+
+  button_7:
+    label: Right
+    repeat: true
+    image: mdi:arrow-right-bold
+    config:
+      - action: webostv.button
+        data:
+          button: RIGHT
+
+  button_10:
+    label: Down
+    repeat: true
+    image: mdi:arrow-down-bold
+    config:
+      - action: webostv.button
+        data:
+          button: DOWN
+
+  button_11:
+    label: Home
+    image: mdi:home-outline
+    config:
+      - action: webostv.button
+        data:
+          button: HOME
+
+  button_volume_up:
+    label: Volume Up
+    repeat: true
+    image: mdi:volume-plus
+    config:
+      - action: media_player.volume_up
+
+  button_volume_down:
+    label: Volume Down
+    repeat: true
+    image: mdi:volume-minus
+    config:
+      - action: media_player.volume_down
+
+  slider_vertical:
+    label: Volume
+    image: mdi:volume-high
+    slider_actions:
+      mode: proportional
+      attribute: volume_level
+      service: media_player.volume_set
+      data_key: volume_level
+      factor: 1.0
+      min: 0.0
+      max: 1.0
+
+  button_back:
+    label: Back
+    image: mdi:keyboard-return
+    config:
+      - action: webostv.button
+        data:
+          button: BACK

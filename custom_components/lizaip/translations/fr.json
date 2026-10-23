@@ -200,7 +200,7 @@
     },
     "refresh_dynamic_sources": {
       "name": "Refresh dynamic sources",
-      "description": "Réévalue les liaisons de disposition dynamiques et envoie les modifications aux télécommandes concernées. Les pages dont le contenu n'a pas changé ne génèrent aucun trafic vers l'appareil.",
+      "description": "Réévalue les liaisons dynamiques de modèle et envoie les modifications aux télécommandes concernées. Les pages dont le contenu n'a pas changé ne génèrent aucun trafic vers l'appareil.",
       "fields": {
         "entry_id": {
           "name": "Device",

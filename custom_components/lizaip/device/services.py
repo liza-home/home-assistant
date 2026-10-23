@@ -23,6 +23,7 @@ from ..config.internal_commands import (
     enabled_commands,
 )
 from ..runtime import find_store
+from ..shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,10 +40,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         url: str = call.data["url"]
 
         for entry in _target_entries(hass, call.data):
-            _LOGGER.info(
-                "lizaip.firmware_update: sending update request to %s: %s",
-                entry.title,
-                url,
+            device_logger(_LOGGER, entry).info(
+                "lizaip.firmware_update: sending update request: %s", url,
             )
             await entry.runtime_data.update_firmware(url)
 
@@ -67,7 +66,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         for entry in _target_entries(hass, call.data):
             conn = entry.runtime_data
-            _LOGGER.info("lizaip.clear_device_pages: clearing %s", entry.title)
+            device_logger(_LOGGER, entry).info("lizaip.clear_device_pages: clearing")
             async with conn.page_cache.lock:
                 await conn.clear_all()
             await sync_config_to_device(hass, entry)
@@ -244,9 +243,8 @@ def _register_internal_command(hass: HomeAssistant, command: InternalCommand) ->
             context = await _page_context(hass, entry)
             params = _validated_params(command, dict(call.data), context)
 
-            _LOGGER.debug(
-                "%s: sending %s to %s",
-                command.full_service, params, entry.title,
+            device_logger(_LOGGER, entry).debug(
+                "%s: sending %s", command.full_service, params,
             )
             await command.run(entry.runtime_data, params)
 

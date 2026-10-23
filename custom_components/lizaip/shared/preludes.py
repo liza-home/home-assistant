@@ -27,7 +27,7 @@ ENSURE_ON_TIMEOUT: Final = "00:00:20"
 # app-link intent. Sized for that worst case — it only runs inside the
 # `state == off` branch, so an already-awake device pays nothing.
 #
-# Deliberately a fixed constant with no per-layout or per-button override. It is
+# Deliberately a fixed constant with no per-template or per-button override. It is
 # sized for the slowest known target, and a tunable version failed silently:
 # a value set too low looks like it works right up until the one press that
 # needed the full ten seconds.
@@ -105,7 +105,7 @@ LAUNCH_VERIFY_TIMEOUT: Final = "00:00:05"
 #: reached the target.
 #:
 #: Namespaced because the sequence it lands in is shared with a hand-written
-#: ``before:``/``after:`` from a layout, which may define variables of its own.
+#: ``before:``/``after:`` from a template, which may define variables of its own.
 LAUNCH_VERIFY_PREVIOUS_VAR: Final = "liza_prev_app_id"
 
 

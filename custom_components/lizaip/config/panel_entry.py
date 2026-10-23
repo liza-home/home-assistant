@@ -11,7 +11,7 @@ from ..const import DOMAIN
 
 if TYPE_CHECKING:
     from .icon_push import IconPushQueue
-    from .layouts.refresh import PushTriggers
+    from .templates.refresh import PushTriggers
 
 _LOGGER = logging.getLogger(__name__)
 

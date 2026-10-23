@@ -55,6 +55,27 @@ ASSIGNMENT_BLANKED_KEY = "blanked_action"
 # panel API and the device protocol can never drift apart.
 PAGE_ID_SCHEMA = vol.All(int, vol.Range(min=MIN_PAGE_ID, max=MAX_PAGE_ID))
 
+# The two payloads the panel sends that are large enough to be described by
+# their shape rather than their fields.
+#
+# Both used to be validated as bare ``dict``/``list``, which let anything
+# through: ``ws_set_pages`` reads ``p.get("id")`` off every entry, so a list
+# holding a string reached the handler and failed there with an AttributeError
+# the panel saw as "unknown error". The fields themselves are deliberately not
+# pinned down -- the panel sends more of them than the backend reads, and
+# listing them here would mean this file had to be edited for every new one --
+# so these say only what the handlers actually depend on.
+
+#: ``{button_key: assignment}``. A null value is a button the panel is
+#: clearing, which the handlers already read as "no assignment".
+ASSIGNMENTS_SCHEMA = vol.Schema({str: vol.Any(dict, None)})
+
+#: ``[{id?, image, hash, ...}]``. An id, when sent, must be a real page id;
+#: a page without one is new and is given one.
+PAGES_SCHEMA = vol.All(
+    list, [vol.Schema({vol.Optional("id"): vol.Any(PAGE_ID_SCHEMA, None)}, extra=vol.ALLOW_EXTRA)],
+)
+
 
 def generate_page_id(existing_ids: set[int] | None = None) -> int:
     """Generate the lowest page ID not already in *existing_ids*.
@@ -150,7 +171,9 @@ def media_id_title(media_content_id) -> str:
 
 
 #: Payload keys that carry a button's own identity (what it plays/selects/sends).
-PAYLOAD_IDENTITY_KEYS = ("media_content_id", "source", "command", "ir_code")
+#: ``button`` is the key ``webostv.button`` presses, so an LG D-pad's five keys
+#: stay five buttons rather than one shared action.
+PAYLOAD_IDENTITY_KEYS = ("media_content_id", "source", "command", "ir_code", "button")
 
 
 def drop_redundant_subject(step: Any) -> bool:
@@ -194,7 +217,7 @@ def payload_identity(data) -> str:
 #: action-library entry is behaviour-only — its icon/name belong to whichever
 #: button happened to create it, so no other button may borrow them.
 PAYLOAD_SERVICES = frozenset(
-    {"play_media", "select_source", "select_sound_mode", "send_command"}
+    {"play_media", "select_source", "select_sound_mode", "send_command", "button"}
 )
 
 #: Shown when we genuinely do not know what a button does — never a real default.

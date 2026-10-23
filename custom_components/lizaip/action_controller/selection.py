@@ -5,6 +5,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
+from ..shared.logs import DeviceLogger, device_logger
 from ._state import remote_state
 from .helpers import _get_store, _resolve_device_id
 from .overrides import (
@@ -23,6 +24,7 @@ _CLICK = "click"
 
 def _update_context(
     entry_id: str, button_key: str, assign: dict | None, interaction: str,
+    log: DeviceLogger,
 ) -> None:
     """Record or clear the fixed-button context for this press.
 
@@ -42,14 +44,14 @@ def _update_context(
         previous = state.selected_button
         state.selected_button = button_key
         if previous != button_key:
-            _LOGGER.debug("Context: %s (was %s)", button_key, previous)
+            log.debug("Context: %s (was %s)", button_key, previous)
         return
 
     if not is_grid_button(button_key):
         return
 
     if interaction != _CLICK:
-        _LOGGER.debug(
+        log.debug(
             "Context: %s is blank — keeping %s (interaction=%s)",
             button_key, state.selected_button, interaction,
         )
@@ -63,7 +65,7 @@ def _update_context(
     # selection, or half a typical grid would become a deselect button.
     state.clear_selection()
     if previous is not None:
-        _LOGGER.debug(
+        log.debug(
             "Context: cleared (was %s) — %s was pressed and is blank",
             previous, button_key,
         )
@@ -95,6 +97,7 @@ async def _record_selection(
     does not resolve the control's mechanics -- that happens at ``touch_start``,
     against the state as it is then.
     """
+    log = device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
     device_id = _resolve_device_id(hass, entry_id)
     if not device_id:
         return
@@ -102,25 +105,25 @@ async def _record_selection(
     assignments = await _get_store(hass).async_get_assignments(device_id, page_id)
     assign = assignments.get(button_key)
 
-    _update_context(entry_id, button_key, assign, interaction)
+    _update_context(entry_id, button_key, assign, interaction, log)
 
     # ``overrides.slider_vertical.entity_id`` is the only spelling that reaches
-    # here. A layout says `slider_select: true` because a preset cannot know the
+    # here. A template says `slider_select: true` because a preset cannot know the
     # entity, and :func:`generate_assignments` resolves that into the block when
     # the preset is applied -- so a guard or migration written against the flag
     # would compile, pass, and mean nothing.
     entity = slider_subject_entity(assign)
     if entity is None:
-        _LOGGER.debug(
+        log.debug(
             "Selection: %s does not drive the slider (no slider subject)", button_key,
         )
         return
 
-    _record_selected_entity(entry_id, entity, assign, button_key)
+    _record_selected_entity(entry_id, entity, assign, button_key, log)
 
 
 def _record_selected_entity(
-    entry_id: str, entity_id: str, assign: dict, button_key: str,
+    entry_id: str, entity_id: str, assign: dict, button_key: str, log: DeviceLogger,
 ) -> None:
     """Commit *entity_id* as the selection, with the button's chosen control.
 
@@ -159,6 +162,6 @@ def _record_selected_entity(
     else:
         state.selected_factor = None
     if previous != entity_id:
-        _LOGGER.debug(
+        log.debug(
             "Selection: %s → %s (was %s)", button_key, entity_id, previous,
         )

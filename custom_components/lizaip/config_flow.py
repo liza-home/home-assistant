@@ -42,6 +42,7 @@ from .slider_throttle import (
     SLIDER_MIN_INTERVAL_MS_MAX,
 )
 from . import provisioning
+from .shared.logs import DeviceLogger, device_logger
 from .shared.numbers import to_float
 from .device.const import LIZAIP_AVAILABILITY_EVENT, MODEL
 
@@ -133,6 +134,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             )
                         break
             if self.discovered_ips:
+                log = self._log_for(unique_id)
                 cfg = await self._async_read_ha_config(self.discovered_ips)
                 stored_host = (
                     str(cfg.get("ha_hostname") or "").strip() if cfg else ""
@@ -141,30 +143,32 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # Not rounded down to "fine". A device we could not ask is
                     # exactly the one that may be sitting there unprovisioned,
                     # and saying nothing is how it stays that way.
-                    _LOGGER.warning(
-                        "Could not read the Home Assistant address from known "
-                        "device %s at %s — leaving it alone rather than "
+                    log.warning(
+                        "Could not read the Home Assistant address from the "
+                        "known device at %s — leaving it alone rather than "
                         "re-provisioning a device that may not need it",
-                        unique_id, self.discovered_ips,
+                        self.discovered_ips,
                     )
                 elif not stored_host:
-                    _LOGGER.info(
-                        "Known device %s has no Home Assistant address "
+                    log.info(
+                        "Known device has no Home Assistant address "
                         "(factory reset?) — re-provisioning",
-                        unique_id,
                     )
-                    self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
+                    self._spawn_provisioning(
+                        self._try_reprovision(self.discovered_ips),
+                        what="factory_reset",
+                    )
                 elif await self._async_address_is_stale(cfg, unique_id):
-                    self.hass.async_create_task(
+                    self._spawn_provisioning(
                         self._reprovision_unless_it_connects(
                             unique_id, self.discovered_ips
-                        )
+                        ),
+                        what="stale_address",
                     )
                 else:
-                    _LOGGER.debug(
-                        "Re-discovery of known device %s, already provisioned "
+                    log.debug(
+                        "Re-discovery of a known device, already provisioned "
                         "— skipping re-provision",
-                        unique_id,
                     )
             return self.async_abort(reason="already_configured")
 
@@ -265,21 +269,30 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         stored = f"{stored_host}:{stored_port if stored_port is not None else '?'}"
         wanted = f"{wanted_host}:{wanted_port}"
 
+        log = self._log_for(unique_id)
         if self._device_connected(unique_id):
-            _LOGGER.debug(
-                "Device %s is aimed at %s and we would send %s, but it is "
+            log.debug(
+                "Device is aimed at %s and we would send %s, but it is "
                 "connected — leaving the working address alone",
-                unique_id, stored, wanted,
+                stored, wanted,
             )
             return False
 
-        _LOGGER.info(
-            "Device %s is aimed at %s, which is not where this Home Assistant "
+        log.info(
+            "Device is aimed at %s, which is not where this Home Assistant "
             "is (%s), and it is not connected — re-provisioning unless it "
             "connects within %ss",
-            unique_id, stored, wanted, self._RECONNECT_GRACE,
+            stored, wanted, self._RECONNECT_GRACE,
         )
         return True
+
+    def _log_for(self, unique_id: str | None) -> DeviceLogger:
+        """A logger naming the paired remote behind *unique_id*, if there is one."""
+        entry = next(
+            (e for e in self._async_current_entries() if e.unique_id == unique_id),
+            None,
+        )
+        return device_logger(_LOGGER, entry)
 
     def _device_connected(self, unique_id: str) -> bool | None:
         """The device's WebSocket state, or ``None`` before its entry loaded."""
@@ -302,12 +315,18 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         out keeps a working address from being replaced by a theory.
         """
         if await self._connects_within_grace(unique_id):
-            _LOGGER.info(
-                "Device %s connected on its own — leaving its address alone",
-                unique_id,
+            self._log_for(unique_id).info(
+                "Device connected on its own — leaving its address alone",
             )
             return
         await self._try_reprovision(device_ips)
+
+    def _availability_matches(self, event, unique_id: str) -> bool:
+        """Whether an availability event says *this* device just connected."""
+        if not event.data.get("connected"):
+            return False
+        entry = self.hass.config_entries.async_get_entry(event.data.get("entry_id"))
+        return entry is not None and entry.unique_id == unique_id
 
     async def _connects_within_grace(self, unique_id: str) -> bool:
         """Whether the device connects within ``_RECONNECT_GRACE`` seconds.
@@ -321,8 +340,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         @callback
         def _on_availability(event) -> None:
-            entry = self.hass.config_entries.async_get_entry(event.data.get("entry_id"))
-            if event.data.get("connected") and entry is not None and entry.unique_id == unique_id:
+            if self._availability_matches(event, unique_id):
                 connected.set()
 
         unsub = self.hass.bus.async_listen(LIZAIP_AVAILABILITY_EVENT, _on_availability)
@@ -338,19 +356,41 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Provisioning — POST /api/config/ha on the device
     # ------------------------------------------------------------------
 
-    async def _try_reprovision(self, device_ips: list[str]) -> None:
+    async def _try_reprovision(self, device_ips: list[str]) -> bool:
         """Push HA's address to the device so it can open its WebSocket.
 
         Needs a port from the mDNS SRV record: without one there is no evidence
         the device even has its HTTP management API up, and the device's own
         announcement is the only thing that can say so here.
+
+        Returns whether an address accepted it.
         """
         if not self.discovered_port:
             _LOGGER.debug("No device port known — skipping provisioning")
-            return
+            return False
 
-        await provisioning.async_provision(
+        return await provisioning.async_provision(
             self.hass, device_ips, self._DEVICE_HTTP_PORT
+        )
+
+    def _spawn_provisioning(self, coro, *, what: str) -> None:
+        """Run a background re-provision, reporting whatever it raises.
+
+        The discovery steps abort straight afterwards, so there is nobody left
+        to await these. Without a wrapper a failure here is invisible: the task
+        dies, nothing is logged, and the device quietly never connects.
+        """
+
+        async def _guarded() -> None:
+            try:
+                await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("Background re-provisioning failed (%s)", what)
+
+        self.hass.async_create_background_task(
+            _guarded(), name=f"lizaip_reprovision_{what}"
         )
 
     # ------------------------------------------------------------------
@@ -372,7 +412,17 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_confirm(self, user_input=None) -> FlowResult:
         if user_input is not None:
             if self.discovered_ips:
-                self.hass.async_create_task(self._try_reprovision(self.discovered_ips))
+                # Awaited, not fired and forgotten: this is the one moment the
+                # user is watching, and `async_provision` is already bounded to
+                # `PROVISION_TIMEOUT` per address. Setup used to be able to
+                # "succeed" while the device was never told where HA lives.
+                if not await self._try_reprovision(self.discovered_ips):
+                    _LOGGER.warning(
+                        "Could not hand Home Assistant's address to the device at %s. "
+                        "The entry was created, but the remote may not connect until "
+                        "it is provisioned — power-cycle it or re-run discovery.",
+                        self.discovered_ips,
+                    )
 
             # Build entry data with device info from GET /api/info
             data: dict[str, Any] = {"sw_version": self.sw_version}

@@ -35,9 +35,9 @@ from ..shared.tokens import (
     resolve_image_tokens,
 )
 from ..shared.i18n import action_labels, get_ui_language
+from ..shared.logs import device_id_logger, device_logger
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url
-from ..variables_calc import variables_scope
 from ..state_icon import entity_icon_style, read_icon_style_options
 from ._state import (
     _DEFAULT_PAGE_ID,
@@ -107,11 +107,12 @@ async def _get_script(
     gesture: str = "click",
 ) -> Script | None:
     """Return the cached Script, rebuilding when the source config changed."""
+    log = device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
     cache = _script_cache(hass, entry_id)
     if cache is None:
-        _LOGGER.warning(
-            "No script cache for entry %s — the entry is unloaded; "
-            "skipping %s/%s", entry_id, page_id, button_key,
+        log.warning(
+            "No script cache — the entry is unloaded; "
+            "skipping %s/%s", page_id, button_key,
         )
         return None
 
@@ -128,7 +129,7 @@ async def _get_script(
         sequence = cv.SCRIPT_SCHEMA(actions)
     except vol.Invalid as exc:
         # Keep HA-accepted service calls running, but without template support.
-        _LOGGER.warning(
+        log.warning(
             "Action config for %s/%s failed script validation (%s) — "
             "running unvalidated; templates in this action will not render",
             page_id, button_key, exc,
@@ -164,6 +165,7 @@ async def async_unload_scripts(hass: HomeAssistant, entry_id: str) -> None:
     cache = _script_cache(hass, entry_id)
     if not cache:
         return
+    log = device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
     for key in list(cache):
         _, script = cache.pop(key)
         try:
@@ -171,10 +173,8 @@ async def async_unload_scripts(hass: HomeAssistant, entry_id: str) -> None:
         except Exception:  # noqa: BLE001
             # Teardown must not fail the unload; a stuck Script is better than
             # an entry that cannot be removed.
-            _LOGGER.debug(
-                "Unloading script %s for %s failed", key, entry_id, exc_info=True,
-            )
-    _LOGGER.debug("Released compiled scripts for entry %s", entry_id)
+            log.debug("Unloading script %s failed", key, exc_info=True)
+    log.debug("Released compiled scripts")
 
 
 #: Payload services whose commands are silently lost when the target sleeps.
@@ -198,7 +198,7 @@ def _inferred_prelude(hass: HomeAssistant, step: dict) -> list[dict]:
     """Infer a wake prelude for *step*, or return ``[]`` if it needs none.
 
     Decided at press time, not page-creation time, so the wake also reaches
-    buttons a layout never saw (the panel builds `play_media` / `select_source`
+    buttons a template never saw (the panel builds `play_media` / `select_source`
     buttons of its own, and pages created before this existed).
 
     Two halves with different scopes:
@@ -325,9 +325,8 @@ def _is_optimistic(hass: HomeAssistant, entry_id: str) -> bool:
         _LOGGER.debug("Optimistic: entry %s not found", entry_id)
         return False
     enabled = entry.options.get(CONF_OPTIMISTIC_UPDATES, True)
-    _LOGGER.debug(
-        "Optimistic: entry %s options=%s → enabled=%s",
-        entry_id, dict(entry.options), enabled,
+    device_logger(_LOGGER, entry).debug(
+        "Optimistic: options=%s → enabled=%s", dict(entry.options), enabled,
     )
     return enabled
 
@@ -341,12 +340,12 @@ async def _fire_cycle_update(
     entry_id: str,
 ) -> None:
     """:func:`_fire_cycle_update_in_scope`, reading ``${_device}`` as the page has it."""
-    layout = None
+    template = None
     for page in await _get_store(hass).async_get_pages(device_id):
         if page.get("id", _DEFAULT_PAGE_ID) == page_id:
-            layout = page.get("layout")
+            template = page.get("template")
             break
-    with page_scope(layout):
+    with page_scope(template):
         await _fire_cycle_update_in_scope(
             hass, device_id, page_id, button_key, assign, entry_id,
         )
@@ -422,7 +421,7 @@ async def _fire_cycle_update_in_scope(
         or resolve_rule_label(assign, hass, entry)
     )
 
-    _LOGGER.debug(
+    device_id_logger(_LOGGER, hass, device_id).debug(
         "Cycle update: %s/%s → next step %d/%d icon=%s",
         page_id, button_key, index + 1, len(rules), icon,
     )
@@ -456,41 +455,42 @@ async def _fire_optimistic_update(
     (``_match_state_icon`` + ``resolve_icon_url``), so the optimistic icon
     matches what lands on confirmation — no flicker. A wrong prediction is
     self-correcting: the real ``EVENT_STATE_CHANGED`` overwrites it."""
+    log = device_id_logger(_LOGGER, hass, device_id)
     if not own_actions:
-        _LOGGER.debug("Optimistic: no own_actions — skipping")
+        log.debug("Optimistic: no own_actions — skipping")
         return
 
     step = own_actions[0] if isinstance(own_actions[0], dict) else {}
     service = step.get("action") or step.get("service") or ""
     if not isinstance(service, str) or "." not in service:
-        _LOGGER.debug("Optimistic: no valid service in step — skipping (step=%s)", step)
+        log.debug("Optimistic: no valid service in step — skipping (step=%s)", step)
         return
     svc = service_name(service)
 
     if not is_state_toggle_service(svc):
-        _LOGGER.debug("Optimistic: service '%s' is not a toggle service — skipping", service)
+        log.debug("Optimistic: service '%s' is not a toggle service — skipping", service)
         return
 
     entity_id = resolve_step_entity(step, hass)
     if not entity_id:
-        _LOGGER.debug("Optimistic: no entity_id resolved from step — skipping")
+        log.debug("Optimistic: no entity_id resolved from step — skipping")
         return
 
     state = hass.states.get(entity_id)
     if state is None:
-        _LOGGER.debug("Optimistic: entity %s has no state — skipping", entity_id)
+        log.debug("Optimistic: entity %s has no state — skipping", entity_id)
         return
 
     action_id = assign.get("action_id")
     if not action_id:
-        _LOGGER.debug("Optimistic: no action_id on assignment — skipping")
+        log.debug("Optimistic: no action_id on assignment — skipping")
         return
 
     store = _get_store(hass)
     lib = await store.async_get_action_library(device_id)
     action_def = next((a for a in lib if a.get("id") == action_id), None)
     if not action_def:
-        _LOGGER.debug(
+        log.debug(
             "Optimistic: action_id '%s' not found in library — skipping", action_id,
         )
         return
@@ -498,7 +498,7 @@ async def _fire_optimistic_update(
     # Predict from state-machine knowledge, not icon rule ordering.
     predicted_ha_state = PREDICTED_HA_STATE_MAP.get(state.state)
     if not predicted_ha_state:
-        _LOGGER.debug(
+        log.debug(
             "Optimistic: current state '%s' has no predicted successor — skipping",
             state.state,
         )
@@ -515,7 +515,7 @@ async def _fire_optimistic_update(
         (r for r in state_rules if r.get("state") == predicted_ha_state), None,
     )
     if not matching_rule:
-        _LOGGER.debug(
+        log.debug(
             "Optimistic: no icon rule for predicted state '%s' in action '%s' "
             "(available rules: %s) — skipping",
             predicted_ha_state, action_id,
@@ -526,7 +526,7 @@ async def _fire_optimistic_update(
     action_icon = matching_rule.get("icon")
 
     if not action_icon:
-        _LOGGER.debug("Optimistic: predicted rule has no icon — skipping")
+        log.debug("Optimistic: predicted rule has no icon — skipping")
         return
 
     # Tooltip action keys can differ from HA states; NEXT_STATE_MAP has the key.
@@ -541,17 +541,17 @@ async def _fire_optimistic_update(
     # the action's own icon, and with neither there is nothing to predict.
     pages = await store.async_get_pages(device_id)
     page_color = ""
-    layout = None
+    template = None
     for p in pages:
         if p.get("id", _DEFAULT_PAGE_ID) == page_id:
             page_color = p.get("default_color", "")
-            layout = p.get("layout")
+            template = p.get("template")
             break
 
-    with page_scope(layout):
+    with page_scope(template):
         icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
     if not icon:
-        _LOGGER.debug("Optimistic: predicted icon has no value — skipping")
+        log.debug("Optimistic: predicted icon has no value — skipping")
         return
 
     # Resolved here rather than below with the language, because the style call
@@ -583,7 +583,7 @@ async def _fire_optimistic_update(
     )
     tooltip = f"{entity_name} {tooltip_label}" if entity_name else tooltip_label
 
-    _LOGGER.debug(
+    log.debug(
         "Optimistic update: %s/%s → predicted %s → icon=%s tooltip=%s",
         page_id, button_key, predicted_ha_state, resolved, tooltip,
     )
@@ -668,9 +668,10 @@ async def execute_longtouch(
     verification and the optimistic icon belong to the click, whose state the
     button shows.
     """
+    log = device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
     actions = await longtouch_assignment(hass, entry_id, button_key, page_id)
     if not actions:
-        _LOGGER.debug("execute_longtouch: no long touch for %s/%s", page_id, button_key)
+        log.debug("execute_longtouch: no long touch for %s/%s", page_id, button_key)
         return
     before = _inferred_prelude(hass, actions[0])
     actions = _bind_internal_steps(actions, entry_id)
@@ -680,14 +681,14 @@ async def execute_longtouch(
     )
     if script is None:
         return
-    _LOGGER.info(
+    log.info(
         "Executing %s (%d steps) for page=%s button=%s",
         script.name, len(script.sequence), page_id, button_key,
     )
     try:
         await script.async_run(context=Context())
     except Exception:
-        _LOGGER.exception("Long touch failed for %s/%s", page_id, button_key)
+        log.exception("Long touch failed for %s/%s", page_id, button_key)
 
 
 def resolve_toggle_steps(
@@ -724,7 +725,7 @@ def resolve_toggle_steps(
         # gives no feedback either way, and leaving the position parked would
         # trap the user on the broken entry with no way to step past it.
         advance_cycle(entry_id, page_id, button_key, len(rules))
-        _LOGGER.debug(
+        device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id)).debug(
             "toggle(cycle): step %d/%d for %s/%s",
             index + 1, len(rules), page_id, button_key,
         )
@@ -740,19 +741,21 @@ async def execute_action(
     page_id: int = _DEFAULT_PAGE_ID,
 ) -> None:
     """Run the HA script action assigned to a clicked button."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    log = device_logger(_LOGGER, entry)
     device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
     if not device_id:
-        _LOGGER.warning("execute_action: device for entry %s not found", entry_id)
+        log.warning("execute_action: device not found")
         return
     if not assign:
-        _LOGGER.info(
-            "execute_action: no assignment for button '%s' on page %s (device=%s)",
-            button_key, page_id, device_id,
+        log.info(
+            "execute_action: no assignment for button '%s' on page %s",
+            button_key, page_id,
         )
         return
 
     if not assign.get("action_id"):
-        _LOGGER.debug("execute_action: no action_id for %s/%s", page_id, button_key)
+        log.debug("execute_action: no action_id for %s/%s", page_id, button_key)
         return
 
     # Asked only of a button that actually carries a block. This runs on every
@@ -767,7 +770,7 @@ async def execute_action(
 
     actions = assign.get("config", [])
     if not isinstance(actions, list) or not actions:
-        _LOGGER.debug("execute_action: empty action config for %s/%s", page_id, button_key)
+        log.debug("execute_action: empty action config for %s/%s", page_id, button_key)
         return
 
     # Preserve the button's own steps for verification retries. A ``toggle``
@@ -786,7 +789,7 @@ async def execute_action(
     if before is None:
         before = _inferred_prelude(hass, own_actions[0])
         if before:
-            _LOGGER.debug(
+            log.debug(
                 "Inferred wake prelude for %s/%s (%s on %s): %s",
                 page_id, button_key,
                 own_actions[0].get("action") or own_actions[0].get("service"),
@@ -802,7 +805,7 @@ async def execute_action(
     if after is None:
         capture, after = _inferred_verification(hass, own_actions[0], own_actions)
         if after:
-            _LOGGER.debug(
+            log.debug(
                 "Inferred launch verification for %s/%s: %s",
                 page_id, button_key, after,
             )
@@ -819,27 +822,25 @@ async def execute_action(
     script = await _get_script(hass, entry_id, page_id, button_key, actions)
     if script is None:
         return
-    _LOGGER.info(
+    log.info(
         "Executing %s (%d steps) for page=%s button=%s",
         script.name, len(script.sequence), page_id, button_key,
     )
 
     # A cycle button has no state listener to correct it, so its repaint is
     # unconditional and comes first: see _fire_cycle_update.
-    entry = hass.config_entries.async_get_entry(entry_id)
-    with variables_scope(getattr(entry, "options", None)):
-        if toggle_mode(assign) == MODE_CYCLE:
-            await _fire_cycle_update(
-                hass, device_id, page_id, button_key, assign, entry_id,
-            )
-        # Optimistic icon updates are corrected by the real state listener.
-        elif _is_optimistic(hass, entry_id):
-            await _fire_optimistic_update(
-                hass, device_id, page_id, button_key, assign, own_actions, entry_id,
-            )
+    if toggle_mode(assign) == MODE_CYCLE:
+        await _fire_cycle_update(
+            hass, device_id, page_id, button_key, assign, entry_id,
+        )
+    # Optimistic icon updates are corrected by the real state listener.
+    elif _is_optimistic(hass, entry_id):
+        await _fire_optimistic_update(
+            hass, device_id, page_id, button_key, assign, own_actions, entry_id,
+        )
     try:
         # Context lets HA trace resulting service calls back to this press.
         await script.async_run(context=Context())
     except Exception:
         # User-authored action failures must not tear down device event dispatch.
-        _LOGGER.exception("Action failed for %s/%s", page_id, button_key)
+        log.exception("Action failed for %s/%s", page_id, button_key)

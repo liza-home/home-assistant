@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ..shared.logs import device_logger
 from ..slider_throttle import has_moved, read_cooldown_seconds
 from .connection import LizaIPConnection
 from .entity import LizaIPEntity
@@ -59,6 +60,7 @@ class LizaIPBrightness(LizaIPEntity, NumberEntity):
 
     def __init__(self, connection: LizaIPConnection, entry: ConfigEntry) -> None:
         super().__init__(connection, entry)
+        self._logger = device_logger(_LOGGER, entry)
         self._attr_unique_id = f"{entry.entry_id}_brightness"
         self._attr_native_value = connection.brightness_value
         self._automatic = connection.brightness_automatic
@@ -84,12 +86,12 @@ class LizaIPBrightness(LizaIPEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         if self._automatic:
-            _LOGGER.debug("Ignoring manual brightness change while automatic mode is enabled")
+            self._logger.debug("Ignoring manual brightness change while automatic mode is enabled")
             return
         try:
             await self._connection.set_brightness(value)
         except Exception as err:
-            _LOGGER.warning("Failed to set brightness to %s: %s", value, err)
+            self._logger.warning("Failed to set brightness to %s: %s", value, err)
 
 
 class LizaIPSlider(LizaIPEntity, NumberEntity):
@@ -109,6 +111,7 @@ class LizaIPSlider(LizaIPEntity, NumberEntity):
         slider_id: str,
     ) -> None:
         super().__init__(connection, entry)
+        self._logger = device_logger(_LOGGER, entry)
         self._slider_id = slider_id
         self._attr_translation_placeholders = {"slider_id": slider_id.replace("slider_", "")}
         self._attr_unique_id = f"{entry.entry_id}_{slider_id}"
@@ -199,7 +202,7 @@ class LizaIPSlider(LizaIPEntity, NumberEntity):
         self._debouncer.async_schedule_call()
 
     async def async_set_native_value(self, value: float) -> None:
-        _LOGGER.warning(
+        self._logger.warning(
             "Cannot set %s from HA — protocol v1 has no slider-set command; "
             "sliders are device → HA only",
             self._slider_id,

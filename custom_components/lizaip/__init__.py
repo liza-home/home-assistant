@@ -41,6 +41,7 @@ from .config.store import LizaRemoteStore
 from .config_restore import async_setup_config_restore
 from .diagnostics_bundle import async_setup_diagnostics_bundle
 from .imgserv import async_setup_imgserv
+from .shared.logs import device_logger
 from .shared.numbers import to_float
 from .runtime import find_store, install_store
 
@@ -124,7 +125,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
             device.id, configuration_url=config_url
         )
     except Exception:
-        pass  # non-critical; don't block setup if URL can't be determined
+        # Non-critical: without it the device page simply has no "Configure"
+        # link, and the panel is still reachable from the sidebar. Logged
+        # rather than passed over, because an instance with no reachable URL
+        # at all is worth knowing about when something else goes wrong later.
+        _LOGGER.debug(
+            "No configuration URL for %s; the device page will have no link to the panel",
+            entry.entry_id, exc_info=True,
+        )
 
     connection = LizaIPConnection(hass, entry, device.id)
     entry.runtime_data = connection
@@ -162,6 +170,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
         nonlocal last_demo_mode, last_demo_dwell, last_demo_swipe
         from .config.device_sync import sync_config_to_device  # noqa: PLC0415
 
+        log = device_logger(_LOGGER, updated)
+
         demo_mode = bool(updated.options.get(CONF_DEMO_MODE, False))
         demo_dwell = to_float(updated.options.get(CONF_DEMO_MODE_DWELL_TIME))
         demo_swipe = to_float(updated.options.get(CONF_DEMO_MODE_SWIPE_TIME))
@@ -182,9 +192,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
             except Exception:  # noqa: BLE001
                 # Never block options saves when the device is offline.
                 # Keep the previous marker so a later save retries automatically.
-                _LOGGER.debug(
-                    "DemoMode apply failed for %s; will retry on next options save",
-                    updated.entry_id,
+                log.debug(
+                    "DemoMode apply failed; will retry on next options save",
                     exc_info=True,
                 )
             else:
@@ -197,9 +206,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
         except Exception:  # noqa: BLE001
             # A device that is offline right now simply gets the new wording on
             # its next ordinary sync. Never let it fail the options save.
-            _LOGGER.debug(
-                "Options resync failed for %s; labels follow on next sync",
-                updated.entry_id, exc_info=True,
+            log.debug(
+                "Options resync failed; labels follow on next sync", exc_info=True,
             )
 
     entry.async_on_unload(entry.add_update_listener(_options_updated))
@@ -252,9 +260,9 @@ def _watch_server_language(hass: HomeAssistant, entry: ConfigEntry) -> None:
         nonlocal setup_language
         if hass.config.language == setup_language:
             return
-        _LOGGER.debug(
-            "Server language changed from %s to %s; reloading %s so entity "
-            "names follow", setup_language, hass.config.language, entry.entry_id,
+        device_logger(_LOGGER, entry).debug(
+            "Server language changed from %s to %s; reloading so entity "
+            "names follow", setup_language, hass.config.language,
         )
         # Updated before the reload is scheduled, so a second event for the
         # same change cannot queue a second reload.

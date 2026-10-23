@@ -42,6 +42,7 @@ from ...runtime import (
     find_store,
     remember_panel_language,
 )
+from ...shared.logs import device_id_logger, device_logger
 from ..blueprint import async_get_blueprint
 from ..const import PAGE_ID_SCHEMA
 from ..device_sync import sync_config_to_device
@@ -150,16 +151,17 @@ async def ws_build_diagnostics_bundle(hass: HomeAssistant, connection, msg: dict
             "event": {"event": "progress", "step": step, "index": index, "total": total},
         })
 
+    log = device_logger(_LOGGER, entry)
     _BUILDS_IN_FLIGHT.add(lane)
     try:
         filename, data = await async_build_zip(
             hass, entry, scope=scope, progress=progress, should_stop=lambda: abandoned,
         )
     except BundleAbandoned:
-        _LOGGER.debug("Stopped building a diagnostics bundle for %s: nobody is waiting", entry.title)
+        log.debug("Stopped building a diagnostics bundle: nobody is waiting")
         return
     except Exception as err:  # noqa: BLE001 — the panel is waiting on an event
-        _LOGGER.exception("Building a diagnostics bundle for %s failed", entry.title)
+        log.exception("Building a diagnostics bundle failed")
         connection.send_message({
             "id": msg["id"],
             "type": "event",
@@ -179,9 +181,9 @@ async def ws_build_diagnostics_bundle(hass: HomeAssistant, connection, msg: dict
         hass, f"{BUNDLE_URL_BASE}/{token}", timedelta(seconds=_DOWNLOAD_SIGNATURE_SECONDS),
     )
 
-    _LOGGER.info(
-        "Built a %s diagnostics bundle for %s: %s (%d bytes, %d section(s) skipped)",
-        scope, entry.title, filename, len(data), len(skipped),
+    log.info(
+        "Built a %s diagnostics bundle: %s (%d bytes, %d section(s) skipped)",
+        scope, filename, len(data), len(skipped),
     )
     connection.send_message({
         "id": msg["id"],
@@ -366,6 +368,7 @@ async def _apply_restore(
     Split out from the command so the parsing and the confirmation stay there
     and everything after "these are the files" reads as one sequence.
     """
+    log = device_id_logger(_LOGGER, hass, device_id)
     store = find_store(hass)
     # The swap and the forgetting are one change: a save that slipped between
     # them would write the configuration this is replacing back out, or sweep
@@ -377,7 +380,7 @@ async def _apply_restore(
             if store is not None:
                 store.async_forget_device(device_id)
     except OSError as err:
-        _LOGGER.exception("Restoring the configuration of %s failed", device_id)
+        log.exception("Restoring the configuration failed")
         connection.send_error(msg["id"], "failed", str(err))
         return
     # The sync this would otherwise start would race the wipe below, which is
@@ -387,9 +390,7 @@ async def _apply_restore(
     # list was read when the panel loaded.
     await refresh_state_listener(hass, msg["entry_id"])
 
-    _LOGGER.info(
-        "Restored %d configuration file(s) for %s", parsed["file_count"], device_id,
-    )
+    log.info("Restored %d configuration file(s)", parsed["file_count"])
 
     # A full re-sync, because the page set changed wholesale -- started rather
     # than awaited, as it costs a device round trip per page and the panel needs
@@ -408,7 +409,7 @@ async def _apply_restore(
                     conn.page_cache.reset()
                 await sync_config_to_device(hass, entry)
             except Exception as err:  # noqa: BLE001 — the files are already restored
-                _LOGGER.warning("Re-syncing %s after a restore failed: %s", device_id, err)
+                log.warning("Re-syncing after a restore failed: %s", err)
 
         hass.async_create_task(_resync(), f"lizaip restore re-sync {device_id}")
 

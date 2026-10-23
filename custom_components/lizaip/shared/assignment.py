@@ -11,27 +11,6 @@ from typing import Final
 ASSIGNMENT_DYNAMIC_KEY: Final = "dynamic"
 
 
-def name_is_source_owned(assign) -> bool:
-    """True when a dynamic source, not the user, wrote this button's name.
-
-    The tooltip ladders treat a stored name as the user's own words and return
-    it verbatim — the whole point being that a typed label is never overwritten
-    by a derived one. A name a source generated is not that: it names the
-    button's *subject* (a lamp, a favorite), not what the button should print.
-
-    Knowing the difference is what lets a bound toggle read "Hall Off" instead
-    of a bare "Hall": the label is a subject the state belongs next to, and the
-    ladder is allowed to add it.
-    """
-    if not isinstance(assign, dict):
-        return False
-    binding = assign.get(ASSIGNMENT_DYNAMIC_KEY)
-    if not isinstance(binding, dict):
-        return False
-    fields = binding.get("fields")
-    return isinstance(fields, list) and "label" in fields
-
-
 # Key on a stored button assignment marking its label as one the user typed.
 #
 # It lives beside ``ASSIGNMENT_DYNAMIC_KEY``, and for the same reason: the panel
@@ -62,6 +41,18 @@ ASSIGNMENT_LONGTOUCH_KEY: Final = "longtouch"
 LONGTOUCH_SECONDS: Final = 2.0
 
 
+# ``repeat: true`` on a stored button: holding it runs its action again and
+# again (key repeat), at the delay and rate the remote's settings name,
+# like a TV remote's cursor keys. Absent or anything else: a held button runs
+# once.
+ASSIGNMENT_REPEAT_KEY: Final = "repeat"
+
+
+def repeats(assign) -> bool:
+    """Whether a stored button runs again while it is held."""
+    return isinstance(assign, dict) and assign.get(ASSIGNMENT_REPEAT_KEY) is True
+
+
 def longtouch_steps(assign) -> list:
     """The long-touch steps of a stored button, or ``[]`` when it has none."""
     steps = assign.get(ASSIGNMENT_LONGTOUCH_KEY) if isinstance(assign, dict) else None
@@ -73,15 +64,13 @@ def name_is_user_written(assign) -> bool:
 
     The ladders used to *infer* this by comparing the stored name against its
     action-library entry's: equal meant auto-filled, different meant typed. That
-    guess is wrong for every layout button, because ``generate_assignments``
-    stores the layout's name and mints the library entry from the same string —
-    so an Android TV ``CH+`` looked auto-filled, fell to the static rung and was
-    printed as "Wohnzimmer CH+". Deleting the room name in the panel then stored
-    what was already stored, and the prefix came straight back.
+    guess is wrong for every template button, because ``generate_assignments``
+    stores the template's name and mints the library entry from the same string —
+    so a template's ``Mute`` button looked auto-filled and announced its next
+    action ("Unmute") even when the user had typed "Mute" on purpose.
 
-    A recorded fact replaces the guess. The entity prefix stays the default for
-    a button nobody has named, and becomes removable — permanently — for one
-    somebody has.
+    A recorded fact replaces the guess: a typed name is printed as it reads,
+    and the ladders derive a label only for a button nobody has named.
     """
     if not isinstance(assign, dict):
         return False

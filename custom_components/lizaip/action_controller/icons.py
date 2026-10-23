@@ -7,32 +7,18 @@ from homeassistant.core import HomeAssistant, State
 
 from ..shared.services import (
     attr_str,
-    is_attribute_state_service,
     is_state_toggle_service,
     is_stateless_service,
-    is_two_way_service,
-    NEXT_STATE_MAP,
     scope_action_states,
     scoped_icon_state,
     service_to_attribute,
     service_name,
 )
 from ..shared.tokens import (
-    clean_label_text,
-    finish_tooltip,
     resolve_image_tokens,
-    substitute_label_tokens,
 )
-from ..shared.i18n import action_labels, get_ui_language
 from ..shared.icon_defaults import icon_defaults
-from ..shared.labels import is_token_only_label, state_token_label
-from ..shared.assignment import name_is_source_owned, name_is_user_written
 from ._state import cycle_index
-from .helpers import (
-    first_step,
-    resolve_step_entity,
-    subject_for_assign,
-)
 from .toggle import (
     MODE_CYCLE,
     rule_icon,
@@ -57,169 +43,15 @@ def _compute_next_state_tooltip(
     hass: HomeAssistant,
     entry=None,
 ) -> str:
-    """Compute dynamic tooltip showing the next state action will trigger.
+    """The tooltip a live update sends: the page sync's own ladder.
 
-    Cleaned on the way out for the same reason as ``button_rendering``'s ladder: the
-    result ends up inside an ``imgserv://`` URL, where a brace is fatal.
-
-    *entry* carries the device's language option. It has to reach here as well
-    as ``button_rendering``: this is the *live* producer of the same tooltip, so a
-    device left out of it would relabel itself in Home Assistant's language the
-    first time its entity moved.
+    One ladder, so the label cannot read one thing at sync time and another the
+    first time *state* -- the entity whose change woke this -- moves.
     """
-    return finish_tooltip(
-        _compute_next_state_tooltip_inner(action, assign, state, hass, entry), hass,
-    )
+    # Imported here: `button_rendering` imports this module.
+    from ..config.button_rendering import _resolve_button_tooltip
 
-
-def _compute_next_state_tooltip_inner(
-    action: dict,
-    assign: dict,
-    state: State | None,
-    hass: HomeAssistant,
-    entry=None,
-) -> str:
-    """The ladder itself. See ``_compute_next_state_tooltip``."""
-    # Rung 0: a toggle rule speaks for the step actually about to run, which no
-    # rung below it knows about. Only cycle mode needs the button's identity to
-    # answer, and this caller repaints from a state change — which cycle mode
-    # never sees — so there is nothing to pass and nothing lost by not passing
-    # it. Labels are optional, so None is the ordinary answer.
-    rule_text = toggle_tooltip(assign, state, hass=hass, entry=entry)
-    if rule_text:
-        return rule_text
-    service = action.get("service", "")
-    svc = service_name(service)
-    static_name = assign.get("label") or action.get("name") or ""
-    # "${_state}" is a shape, not a name — never hand it out as a fallback, or a
-    # brace reaches the imgserv URL.
-    if is_token_only_label(static_name):
-        static_name = action.get("name") or ""
-
-    lang = get_ui_language(hass, entry) if hass else "en"
-    # Same rung `button_rendering` localizes, or this overwrites the synced text.
-    static_name = action_labels.localize(static_name, lang, name_is_user_written(assign))
-
-    if not svc:
-        return static_name
-
-    # What a setter's `${_state}` reads: the entity's attributes, and the step's
-    # own service data when it names a literal value. Both producers of this
-    # tooltip must pass the same pair or the label flickers the first time the
-    # entity changes -- `button_rendering._fill_label_tokens` is the other one.
-    _step = first_step(assign)
-    step_data = _step.get("data") or {}
-
-    # The subject is what the button targets, not the entity whose change woke
-    # this. Resolved by the same helper `button_rendering` uses: deriving the pair
-    # separately let an unnamed target take two different states.
-    subject_name, state = subject_for_assign(assign, hass, state)
-
-    attrs = dict(state.attributes or {}) if state else None
-    # What `${_state}` resolves to for this button. Computed once: all three
-    # rungs below that answer from the entity ask exactly the same question,
-    # and three copies of the call is three places to forget an argument --
-    # `step_data` was already missing from one of them once.
-    token_state = state_token_label(svc, state.state if state else "", lang, attrs, step_data)
-    # The same reasoning, and the same dict, as `_fill_label_tokens` builds at
-    # sync time. Both rungs below fill from `label_values`, so the live tooltip
-    # and the synced one resolve `${_state}` identically.
-    label_values = {"_state": token_state}
-    # `${_device.media_title}` and `${_queue.next_song}` are aliases for
-    # attributes of the subject -- the player itself, or its queue sensor --
-    # so they travel as an entity rather than in the dict above.
-    subject_entity = getattr(state, "entity_id", None)
-
-    # A label the user typed wins here exactly as it does in `button_rendering`'s
-    # tooltip ladder. Without this the two producers disagree: the initial sync
-    # would send the custom label and the first state change would overwrite it
-    # with an entity-derived one, so a `${_state}` label lost its prefix.
-    stored_name = (assign.get("label") or "").strip()
-    token_only = is_token_only_label(stored_name)
-    # See `button_rendering`'s ladder: a recorded edit outranks the guess below it,
-    # and releases the source-owned guard, so a lamp the user renamed by hand
-    # keeps its own words on every state change too.
-    user_named = name_is_user_written(assign)
-    # See `button_rendering`'s ladder: a name a dynamic source wrote names the
-    # button's subject, so a toggle is allowed to print the state after it.
-    bound_toggle = (
-        not user_named and name_is_source_owned(assign) and is_two_way_service(svc)
-    )
-    # A token-only name is a shape rather than words *unless the user wrote it*.
-    # Deleting the entity prefix in front of "${_state}" is the one way to ask
-    # for the bare state word, and treating that edit as a shape put the prefix
-    # straight back -- the label could not be changed at all.
-    if (
-        stored_name
-        and (user_named or not token_only)
-        and not bound_toggle
-        and (user_named or stored_name != (action.get("name") or ""))
-    ):
-        # Empty after cleaning: the user's own label is printed as it reads,
-        # empty included -- `${_device.media_title_prev}` with nothing before
-        # it must not turn into "Wohnzimmer Previous". Only a label nobody
-        # typed, which was nothing but wreckage, falls through to a derived
-        # name. Mirrors `button_rendering`'s rung.
-        resolved = clean_label_text(
-            substitute_label_tokens(
-                stored_name,
-                label_values,
-                hass,
-                subject_entity,
-            )
-        )
-        if resolved or user_named:
-            return resolved
-
-    entity_name = subject_name
-    if not entity_name and state:
-        entity_name = (
-            state.attributes.get("friendly_name", "")
-            or state.entity_id.split(".")[-1].replace("_", " ").title()
-        )
-    elif not entity_name:
-        eid = resolve_step_entity(_step, hass) if _step else None
-        if eid:
-            entity_name = eid.split(".")[-1].replace("_", " ").title()
-
-    # `not token_only`: "${_state}" is a shape, not a subject, and taking it as
-    # the entity name would drop the lamp from the front of the label.
-    if bound_toggle and stored_name and not token_only:
-        entity_name = stored_name
-        if not state:
-            return stored_name
-
-    # "${_state}" names nothing by itself, so the entity goes in front of it —
-    # the same shape `button_rendering` produces for the very same stored label.
-    if token_only:
-        resolved = substitute_label_tokens(
-            stored_name,
-            label_values,
-            hass,
-            subject_entity,
-        )
-        if resolved:
-            return f"{entity_name} {resolved}" if entity_name else resolved
-
-    # An unrenamed attribute button announces its next action, exactly as an
-    # unrenamed toggle announces its next state below. Mirrors the rung of the
-    # same name in `button_rendering._resolve_button_tooltip_ladder`; the two must
-    # agree or the label changes the first time the entity moves.
-    if is_attribute_state_service(svc):
-        if token_state:
-            return f"{entity_name} {token_state}" if entity_name else token_state
-
-    if is_state_toggle_service(svc) and state:
-        next_key = NEXT_STATE_MAP.get(state.state)
-        if next_key:
-            label = action_labels.get(next_key, lang)
-            return f"{entity_name} {label}" if entity_name else label
-
-    label = action_labels.for_service(svc, lang)
-    if label:
-        return f"{entity_name} {label}" if entity_name else label
-
-    return static_name or entity_name
+    return _resolve_button_tooltip(action, assign, hass, entry, state=state)
 
 
 # ---------------------------------------------------------------------------

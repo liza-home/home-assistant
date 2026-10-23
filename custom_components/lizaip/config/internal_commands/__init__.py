@@ -2,14 +2,14 @@
 
 PROTOCOL.md §5 lets a button declare an ``action.type`` that firmware executes
 locally, with no network round trip. These are modelled as real Home Assistant
-services because the store, action library, layout YAML, automations and action
+services because the store, action library, template YAML, automations and action
 editor already speak service calls.
 
 One declaration feeds service registration, device-sync translation, panel
 shortcuts and labels/icons. Device-local actions normally emit no ``button``
 event, so they do not double-execute through :mod:`.action_controller` — which
 is why this lives under ``config`` and not there: a ``goto_page`` step is
-configuration written into the layout the device is given, never an event the
+configuration written into the template the device is given, never an event the
 host dispatches.
 
 The package is split by subject rather than by layer: :mod:`.base` is the shape

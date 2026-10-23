@@ -21,6 +21,7 @@ from ._state import (
     get_selected_factor,
 )
 from .helpers import _get_store, _resolve_device_id
+from ..shared.logs import DeviceLogger, device_logger
 from ..shared.services import split_service
 from .sliders import (
     SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY,
@@ -34,7 +35,7 @@ from .sliders import (
 _LOGGER = logging.getLogger(__name__)
 
 #: Sensitivity bounds for the drag factor. The panel advertises them on its
-#: number input, but those attributes only feed form validity — and layout YAML
+#: number input, but those attributes only feed form validity — and template YAML
 #: reaches the executor without any sanitising — so they are enforced here too.
 #: A factor of 0 makes every delta zero, so the floor keeps a slider usable.
 #: Direction is deliberately not a factor concern: it belongs to the control
@@ -48,6 +49,11 @@ _TOUCH_START = "touch_start"
 _SLIDE = "slide"
 _TOUCH_END = "touch_end"
 _TOUCH_CANCEL = "touch_cancel"
+
+
+def _log_for(hass: HomeAssistant, entry_id: str) -> DeviceLogger:
+    """A logger naming the remote this gesture came from."""
+    return device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
 
 
 def _min_interval_for(hass: HomeAssistant, entry_id: str) -> float:
@@ -71,7 +77,7 @@ def _slider_num(
 ) -> float:
     """Read a numeric slider setting, falling back to `default` if unusable.
 
-    Layout YAML is user-editable and reaches here unsanitised, so a typo must
+    Template YAML is user-editable and reaches here unsanitised, so a typo must
     not raise once per event of a drag. NaN and ±inf are treated as unusable
     rather than clamped: YAML parses both, and every NaN comparison is False,
     so they would slip through a naive bounds check.
@@ -224,7 +230,7 @@ def _resolve_selected_control(
     resolved = resolve_control(hass, entity_id, get_selected_control(entry_id))
     if not resolved:
         return None
-    _LOGGER.debug(
+    _log_for(hass, entry_id).debug(
         "Slider %s: driving %s → %s", slider_key, entity_id, resolved["control"],
     )
     return resolved
@@ -249,6 +255,7 @@ def _resolve_selection_config(
     None means the caller must not start a gesture at all; storing no state is
     what makes a failed start self-healing.
     """
+    log = _log_for(hass, entry_id)
     resolved = _resolve_selected_control(hass, entry_id, slider_key)
     if resolved:
         override = get_selected_factor(entry_id)
@@ -263,13 +270,13 @@ def _resolve_selection_config(
         # Whole and unmodified — it already *is* a complete pinned config.
         # `target` goes because from here on this is an ordinary drag.
         default = {k: v for k, v in slider_cfg.items() if k != "target"}
-        _LOGGER.debug(
+        log.debug(
             "Slider %s: nothing selected — falling back to the page default %s",
             slider_key, default.get("target_entity"),
         )
         return default
 
-    _LOGGER.debug(
+    log.debug(
         "Slider %s: nothing touched yet, so nothing to drive (selection=%s)",
         slider_key, get_selected_entity(entry_id),
     )
@@ -282,6 +289,7 @@ def _read_base_value(
     target_entity: str,
     attribute: str,
     val_min: float,
+    log: DeviceLogger,
 ) -> float | None:
     """The value a gesture should start from, or None if it can't be read.
 
@@ -291,7 +299,7 @@ def _read_base_value(
     """
     entity_state = hass.states.get(target_entity)
     if not entity_state:
-        _LOGGER.warning("Slider target %s not found", target_entity)
+        log.warning("Slider target %s not found", target_entity)
         return None
 
     current_val = entity_state.attributes.get(attribute)
@@ -299,7 +307,7 @@ def _read_base_value(
         try:
             return float(current_val)
         except (ValueError, TypeError):
-            _LOGGER.warning("Cannot parse %s.%s=%s", target_entity, attribute, current_val)
+            log.warning("Cannot parse %s.%s=%s", target_entity, attribute, current_val)
             return None
 
     # Some entities carry the value as the state itself.
@@ -311,13 +319,13 @@ def _read_base_value(
     # HA drops `brightness` while a light is off. Start from the bottom of the
     # range so dragging up switches it on rather than doing nothing.
     if entity_state.state in ("off", "unavailable", "unknown", "idle"):
-        _LOGGER.debug(
+        log.debug(
             "Slider %s: %s is '%s' and has no '%s' — basing at min (%.3f)",
             slider_key, target_entity, entity_state.state, attribute, val_min,
         )
         return val_min
 
-    _LOGGER.warning("Cannot read %s.%s for slider", target_entity, attribute)
+    log.warning("Cannot read %s.%s for slider", target_entity, attribute)
     return None
 
 
@@ -381,7 +389,7 @@ def _pinned_config(
         # would make every later touch read as a slide and bail here again,
         # killing the slider until the staleness cutoff.
         _drop_touch(state_key)
-        _LOGGER.debug(
+        _log_for(hass, entry_id).debug(
             "Slider %s: '%s' with no resolved target — ignoring", slider_key, gesture,
         )
     return resolved
@@ -453,17 +461,18 @@ async def _do_start(
     pinned_cfg: dict | None,
 ) -> None:
     """Pin the zero-point and base value a drag is measured from."""
+    log = _log_for(hass, state_key[0])
     if position is None:
         # Pinning a guessed zero-point would make every later slide wrong.
-        _LOGGER.warning("Slider %s: touch_start without a position — ignoring", slider_key)
+        log.warning("Slider %s: touch_start without a position — ignoring", slider_key)
         return
     base_value = _read_base_value(
-        hass, slider_key, mech.target_entity, mech.attribute, mech.val_min,
+        hass, slider_key, mech.target_entity, mech.attribute, mech.val_min, log,
     )
     if base_value is None:
         return
     _begin_gesture(state_key, base_value, position, pinned_cfg)
-    _LOGGER.debug(
+    log.debug(
         "Slider touch_start: %s base=%.3f zero_pos=%.3f", slider_key, base_value, position,
     )
 
@@ -481,7 +490,9 @@ async def _do_slide(
     if not touch:
         return
     if position is None:
-        _LOGGER.debug("Slider %s: slide without a position — ignoring", slider_key)
+        _log_for(hass, entry_id).debug(
+            "Slider %s: slide without a position — ignoring", slider_key,
+        )
         return
 
     # Updated unconditionally and up front: it tracks that the finger is still
@@ -511,7 +522,10 @@ async def _do_slide(
         return
 
     # Already predicted above, whether or not the position had moved.
-    await _write(hass, mech, touch, _SLIDE, slider_key, position, predict=False)
+    await _write(
+        hass, mech, touch, _SLIDE, slider_key, position,
+        predict=False, log=_log_for(hass, entry_id),
+    )
     # Only after the write landed. `last_pos` is the record of what reached the
     # entity, and `touch_end` skips its commit when the final position matches
     # it — advancing it on a failed write would strand the gesture.
@@ -534,11 +548,12 @@ async def _do_end(
     falling back to `pending_pos` matters because the tail of a drag may exist
     nowhere else.
     """
+    log = _log_for(hass, state_key[0])
     touch = _live_touch(state_key, pop=True)
     final_pos = position if position is not None else (touch or {}).get("pending_pos")
     if touch and final_pos is not None and final_pos != touch.get("last_pos"):
-        await _write(hass, mech, touch, _TOUCH_END, slider_key, final_pos)
-    _LOGGER.debug("Slider touch_end: %s (from '%s')", slider_key, interaction)
+        await _write(hass, mech, touch, _TOUCH_END, slider_key, final_pos, log=log)
+    log.debug("Slider touch_end: %s (from '%s')", slider_key, interaction)
 
 
 def _value_at(mech: _Mechanics, touch: dict, pos: float) -> float:
@@ -555,6 +570,7 @@ async def _write(
     pos: float,
     *,
     predict: bool = True,
+    log: DeviceLogger,
 ) -> None:
     """Write the value `pos` implies, relative to the gesture's origin.
 
@@ -574,7 +590,7 @@ async def _write(
     difference the lamp never sees.
     """
     new_value = _value_at(mech, touch, pos)
-    _LOGGER.debug(
+    log.debug(
         "Slider %s: %s pos=%.3f new=%.3f → %s(%s)",
         slider_key, phase, pos, new_value, mech.service, mech.target_entity,
     )
@@ -585,7 +601,7 @@ async def _write(
         # even though the lamp already has it.
         if predict:
             mech.predict(hass, new_value)
-        _LOGGER.debug(
+        log.debug(
             "Slider %s: %s would repeat %s — not calling %s",
             slider_key, phase, sent_value, mech.service,
         )
@@ -609,6 +625,7 @@ async def execute_slider_action(
 
     See :func:`_execute_slider_action` for the behaviour.
     """
+    log = _log_for(hass, entry_id)
     try:
         await _execute_slider_action(
             hass, entry_id, slider_key, page_id, interaction, position
@@ -617,7 +634,7 @@ async def execute_slider_action(
         # Deliberately broad, as in `execute_action`: this runs off the shared
         # device event listener and slider config can come from user-editable
         # YAML, so one bad slider must not take out every button on the device.
-        _LOGGER.exception("Slider action failed for %s/%s", page_id, slider_key)
+        log.exception("Slider action failed for %s/%s", page_id, slider_key)
 
 
 async def _execute_slider_action(
@@ -654,6 +671,7 @@ async def _execute_slider_action(
     and down at most ``p*factor*(max-min)``, which is what lets one formula
     drive a 0.0-1.0 volume and a 0-255 brightness alike.
     """
+    log = _log_for(hass, entry_id)
     device_id = _resolve_device_id(hass, entry_id)
     if not device_id:
         return
@@ -664,7 +682,7 @@ async def _execute_slider_action(
         # Any live state is stale — the slider was reconfigured mid-gesture —
         # and a delta against its zero-point would land on the next touch.
         _drop_touch(state_key)
-        _LOGGER.debug(
+        log.debug(
             "execute_slider_action: %s has no slider_actions — ignoring", slider_key,
         )
         return
@@ -672,12 +690,12 @@ async def _execute_slider_action(
     gesture = _gesture_for(interaction, state_key)
     if gesture == _TOUCH_CANCEL:
         _drop_touch(state_key)
-        _LOGGER.debug("Slider %s: gesture cancelled — state discarded", slider_key)
+        log.debug("Slider %s: gesture cancelled — state discarded", slider_key)
         return
 
     if gesture != _TOUCH_START and _shape_changed_mid_gesture(state_key, follows):
         _drop_touch(state_key)
-        _LOGGER.debug(
+        log.debug(
             "Slider %s: config changed shape mid-gesture — discarding it", slider_key,
         )
         return
@@ -697,9 +715,9 @@ async def _execute_slider_action(
         mode = "proportional"
 
     # The only mode the executor implements. The panel-save path drops anything
-    # else, but `layouts.py` writes straight from YAML.
+    # else, but `templates.py` writes straight from YAML.
     if mode != "proportional":
-        _LOGGER.warning(
+        log.warning(
             "Slider %s: unsupported slider mode %r — ignoring event", slider_key, mode,
         )
         return
@@ -715,4 +733,4 @@ async def _execute_slider_action(
     elif gesture == _TOUCH_END:
         await _do_end(hass, state_key, mech, slider_key, position, interaction)
     else:
-        _LOGGER.debug("Slider %s: unhandled interaction '%s'", slider_key, interaction)
+        log.debug("Slider %s: unhandled interaction '%s'", slider_key, interaction)

@@ -36,7 +36,7 @@ class SizeSpec(NamedTuple):
 # it explicitly as well (`resolve_title_url`, `resolve_tooltip_url`): the remote
 # caches images by URL, so a new value here has to change the URL to reach it.
 SIZE_IDS: Final = {
-    "tile": SizeSpec(50, 50, 50),
+    "tile": SizeSpec(50, 52, 52),
     "title": SizeSpec(200, 50, 48),
     "tooltip": SizeSpec(200, 40, 24),
 }
@@ -49,9 +49,20 @@ DEFAULT_SIZE_ID: Final = "tile"
 DEFAULT_SIZE: Final = SIZE_IDS[DEFAULT_SIZE_ID][:2]
 
 # The sources whose value is a slug and so can never hold a space: a logo is a
-# file we ship (`hue`, `netflix_wide`) and an mdi glyph is a hyphenated name
-# (`play-circle`). After one of those the first space starts something else.
-SLUG_SOURCES: Final = ("logo:", "mdi:")
+# file we ship (`hue`, `netflix_wide`), an mdi glyph is a hyphenated name
+# (`play-circle`) and a picture is an address, which spells a space `%20`.
+# After one of those the first space starts something else.
+SLUG_SOURCES: Final = ("logo:", "mdi:", "media:")
+
+# A picture written as a bare address: an HA path (`/local/a.png`,
+# `${_device.entity_picture}`) or an http(s) URL. It is a part of its own, as
+# `media:` is, so a title can put a cover beside a mark and a name.
+_ADDRESS = re.compile(r"^(?:/\S|https?://)", re.IGNORECASE)
+
+
+def is_address(word: str) -> bool:
+    """Whether *word* is a picture written as a bare address."""
+    return bool(_ADDRESS.match(word))
 
 # What may stand between two parts once a space has already divided them. A
 # bare hyphen cannot be a separator on its own -- `mdi:play-circle` holds one
@@ -60,19 +71,21 @@ _PART_LEAD_INS: Final = ("-", "+")
 
 # What a part looks like from the outside: a scheme, then a colon. A word not
 # shaped like that belongs to the part it follows, so `text:Hello world` is
-# one phrase and `file:my photo.png` is one filename.
+# one phrase.
 _PART_START = re.compile(r"^([a-z][a-z0-9_]*):")
 
 # The source types imgserv draws itself. Only one of these -- or a registered
 # extra icon set -- starts a part: words that merely end in a colon do not, or
 # a label like "Go to page: Sonos" would ask imgserv for a `page:` source.
 PART_SOURCE_TYPES: Final = frozenset(
-    ("mdi", "logo", "text", "file", "media", "ref", "history", "phu"),
+    ("mdi", "logo", "text", "media", "ref", "history", "phu"),
 )
 
 
 def _is_part_start(word: str) -> bool:
     """Whether *word* names a source, and so starts a part of its own."""
+    if is_address(word):
+        return True
     m = _PART_START.match(word)
     return bool(m) and (m.group(1) in PART_SOURCE_TYPES or m.group(1) in _custom_icon_prefixes)
 
@@ -81,7 +94,7 @@ def split_source_parts(source: str) -> tuple[str, ...]:
     """Split *source* into the parts drawn side by side, in order.
 
     A part ends where the next one starts, and a part starts at a word naming
-    a source (``logo:``, ``text:``, ``mdi:``, ``file:``..., or a registered
+    a source (``logo:``, ``text:``, ``mdi:``, ``media:``..., or a registered
     icon set) -- not at any word ending in a colon, which is just punctuation. After a slug
     subject plain words start a part too, and are read as the ``text:`` they
     would have to be spelled as anywhere else, so all of these draw the hue
@@ -94,8 +107,8 @@ def split_source_parts(source: str) -> tuple[str, ...]:
         logo:hue text:Wohnzimmer
 
     A lone ``-`` or ``+`` between two parts is punctuation and is dropped,
-    except where dropping it would change what a part means: a ``file:my +
-    photo.png`` whose next word is not a part of its own is one filename.
+    except where dropping it would change what a part means: a ``text:1 +
+    1`` whose next word is not a part of its own is one phrase.
 
     One part is the common case and comes back as a tuple of one. The rule is
     the whole rule: `_draws_words` and the panel's `_splitSourceParts` read a
@@ -130,10 +143,26 @@ def split_source_parts(source: str) -> tuple[str, ...]:
 
 def _is_slug_part(part: str) -> bool:
     """Whether *part* is a slug subject still holding nothing but its slug."""
-    return part.startswith(SLUG_SOURCES) and " " not in part
+    return (part.startswith(SLUG_SOURCES) or is_address(part)) and " " not in part
 
 
 # Symbolic color names → (R, G, B, A)
+#
+# The last three are named for a *state* rather than a hue: they are what a
+# tile is tinted with when the entity behind it is on, off, or not answering.
+# Written out as their own entries, not aliases, because the hue each one
+# happens to carry today is a looks decision about that state and nothing else
+# — restyling "disabled" must not drag `?fg=inactive` along with it.
+#
+# `unavailable` is a dimmed red, not the full `red`: an entity that has gone
+# missing is not an alarm, and at alarm strength every dead tile on a page
+# shouts louder than the one thing that is actually wrong.
+#
+# `enabled` is the default foreground (`white`, see DEFAULT_FG_COLOR) rather
+# than a colour of its own: a tile that is simply on is the normal case, and
+# the page reads calmer when only the departures from normal carry a hue.
+# It is still spelled out here, because it is the one of the three most likely
+# to be restyled and must be restylable without touching `white`.
 COLOR_NAMES: Final = {
     "yellow": (254, 212, 48, 255),
     "blue": (72, 203, 245, 255),
@@ -143,6 +172,9 @@ COLOR_NAMES: Final = {
     "black": (0, 0, 0, 255),
     "inactive": (140, 143, 166, 255),
     "transparent": (0, 0, 0, 0),
+    "enabled": (255, 255, 255, 255),
+    "disabled": (140, 143, 166, 255),
+    "unavailable": (150, 74, 76, 255),
 }
 
 
@@ -278,7 +310,11 @@ MODE_DEFAULTS: Final = {
 # sense as a foreground pick:
 #   - `transparent` is not a colour; tinting an icon with it renders nothing.
 #   - `black` is invisible against the device's permanently dark screen.
-# Both stay parseable (an explicit `?fg=black` still works), they are just not
+#   - `enabled`/`disabled`/`unavailable` name a state, not a pick. Each one
+#     draws the same hex as a swatch already on offer, so listing them would put
+#     the same colour in the picker twice under a name that promises it tracks
+#     a state — which a one-click tint does not.
+# All stay parseable (an explicit `?fg=black` still works), they are just not
 # offered as one-click choices.
 PALETTE_NAMES: Final = ("white", "yellow", "blue", "green", "red", "inactive")
 
@@ -312,7 +348,7 @@ IMG_PATH: Final = "/api/imgserv"
 #: these names never shadows it. ``phu`` is deliberately not among them: the
 #: custom-brand-icons set is a browser registration like any other, and its
 #: shapes arrive through the upload path instead of a JS bundle read off disk.
-NATIVE_SOURCE_TYPES: Final = frozenset({"mdi", "logo", "text", "file", "media"})
+NATIVE_SOURCE_TYPES: Final = frozenset({"mdi", "logo", "text", "media"})
 
 #: Icon sets the frontend has registered beyond the native ones (``phu``,
 #: ``hue``, ``fapro``, ...), as last reported by the panel. They exist only in

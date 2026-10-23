@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from homeassistant.core import HomeAssistant
 
 from ..shared.assignment import LONGTOUCH_SECONDS
+from ..shared.logs import device_logger
 from ._state import remote_state
 from .buttons import execute_action, execute_longtouch, longtouch_assignment
 
@@ -87,7 +88,9 @@ def _fire(hass: HomeAssistant, entry_id: str, button_key: str, gesture: _Gesture
     if remote_state(entry_id).button_gestures.get(button_key) is not gesture:
         return
     gesture.fired = True
-    _LOGGER.debug("Long touch on %s (%s)", button_key, entry_id)
+    device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id)).debug(
+        "Long touch on %s", button_key,
+    )
     hass.async_create_task(
         execute_longtouch(hass, entry_id, button_key, gesture.page_id),
         f"lizaip_longtouch_{button_key}",

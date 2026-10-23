@@ -27,7 +27,7 @@ from homeassistant.core import HomeAssistant
 from ..const import DOMAIN
 from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError, is_valid_page_id
 from ..runtime import entry_connection, entry_device_id, _get_store
-from ..variables_calc import variables_scope
+from ..shared.logs import device_logger
 from .const import is_subpage
 from .events import fire_device_synced
 from .page_payload import build_page_payload, build_sync_context, compute_page_hash
@@ -65,6 +65,7 @@ async def _send_page_op(
     index: int | None = None,
     total: int | None = None,
     error_sink: list[Exception] | None = None,
+    log: Any = None,
 ) -> bool:
     """Run one page command, with retries, and say whether it landed.
 
@@ -76,8 +77,10 @@ async def _send_page_op(
     coroutine because a coroutine cannot be awaited twice, and a retry needs a
     fresh one. *error_sink* collects the exception a giving-up operation died
     of, so a caller can report what the device actually said rather than a
-    generic "it failed".
+    generic "it failed". *log* names the remote the pages are going to; it is
+    passed in because this helper is given a bound factory, not a connection.
     """
+    log = log or _LOGGER
     where = f"page {page_id}" if page_id is not None else "main page order"
     progress = f" ({index}/{total})" if index is not None and total else ""
 
@@ -88,7 +91,7 @@ async def _send_page_op(
             # A retry is for a remote that stalled. One that answered with an
             # error has decided, and says the same again.
             last = attempt == PAGE_WRITE_ATTEMPTS or _is_refusal(err)
-            _LOGGER.log(
+            log.log(
                 logging.ERROR if last else logging.WARNING,
                 "%s failed for %s%s (attempt %d/%d): %s",
                 op, where, progress, attempt, PAGE_WRITE_ATTEMPTS, err,
@@ -99,7 +102,7 @@ async def _send_page_op(
                 return False
             await asyncio.sleep(PAGE_RETRY_DELAY)
         else:
-            _LOGGER.debug("%s ok for %s%s", op, where, progress)
+            log.debug("%s ok for %s%s", op, where, progress)
             return True
     return False
 
@@ -119,7 +122,7 @@ class _GiveUp:
     """Counts page operations failing in a row, and says when to stop asking."""
 
     def __init__(self, entry: ConfigEntry, phase: str) -> None:
-        self._entry = entry
+        self._log = device_logger(_LOGGER, entry)
         self._phase = phase
         self._in_a_row = 0
         self.skipped: list[int] = []
@@ -136,10 +139,10 @@ class _GiveUp:
 
     def report(self) -> None:
         if self.skipped:
-            _LOGGER.error(
-                "%s failed %d %s in a row; skipped the remaining %d (pages %s) "
+            self._log.error(
+                "Failed %d %s in a row; skipped the remaining %d (pages %s) "
                 "for this sync instead of waiting on each",
-                self._entry.title, GIVE_UP_AFTER_FAILURES, self._phase,
+                GIVE_UP_AFTER_FAILURES, self._phase,
                 len(self.skipped), ", ".join(str(p) for p in self.skipped),
             )
 
@@ -163,7 +166,9 @@ async def _add_page_if_missing(conn, page_id: int) -> None:
             raise err from None
         if page_id not in existing:
             raise
-        _LOGGER.debug("Page %s already on device, keeping it: %s", page_id, err)
+        device_logger(_LOGGER, conn).debug(
+            "Page %s already on device, keeping it: %s", page_id, err,
+        )
 
 
 def _page_delta(previous: dict | None, desired: dict) -> dict:
@@ -235,7 +240,7 @@ async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool
     state = _sync_state(hass, entry)
     if state["running"]:
         state["dirty"] = True
-        _LOGGER.debug("Sync already running for %s, coalescing", entry.title)
+        device_logger(_LOGGER, entry).debug("Sync already running, coalescing")
         return True
 
     async with state["lock"]:
@@ -300,11 +305,10 @@ async def _sync_locked(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
     conn = entry_connection(entry)
     if not is_ready(conn):
-        _LOGGER.debug("Device not connected, skipping sync for %s", entry.title)
+        device_logger(_LOGGER, entry).debug("Device not connected, skipping sync")
         return False
     async with conn.page_cache.lock:
-        with variables_scope(getattr(entry, "options", None)):
-            return await _sync_config_to_device(hass, entry, conn)
+        return await _sync_config_to_device(hass, entry, conn)
 
 
 async def _sync_config_to_device(
@@ -314,10 +318,11 @@ async def _sync_config_to_device(
 
     Uses the protocol commands: get_pages, clear_all/add_page/set_page/set_main_pages.
     """
+    log = device_logger(_LOGGER, entry)
     # Load pages from store
     device_id = entry_device_id(entry)
     if not device_id:
-        _LOGGER.debug("No device_id for entry %s", entry.entry_id)
+        log.debug("No device_id for this entry")
         return False
     store = _get_store(hass)
     pages = await store.async_get_pages(device_id)
@@ -335,7 +340,7 @@ async def _sync_config_to_device(
             # Without the hashes there is nothing to sync against, so the pass
             # is abandoned and the cache left unset, which makes the next sync
             # read them again.
-            _LOGGER.error(
+            log.error(
                 "Failed to get_pages from device: %s — skipping this sync rather "
                 "than rewriting all %d page(s) blind", err, len(pages),
             )
@@ -348,7 +353,7 @@ async def _sync_config_to_device(
         except Exception as err:
             # Survivable where the page listing is not: an unknown order means
             # the order gets pushed again, not that every page does.
-            _LOGGER.debug("Failed to get_main_pages from device: %s", err)
+            log.debug("Failed to get_main_pages from device: %s", err)
             device_main_pages = []
     else:
         device_hash_map = {pid: p.get("hash") for pid, p in conn.page_cache.pages.items()}
@@ -368,7 +373,7 @@ async def _sync_config_to_device(
         # one bad page abort the whole sync with a protocol error.
         page_id = page_config.get("id", 1)
         if not is_valid_page_id(page_id):
-            _LOGGER.warning(
+            log.warning(
                 "Skipping stored page with invalid page_id %r — must be an integer "
                 "in 1…4294967295 (0 is reserved)",
                 page_id,
@@ -386,7 +391,7 @@ async def _sync_config_to_device(
     # Every page is rebuilt because a page's hash is only known once its
     # payload is resolved. Logged because it is the one part of a sync that
     # grows with the number of pages.
-    _LOGGER.debug(
+    log.debug(
         "Built %d page payloads in %.0f ms",
         len(desired_pages), (time.monotonic() - build_started) * 1000,
     )
@@ -418,10 +423,10 @@ async def _sync_config_to_device(
         conn.page_cache.pages = {p["page_id"]: p for p in desired_pages}
         conn.page_cache.main_pages = list(main_page_ids)
         _note_sync_success(hass, entry, conn)
-        _LOGGER.debug("Device pages up to date, no sync needed")
+        log.debug("Device pages up to date, no sync needed")
         return True
 
-    _LOGGER.info(
+    log.info(
         "Syncing pages: add=%s, remove=%s, update=%s, order_changed=%s",
         pages_to_add, pages_to_remove | set(stray_pages), pages_to_update, order_changed,
     )
@@ -467,8 +472,39 @@ async def _sync_config_to_device(
     rejected = conn.page_cache.rejected
     rejected_before = set(rejected)
 
+    # Nothing the device holds survives this sync: a remote just added, whose
+    # pages belong to whoever had it before, or a configuration emptied in the
+    # panel. `clear_all` says that in one command instead of one per page, and
+    # takes the pages that were written without being confirmed with it --
+    # there is nothing left for them to collide with. Falls through to the
+    # per-page deletes if the device will not take it, since the outcome, not
+    # the command, is what matters.
+    wipe_all = bool(device_page_ids) and not (desired_page_ids & device_page_ids)
+    if wipe_all:
+        try:
+            await conn.clear_all()
+        except Exception as err:  # noqa: BLE001 -- the per-page path still has to run
+            log.warning("clear_all was refused (%s); deleting page by page", err)
+            wipe_all = False
+        else:
+            log.info("Removed all %d page(s) the device held", len(device_page_ids))
+            known_pages.clear()
+            # `clear_all` forgets the page table, and the dict this sync is
+            # recording into is that table: hand it back, emptied, so the
+            # writes below are remembered instead of going to an orphan.
+            conn.page_cache.pages = known_pages
+            unsure.clear()
+            # Nothing is on the device to refuse any more.
+            rejected.clear()
+            # The order went with the pages; what the listing said it was no
+            # longer describes anything.
+            device_main_pages = []
+            # Both lists are what the wipe just did, in one command.
+            remove_order = []
+            stray_pages = []
+
     for pid in remove_order:
-        if await _send_page_op(partial(conn.del_page, pid), "del_page", pid):
+        if await _send_page_op(partial(conn.del_page, pid), "del_page", pid, log=log):
             known_pages.pop(pid, None)
         else:
             failed.append(pid)
@@ -480,9 +516,9 @@ async def _sync_config_to_device(
         try:
             await conn.del_page(pid)
         except Exception as err:  # noqa: BLE001 -- most likely never stored
-            _LOGGER.debug("del_page for page %s, which may never have landed: %s", pid, err)
+            log.debug("del_page for page %s, which may never have landed: %s", pid, err)
         else:
-            _LOGGER.info("Removed page %s, which the device held without having confirmed it", pid)
+            log.info("Removed page %s, which the device held without having confirmed it", pid)
 
     # A failed `add_page` no longer takes its `set_page` down with it. The
     # device answers `[-4] "data"."page_id"` both for an ID it will not accept
@@ -500,7 +536,7 @@ async def _sync_config_to_device(
             adds.skip(pid)
             continue
         ok = await _send_page_op(
-            partial(_add_page_if_missing, conn, pid), "add_page", pid,
+            partial(_add_page_if_missing, conn, pid), "add_page", pid, log=log,
         )
         adds.note(ok)
         if not ok:
@@ -533,12 +569,12 @@ async def _sync_config_to_device(
         )
         ok = await _send_page_op(
             partial(conn.set_page, timeout=PAGE_WRITE_TIMEOUT, **payload),
-            "set_page", pid, n, total,
+            "set_page", pid, n, total, log=log,
         )
         sets.note(ok)
         if ok:
             if pid in add_failed:
-                _LOGGER.info(
+                log.info(
                     "Page %d was written despite add_page being refused — the "
                     "device already held it but did not report it in get_pages",
                     pid,
@@ -576,7 +612,7 @@ async def _sync_config_to_device(
     if order_changed or deliverable != device_main_pages:
         if await _send_page_op(
             partial(conn.set_main_pages, deliverable), "set_main_pages", None,
-            error_sink=order_errors,
+            error_sink=order_errors, log=log,
         ):
             conn.page_cache.main_pages = list(deliverable)
         else:
@@ -595,18 +631,17 @@ async def _sync_config_to_device(
 
     newly_rejected = rejected - rejected_before
     if newly_rejected:
-        _LOGGER.error(
-            "%s refused to store page(s) %s and holds %d page(s); it reports no "
-            "page limit, so this may be the one it has. They are skipped until "
-            "the remote reconnects. Remove them in the lizaIP panel or update "
-            "the firmware.",
-            entry.title, ", ".join(str(p) for p in sorted(newly_rejected)),
-            len(known_pages),
+        log.error(
+            "The remote refused to store page(s) %s and holds %d page(s); it "
+            "reports no page limit, so this may be the one it has. They are "
+            "skipped until the remote reconnects. Remove them in the lizaIP "
+            "panel or update the firmware.",
+            ", ".join(str(p) for p in sorted(newly_rejected)), len(known_pages),
         )
 
     if failed:
         names = ", ".join(str(p) for p in sorted(set(failed)))
-        _LOGGER.error(
+        log.error(
             "Page sync incomplete: %d of %d page writes failed (pages %s). "
             "The pages that did sync are live; the rest are retried on the "
             "next config change or reconnect.",
@@ -626,7 +661,7 @@ async def _sync_config_to_device(
         return False
 
     _note_sync_success(hass, entry, conn)
-    _LOGGER.info("Page sync complete (%d page(s) written)", total)
+    log.info("Page sync complete (%d page(s) written)", total)
     return True
 
 
@@ -663,23 +698,24 @@ def _note_sync_failure(
         # The remote is away, not refusing pages. The next hello syncs
         # everything anyway, so a remote that was simply asleep or switched
         # off is not counted.
-        _LOGGER.debug("Sync failure not counted, the remote is not connected: %s", err)
+        device_logger(_LOGGER, entry).debug(
+            "Sync failure not counted, the remote is not connected: %s", err,
+        )
         return
     count = conn.page_cache.failures + 1
     conn.page_cache.failures = count
     if count == MAX_SYNC_FAILURES:
-        _LOGGER.error(
-            "Pages could not be sent to %s: %d syncs in a row failed (last "
-            "error: %s). The remote may show outdated pages until a sync "
-            "succeeds.",
-            entry.title, count, err,
+        device_logger(_LOGGER, entry).error(
+            "Pages could not be sent: %d syncs in a row failed (last error: "
+            "%s). The remote may show outdated pages until a sync succeeds.",
+            count, err,
         )
 
 
 def _note_sync_success(hass: HomeAssistant, entry: ConfigEntry, conn: Any) -> None:
     """Clear the failure count, and tell the panel the device has the change."""
     if conn.page_cache.failures >= MAX_SYNC_FAILURES:
-        _LOGGER.info("Pages are in sync with %s again", entry.title)
+        device_logger(_LOGGER, entry).info("Pages are in sync again")
     conn.page_cache.failures = 0
     # What the panel's memory bars wait for: a transfer is what moves them.
     fire_device_synced(hass, entry.entry_id)
@@ -713,6 +749,34 @@ def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
     return changes
 
 
+def patched_page(
+    conn, page_id: int, buttons: list[dict], img_title: str | None = None,
+) -> dict | None:
+    """The known copy of *page_id* with a partial ``set_page`` applied, new hash included.
+
+    The hash is sent with the partial write, so the device's own copy is
+    stamped with what it now shows: a variable that moved changes the page's
+    hash exactly as a full rebuild would, and the next comparison sees the
+    truth. None when the cache does not hold the page (or those buttons).
+    """
+    cache = getattr(conn, "page_cache", None)
+    known = cache.pages if cache is not None else None
+    copy = None if known is None else known.get(page_id)
+    if copy is None:
+        return None
+    moved = {
+        b.get("name"): {k: b[k] for k in _LIVE_BUTTON_FIELDS if k in b} for b in buttons
+    }
+    if not moved.keys() <= {b.get("name") for b in copy.get("buttons", ())}:
+        return None
+    patched = {k: v for k, v in copy.items() if k != "hash"}
+    if img_title is not None:
+        patched["img_title"] = img_title
+    patched["buttons"] = [{**b, **moved.get(b.get("name"), {})} for b in copy["buttons"]]
+    patched["hash"] = compute_page_hash(patched)
+    return patched
+
+
 def note_partial_page(
     conn, page_id: int, buttons: list[dict], img_title: str | None = None,
 ) -> None:
@@ -723,29 +787,16 @@ def note_partial_page(
     push resends it, and the next full sync resends the whole page. A page the
     cache does not hold is left for the full sync to settle.
     """
-    known = conn.page_cache.pages
-    copy = None if known is None else known.get(page_id)
-    if copy is None:
-        return
-    moved = {
-        b.get("name"): {k: b[k] for k in _LIVE_BUTTON_FIELDS if k in b} for b in buttons
-    }
-    if not moved.keys() <= {b.get("name") for b in copy.get("buttons", ())}:
-        return
-    patched = {k: v for k, v in copy.items() if k != "hash"}
-    if img_title is not None:
-        patched["img_title"] = img_title
-    patched["buttons"] = [{**b, **moved.get(b.get("name"), {})} for b in copy["buttons"]]
-    patched["hash"] = compute_page_hash(patched)
-    known[page_id] = patched
+    patched = patched_page(conn, page_id, buttons, img_title)
+    if patched is not None:
+        conn.page_cache.pages[page_id] = patched
 
 
 async def async_push_variable_pages(
     hass: HomeAssistant, entry: ConfigEntry, page_ids: set[int],
 ) -> None:
-    """:func:`_push_variable_pages` with *entry*'s variables setting in force."""
-    with variables_scope(getattr(entry, "options", None)):
-        await _push_variable_pages(hass, entry, page_ids)
+    """Bring the pages whose variables moved up to date; see :func:`_push_variable_pages`."""
+    await _push_variable_pages(hass, entry, page_ids)
 
 
 async def _push_variable_pages(
@@ -759,6 +810,7 @@ async def _push_variable_pages(
     them. A page the device's copy of is not known, or that changed more than a
     variable can, falls back to the full sync.
     """
+    log = device_logger(_LOGGER, entry)
     conn = entry_connection(entry)
     if not is_ready(conn):
         return
@@ -792,7 +844,7 @@ async def _push_variable_pages(
         title = built.get("img_title")
         title = title if title != sent.get("img_title") else None
         if changes or title is not None:
-            _LOGGER.debug(
+            log.debug(
                 "Variables moved on page %s: %s%s", page_id,
                 [c["name"] for c in changes], " and its title" if title is not None else "",
             )

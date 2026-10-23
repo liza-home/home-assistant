@@ -4,10 +4,10 @@ Provides an HTTP endpoint that serves dynamically generated PNG images:
 
     GET /api/imgserv/<source>:<value>?<options>
 
-Sources: ``mdi:``, ``logo:``, ``text:``, ``file:``, ``media:``, and the icon
+Sources: ``mdi:``, ``logo:``, ``text:``, ``media:``, ``history:``, and the icon
 sets registered in the browser (``phu:``, ``hue:``, ...; see
 ``render_custom.py``).
-Options: ``size``, ``fg``/``color``, ``bg``, ``mode``, ``crop``, ``alpha``,
+Options: ``size``, ``box``, ``fg``/``color``, ``bg``, ``mode``, ``crop``, ``alpha``,
 ``percent``, ``font``, ``font_size`` — see ``httpsocket.py`` for the full
 request table and ``render.py`` for the shared pipeline they drive.
 """

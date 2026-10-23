@@ -21,6 +21,7 @@ from ..device.services import _selected_entry_ids
 from ..runtime import _get_store, entry_device_id
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
+from ..shared.logs import device_logger
 from ..shared.tokens import page_scope, substitute_device_token
 from ..state_icon import (
     IconStyle,
@@ -172,8 +173,8 @@ async def build_page_payload(
     ctx: SyncContext | None = None,
 ) -> dict:
     """Build a set_page data payload, its tiles reading ``${_device}`` as the page has it."""
-    layout = page_config.get("layout") if isinstance(page_config, dict) else None
-    with page_scope(layout):
+    template = page_config.get("template") if isinstance(page_config, dict) else None
+    with page_scope(template):
         return await _build_page_payload_in_scope(
             hass, entry, page_id, page_config, all_pages, ctx=ctx,
         )
@@ -276,7 +277,7 @@ async def _build_page_payload_in_scope(
         # glyph while the panel kept showing the chosen one.
         #
         # Exception: when the button carries its own payload identity (play_media /
-        # select_source), a pinned image that came from a layout may belong to a
+        # select_source), a pinned image that came from a template may belong to a
         # different media item, so the payload thumbnail wins.
         # Lets a cycle toggle paint the step that is actually next rather than
         # restarting at step one every time the page is resynced. Read
@@ -302,7 +303,7 @@ async def _build_page_payload_in_scope(
             if isinstance(config, list) and config and isinstance(config[0], dict)
             else None
         )
-        _LOGGER.debug(
+        device_logger(_LOGGER, entry).debug(
             "Button %s: action_id=%s, action_def.icon=%s, service=%s, resolved=%s",
             button_name, action_id, action_def.get("icon"), action_def.get("service"), resolved_icon,
         )
@@ -373,7 +374,7 @@ async def _build_page_payload_in_scope(
     # `${_device}` first: what it names can itself hold no variable.
     page_img_title = with_resolved_image(
         {"image": substitute_device_token(
-            page_config.get("image", ""), hass, page_config.get("layout"),
+            page_config.get("image", ""), hass, page_config.get("template"),
         )}, hass,
     ).get("image") or ""
     img_title = resolve_title_url(page_img_title, page_color, text_settings["title"])

@@ -37,7 +37,7 @@ PREDICTED_HA_STATE_MAP: dict[str, str] = {
 # Those are not extra faces: core's `async_media_play_pause` is binary, so
 # anything not playing presses play, and `paused` is already that bucket's icon.
 # Without this a user's custom "Paused" icon would vanish the moment the speaker
-# went idle. Mirrored by STATE_CATCHALL in liza-remote-states.js.
+# went idle. Mirrored by STATE_CATCHALL in lizaip-states.js.
 STATE_CATCHALL: dict[str, dict[str, str]] = {
     "media_player": {"active": "playing", "inactive": "paused"},
 }
@@ -193,7 +193,7 @@ def scope_action_states(service: str, states: Any) -> list[dict]:
     """Drop stored state rules a narrowed service can never reach.
 
     `states` is persisted on the action-library entry, so entries written before
-    the service was scoped -- and every page built from `layouts.py` before the
+    the service was scoped -- and every page built from `templates.py` before the
     same fix -- still carry `idle` and `off` rows for `media_play_pause`, and a
     full set of rows for one-way services that have no faces at all. Every
     consumer walks that list *before* any fallback runs, so a stale `off` rule
@@ -213,7 +213,7 @@ def scope_action_states(service: str, states: Any) -> list[dict]:
     function is the chokepoint the state readers go through -- `icons.py` and
     `buttons.py` walk its result calling `.get` -- so an unscoped service like
     `toggle`, which keeps every row, would otherwise hand them the junk
-    untouched. Nothing in the repo writes a malformed `states`: `layouts.py`
+    untouched. Nothing in the repo writes a malformed `states`: `templates.py`
     derives a list of dicts and the panel round-trips that. But the value comes
     back from the store over the websocket with no schema in between, so a
     hand-edited entry arrives unchecked, and dropping the bad rows here keeps a
@@ -262,10 +262,10 @@ SERVICE_ACTION_MAP: dict[str, str] = {
 # "anything else → off" fallback is deliberately not copied — it would name a
 # direction for a value we do not recognise; unknown values degrade instead.
 # Do not re-derive the order from ``knownAttrStates`` in
-# ``liza-remote-states.js``: that enumerates legal values, it does not order the
+# ``lizaip-states.js``: that enumerates legal values, it does not order the
 # cycle.
 #
-# Mirrored in ``panel/liza-remote-helpers.js``; ``tests/label_parity_cases.json``
+# Mirrored in ``panel/lizaip-helpers.js``; ``tests/label_parity_cases.json``
 # pins the two together.
 ATTR_ACTION_CYCLES: dict[str, tuple[tuple[str, str], ...]] = {
     "is_volume_muted": (("true", "mute"), ("false", "unmute")),

@@ -12,13 +12,11 @@ branching function. Each rung answers only for the cases it owns and returns
 ``None`` otherwise, which keeps "why did this button get that icon?" answerable
 by reading one short function instead of unwinding a chain of conditionals.
 
-The tooltip is a ladder too, in :func:`_resolve_button_tooltip_ladder`. It has
-a twin in :func:`action_controller.icons._compute_next_state_tooltip_inner` —
-this one answers while a page is being built, that one on every state change —
-and the two must return the same string for the same button or the tooltip
-changes under the user the first time the entity moves. Rungs that need to
-agree therefore call one shared helper rather than each deriving the answer:
-:func:`shared.labels.state_token_label` is one such.
+The tooltip is a ladder too, in :func:`_resolve_button_tooltip_ladder`. It
+answers both while a page is being built and on every state change
+(:func:`action_controller.icons._compute_next_state_tooltip` calls it with the
+state that moved), so the label cannot read one thing at sync time and another
+the first time the entity moves.
 """
 from __future__ import annotations
 
@@ -27,7 +25,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 
 # Here since HA 2024.2, the release that introduced icon translations and with
 # them the per-service icons this module reads. `hacs.json` asks for 2024.7.0,
@@ -52,22 +50,19 @@ from ..shared.services import (
     is_state_toggle_service,
     icon_varies_with_state,
     is_stateless_service,
-    is_two_way_service,
     scope_action_states,
     scoped_icon_state,
     service_fixed_icon,
     service_to_attribute,
 )
-from ..shared.history import history_entity
+from ..shared.history import history_entities
 from ..shared.icon_defaults import icon_defaults
 from ..shared.i18n import action_labels, get_ui_language
 from ..shared.labels import (
     STATE_TOKEN,
-    is_token_only_label,
     state_token_label,
 )
 from ..shared.assignment import (
-    name_is_source_owned,
     name_is_user_written,
     ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
 )
@@ -155,6 +150,7 @@ def _fill_label_tokens(
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
+    state: State | None = None,
 ) -> str:
     """Resolve ``${_state}``/``${_name}`` (and any future token) in a typed label.
 
@@ -169,7 +165,7 @@ def _fill_label_tokens(
     svc = service_name(service)
     lang = get_ui_language(hass, entry)
 
-    _, state_obj = subject_for_assign(assign, hass)
+    _, state_obj = subject_for_assign(assign, hass, state)
     current_state = state_obj.state if state_obj else ""
     attributes = dict(state_obj.attributes or {}) if state_obj else None
 
@@ -205,8 +201,12 @@ def _resolve_button_tooltip(
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
     button_ref: tuple[str, int, str] | None = None,
+    state: State | None = None,
 ) -> str:
     """Compute the text the remote prints under a button.
+
+    The one ladder for both producers: the page sync, and the live update that
+    passes the *state* whose change woke it (``icons._compute_next_state_tooltip``).
 
     A thin wrapper over the ladder so that *every* rung's answer is cleaned on
     the way out — the result is interpolated into an ``imgserv://`` URL, and a
@@ -215,7 +215,7 @@ def _resolve_button_tooltip(
     """
     return finish_tooltip(
         _resolve_button_tooltip_ladder(
-            action_def, assign, hass, entry, internal_context, button_ref,
+            action_def, assign, hass, entry, internal_context, button_ref, state,
         ),
         hass,
     )
@@ -228,11 +228,12 @@ def _resolve_button_tooltip_ladder(
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
     button_ref: tuple[str, int, str] | None = None,
+    state: State | None = None,
 ) -> str:
     """Compute a dynamic tooltip showing the next state the button will trigger.
 
-    Returns a string like "Schreibtisch Aus" (entity name + translated action).
-    Uses HA's configured language for translations.
+    Returns a string like "Aus" (the translated action). A stored label wins
+    and is printed as it reads. Uses HA's configured language for translations.
     """
     # Rung 0, mirroring `_icon_from_toggle_rule`: the toggle block is the only
     # thing that knows the button is about to do something other than its
@@ -240,7 +241,7 @@ def _resolve_button_tooltip_ladder(
     entry_id = page_id = button_key = None
     if button_ref:
         entry_id, page_id, button_key = button_ref
-    _, toggle_state = subject_for_assign(assign, hass)
+    _, toggle_state = subject_for_assign(assign, hass, state)
     rule_text = toggle_tooltip(
         assign, toggle_state, entry_id, page_id, button_key, hass, entry,
     )
@@ -259,49 +260,18 @@ def _resolve_button_tooltip_ladder(
     # it read as the user's own words: the tooltip said "Toggle" at sync time
     # and "Schreibtisch Off" on the next live update.
     stored_name = (assign.get("label") or "").strip()
-    # The panel records who wrote the name, so the comparison below is only the
-    # fallback for buttons stored before it did. A layout button stores its own
-    # name *and* mints its library entry from it (`layouts.py`), so comparing
-    # the two called "CH+" auto-filled and printed "Wohnzimmer CH+" — and
-    # deleting the room name in the panel stored what was already stored, so
-    # nothing moved. A recorded edit is not a guess, and outranks all of it.
+    # The panel records who wrote the name, so the comparison with the library
+    # entry is only the fallback for buttons stored before it did.
     user_named = name_is_user_written(assign)
-    # A label made only of placeholders ("${_state}") names nothing on its own,
-    # so it is a shape rather than the user's words: it is resolved below and
-    # given the entity prefix, exactly as a short static name like "Next" is.
-    # True of a typed one too — typing "${_state}" asks for the derived label.
-    token_only = is_token_only_label(stored_name)
-    # …and a name a dynamic source wrote is not the user's words either. On a
-    # page of toggles — every lamp on a Hue bridge — the name is the lamp, and
-    # returning it here is what left eleven buttons reading "Kitchen" while the
-    # twelfth read "Kitchen Off" purely because its name happened to match the
-    # shared library entry's. A name the user typed over one of those lamps is
-    # theirs again, which is why `user_named` releases this guard too.
-    bound_toggle = (
-        not user_named and name_is_source_owned(assign) and is_two_way_service(svc)
-    )
-    # A token-only name is a shape rather than words *unless the user wrote it*.
-    # Deleting the entity prefix in front of "${_state}" is the one way to ask
-    # for the bare state word, and treating that edit as a shape put the prefix
-    # straight back -- the label could not be changed at all.
-    if (
-        stored_name
-        and (user_named or not token_only)
-        and not bound_toggle
-        and (user_named or stored_name != (action_def.get("name") or ""))
-    ):
-        resolved = clean_label_text(
+    # A stored label is printed as it reads, its placeholders filled -- empty
+    # included: `${_device.media_title_prev}` with nothing before it reads as
+    # nothing, not as a derived "Previous".
+    if stored_name and (user_named or stored_name != (action_def.get("name") or "")):
+        return clean_label_text(
             _fill_label_tokens(
-                stored_name, action_def, assign, hass, entry, internal_context
+                stored_name, action_def, assign, hass, entry, internal_context, state
             )
         )
-        # A label that is nothing but a damaged placeholder ("${STATE") cleans
-        # away to nothing. Returning it would blank the tooltip *and* stop the
-        # ladder, so the button loses the name it would otherwise have derived.
-        # Not so for the user's own words: a typed `${_device.media_title_prev}`
-        # with nothing before it reads as nothing, not as "Wohnzimmer Previous".
-        if resolved or user_named:
-            return resolved
 
     # An internal command has no entity, so none of the state machinery below
     # applies — it names itself after what it does ("Living Room" for the page
@@ -325,8 +295,8 @@ def _resolve_button_tooltip_ladder(
 
     # Static name fallback. Never borrow the library entry's name for a
     # payload-carrying service — it describes whichever button created it.
-    static_name = "" if token_only else (
-        stored_name or ("" if is_payload_service(service) else (action_def.get("name") or ""))
+    static_name = stored_name or (
+        "" if is_payload_service(service) else (action_def.get("name") or "")
     )
 
     # The device's own language option first, then the panel/HA language.
@@ -337,70 +307,39 @@ def _resolve_button_tooltip_ladder(
     if not svc:
         return static_name
 
-    # Get entity friendly name and current state
-    entity_id = _entity_id_for_assign(assign, hass)
-
-    entity_name, state_obj = subject_for_assign(assign, hass)
+    _, state_obj = subject_for_assign(assign, hass, state)
     current_state = state_obj.state if state_obj else ""
-
-    if not entity_name and state_obj:
-        entity_name = (
-            state_obj.attributes.get("friendly_name", "")
-            or state_obj.entity_id.split(".")[-1]
-        )
-    if not entity_name:
-        entity_name = entity_id.split(".")[-1] if entity_id else ""
-
-    # `not token_only`: "${_state}" is a shape, not a subject. The panel asks for
-    # the prefix by resolving the token alone, and taking it as the entity name
-    # left the field reading a bare "${_state}" with no lamp in front of it.
-    if bound_toggle and stored_name and not token_only:
-        # The source picked the subject's name; the registry's friendly name is
-        # the same string in the ordinary case and the wrong one when it is not
-        # (a source is free to title an item however it likes).
-        entity_name = stored_name
-        if not current_state:
-            # Nothing to append — an unavailable lamp still deserves its name
-            # rather than the generic "Toggle" the bottom of the ladder derives.
-            return stored_name
-
-    # A token-only label resolves to the state alone; the entity goes in front,
-    # so "${_state}" reads "Unnamed Room Pause" just as "Next" reads
-    # "Unnamed Room Next". When the token cannot resolve (a state absent from
-    # NEXT_STATE_MAP) it collapses to nothing and the ladder carries on below.
-    if token_only:
-        resolved = _fill_label_tokens(stored_name, action_def, assign, hass, entry)
-        if resolved:
-            return f"{entity_name} {resolved}" if entity_name else resolved
 
     # An unrenamed attribute button announces its next action, exactly as an
     # unrenamed toggle announces its next state below. Without this a
     # `volume_mute` button whose stored name is still the library's "Mute" would
     # read a frozen "Mute" while its own icon already showed the opposite.
     if is_attribute_state_service(svc):
-        attr_label = _fill_label_tokens(STATE_TOKEN, action_def, assign, hass, entry)
+        attr_label = _fill_label_tokens(
+            STATE_TOKEN, action_def, assign, hass, entry, state=state,
+        )
         if attr_label:
-            return f"{entity_name} {attr_label}" if entity_name else attr_label
+            return attr_label
 
     # Toggle services — show the opposite of current state
     if is_state_toggle_service(svc) and current_state:
         next_key = NEXT_STATE_MAP.get(current_state)
         if next_key:
-            label = action_labels.get(next_key, lang)
-            return f"{entity_name} {label}" if entity_name else label
+            return action_labels.get(next_key, lang)
 
     # Stateless services with a predefined name — use the button name as tooltip
-    # (e.g., layout buttons: "CH+", "Up", "OK" instead of generic "Send Command")
+    # (e.g., template buttons: "CH+", "Up", "OK" instead of generic "Send Command")
     if is_stateless_service(svc) and static_name:
-        return f"{entity_name} {static_name}" if entity_name else static_name
+        return static_name
 
     # All other services — derive friendly label from service name
     label = action_labels.for_service(svc, lang)
     if label:
-        return f"{entity_name} {label}" if entity_name else label
+        return label
 
-    # Fallback: static name
-    return static_name or entity_name
+    # Nothing the button does has a word: an empty button stays empty, rather
+    # than borrowing the name of what it acts on.
+    return static_name
 
 
 def button_image_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> bool:
@@ -421,7 +360,7 @@ def button_image_wins(assign: dict, svc_name: str, payload_thumb: str | None) ->
     image was discarded and re-derived as a generic power glyph.
 
     The payload clause is unchanged: a play_media button carries its own media
-    identity, and a pinned image inherited from a layout may belong to a
+    identity, and a pinned image inherited from a template may belong to a
     different item, so the payload thumbnail wins unless the user pinned it.
     """
     image = assign.get("image")
@@ -724,7 +663,7 @@ def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
     """
     image = assign.get("image") if isinstance(assign, dict) else None
     # A `history:` graph is resolved too: it gets the version that moves it.
-    if not entity_token_entities(image) and history_entity(image) is None:
+    if not entity_token_entities(image) and not history_entities(image):
         return assign
     # The rules themselves are in `resolve_image_tokens`, shared with the
     # toggle rule icons that accept exactly the same syntax -- weather

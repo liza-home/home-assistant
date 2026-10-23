@@ -152,7 +152,7 @@
     },
     "refresh_dynamic_sources": {
       "name": "Dynamische Quellen aktualisieren",
-      "description": "Löst dynamische Layout-Bindungen neu auf und überträgt Änderungen an die betroffenen Fernbedienungen. Seiten ohne inhaltliche Änderung erzeugen keinen Gerätedatenverkehr.",
+      "description": "Löst dynamische Vorlagen-Bindungen neu auf und überträgt Änderungen an die betroffenen Fernbedienungen. Seiten ohne inhaltliche Änderung erzeugen keinen Gerätedatenverkehr.",
       "fields": {
         "entry_id": {
           "name": "Gerät",

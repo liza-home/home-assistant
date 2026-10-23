@@ -1,7 +1,9 @@
 """The device event listener: routes button, slider and page events."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from homeassistant.core import Event, HomeAssistant
 
@@ -13,15 +15,84 @@ from ._state import (
     _page_changed,
     clear_slider_state,
     get_current_page,
+    remote_state,
 )
 from . import longtouch
-from .buttons import execute_action
+from .buttons import execute_action, resolve_button_assignment
+from .helpers import _get_store
+from ..config.text_style import key_repeat_timing
+from ..shared.assignment import repeats
 from .helpers import _coerce_page_id, _normalize_position, _raw_page_id, _resolve_entry_id
+from ..shared.logs import device_id_logger
 from .selection import _record_selection
 from .slider_exec import execute_slider_action
 from .sliders import SLIDER_NAME_ALIASES
 
 _LOGGER = logging.getLogger(__name__)
+
+
+#: A held button says so every ~0.24 s; one silent for longer has been let go,
+#: whether or not its ``release`` arrived.
+REPEAT_HEARTBEAT_TIMEOUT = 0.4
+
+#: No hold is this long; a repeat loop still running by then is stopped anyway.
+REPEAT_MAX_SECONDS = 60.0
+
+
+def _heartbeat(entry_id: str, button_key: str) -> None:
+    """The remote says *button_key* is still down."""
+    state = remote_state(entry_id)
+    if button_key in state.repeat_tasks:
+        state.repeat_heartbeat[button_key] = time.monotonic()
+
+
+def _stop_repeat(entry_id: str, button_key: str) -> None:
+    state = remote_state(entry_id)
+    task = state.repeat_tasks.pop(button_key, None)
+    if task is not None:
+        task.cancel()
+    state.repeat_heartbeat.pop(button_key, None)
+
+
+async def _start_repeat(hass: HomeAssistant, entry_id: str, button_key: str, page_id: int) -> None:
+    """Begin key repeat for a just-pressed button, if it repeats."""
+    device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+    if not repeats(assign):
+        return
+    settings = await _get_store(hass).async_get_settings(device_id) if device_id else None
+    delay, interval = key_repeat_timing(settings)
+    _stop_repeat(entry_id, button_key)
+    state = remote_state(entry_id)
+    state.repeat_heartbeat[button_key] = time.monotonic()
+    state.repeat_tasks[button_key] = asyncio.get_running_loop().create_task(
+        _repeat_loop(hass, entry_id, button_key, page_id, delay, interval)
+    )
+
+
+async def _repeat_loop(
+    hass: HomeAssistant, entry_id: str, button_key: str, page_id: int,
+    delay: float, interval: float,
+) -> None:
+    """Press *button_key* again every *interval* after *delay*, while it is held.
+
+    Each press is waited for before the next is timed, so an action slower than
+    the rate lowers the rate rather than queueing presses behind it.
+    """
+    state = remote_state(entry_id)
+    try:
+        await asyncio.sleep(delay)
+        deadline = time.monotonic() + REPEAT_MAX_SECONDS
+        while time.monotonic() < deadline:
+            last = state.repeat_heartbeat.get(button_key)
+            if last is None or time.monotonic() - last > REPEAT_HEARTBEAT_TIMEOUT:
+                return
+            started = time.monotonic()
+            await execute_action(hass, entry_id, button_key, page_id)
+            await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
+    finally:
+        if state.repeat_tasks.get(button_key) is asyncio.current_task():
+            state.repeat_tasks.pop(button_key, None)
+            state.repeat_heartbeat.pop(button_key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -39,11 +110,12 @@ def setup(hass: HomeAssistant) -> None:
         if event_type not in ("button", "slider", "goto_page"):
             return
 
-        _LOGGER.debug("action_controller: %s event %s", event_type, data)
+        log = device_id_logger(_LOGGER, hass, data.get("device_id"))
+        log.debug("action_controller: %s event %s", event_type, data)
 
         entry_id = _resolve_entry_id(hass, data)
         if not entry_id:
-            _LOGGER.warning(
+            log.warning(
                 "action_controller: no entry_id for device_id=%s", data.get("device_id"),
             )
             return
@@ -72,7 +144,7 @@ def setup(hass: HomeAssistant) -> None:
         # is handled, so that the first touch on the new page is already clean
         # rather than the one that pays for the old page's state.
         if _page_changed(entry_id, raw_page_id):
-            _LOGGER.debug(
+            log.debug(
                 "action_controller: %s event on page %s, last seen on %s — "
                 "treating as a page change",
                 event_type, raw_page_id, get_current_page(entry_id),
@@ -89,7 +161,7 @@ def setup(hass: HomeAssistant) -> None:
         if event_type == "slider":
             raw_slider_name = data.get("slider_name") or ""
             if not raw_slider_name:
-                _LOGGER.debug("action_controller: slider event with no slider_name")
+                log.debug("action_controller: slider event with no slider_name")
                 return
             # Normalised once, here: this is the only ingress into the
             # assignment lookup, so the key the lookup, the gesture state and
@@ -116,18 +188,26 @@ def setup(hass: HomeAssistant) -> None:
             )
 
         if interaction == "touch":
+            _heartbeat(entry_id, button_key)
             await longtouch.on_touch(hass, entry_id, button_key, page_id)
         elif interaction == "release":
+            _stop_repeat(entry_id, button_key)
             await longtouch.on_release(hass, entry_id, button_key)
+        elif interaction == "repeat":
+            # The remote's own repeat is only a sign the button is still down:
+            # the presses come from the virtual repeat, at the remote's rate.
+            _heartbeat(entry_id, button_key)
+            return
 
         if interaction != "click":
-            _LOGGER.debug("  → ignoring interaction=%s (only click fires)", interaction)
+            log.debug("  → ignoring interaction=%s (only click fires)", interaction)
             return
 
         if longtouch.on_click(entry_id, button_key):
-            _LOGGER.debug("  → click held until release (button has a long touch)")
+            log.debug("  → click held until release (button has a long touch)")
             return
 
+        await _start_repeat(hass, entry_id, button_key, page_id)
         await execute_action(hass, entry_id, button_key, page_id)
 
     hass.data.setdefault(DOMAIN, {})

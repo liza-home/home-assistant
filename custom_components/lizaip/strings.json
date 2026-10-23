@@ -152,7 +152,7 @@
     },
     "refresh_dynamic_sources": {
       "name": "Refresh dynamic sources",
-      "description": "Re-resolve dynamic layout bindings and push any changes to the affected remotes. Pages whose content did not change produce no device traffic.",
+      "description": "Re-resolve dynamic template bindings and push any changes to the affected remotes. Pages whose content did not change produce no device traffic.",
       "fields": {
         "entry_id": {
           "name": "Device",

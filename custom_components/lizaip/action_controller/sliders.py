@@ -148,7 +148,7 @@ SLIDER_CONTROLS: tuple[SliderControl, ...] = (
 #: its capability. Direction belongs to the *control*, not to the saved config:
 #: keying it off the mechanics means configs written before this existed behave
 #: correctly without a migration, and no new key has to be threaded through the
-#: panel, the websocket sanitiser and the layout generator.
+#: panel, the websocket sanitiser and the template generator.
 _INVERTED_MECHANICS: frozenset[tuple[str, str]] = frozenset(
     (c.service, c.data_key) for c in SLIDER_CONTROLS if c.invert
 )
@@ -302,7 +302,7 @@ def slider_follows(slider_key: Any, assign: Any) -> bool:
     unconfigured. Any blob with mechanics, even an unknown ``mode``, is real
     config and is not guessed at here or in ``_effective_target``.
 
-    Mirrored by ``sliderFollows`` in ``liza-remote-buttons-view.js``. Python and
+    Mirrored by ``sliderFollows`` in ``lizaip-buttons-view.js``. Python and
     JS disagree on ``{}`` truthiness, so both sides must use an explicit
     emptiness test (``Object.keys(...).length === 0`` in JS)."""
     slider_cfg = assign.get("slider_actions") if isinstance(assign, dict) else None
@@ -337,7 +337,7 @@ def targets_entity(slider_cfg: Any) -> bool:
 def last_touched_slider_actions(factor: float) -> dict[str, Any]:
     """Build the stored blob for a slider that drives the last-touched device.
 
-    Shared by the panel save path and layout YAML because the absent keys are the
+    Shared by the panel save path and template YAML because the absent keys are the
     contract. Target, entity, attribute, service, data key and range must be
     omitted: the executor reads stored mechanics first, so stale leftovers from a
     previous mode would pin the slider to the wrong entity.
@@ -347,7 +347,7 @@ def last_touched_slider_actions(factor: float) -> dict[str, Any]:
 
     ``mode`` remains ``"proportional"`` because the drag maths are unchanged;
     ``factor`` is the slider's own physical-track mechanic and is already coerced
-    by the caller (panel JSON vs layout YAML)."""
+    by the caller (panel JSON vs template YAML)."""
     return {
         "mode": "proportional",
         "factor": factor,
@@ -365,7 +365,7 @@ def last_touched_or_entity_slider_actions(
     ``resolve_control``; a half-written blob would be partial mechanics, and the
     resolver deliberately refuses to merge or repair those.
 
-    Using the same live capability table as the selection path keeps a layout
+    Using the same live capability table as the selection path keeps a template
     that names only an entity from disagreeing with a touch on that entity, and
     avoids YAML traps such as reading brightness 0-255 while writing
     ``brightness_pct``.

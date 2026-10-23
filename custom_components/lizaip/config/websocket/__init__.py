@@ -6,7 +6,7 @@ One module per area of the panel:
 - ``assignments``      -- the action library and what each button does
 - ``pages``            -- the page list: reorder, edit, duplicate
 - ``settings``         -- text style, icon options and the editors' lookups
-- ``layouts``          -- pages generated from a layout, and retargeting them
+- ``templates``          -- pages generated from a template, and retargeting them
 - ``dynamic``          -- buttons filled from a dynamic source
 - ``assignment_entry`` -- validating a button assignment the panel sent
 - ``common``           -- helpers the handler modules share
@@ -20,7 +20,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import debug_available
-from . import assignments, devices, dynamic, layouts, pages, settings
+from . import assignments, devices, dynamic, templates, pages, settings
 
 
 def register_commands(hass: HomeAssistant) -> None:
@@ -53,11 +53,11 @@ def register_commands(hass: HomeAssistant) -> None:
         settings.ws_get_action_labels,
         settings.ws_get_slider_controls,
         settings.ws_get_internal_commands,
-        layouts.ws_list_layouts,
-        layouts.ws_list_layout_devices,
-        layouts.ws_list_layout_config_entries,
-        layouts.ws_add_layout_page,
-        layouts.ws_retarget_layout_page,
+        templates.ws_list_templates,
+        templates.ws_list_template_devices,
+        templates.ws_list_template_config_entries,
+        templates.ws_add_template_page,
+        templates.ws_retarget_template_page,
         dynamic.ws_browse_media,
         dynamic.ws_list_dynamic_sources,
         dynamic.ws_preview_dynamic_source,

@@ -52,26 +52,17 @@ def is_token_only_label(text: str) -> bool:
     """True when *text* is nothing but placeholders — no words of its own.
 
     Such a label is a shape, not a name: ``"${_state}"`` says "print the state
-    here" and leaves the button unnamed. The tooltip ladder therefore treats it
-    like a short static name (``"Next"``) and puts the entity in front of it,
-    rather than like a label the user typed, which is returned verbatim.
-
-    That is what keeps a two-way button's stored label the same shape as its
-    neighbours: ``Previous`` / ``${_state}`` / ``Next``, all three of which the
-    device renders behind the room name.
+    here" and names nothing by itself. The live tooltip therefore never hands
+    one out as a static fallback (a brace would reach the imgserv URL), and the
+    panel offers the derived ``${_state}`` in place of an auto-filled name only
+    when it is a shape.
 
     A separator between two placeholders is part of the shape, not a word:
     ``"${_state} - ${_device.media_title}"`` is as unnamed as ``"${_state}"``,
     and the dash only has something to join once both tokens resolve.
 
     ``${_queue.next_song}`` and ``${_device.media_title}`` count as placeholders
-    too, though their dot keeps them out of :data:`LABEL_TOKEN_RE`. Without
-    that, the Sonos preset's ``"${_state} - ${_device.media_title}"`` would be
-    read as a name the layout chose, and a preset's name is the one case the
-    tooltip ladder resolves no tokens in — the placeholder would reach
-    ``clean_label_text`` and be thrown away as wreckage, taking the device
-    prefix with it. The button read "Pause" where it should read
-    "Sonos Pause - Bohemian Rhapsody".
+    too, though their dot keeps them out of :data:`LABEL_TOKEN_RE`.
 
     This decides tooltips only — :func:`is_token_only_label` is called from the
     label ladders in ``button_rendering.py`` and ``icons.py`` and from nowhere
@@ -80,9 +71,7 @@ def is_token_only_label(text: str) -> bool:
     """
     if not text or "${" not in text:
         return False
-    # Leftover braces are wreckage, not words: "${_state}}" is still a shape, and
-    # counting the stray brace as a name cost the label its entity prefix -- the
-    # tooltip read "Off" instead of "Schreibtischlampe Off".
+    # Leftover braces are wreckage, not words: "${_state}}" is still a shape.
     stripped = DOTTED_TOKEN_RE.sub("", LABEL_TOKEN_RE.sub("", text))
     remainder = stripped.replace("{", "").replace("}", "")
     return not _SEPARATORS_ONLY_RE.sub("", remainder).strip()
@@ -126,7 +115,7 @@ def state_token_label(
         # The step names a literal value for the attribute, so the button has
         # one direction regardless of the entity: `is_volume_muted: true` is a
         # mute button. A template (`{{ not is_state_attr(...) }}`, which is how
-        # a layout turns the setter into a toggle) is not a value of the
+        # a template turns the setter into a toggle) is not a value of the
         # attribute, so it misses here and falls to the rung below — which is
         # exactly where an inverting button belongs.
         if isinstance(data, dict):

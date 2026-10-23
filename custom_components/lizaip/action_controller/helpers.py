@@ -186,7 +186,7 @@ def _subject_name(
 
 #: Target kinds that name something other than an entity, narrowest first, each
 #: paired with the registry that knows its name and how that registry is asked.
-#: Mirrored by `SUBJECT_KINDS` in `liza-remote-helpers.js`.
+#: Mirrored by `SUBJECT_KINDS` in `lizaip-helpers.js`.
 _SUBJECT_REGISTRIES = (
     ("device_id", dr, "async_get"),
     ("area_id", ar, "async_get_area"),

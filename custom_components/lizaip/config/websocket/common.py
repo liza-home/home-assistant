@@ -4,14 +4,27 @@ from __future__ import annotations
 import logging
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from ...action_controller import setup_state_listener
 from ...runtime import _resolve_device_id, entry_connection
+from ...shared.logs import DeviceLogger, device_logger
 from ..const import step_service
 from ..internal_commands import pinned_page_ids
 from ..panel_entry import get_panel_entry
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def entry_log(logger: logging.Logger, hass: HomeAssistant, entry_id: str) -> DeviceLogger:
+    """*logger*, naming the remote *entry_id* configures.
+
+    The registry is read through ``getattr`` because a handler may be called
+    with a stand-in ``hass`` that has none; an unresolved entry logs unprefixed.
+    """
+    registry = getattr(hass, "config_entries", None)
+    entry = registry.async_get_entry(entry_id) if registry is not None else None
+    return device_logger(logger, entry)
 
 
 def schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
@@ -34,15 +47,52 @@ def schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
         try:
             await triggers.async_rescan()
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Push trigger re-scan failed for %s: %s", entry_id, err)
+            entry_log(_LOGGER, hass, entry_id).debug(
+                "Push trigger re-scan failed: %s", err,
+            )
 
     try:
         create_task(_rescan())
     except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("Could not schedule push trigger re-scan: %s", err)
+        entry_log(_LOGGER, hass, entry_id).debug(
+            "Could not schedule push trigger re-scan: %s", err,
+        )
 
 
 EMPTY_BUTTON = {"action_id": None, "config": [], "label": None, "image": None, "image_pinned": False, "state_icons": {}}
+
+
+def send_failure(
+    hass: HomeAssistant,
+    connection,
+    msg: dict,
+    code: str,
+    exc: Exception,
+    *,
+    logger: logging.Logger = _LOGGER,
+    what: str = "Request",
+) -> None:
+    """Tell the panel a request failed, and the log why.
+
+    Two kinds of failure reach a handler and they are not the same thing. A
+    ``HomeAssistantError`` is something the integration decided and worded on
+    purpose -- the disk refused the write, the device is not connected -- so its
+    message is meant for the user and is passed through. Anything else is a bug
+    here: its text names internals the user can do nothing with, so they get a
+    fixed sentence and the traceback goes to the log, where it is useful.
+
+    Either way the panel gets an error rather than silence, which is the point:
+    a save that failed must not look like a save that worked.
+    """
+    log = entry_log(logger, hass, msg.get("entry_id", ""))
+    if isinstance(exc, HomeAssistantError):
+        log.error("%s failed: %s", what, exc)
+        connection.send_error(msg["id"], code, str(exc))
+        return
+    log.error("%s failed unexpectedly", what, exc_info=True)
+    connection.send_error(
+        msg["id"], code, f"{what} failed. See the Home Assistant log for details.",
+    )
 
 
 def requires_device(handler):

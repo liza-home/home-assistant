@@ -42,6 +42,11 @@ _LOGGER = logging.getLogger(__name__)
 # advance width (italics, the tail of a "g") are clipped by the canvas edge.
 TEXT_PADDING = 2
 
+# The smallest the font is allowed to get while fitting words into a width
+# (see `render_text_fitted`). Below this the lettering stops being readable on
+# the device, so letting the picture stay too wide is the better failure.
+MIN_FIT_FONT_SIZE = 14
+
 # Keep underscore aliases so existing tests that import the private names
 # continue to work without changes.
 _find_font = find_font
@@ -392,3 +397,36 @@ def text_baseline(
 ) -> int:
     """The line *text* sits on in what `render_text` draws; the same for any text."""
     return text_line(height, font_size, font_id, user_fonts_dir)[1]
+
+
+def render_text_fitted(
+    text: str,
+    width: int,
+    height: int,
+    fg_color: tuple = DEFAULT_FG_COLOR,
+    font_size: int | None = None,
+    font_id: str | None = None,
+    user_fonts_dir: str | None = None,
+    min_size: int = MIN_FIT_FONT_SIZE,
+) -> Image.Image:
+    """*text* drawn no wider than *width*, by shrinking the font to suit.
+
+    ``render_text`` fits the font to the *height* and then lets the canvas
+    grow as wide as the words turn out to be -- right for a page title, which
+    the device scrolls, wrong for a tile, which it does not: "Battery 91 %"
+    drawn at 50 px comes back three tiles wide. Here the font is stepped down
+    until the words fit, so a tile shows all of them.
+
+    Only ever shrinks. Words that already fit are drawn at the size asked
+    for, never stretched to fill the width, so two tiles beside each other
+    keep the same lettering. Shrinking stops at *min_size*: past that the
+    words would be unreadable, and staying wide is the better failure.
+    """
+    img = render_text(text, width, height, fg_color, font_size, font_id, user_fonts_dir)
+    size = font_size or height
+    while width > 0 and img.width > width and size > min_size:
+        # Aim straight at the ratio that would fit, but always move by at
+        # least one step: rounding could otherwise stand still forever.
+        size = max(min_size, min(size - 1, int(size * width / img.width)))
+        img = render_text(text, width, height, fg_color, size, font_id, user_fonts_dir)
+    return img

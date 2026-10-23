@@ -200,7 +200,7 @@
     },
     "refresh_dynamic_sources": {
       "name": "Refresh dynamic sources",
-      "description": "Risolve nuovamente i collegamenti di layout dinamici e invia le modifiche ai telecomandi interessati. Le pagine il cui contenuto non è cambiato non generano traffico verso il dispositivo.",
+      "description": "Risolve nuovamente i collegamenti dinamici dei modelli e invia le modifiche ai telecomandi interessati. Le pagine il cui contenuto non è cambiato non generano traffico verso il dispositivo.",
       "fields": {
         "entry_id": {
           "name": "Device",

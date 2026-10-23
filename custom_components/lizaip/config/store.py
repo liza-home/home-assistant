@@ -15,12 +15,15 @@ import hashlib
 import logging
 import os
 import shutil
+import tempfile
+from contextlib import suppress
 from copy import deepcopy
 from typing import Any
 
 import yaml
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from ..action_controller import (
     OVERRIDABLE_FIXED_BUTTONS,
@@ -29,24 +32,49 @@ from ..action_controller import (
     sanitize_slider_override,
     sanitize_toggle,
 )
+from ..shared.logs import device_id_logger
 from ..shared.assignment import (
     longtouch_steps,
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_LABEL_EDITED_KEY,
 )
 from .const import PAGE_SUBPAGE_KEY, is_subpage
-from .layouts import async_load_layout, layout_bindings, load_layout
+from .templates import async_load_template, template_bindings, load_template
 from .text_style import normalize_settings
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class StoreWriteError(HomeAssistantError):
+    """Raised when configuration could not be persisted to disk.
+
+    Exists so a failed save reaches the panel as a save failure instead of
+    being swallowed into a success the user then trusts.
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        super().__init__(f"Could not write {path}")
+
+
 YAML_DIR = "lizaip"
+
+
+def _migrate_page_file(raw: dict) -> None:
+    """Read a page file written before templates were called templates.
+
+    Such a file spells its template as ``layout:``, and without the rename
+    nothing knows the page's device, so every ``${_device.…}`` on it reads
+    empty. The next write stores the new spelling.
+    """
+    if "template" not in raw and isinstance(raw.get("layout"), dict):
+        raw["template"] = raw.pop("layout")
 
 
 class LizaRemoteStore:
     """Per-device action library, page order, and page assignments.
 
-    Disk layout:
+    Disk template:
       <ha_config>/lizaip/<device_id>/action_library.yaml
       <ha_config>/lizaip/<device_id>/main_pages.yaml   main pages, in order
       <ha_config>/lizaip/<device_id>/page_order.yaml   every page, in editor order
@@ -111,14 +139,21 @@ class LizaRemoteStore:
         and is what tells a subpage's file from an orphan on the next read.
         """
         listed = [p for p in pages if isinstance(p, dict) and "id" in p]
-        await self._hass.async_add_executor_job(
-            self._write_yaml, self._main_pages_path(device_id),
+        main_path = self._main_pages_path(device_id)
+        order_path = self._page_order_path(device_id)
+        wrote_main = await self._hass.async_add_executor_job(
+            self._write_yaml, main_path,
             [p["id"] for p in listed if not is_subpage(p)],
         )
-        await self._hass.async_add_executor_job(
-            self._write_yaml, self._page_order_path(device_id),
-            [p["id"] for p in listed],
+        wrote_order = await self._hass.async_add_executor_job(
+            self._write_yaml, order_path, [p["id"] for p in listed],
         )
+        # Both are attempted before raising: the order file is what the remote
+        # pages off, so a failure on the main list must not skip writing it.
+        unwritten = [p for p, ok in ((main_path, wrote_main), (order_path, wrote_order)) if not ok]
+        if unwritten:
+            raise StoreWriteError(", ".join(unwritten))
+
 
     async def _async_read_id_list(self, path: str) -> list[int] | None:
         """Page ids from *path*, or ``None`` when there is no such file."""
@@ -146,10 +181,21 @@ class LizaRemoteStore:
 
     @staticmethod
     def _write_yaml(path: str, data: Any) -> bool:
-        """Write *data* as YAML. Returns whether it reached the disk."""
+        """Write *data* as YAML atomically. Returns whether it reached the disk.
+
+        Written to a sibling temp file and renamed into place: a plain open(w)
+        truncates first, so a crash or a full disk mid-dump leaves a valid-looking
+        but half-written page behind. ``os.replace`` is atomic on the same
+        filesystem, so a reader sees either the old file or the new one.
+        """
+        tmp_path: str | None = None
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
+            directory = os.path.dirname(path)
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=directory, prefix=f".{os.path.basename(path)}.", suffix=".tmp",
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 yaml.dump(
                     data, f,
                     default_flow_style=False,
@@ -157,10 +203,28 @@ class LizaRemoteStore:
                     sort_keys=False,
                     width=120,
                 )
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            tmp_path = None
         except OSError as exc:
             _LOGGER.error("Failed to write YAML %s: %s", path, exc)
+            if tmp_path is not None:
+                with suppress(OSError):
+                    os.unlink(tmp_path)
             return False
         return True
+
+    async def _async_write_yaml(self, path: str, data: Any) -> None:
+        """Write *data* to *path*, raising when it does not reach the disk.
+
+        The bool from :meth:`_write_yaml` was almost never checked, so a failed
+        write surfaced to the user as a successful save. Callers that persist
+        on the user's behalf go through here instead, so the panel is told the
+        truth.
+        """
+        if not await self._hass.async_add_executor_job(self._write_yaml, path, data):
+            raise StoreWriteError(path)
 
     @staticmethod
     def _runnable_overrides(table: Any) -> dict:
@@ -168,7 +232,7 @@ class LizaRemoteStore:
 
         Absence means inherit. Empty or actionless overrides are not stored,
         because they would displace the page default and then execute nothing.
-        This gate also covers layout-generated and hand-edited YAML, which do
+        This gate also covers template-generated and hand-edited YAML, which do
         not pass through the WebSocket sanitiser.
 
         This helper takes the override table itself so the store's empty-button
@@ -272,7 +336,7 @@ class LizaRemoteStore:
                     result[key] = cleaned_steps
                 continue
             # Override tables obey the disk invariant too. The WebSocket path
-            # already sanitises them, but layout-generated and hand-edited YAML
+            # already sanitises them, but template-generated and hand-edited YAML
             # reach this last gate directly: only runnable entries survive, and
             # an empty table is absence/inherit.
             # The toggle block takes the same route for the same reason: it is
@@ -312,7 +376,7 @@ class LizaRemoteStore:
     #   image: <string>
     #   hash: <int>
     #   default_color: <hex color>       (optional)
-    #   layout: {...}                    (optional layout provenance)
+    #   template: {...}                    (optional template provenance)
     #   buttons:
     #     <button_key>: { action_id, config, label, image, state_icons, ... }
     #       toggle: optional sibling of config, giving one button several
@@ -321,49 +385,49 @@ class LizaRemoteStore:
     #               mirrors rule 1 and is the fallback if the block is inert.
 
     @staticmethod
-    def _layout_bindings(page_meta: dict) -> dict[str, dict]:
-        """What the page's layout says each of its bound buttons is bound to.
+    def _template_bindings(page_meta: dict) -> dict[str, dict]:
+        """What the page's template says each of its bound buttons is bound to.
 
-        Empty for a page with no layout provenance, and for one whose layout has
+        Empty for a page with no template provenance, and for one whose template has
         since been removed — both simply keep whatever the file holds.
         """
-        layout_meta = page_meta.get("layout")
-        if not isinstance(layout_meta, dict):
+        template_meta = page_meta.get("template")
+        if not isinstance(template_meta, dict):
             return {}
-        layout_id = str(layout_meta.get("type") or "").strip()
-        if not layout_id:
+        template_id = str(template_meta.get("type") or "").strip()
+        if not template_id:
             return {}
-        layout = load_layout(layout_id)
-        if not isinstance(layout, dict):
+        template = load_template(template_id)
+        if not isinstance(template, dict):
             return {}
-        target = layout_meta.get("target")
+        target = template_meta.get("target")
         target = target if isinstance(target, dict) else {}
-        return layout_bindings(
-            layout,
+        return template_bindings(
+            template,
             str(target.get("entity_id") or ""),
             str(target.get("config_entry") or ""),
         )
 
     @classmethod
-    def _strip_layout_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
-        """Drop the binding keys the page's layout can state itself.
+    def _strip_template_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
+        """Drop the binding keys the page's template can state itself.
 
         Twelve Hue lamps each stored the source they came from, the spec that
         narrowed it, the fields tracked and the slot index — which is ``@lamp[3]``
-        in the layout, written out longhand twelve times. The layout is right
-        there in the page's own ``layout:`` block, so the file keeps only what a
+        in the template, written out longhand twelve times. The template is right
+        there in the page's own ``template:`` block, so the file keeps only what a
         refresh actually found: which item landed in the slot, and whether it is
         still there.
 
-        A key is dropped only when the layout derives an *equal* value, so the
-        round trip is exact and a page the layout cannot fully describe — one
+        A key is dropped only when the template derives an *equal* value, so the
+        round trip is exact and a page the template cannot fully describe — one
         needing the sibling-entity fallback, say — keeps that key on disk rather
         than being handed a wrong one on the next load.
 
         ``buttons`` is the stripped copy built for writing, not the live
         assignments.
         """
-        derived = cls._layout_bindings(page_meta)
+        derived = cls._template_bindings(page_meta)
         if not derived:
             return
         for btn_key, btn in buttons.items():
@@ -379,14 +443,14 @@ class LizaRemoteStore:
             }
 
     @classmethod
-    def _restore_layout_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
-        """Put the layout-stated keys back, before anything reads a binding.
+    def _restore_template_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
+        """Put the template-stated keys back, before anything reads a binding.
 
         Only buttons that already carry a binding get one: a hand-made button
         sitting in a generated page's slot has no dynamic binding and must not be
-        given the one the layout would have put there.
+        given the one the template would have put there.
         """
-        derived = cls._layout_bindings(page_meta)
+        derived = cls._template_bindings(page_meta)
         if not derived:
             cls._warn_if_unrefreshable(page_meta, buttons)
             return
@@ -400,15 +464,15 @@ class LizaRemoteStore:
 
     @staticmethod
     def _warn_if_unrefreshable(page_meta: dict, buttons: dict) -> None:
-        """Say so when a page's layout is the only thing that knew what it holds.
+        """Say so when a page's template is the only thing that knew what it holds.
 
-        A page that was written against a layout stores only what the layout
-        cannot say. If that layout later stops resolving, the rest cannot be
+        A page that was written against a template stores only what the template
+        cannot say. If that template later stops resolving, the rest cannot be
         recovered and the page quietly stops refreshing, so name it once here
         rather than leave it to be noticed as buttons going stale.
         """
-        layout_meta = page_meta.get("layout")
-        if not isinstance(layout_meta, dict):
+        template_meta = page_meta.get("template")
+        if not isinstance(template_meta, dict):
             return
         orphaned = [
             key
@@ -420,10 +484,10 @@ class LizaRemoteStore:
         if not orphaned:
             return
         _LOGGER.warning(
-            "Page %s was generated from layout %r, which no longer loads; "
+            "Page %s was generated from template %r, which no longer loads; "
             "%d of its buttons can no longer refresh: %s",
             page_meta.get("id", "?"),
-            layout_meta.get("type"),
+            template_meta.get("type"),
             len(orphaned),
             ", ".join(sorted(orphaned)),
         )
@@ -432,11 +496,11 @@ class LizaRemoteStore:
         clean_buttons = {k: self._strip_empty_fields(v)
                          for k, v in assignments.items()
                          if not self._is_empty_button(v)}
-        self._strip_layout_stated_keys(page_meta, clean_buttons)
+        self._strip_template_stated_keys(page_meta, clean_buttons)
         data: dict[str, Any] = {}
-        layout = page_meta.get("layout")
-        if layout and isinstance(layout, dict):
-            data["layout"] = layout
+        template = page_meta.get("template")
+        if template and isinstance(template, dict):
+            data["template"] = template
         img_title = page_meta.get("image", "")
         if img_title:
             data["image"] = img_title
@@ -455,23 +519,23 @@ class LizaRemoteStore:
     def _parse_page_file_data(self, raw: dict) -> tuple[dict, dict]:
         """Parse one page YAML payload into metadata and button assignments.
 
-        Blocking: consults the page's layout. Call via ``async_add_executor_job``.
+        Blocking: consults the page's template. Call via ``async_add_executor_job``.
         """
         img_title = raw.get("image", "")
         page_hash = raw.get("hash", 0)
         default_color = raw.get("default_color", "")
-        layout = raw.get("layout")
+        template = raw.get("template")
         buttons = raw.get("buttons", {})
         meta: dict[str, Any] = {"image": img_title, "hash": page_hash}
         if default_color:
             meta["default_color"] = default_color
         if is_subpage(raw):
             meta[PAGE_SUBPAGE_KEY] = True
-        if layout and isinstance(layout, dict):
-            meta["layout"] = layout
+        if template and isinstance(template, dict):
+            meta["template"] = template
         buttons = buttons if isinstance(buttons, dict) else {}
         # Before anything reads a binding: undo how the file spells them.
-        self._restore_layout_stated_keys(meta, buttons)
+        self._restore_template_stated_keys(meta, buttons)
         return meta, buttons
 
     async def _read_device_from_disk(self, device_id: str) -> dict[str, Any] | None:
@@ -547,7 +611,12 @@ class LizaRemoteStore:
         whether anything moved, so handing over everything costs one payload
         build per page rather than one disk write per page. One malformed page
         entry must not prevent the other page files from being written.
+
+        Every page is attempted before raising, so one unwritable file does not
+        strand the rest — but the caller is still told, because reporting a save
+        the disk refused is how a user loses work without knowing.
         """
+        unwritten: list[str] = []
         for page_meta in pages:
             if not isinstance(page_meta, dict):
                 continue
@@ -556,26 +625,29 @@ class LizaRemoteStore:
                 continue
             page_assigns = assignments.get(page_id, {})
             page_path = self._page_path(device_id, page_id)
-            await self._async_write_page(page_path, page_meta, page_assigns)
+            if not await self._async_write_page(page_path, page_meta, page_assigns):
+                unwritten.append(page_path)
+        if unwritten:
+            raise StoreWriteError(", ".join(unwritten))
 
-    async def _async_layout_ready(self, source: dict) -> None:
-        """Parse the page's layout now, so building and parsing can stay on the loop.
+    async def _async_template_ready(self, source: dict) -> None:
+        """Parse the page's template now, so building and parsing can stay on the loop.
 
-        Both consult the layout, and both walk the live in-memory assignments —
+        Both consult the template, and both walk the live in-memory assignments —
         which a concurrent refresh mutates in place between its awaits. Running
         them in an executor would make that walk race a mutation and write a file
         matching no point in time. Only the *read* needs to be off the loop, and
         after the first one it is cached, so this is usually free.
 
         *source* is a page's metadata or its raw file payload; both spell the
-        layout the same way.
+        template the same way.
         """
-        layout_meta = source.get("layout")
-        if not isinstance(layout_meta, dict):
+        template_meta = source.get("template")
+        if not isinstance(template_meta, dict):
             return
-        layout_id = str(layout_meta.get("type") or "").strip()
-        if layout_id:
-            await async_load_layout(self._hass, layout_id)
+        template_id = str(template_meta.get("type") or "").strip()
+        if template_id:
+            await async_load_template(self._hass, template_id)
 
     @staticmethod
     def _page_file_digest(file_data: dict) -> str:
@@ -610,7 +682,7 @@ class LizaRemoteStore:
                 except ValueError:
                     pass
             self._written_page_digests.pop(path, None)
-    async def _async_write_page(self, path: str, page_meta: dict, assignments: dict) -> None:
+    async def _async_write_page(self, path: str, page_meta: dict, assignments: dict) -> bool:
         """Build one page's file payload on the loop and write it off it.
 
         Skipped when the payload matches what we last wrote to *path*. Callers
@@ -619,12 +691,14 @@ class LizaRemoteStore:
         every such call rewrote every page file. Only the two list files carry
         order; the page files do not, so a reorder has nothing to say to any of
         them and now writes none.
+
+        Returns whether the page is on disk as requested.
         """
-        await self._async_layout_ready(page_meta)
+        await self._async_template_ready(page_meta)
         file_data = self._build_page_file_data(page_meta, assignments)
         digest = self._page_file_digest(file_data)
         if self._written_page_digests.get(path) == digest:
-            return
+            return True
         written = await self._hass.async_add_executor_job(
             self._write_yaml, path, file_data,
         )
@@ -632,28 +706,50 @@ class LizaRemoteStore:
         # failed write would make every later attempt skip itself.
         if written:
             self._written_page_digests[path] = digest
+        return written
 
     async def _async_read_page(self, path: str) -> tuple[dict, dict] | None:
         """Read one page file off the loop and parse it on it."""
         raw = await self._hass.async_add_executor_job(self._read_yaml, path)
         if not isinstance(raw, dict):
             return None
-        await self._async_layout_ready(raw)
+        _migrate_page_file(raw)
+        await self._async_template_ready(raw)
         return self._parse_page_file_data(raw)
+
+    @staticmethod
+    def _clean_action_library(actions: Any) -> list[dict]:
+        """Drop empty fields from each action before it is persisted.
+
+        Shared by the full-device save and the action-library-only save: they
+        each had their own copy of this, so a change to the persisted action
+        shape could be made in one and missed in the other.
+        """
+        clean: list[dict] = []
+        for action in actions or []:
+            if not isinstance(action, dict):
+                continue
+            clean.append({
+                k: v for k, v in action.items()
+                if v is not None
+                and not (isinstance(v, list) and not v)
+                and not (isinstance(v, dict) and not v)
+            })
+        return clean
 
     async def _write_device_to_disk(self, device_id: str) -> None:
         data = self._data.get(device_id, {})
         await self._hass.async_add_executor_job(self._ensure_dirs, device_id)
 
-        lib = data.get("action_library", [])
-        clean_lib = []
-        for a in lib:
-            if isinstance(a, dict):
-                cleaned = {k: v for k, v in a.items()
-                           if v is not None and not (isinstance(v, list) and not v) and not (isinstance(v, dict) and not v)}
-                clean_lib.append(cleaned)
+        # Held rather than raised, so one unwritable library file does not cost
+        # the caller every page write in the same flush -- the same
+        # attempt-everything-then-raise contract the page helpers below keep.
+        library_error: Exception | None = None
         lib_path = self._action_library_path(device_id)
-        await self._hass.async_add_executor_job(self._write_yaml, lib_path, clean_lib)
+        try:
+            await self._async_write_yaml(lib_path, self._clean_action_library(data.get("action_library", [])))
+        except StoreWriteError as err:
+            library_error = err
 
         pages = data.get("pages", [])
         await self._async_write_page_lists(device_id, pages)
@@ -668,6 +764,9 @@ class LizaRemoteStore:
             self._cleanup_stale_pages, pages_dir, active_page_ids,
         )
         self._forget_page_digests(pages_dir, keep=active_page_ids)
+
+        if library_error is not None:
+            raise library_error
 
     @staticmethod
     def _cleanup_stale_pages(pages_dir: str, active_page_ids: set[int]) -> None:
@@ -731,7 +830,9 @@ class LizaRemoteStore:
                 try:
                     await self._hass.async_add_executor_job(shutil.rmtree, device_dir)
                 except OSError as exc:
-                    _LOGGER.warning("Failed to remove %s: %s", device_dir, exc)
+                    device_id_logger(_LOGGER, self._hass, device_id).warning(
+                        "Failed to remove %s: %s", device_dir, exc,
+                    )
 
     def _ensure_device(self, device_id: str) -> dict[str, Any]:
         if device_id not in self._data:
@@ -797,7 +898,7 @@ class LizaRemoteStore:
         """Digest of fields the device renders for cache validation.
 
         PROTOCOL.md describes page hashes as "for cache validation" and says a
-        reconnect "re-syncs only changed pages", so only page title, image
+        reconnect "writes only what differs", so only page title, image
         fields, and top-level state icons are hashed. Overrides are deliberately
         excluded: PROTOCOL.md §12 fixes physical fixed-button glyphs in
         firmware, and ``device_sync`` builds the device's ``buttons[]`` from the
@@ -863,14 +964,12 @@ class LizaRemoteStore:
         async with self.device_lock(device_id):
             await self._ensure_loaded(device_id)
             entry = self._ensure_device(device_id)
-            entry["action_library"] = actions
-            clean_actions = []
-            for a in actions:
-                cleaned = {k: v for k, v in a.items()
-                           if v is not None and not (isinstance(v, list) and not v) and not (isinstance(v, dict) and not v)}
-                clean_actions.append(cleaned)
             path = self._action_library_path(device_id)
-            await self._hass.async_add_executor_job(self._write_yaml, path, clean_actions)
+            # Written before the cache is updated, like `async_set_settings`:
+            # caching a library the disk refused would have the panel read back
+            # entries that vanish on the next restart.
+            await self._async_write_yaml(path, self._clean_action_library(actions))
+            entry["action_library"] = actions
 
     async def async_get_assignments(self, device_id: str, page_id: int) -> dict[str, dict]:
         await self._ensure_loaded(device_id)
@@ -885,7 +984,8 @@ class LizaRemoteStore:
             pages = entry.get("pages", [])
             page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), {"id": page_id})
             path = self._page_path(device_id, page_id)
-            await self._async_write_page(path, page_meta, assignments)
+            if not await self._async_write_page(path, page_meta, assignments):
+                raise StoreWriteError(path)
 
     async def async_get_all_assignments(self, device_id: str) -> dict[int, dict[str, dict]]:
         await self._ensure_loaded(device_id)
@@ -920,8 +1020,9 @@ class LizaRemoteStore:
         """Save the text settings; returns them as stored."""
         clean = normalize_settings(settings)
         async with self.device_lock(device_id):
-            await self._hass.async_add_executor_job(
-                self._write_yaml, self._settings_path(device_id), clean,
-            )
+            # Written before the cache is updated: caching settings the disk
+            # refused would have the panel read back values that vanish on the
+            # next restart.
+            await self._async_write_yaml(self._settings_path(device_id), clean)
             self._settings[device_id] = clean
         return deepcopy(clean)

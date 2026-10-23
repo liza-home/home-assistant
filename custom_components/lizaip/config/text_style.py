@@ -13,6 +13,9 @@ Stored as ``settings.yaml`` in the remote's folder::
       enabled: false
     toggle:
       enabled: false
+    key_repeat:
+      delay_ms: 500
+      rate: 30
 
 A remote without the file, or with a value that makes no sense, gets the
 defaults -- the same text the remote showed before the settings existed.
@@ -46,6 +49,18 @@ MEMORY_SECTION: Final = "memory"
 #: defaults, the file reader and the editor's validator -- cannot drift apart.
 FEATURE_SECTIONS: Final = (LONGTOUCH_SECTION, TOGGLE_SECTION, MEMORY_SECTION)
 
+#: How a button with key repeat repeats while it is held: the pause
+#: after the press before the first repeat, and then how many presses a second.
+#: A keyboard's own defaults -- long enough that a tap never repeats, fast
+#: enough to run a cursor along a row of tiles.
+KEY_REPEAT_SECTION: Final = "key_repeat"
+DEFAULT_KEY_REPEAT_DELAY_MS: Final = 500
+DEFAULT_KEY_REPEAT_RATE: Final = 30
+KEY_REPEAT_DELAY_MIN_MS: Final = 100
+KEY_REPEAT_DELAY_MAX_MS: Final = 2000
+KEY_REPEAT_RATE_MIN: Final = 1
+KEY_REPEAT_RATE_MAX: Final = 50
+
 # Smaller than this is unreadable on the remote's screen.
 MIN_FONT_SIZE: Final = 6
 
@@ -58,7 +73,32 @@ def default_settings() -> dict[str, dict[str, Any]]:
     settings[LONGTOUCH_SECTION] = {"enabled": False}
     settings[TOGGLE_SECTION] = {"enabled": False}
     settings[MEMORY_SECTION] = {"enabled": False}
+    settings[KEY_REPEAT_SECTION] = {
+        "delay_ms": DEFAULT_KEY_REPEAT_DELAY_MS, "rate": DEFAULT_KEY_REPEAT_RATE,
+    }
     return settings
+
+
+def _key_repeat_value(key: str, value: Any) -> bool:
+    """Whether *value* is a usable ``key_repeat`` *key*: a whole number in range."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    if key == "delay_ms":
+        return KEY_REPEAT_DELAY_MIN_MS <= value <= KEY_REPEAT_DELAY_MAX_MS
+    return KEY_REPEAT_RATE_MIN <= value <= KEY_REPEAT_RATE_MAX
+
+
+def key_repeat_timing(settings: Any) -> tuple[float, float]:
+    """``(initial delay, interval)`` in seconds for a held, repeating button."""
+    given = settings.get(KEY_REPEAT_SECTION) if isinstance(settings, dict) else None
+    given = given if isinstance(given, dict) else {}
+    delay = given.get("delay_ms")
+    rate = given.get("rate")
+    if not _key_repeat_value("delay_ms", delay):
+        delay = DEFAULT_KEY_REPEAT_DELAY_MS
+    if not _key_repeat_value("rate", rate):
+        rate = DEFAULT_KEY_REPEAT_RATE
+    return delay / 1000, 1 / rate
 
 
 def _feature_enabled(settings: Any, section: str) -> bool:
@@ -118,6 +158,11 @@ def normalize_settings(raw: Any) -> dict[str, dict[str, Any]]:
         settings[TOGGLE_SECTION]["enabled"] = True
     if _feature_enabled(raw, MEMORY_SECTION):
         settings[MEMORY_SECTION]["enabled"] = True
+    given = raw.get(KEY_REPEAT_SECTION)
+    if isinstance(given, dict):
+        for key in ("delay_ms", "rate"):
+            if _key_repeat_value(key, given.get(key)):
+                settings[KEY_REPEAT_SECTION][key] = given[key]
     return settings
 
 
@@ -142,10 +187,22 @@ def validate_settings(
     """
     if not isinstance(raw, dict):
         raise ValueError("settings must be a mapping")
-    unknown = set(raw) - set(TEXT_KINDS) - set(FEATURE_SECTIONS)
+    unknown = set(raw) - set(TEXT_KINDS) - set(FEATURE_SECTIONS) - {KEY_REPEAT_SECTION}
     if unknown:
         raise ValueError(f"unknown setting: {', '.join(sorted(unknown))}")
     settings = default_settings()
+    if KEY_REPEAT_SECTION in raw:
+        given = raw[KEY_REPEAT_SECTION]
+        if not isinstance(given, dict) or set(given) - {"delay_ms", "rate"}:
+            raise ValueError(f"{KEY_REPEAT_SECTION} must be a mapping of 'delay_ms' and 'rate'")
+        for key, value in given.items():
+            if not _key_repeat_value(key, value):
+                low, high = (
+                    (KEY_REPEAT_DELAY_MIN_MS, KEY_REPEAT_DELAY_MAX_MS) if key == "delay_ms"
+                    else (KEY_REPEAT_RATE_MIN, KEY_REPEAT_RATE_MAX)
+                )
+                raise ValueError(f"{KEY_REPEAT_SECTION}: {key} must be a whole number from {low} to {high}")
+            settings[KEY_REPEAT_SECTION][key] = value
     for section in FEATURE_SECTIONS:
         if section not in raw:
             continue
@@ -157,7 +214,7 @@ def validate_settings(
                 raise ValueError(f"{section}: enabled must be true or false")
             settings[section]["enabled"] = given["enabled"]
     for kind, given in raw.items():
-        if kind in FEATURE_SECTIONS:
+        if kind in FEATURE_SECTIONS or kind == KEY_REPEAT_SECTION:
             continue
         if not isinstance(given, dict):
             raise ValueError(f"{kind} must be a mapping")

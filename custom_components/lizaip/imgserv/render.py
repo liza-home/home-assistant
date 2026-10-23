@@ -31,7 +31,7 @@ SVG rendering (used by render_mdi, render_logo, render_custom):
   - ``parse_svg_viewbox``     — extract viewBox from SVG root element
   - ``collect_svg_paths``     — extract <path>/<circle> d-strings from SVG root
 
-Text rendering lives in render_text.py; static-image resizing in render_static.py.
+Text rendering lives in render_text.py.
 Colours, sizes and the tint opacity come from ``const.py``; the two numbers that
 only steer this engine — ``SVG_SUPERSAMPLE`` and ``CURVE_SEGMENTS`` — are defined
 below, where the code that reads them can be seen at the same time.

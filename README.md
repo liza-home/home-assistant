@@ -11,9 +11,12 @@ you decide what every button depicts and what it controls, all from a panel insi
 
 **This integration requires a physical lizaIP device.**
 
-📸 **New here?** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) is a screenshot-illustrated
-walkthrough: installing, adding a device, defining pages, assigning button actions, the
+📸 **New here?** The user guide is a screenshot-illustrated walkthrough: installing,
+adding a device, defining pages, assigning button actions, the
 `mdi:`/`phu:`/`logo:`/`text:`/`media:` image schemes, and live entity variables.
+Read it [here on GitHub](custom_components/lizaip/docs/USER_GUIDE.md), or inside
+Home Assistant — open the **lizaIP** panel and press the **?** button in its
+toolbar, which needs no second window and works offline.
 
 ## Installation
 
@@ -82,7 +85,7 @@ The Buttons tab shows the remote face, with that remote's pages beside it.
 - Give it a **Tooltip** — what is shown when a button is touched: usually words, but
   any picture the Image field takes works too.
   `${_state}` is replaced by what pressing the button does, `${_name}`
-  by what it opens, and on a layout page `${_device.media_title}` and
+  by what it opens, and on a template page `${_device.media_title}` and
   `${_device.media_artist}` by what is
   playing right now. Typing `${` offers the ones that fit that button, each with
   a word explaining it, alongside your entities. The hint under the field shows
@@ -125,7 +128,7 @@ override in this mode, not the page default underneath it.
 ### Pages
 
 - **Add** a page with the **+** tile at the end of the strip. You are offered a **blank
-  page**, or a **layout** — a ready-made page for a device you already have in Home
+  page**, or a **template** — a ready-made page for a device you already have in Home
   Assistant.
 - **Reorder** by dragging thumbnails, or with the arrows in Page settings.
 - **Delete** with the ✕ on a thumbnail.
@@ -135,7 +138,7 @@ override in this mode, not the page default underneath it.
 - To rename a page, click its **title** for the editor — plain text, an `mdi:` icon, a `logo:` name or an
   image URL.
 
-Some layout pages stay **live**: a Sonos page follows the speaker's favourites, and
+Some template pages stay **live**: a Sonos page follows the speaker's favourites, and
 refills itself when you change them. **Sonos Radio** and **Sonos Playlists** do the same
 with only your favourite radio stations or only your favourite playlists, twelve to a page. Editing such a button by hand detaches it from the
 source.
@@ -182,26 +185,27 @@ editor stops suggesting them.
 | Tooltip | `Battery ${sensor.lizaip_1c63499a7193_battery}` | Battery 85 % |
 | Tooltip | `${media_player.living_room.media_title}` | the song that is playing |
 | Tooltip | `${_state} · ${sensor.desk_lamp_power}` | Off · 12 W |
-| Tooltip (layout page) | `${_device.media_title}` | Bohemian Rhapsody |
-| Tooltip (layout page) | `play:5 ${_state} - ${_device.media_title}` | play:5 Pause - Bohemian Rhapsody |
-| Tooltip (layout page) | `${_device.media_title} – ${_device.media_artist}` | Bohemian Rhapsody – Queen |
+| Tooltip (template page) | `${_device.media_title}` | Bohemian Rhapsody |
+| Tooltip (template page) | `play:5 ${_state} - ${_device.media_title}` | play:5 Pause - Bohemian Rhapsody |
+| Tooltip (template page) | `${_device.media_title} – ${_device.media_artist}` | Bohemian Rhapsody – Queen |
 | Tooltip (Sonos page) | `${_device.media_title_prev}` | the track before this one, e.g. Endless Summer |
 | Tooltip (Sonos page) | `${_device.media_title_next}` – `${_device.media_artist_next}` | Babylon – David Gray |
 | Tooltip (any page) | `${_queue.next_song}` | the next track of the speaker the button points at |
 | Image | `${sensor.outdoor_temperature}` | the value drawn as the button's picture |
+| Image | `mdi:battery ${sensor.lizaip_1c63499a7193_battery}` | a battery mark beside 85 % |
 | Image | `text:${weather.home.temperature}°` | 18° |
 | Image | `${weather.home}` | the current weather icon (sun, clouds, rain, …) |
 | Image | `${sensor.lizaip_battery_icon}` | an icon chosen by a helper — see below |
 | Page title | `Living room ${sensor.living_room_temperature}` | Living room 22 °C |
-| Page title (layout page) | `${_device}` | the name of the page's device, e.g. `Living Room TV` |
-| Page title (layout page) | `Vol ${_device.volume_level}` | an attribute of the page's own entity |
-| Page title (layout page) | `Vol ${round(_device.volume_level * 100)}%` | Vol 12% |
-| Tooltip (layout page) | `${_device} ${round(_device.volume_level * 100)}%` | Living Room TV 12% |
+| Page title (template page) | `${_device}` | the name of the page's device, e.g. `Living Room TV` |
+| Page title (template page) | `Vol ${_device.volume_level}` | an attribute of the page's own entity |
+| Page title (template page) | `Vol ${round(_device.volume_level * 100)}%` | Vol 12% |
+| Tooltip (template page) | `${_device} ${round(_device.volume_level * 100)}%` | Living Room TV 12% |
 | Tooltip | `Brightness ${round(light.desk.brightness * 100 / 255)}%` | Brightness 50% |
 | Tooltip | `${round(sensor.outdoor_temperature)} °C` | 22 °C |
 
-`${_device}` works the same in a layout page's tiles, state icons and tooltips, and in the
-icons of the actions its buttons run. Typing `${` in a layout page's title, image or tooltip field also suggests `_device`, and after `${_device.`
+`${_device}` works the same in a template page's tiles, state icons and tooltips, and in the
+icons of the actions its buttons run. Typing `${` in a template page's title, image or tooltip field also suggests `_device`, and after `${_device.`
 the attributes of the page's entity.
 
 **Calculations.** Inside `${…}` you can calculate with numbers, variables, the operators
@@ -410,8 +414,10 @@ it off.
 | The tab strip at the top | **←** and **→** move between tabs, **Home** and **End** jump to the first and last. The tab you land on opens as you arrive. |
 | An open configuration card | **Escape** closes it and returns focus to the button that opened it. |
 | Page order | The **Move left** and **Move right** arrows beside the page name do what dragging a page thumbnail does. |
-| A page thumbnail | **Shift+F10**, or the **Context Menu** key, opens that page's menu — the same one a right-click or long-press gives — where a page is duplicated, moved to another device (layout pages), deleted, or turned into a subpage, or back. A thumbnail is a tab stop only while its page is not the open one, so to mark the page you are on, step to another page first. |
+| A page thumbnail | **Shift+F10**, or the **Context Menu** key, opens that page's menu — the same one a right-click or long-press gives — where a page is duplicated, moved to another device (template pages), deleted, or turned into a subpage, or back. A thumbnail is a tab stop only while its page is not the open one, so to mark the page you are on, step to another page first. |
 | The open page | **Delete**, or **Backspace** (the key a Mac labels *delete*), deletes it after the same confirmation as its ✕ — unless you are typing in a field, or a dialog or menu is open. |
+| The user guide | The **?** in the toolbar opens it beside the configuration. In its contents list, **↑** and **↓** move between entries, **Home** and **End** jump to the first and last, and **Enter** or **Space** opens the chapter. In the search box, **Enter** steps to the next match and **Shift+Enter** to the previous. **Escape** closes the guide. |
+| A guide screenshot | **Enter** or **Space** opens it full size. Inside the viewer, **←** and **→** step between screenshots, **Home** and **End** jump to the first and last, **+** and **-** zoom in and out, **0** fits the picture to the window again, and **Escape** closes it. |
 | Dialogs | **Tab** stays inside the dialog, **Escape** cancels. |
 
 ### What else is covered
@@ -419,7 +425,7 @@ it off.
 Colour, contrast and text size follow your Home Assistant theme, so the panel re-themes
 and scales along with everything else. A few indicators, such as the keyboard focus ring,
 keep a fixed colour so they stay visible on any theme. Controls carry names and roles for
-screen readers, and changes with no visible cursor behind them — a page deleted, a layout
+screen readers, and changes with no visible cursor behind them — a page deleted, a template
 applied — are announced. Deleting a page always asks for confirmation first, and says how
 many configured buttons go with it.
 

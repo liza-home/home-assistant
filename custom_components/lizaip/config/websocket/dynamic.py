@@ -11,16 +11,21 @@ from ...runtime import _get_store
 from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
 from ..const import PAGE_ID_SCHEMA
 from ..events import fire_config_changed
-from ..layouts import (
+from ..templates import (
     DEFAULT_MAX_ITEMS,
     DEFAULT_TRACKED_FIELDS,
     SOURCES,
     async_resolve_source,
     get_source,
     validate_spec,
-    refresh as layout_refresh,
+    refresh as template_refresh,
 )
-from .common import EMPTY_BUTTON, requires_device, schedule_push_rescan
+from .common import (
+    EMPTY_BUTTON,
+    requires_device,
+    schedule_push_rescan,
+    send_failure,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,8 +79,10 @@ async def ws_browse_media(hass: HomeAssistant, connection, msg: dict) -> None:
                 return
             result = await entity.async_browse_media(media_content_type or None, media_content_id or None)
     except Exception as exc:
-        _LOGGER.warning("browse_media failed for %s: %s", entity_id, exc)
-        connection.send_error(msg["id"], "browse_failed", str(exc))
+        send_failure(
+            hass, connection, msg, "browse_failed", exc,
+            logger=_LOGGER, what=f"Browsing media on {entity_id}",
+        )
         return
 
     def _serialize_item(item) -> dict:
@@ -152,14 +159,16 @@ async def ws_preview_dynamic_source(hass: HomeAssistant, connection, msg: dict) 
 @websocket_api.async_response
 async def ws_refresh_dynamic(hass: HomeAssistant, connection, msg: dict) -> None:
     try:
-        changed = await layout_refresh.async_refresh_and_sync(
+        changed = await template_refresh.async_refresh_and_sync(
             hass,
             msg["entry_id"],
             page_id=msg.get("page_id"),
         )
     except Exception as exc:  # noqa: BLE001
-        _LOGGER.error("Dynamic refresh failed for %s: %s", msg["entry_id"], exc)
-        connection.send_error(msg["id"], "refresh_failed", str(exc))
+        send_failure(
+            hass, connection, msg, "refresh_failed", exc,
+            logger=_LOGGER, what="Refreshing the dynamic pages",
+        )
         return
 
     connection.send_result(msg["id"], {"success": True, "changed": changed})
@@ -222,13 +231,15 @@ async def ws_set_dynamic_binding(hass: HomeAssistant, connection, msg: dict, dev
         await store.async_set_assignments(device_id, page_id, assignments)
         await store.async_recompute_page_hash(device_id, page_id)
     except Exception as exc:  # noqa: BLE001
-        _LOGGER.error("set_dynamic_binding failed: %s", exc)
-        connection.send_error(msg["id"], "save_failed", str(exc))
+        send_failure(
+            hass, connection, msg, "save_failed", exc,
+            logger=_LOGGER, what="Saving the dynamic binding",
+        )
         return
 
     schedule_push_rescan(hass, msg["entry_id"])
 
-    changed = await layout_refresh.async_refresh_and_sync(
+    changed = await template_refresh.async_refresh_and_sync(
         hass, msg["entry_id"], page_id=page_id,
     )
     if not changed:

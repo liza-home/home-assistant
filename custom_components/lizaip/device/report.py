@@ -28,6 +28,8 @@ import aiohttp
 from aiohttp import ClientTimeout
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .http import device_base_url, error_detail
+
 if TYPE_CHECKING:
     from .connection import LizaIPConnection
 
@@ -112,7 +114,7 @@ async def async_probe_reachability(
     if not conn.device_http_port:
         return {"reachable": False, "reason": "no_port", "peer_ip": conn.peer_ip}
 
-    url = f"http://{conn.peer_ip}:{conn.device_http_port}/api/info"
+    url = f"{device_base_url(conn)}/api/info"
     session = async_get_clientsession(conn.hass)
     started = time.monotonic()
     try:
@@ -130,8 +132,7 @@ async def async_probe_reachability(
                 result["body"] = body
             return result
     except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-        # `str()` on a timeout is empty, which would render a blank reason.
-        detail = f"{err.__class__.__name__}: {err}" if str(err) else err.__class__.__name__
+        detail = error_detail(err)
         return {
             "reachable": False,
             "reason": "unreachable",
@@ -166,7 +167,7 @@ async def async_fetch_section(conn: LizaIPConnection, endpoint: str) -> dict[str
     leave the reader unable to tell a broken endpoint from one never asked.
     """
     session = async_get_clientsession(conn.hass)
-    base = f"http://{conn.peer_ip}:{conn.device_http_port}"
+    base = device_base_url(conn)
     try:
         async with session.get(
             f"{base}{endpoint}", timeout=ClientTimeout(total=10)
@@ -187,7 +188,7 @@ async def async_fetch_section(conn: LizaIPConnection, endpoint: str) -> dict[str
                 }
             return {"status": resp.status, "body": body}
     except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-        detail = f"{err.__class__.__name__}: {err}" if str(err) else err.__class__.__name__
+        detail = error_detail(err)
         return {"error": detail}
 
 

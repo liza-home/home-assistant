@@ -32,19 +32,21 @@ from ...state_color import (
     read_color_enabled,
 )
 from ...variables_calc import (
-    CONF_VARIABLES_ENABLED,
     CONF_VARIABLES_INTERVAL,
-    DEFAULT_VARIABLES_ENABLED,
     DEFAULT_VARIABLES_INTERVAL,
     VARIABLES_INTERVAL_MAX,
     VARIABLES_INTERVAL_MIN,
     VARIABLES_INTERVAL_STEP,
-    read_variables_enabled,
     read_variables_interval,
 )
 from ..events import fire_config_changed
 from ..internal_commands import panel_descriptors
 from ..text_style import (
+    KEY_REPEAT_DELAY_MAX_MS,
+    KEY_REPEAT_DELAY_MIN_MS,
+    KEY_REPEAT_RATE_MAX,
+    KEY_REPEAT_RATE_MIN,
+    KEY_REPEAT_SECTION,
     TEXT_KINDS,
     default_settings,
     font_size_limits,
@@ -75,13 +77,11 @@ def _icon_options_reply(options: object) -> dict:
         "icon_fill_step": read_fill_step(options),
         "icon_fill_enabled": read_fill_enabled(options),
         "icon_color_enabled": read_color_enabled(options),
-        "variables_enabled": read_variables_enabled(options),
         "variables_interval_ms": read_variables_interval(options),
         "defaults": {
             "icon_fill_step": DEFAULT_ICON_FILL_STEP,
             "icon_fill_enabled": DEFAULT_ICON_FILL_ENABLED,
             "icon_color_enabled": DEFAULT_ICON_COLOR_ENABLED,
-            "variables_enabled": DEFAULT_VARIABLES_ENABLED,
             "variables_interval_ms": DEFAULT_VARIABLES_INTERVAL,
         },
         "limits": {
@@ -141,7 +141,7 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
             )
         updates[CONF_VARIABLES_INTERVAL] = interval
 
-    for key in (CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED, CONF_VARIABLES_ENABLED):
+    for key in (CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED):
         if key in changes:
             value = changes[key]
             if not isinstance(value, bool):
@@ -183,7 +183,6 @@ async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     vol.Optional("icon_fill_step"): object,
     vol.Optional("icon_fill_enabled"): object,
     vol.Optional("icon_color_enabled"): object,
-    vol.Optional("variables_enabled"): object,
     vol.Optional("variables_interval_ms"): object,
 })
 @websocket_api.require_admin
@@ -192,7 +191,7 @@ async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     """Save the icon-rendering settings edited in the gear tab."""
     changes = {
         key: msg[key]
-        for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled", "variables_enabled",
+        for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled",
                     "variables_interval_ms")
         if key in msg
     }
@@ -228,7 +227,14 @@ def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
         "defaults": default_settings(),
         "fonts": fonts,
         "limits": {
-            kind: dict(zip(("min", "max"), font_size_limits(kind))) for kind in TEXT_KINDS
+            **{
+                kind: dict(zip(("min", "max"), font_size_limits(kind)))
+                for kind in TEXT_KINDS
+            },
+            KEY_REPEAT_SECTION: {
+                "delay_ms": {"min": KEY_REPEAT_DELAY_MIN_MS, "max": KEY_REPEAT_DELAY_MAX_MS},
+                "rate": {"min": KEY_REPEAT_RATE_MIN, "max": KEY_REPEAT_RATE_MAX},
+            },
         },
     }
 

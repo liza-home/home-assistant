@@ -68,6 +68,10 @@ def render_logo(
     exists, monochrome rendering is used.  This is used when ``?mode=`` is
     set without an explicit ``?fg=`` - the PNG's own colours are appropriate.
     """
+    # A logo is a bare name in the flat logos directory, never a path.
+    if not logo_name or "/" in logo_name or "\\" in logo_name or ".." in logo_name:
+        _LOGGER.warning("Rejected logo_name that is a path: %r", logo_name)
+        return None
     logos_dir = LOGOS_DIR
     logo_name = _pick_shape(logos_dir, logo_name, width, height)
     svg_path = _resolve_under(logos_dir, logo_name if logo_name.endswith(".svg") else f"{logo_name}.svg")

@@ -7,72 +7,156 @@ from collections.abc import Mapping
 from typing import Any, Final
 from urllib.parse import quote, unquote, urlencode
 
-from ..imgserv import media_refs
 from ..imgserv.const import (
+    PART_SOURCE_TYPES,
     SIZE_IDS,
     _custom_icon_prefixes,
+    is_address,
     split_source_parts,
 )
 from ..imgserv.fonts import DEFAULT_FONT_ID
 
-#: imgserv options a picture may carry after a ``|``: ``media:<url>|size=200x200``.
-MEDIA_OPTION_KEYS: Final = ("size", "mode", "fg", "bg", "crop", "alpha")
+#: imgserv options a picture may carry in its query: ``media:<url>?size=200x200``.
+MEDIA_OPTION_KEYS: Final = ("size", "box", "fit", "mode", "fg", "bg", "crop", "alpha", "percent")
 
-#: A numeric ``size=`` in the URL's own query, which is read as imgserv's.
-_QUERY_SIZE_RE: Final = re.compile(r"([?&])size=(\d+(?:x\d+)?)(?=&|#|$)", re.IGNORECASE)
+#: Options that are imgserv's wherever they are written, not just on a picture.
+#: The drawing options (`font`, `hours`) only mean something to some sources,
+#: but none of them is ever a word someone meant to see drawn.
+OPTION_KEYS: Final = (*MEDIA_OPTION_KEYS, "color", "font", "font_size", "hours", "days")
+
+#: A numeric ``size=``: pixels, square or ``WxH``. Symbolic ids are separate.
+_SIZE_RE: Final = re.compile(r"\d+(?:x\d+)?", re.IGNORECASE)
+
+#: A ``box=``: the four numbers ``x,y,w,h`` of the piece to cut out.
+_BOX_RE: Final = re.compile(r"\d+,\d+,\d+,\d+")
+
+
+def _media_option(part: str) -> tuple[str, str] | None:
+    """``(key, value)`` when *part* (``key=value``) is one of imgserv's options."""
+    key, eq, val = part.partition("=")
+    key, val = key.strip().lower(), val.strip()
+    if not eq or not val or key not in MEDIA_OPTION_KEYS:
+        return None
+    if key == "size":
+        # The symbolic ids are imgserv's own vocabulary, so `?size=tile` on a
+        # picture means what it means everywhere else; `size=large` is a word
+        # imgserv does not know and stays the host's.
+        if not (val.lower() in SIZE_IDS or _SIZE_RE.fullmatch(val)):
+            return None
+        val = val.lower()
+    if key == "percent" and not (val.isdigit() and int(val) <= 100):
+        return None
+    if key == "fit":
+        val = val.lower()
+        if val not in ("contain", "fill"):
+            return None
+    if key == "box":
+        val = val.replace(" ", "")
+        if not _BOX_RE.fullmatch(val):
+            return None
+    return key, val
+
+
+def _media_options(query: str) -> tuple[dict[str, str], list[str]]:
+    """imgserv's options in *query* (a second ``?`` counts as ``&``), and the rest."""
+    options: dict[str, str] = {}
+    kept: list[str] = []
+    for part in query.replace("?", "&").split("&"):
+        option = _media_option(part)
+        if option:
+            options.setdefault(*option)
+        else:
+            kept.append(part)
+    return options, kept
+
+
+def _option_parts(query: str) -> tuple[list[str], bool]:
+    """The parts of *query* that are imgserv options, and whether any are.
+
+    A second ``?`` counts as ``&``. Only the key is judged here, not the
+    value: ``size=large`` is still imgserv's ``size`` being asked for
+    something it cannot give, and `_media_option` is where a value is
+    weighed. A part with no value (``size=``) says nothing and is dropped
+    with the rest.
+    """
+    parts = [p for p in query.replace("?", "&").split("&") if p]
+    kept = []
+    for part in parts:
+        key, _, val = part.partition("=")
+        key, val = key.strip().lower(), val.strip()
+        if key in OPTION_KEYS and val:
+            # Written back tidied: a stray space around `size = tile` would
+            # otherwise hide the option from the `[?&]size=` test that keeps
+            # the field from writing its own size a second time.
+            kept.append(f"{key}={val}")
+    return kept, bool(kept)
+
+
+def split_option_query(value: str) -> tuple[str, str]:
+    """*value* without its trailing imgserv query, and that query.
+
+    Words are drawn as written, question mark and all ("What?"), so a query
+    is only taken for one when at least one part of it is an option imgserv
+    knows: ``${sensor.battery}?size=tile`` asks for a size, ``Tea?`` does not.
+
+    Anything else in that query is dropped rather than drawn. There is no
+    host behind words for it to belong to, and someone who wrote
+    ``${sensor.battery}?size=tile&1rea`` means the size and a typo, not a
+    picture of the typo. The options that are there still apply.
+    """
+    head, q, query = value.rpartition("?")
+    if not q:
+        return value, ""
+    kept, is_options = _option_parts(query)
+    if not is_options:
+        return value, ""
+    return head, "&".join(kept)
 
 
 def split_media_options(value: str) -> tuple[str, dict[str, str]]:
-    """``(url, options)`` for ``<url>|key=value&key=value``.
+    """``(url, options)`` for ``<url>?size=200x200&bg=black``.
 
-    The options are imgserv's own, which the URL's query cannot carry: the URL
-    is sent encoded, so its query would only reach the image's host. ``|``
-    never occurs in a URL unencoded. Unknown keys are dropped; a tail without a
-    single known key is not options at all and stays part of the URL.
+    The URL is sent encoded, so its query would only ever reach the image's
+    host; imgserv's own options (`MEDIA_OPTION_KEYS`) are taken out of it and
+    read as imgserv's. A second ``?`` counts as ``&``, so
+    ``${_device.entity_picture}?size=200x200`` works although that picture's
+    URL already has a query of its own.
 
-    A numeric ``size=200x200`` (or ``size=200``) in the URL's own query is taken
-    out of it and read as imgserv's size too, as that is where it gets typed;
-    a ``|size=`` wins over it. Any other ``size=`` (``size=large``) is the
-    host's and stays.
+    A URL in quotes (``"…"`` or ``'…'``) is the host's as written, query and
+    all; only what follows the closing quote is imgserv's:
+    ``'https://a/b.png?size=2000'?size=200x200``.
     """
-    url, sep, tail = value.rpartition("|")
-    options: dict[str, str] = {}
-    if sep:
-        for part in tail.split("&"):
-            key, eq, val = part.partition("=")
-            key = key.strip().lower()
-            if eq and key in MEDIA_OPTION_KEYS and val.strip():
-                options[key] = val.strip()
-    if options:
-        url = url.strip()
-    else:
-        url = value
-    m = _QUERY_SIZE_RE.search(url)
-    if m:
-        options.setdefault("size", m.group(2).lower())
-        start, end = m.span()
-        rest = url[end:]
-        if m.group(1) == "?":
-            # The first parameter goes; the next one, if any, takes its `?`.
-            url = url[:start] + ("?" + rest[1:] if rest.startswith("&") else rest)
-        else:
-            url = url[:start] + rest
-    return url, options
+    quote_char = value[:1]
+    if quote_char in ("'", '"'):
+        end = value.find(quote_char, 1)
+        if end > 0:
+            options, _ = _media_options(value[end + 1:].lstrip("?&"))
+            return value[1:end], options
+    head, q, query = value.partition("?")
+    if not q:
+        return value, {}
+    query, hash_sign, fragment = query.partition("#")
+    options, kept = _media_options(query)
+    if not options and "?" not in query:
+        return value, options
+    query = "&".join(p for p in kept if p)
+    return head + (f"?{query}" if query else "") + hash_sign + fragment, options
 
 
 def _media_url(url: str, size: str, pct: str) -> str:
-    """``imgserv://media:…`` for *url*, its ``|`` options over the defaults."""
+    """``imgserv://media:…`` for *url*, its own options over the defaults."""
     url, options = split_media_options(url)
-    query = urlencode({"size": size, "mode": "dark", **options}, safe=",")
+    if "percent" in options:
+        # Written on the picture, it wins over the one the field derives.
+        pct = ""
+    if "size" in options and "fit" not in options:
+        # A size written on the picture is meant exactly: the cover cut into a
+        # 3×3 grid needs its 180×186. Without one the picture keeps its own
+        # proportions inside the field's size.
+        options = {**options, "fit": "fill"}
     source = encode_media_source(url)
-    result = f"imgserv://{source}?{query}{pct}"
-    if len(result) > media_refs.MAX_URL_LENGTH:
-        # The remote fails on long URLs; imgserv gets the source by reference,
-        # exactly as it would have received it (decoded once, like the path).
-        # TEMPORARY: remove once LZIP-8 is implemented (see imgserv/media_refs).
-        key = media_refs.remember(unquote(source.removeprefix("media:")))
-        result = f"imgserv://ref:{key}?{query}{pct}"
-    return result
+    query = urlencode({"size": size, "mode": "dark", **options}, safe=",")
+    return f"imgserv://{source}?{query}" + (f"&{pct}" if pct else "")
 
 
 def encode_media_source(url: str) -> str:
@@ -152,7 +236,7 @@ def resolve_icon_url(
     """Convert an icon value to a fetchable URL.
 
     - MDI strings (mdi:lightbulb) → imgserv://mdi:lightbulb?size={size}[&fg={color}]
-    - imgserv source types (logo:hue, text:foo, phu:bar, file:img.png) → imgserv://{icon}?size={size}&mode=dark[&fg={color}]
+    - imgserv source types (logo:hue, text:foo, phu:bar, history:sensor.x) → imgserv://{icon}?size={size}&mode=dark[&fg={color}]
     - External URLs (http://, https://) and HA paths (/…) → imgserv://media:{encoded}?size={size}&mode=dark
     - imgserv:// / ha:// / local:// / data: → passed through unchanged
 
@@ -199,7 +283,7 @@ def resolve_icon_url(
     icon = icon.strip() if icon else ""
     if not icon:
         return ""
-    pct = f"&percent={percent}" if percent is not None else ""
+    pct = f"percent={percent}" if percent is not None else ""
     # Scheme tests run against a lowercased copy; the returned value always uses the
     # original casing so signed URLs and file names stay byte-exact.
     low = icon.lower()
@@ -210,6 +294,15 @@ def resolve_icon_url(
         # exactly as it is on any other branch. ASCII is returned byte for
         # byte, so an already percent-encoded URL is untouched.
         return _ascii_safe_path(icon)
+    fg = color.lstrip("#") if color else ""
+    composite = _with_pictures(icon)
+    if composite is not None:
+        # Several parts, one of them a picture: each picture is encoded on
+        # its own, so its query stays its own and the words beside it stay words.
+        return _with_query(
+            composite, _size_part(composite, size), "mode=dark",
+            f"fg={fg}" if fg and _tintable(composite) else "", pct,
+        )
     if low.startswith(("http://", "https://")):
         return _media_url(icon, size, pct)
     if icon.startswith("/"):
@@ -217,42 +310,126 @@ def resolve_icon_url(
         # imgserv too: the remote's firmware does not resolve `ha://` and would
         # ask HA for `/ha://api/…`.
         return _media_url(icon, size, pct)
-    fg = color.lstrip("#") if color else ""
     if icon.startswith("mdi:"):
         # The value may carry its own query (`mdi:lightbulb?color=blue`): join
         # with `&`, and only add the page colour when the value has none of its own.
-        sep = "&" if "?" in icon else "?"
         own = re.search(r"[?&](fg|color)=", icon)
-        fg_part = f"&fg={fg}" if fg and not own else ""
-        return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}{fg_part}{pct}"
+        return _with_query(
+            icon, _size_part(icon, size), f"fg={fg}" if fg and not own else "", pct,
+        )
     if icon.startswith("media:"):
         # The value is a URL in its own right — encode it so its query survives.
         return _media_url(icon[6:], size, pct)
-    # imgserv source types: logo:, text:, phu:, file:, history:, and the extra
+    # imgserv source types: logo:, text:, phu:, history:, and the extra
     # icon sets the frontend registered (drawn from their uploaded shapes).
     custom = custom_icon_scheme(icon)
-    if icon.startswith(("logo:", "text:", "phu:", "file:", "history:")) or custom:
-        sep = "&" if "?" in icon else "?"
+    if icon.startswith(("logo:", "text:", "phu:", "history:")) or custom:
         # Tint monochrome sources (text:, icons, a graph's line); leave
         # logos/photos untouched. A composite is tinted as soon as one of its
         # parts can take it -- imgserv is what decides which parts spend it.
-        tintable = any(
-            part.startswith(("text:", "phu:", "history:", "mdi:")) or custom_icon_scheme(part)
-            for part in split_source_parts(icon)
+        color_suffix = fg if fg and _tintable(icon) and not re.search(r"[?&](fg|color)=", icon) else ""
+        return _with_query(
+            icon, _size_part(icon, size), "mode=dark",
+            f"fg={color_suffix}" if color_suffix else "", pct,
         )
-        color_suffix = f"&fg={fg}" if fg and tintable and not re.search(r"[?&](fg|color)=", icon) else ""
-        return f"imgserv://{_ascii_safe_path(icon)}{sep}size={size}&mode=dark{color_suffix}{pct}"
 
     return resolve_icon_url(_words_source(icon), size, color, percent)
+
+
+def _tintable(source: str) -> bool:
+    """Whether any part of *source* can take a colour (imgserv picks which do)."""
+    return any(
+        part.startswith(("text:", "phu:", "history:", "mdi:")) or custom_icon_scheme(part)
+        for part in split_source_parts(source)
+    )
+
+
+def _is_picture_part(part: str) -> bool:
+    return part.startswith("media:") or is_address(part)
+
+
+def _with_pictures(icon: str) -> str | None:
+    """*icon* as an imgserv composite when it puts a picture beside other parts.
+
+    Each picture becomes ``media:<encoded address>``. ``None`` for a single
+    part, or a composite without a picture, which the other branches already
+    spell.
+    """
+    parts = split_source_parts(icon)
+    if len(parts) < 2 or not any(_is_picture_part(p) for p in parts):
+        return None
+    spelled: list[str] = []
+    for i, part in enumerate(parts):
+        if _is_picture_part(part):
+            address = part[len("media:"):] if part.startswith("media:") else part
+            # imgserv's own options cannot be given per part; only the
+            # address goes to its host.
+            address, _options = split_media_options(address)
+            spelled.append(encode_media_source(address))
+        elif i == 0 and not _names_a_source(part):
+            spelled.append(f"text:{part}")
+        else:
+            spelled.append(part)
+    return " ".join(spelled)
+
+
+def _names_a_source(part: str) -> bool:
+    m = re.match(r"^([a-z][a-z0-9_]*):", part)
+    return bool(m) and (m.group(1) in PART_SOURCE_TYPES or bool(custom_icon_scheme(part)))
+
+
+def _with_query(icon: str, *parts: str) -> str:
+    """The ``imgserv://`` URL for *icon*, *parts* added to the query it has."""
+    written = "&".join(p for p in parts if p)
+    path = _ascii_safe_path(icon)
+    if not written:
+        return f"imgserv://{path}"
+    return f"imgserv://{path}{'&' if '?' in path else '?'}{written}"
+
+
+def _size_part(icon: str, size: str) -> str:
+    """``size=…`` for the field, or nothing when *icon* names its own.
+
+    Written twice the first one would win, so the value's would be drawn
+    either way -- but only one of them says what the picture is, and a URL
+    carrying both reads like a bug to whoever next looks at the traffic.
+    """
+    return "" if re.search(r"[?&]size=", icon) else f"size={size}"
 
 
 def _words_source(words: str) -> str:
     """Plain *words* as the ``text:`` source drawing them.
 
     Their own ``?`` is part of what they say, not the start of a query:
-    unescaped, "What?" reached imgserv as the text "What".
+    unescaped, "What?" reached imgserv as the text "What". Only the words
+    themselves: a part that follows them ("Battery + history:x?v=1") keeps
+    its query, and so does a trailing query that is nothing but options --
+    ``${sensor.battery}?size=tile`` asks for a size rather than saying one.
+
+    A query is only read as the words' own when nothing follows them. Once a
+    source part does, the trailing ``?`` is that part's -- ``history:x`` is
+    the one that takes ``hours=6``, and its cache-busting ``v=`` has to
+    survive beside it.
     """
-    return "text:" + words.replace("?", "%3F")
+    end = _first_part_after_words(words)
+    query = ""
+    if end == len(words):
+        words, query = split_option_query(words)
+        end = _first_part_after_words(words)
+    source = "text:" + words[:end].replace("?", "%3F") + words[end:]
+    if not query:
+        return source
+    return source + ("&" if "?" in source else "?") + query
+
+
+def _first_part_after_words(words: str) -> int:
+    """Where the first source part after the leading words starts, or the end."""
+    from ..imgserv.const import PART_SOURCE_TYPES, custom_icon_prefixes
+
+    for m in re.finditer(r"\s([a-z][a-z0-9_]*):", words):
+        if m.group(1) in PART_SOURCE_TYPES or m.group(1) in custom_icon_prefixes():
+            return m.start()
+    return len(words)
 
 
 def _text_style_query(kind: str, style: Mapping[str, Any] | None) -> str:
@@ -277,7 +454,7 @@ def _text_style_query(kind: str, style: Mapping[str, Any] | None) -> str:
 # case-insensitive (RFC 3986); imgserv source types are not, the server matching
 # them exactly.
 _URL_PREFIXES: Final = ("http://", "https://", "ha://", "imgserv://", "local://", "data:")
-_SOURCE_PREFIXES: Final = ("mdi:", "phu:", "logo:", "text:", "file:", "media:", "history:", "/")
+_SOURCE_PREFIXES: Final = ("mdi:", "phu:", "logo:", "text:", "media:", "history:", "/")
 
 
 def custom_icon_scheme(value: str) -> str:
@@ -289,7 +466,7 @@ def custom_icon_scheme(value: str) -> str:
 def is_media_source(value: str) -> bool:
     """True when *value* names a picture rather than words to print.
 
-    Mirrors `_isMediaSource` in liza-remote-helpers.js: the editor draws its
+    Mirrors `_isMediaSource` in lizaip-helpers.js: the editor draws its
     preview by the same rule, so a field cannot preview text and send an icon.
     """
     value = value.strip() if value else ""

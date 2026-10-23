@@ -267,7 +267,7 @@ def rule_action_id(rule: Any) -> str | None:
     runs exactly the same. It exists so the Actions view can answer "is this
     action still used?" honestly: that count is what marks an action safe to
     delete, and a rule step is as live a use as a button's own ``config``.
-    Under-counting is the dangerous direction, as ``liza-remote-data.js`` says
+    Under-counting is the dangerous direction, as ``lizaip-data.js`` says
     about the pages it scans.
     """
     if not isinstance(rule, dict):
@@ -308,7 +308,7 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
     handed this text to ``substitute_label_tokens`` with an *empty* value map
     (``buttons.py``) or did not substitute at all (:func:`toggle_tooltip`), so
     ``${_state}`` and ``${_name}`` collapsed to nothing on a press while reading
-    "Schreibtisch Off" on the button above it -- one field, one syntax, two
+    "Off" on the button above it -- one field, one syntax, two
     behaviours, and the one that silently printed less was the one the panel
     offered no warning about.
 
@@ -359,7 +359,7 @@ def sanitize_toggle(value: Any) -> dict:
     """The storable form of a ``toggle`` block, or ``{}`` for anything unusable.
 
     The one gate every writer passes through — the WebSocket handler, the
-    store's last-chance stripper and anything a layout generates — so "what may
+    store's last-chance stripper and anything a template generates — so "what may
     reach disk" is answered once rather than three times in three dialects.
     :func:`overrides.sanitize_slider_override` is the model, and the reasoning
     is the same: the panel tests presence with ``Object.hasOwn`` and must never

@@ -2,13 +2,15 @@
 
     GET /api/imgserv/<source>:<value>?<options>
 
-**Sources** — ``mdi:``, ``logo:``, ``text:``, ``file:``, ``media:``, and any
+**Sources** — ``mdi:``, ``logo:``, ``text:``, ``media:``, ``history:``, and any
 icon set the browser registered, ``phu:`` among them (``render_custom.py``).
 
 **Options**, all optional, all shared by every source:
 
 ======================  ==================================================
 ``size``                ``tile`` (60×60), ``title`` (200×60), ``WxH``, ``N``
+``box``                 ``x,y,w,h`` — answer with that piece of the sized
+                        image, for cutting one picture into several buttons
 ``fg`` (alias ``color``)  foreground: ``RRGGBB``, ``RRGGBBAA`` or a name
 ``bg``                  background mounted behind it; default transparent
 ``mode``                ``dark``/``light`` — a default ``fg``, never a ``bg``
@@ -31,14 +33,17 @@ every response the same way — see the note above ``_SOURCES``.
 from __future__ import annotations
 
 import io
+import ipaddress
 import logging
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
-from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from aiohttp import web
+from multidict import MultiDict
+from yarl import URL
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -72,8 +77,7 @@ from .render_history import (
 )
 from .render_logo import render_logo
 from .render_mdi import render_mdi_icon
-from .render_static import load_static_image
-from .render_text import render_text
+from .render_text import render_text, render_text_fitted
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,10 +90,16 @@ _LOGGER = logging.getLogger(__name__)
 # costs one render pass, short enough that a changed logo appears the same day;
 # callers that need to defeat it add a version parameter to the URL.
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=3600"}
+# A fetched picture may be a camera frame or a cover behind a token: no shared
+# cache may keep it.
+_PRIVATE_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
 
 # Unbounded text drives an expensive layout pass in render_text — cap it well
 # above any realistic tile/title label to bound per-request CPU cost.
 _MAX_TEXT_LENGTH = 200
+# What one request may draw: a title of a few marks, words and covers.
+_MAX_PARTS = 8
+_MAX_MEDIA_PARTS = 4
 
 # Query flags (``?crop=``, ``?alpha=``) count as off for these spellings and as
 # on for anything else. Compared after lowercasing, so entries must be lower
@@ -154,14 +164,48 @@ def _parse_size(size_str: str | None) -> tuple[int, int]:
     return (max(1, min(w, MAX_SIZE)), max(1, min(h, MAX_SIZE)))
 
 
+def _parse_box(raw: str | None) -> tuple[int, int, int, int] | None:
+    """Parse ``x,y,w,h``: the piece of the sized image to answer with.
+
+    It is read after ``size``, not instead of it -- ``?size=180x186&box=0,0,60,62``
+    scales the picture to 180×186 and cuts the top left of nine tiles out of it.
+    """
+    if not raw or not raw.strip():
+        return None
+    parts = raw.strip().split(",")
+    if len(parts) != 4:
+        raise ValueError("box takes four numbers: x,y,w,h")
+    try:
+        x, y, w, h = (int(p) for p in parts)
+    except ValueError:
+        raise ValueError("box takes whole numbers: x,y,w,h") from None
+    if x < 0 or y < 0:
+        raise ValueError("box starts at 0,0 or further in, never before it")
+    if w < 1 or h < 1:
+        raise ValueError("box needs a width and a height of at least 1")
+    return (x, y, min(w, MAX_SIZE), min(h, MAX_SIZE))
+
+
+def _cut_box(image, box: tuple[int, int, int, int]):
+    """The ``x,y,w,h`` piece of *image*, in exactly the size that was asked for.
+
+    Where the box reaches past the edge the piece is transparent there rather
+    than short: nine tiles of a picture whose size does not divide evenly stay
+    nine tiles of one size, and the device's buttons stay a grid.
+    """
+    x, y, w, h = box
+    return image.convert("RGBA").crop((x, y, x + w, y + h))
+
+
 def _parse_font_size(raw: str | None) -> int | None:
     """Parse an optional integer font_size query param."""
     if not raw:
         return None
     try:
-        return int(raw)
+        size = int(raw)
     except (ValueError, TypeError):
         return None
+    return size if 0 < size <= MAX_SIZE else None
 
 
 def _default_font_size(size_str: str | None) -> int | None:
@@ -295,6 +339,7 @@ class _Options:
 
     width: int
     height: int
+    box: tuple[int, int, int, int] | None
     fg: tuple
     bg: tuple
     crop: bool
@@ -304,7 +349,11 @@ class _Options:
     font_size: int | None
     mode: str
     explicit_fg: bool
+    explicit_font_size: bool
     period: tuple[datetime, datetime]
+    #: How a `media:` picture meets the size: ``contain`` keeps its proportions
+    #: (the default), ``fill`` stretches it to exactly that size.
+    fit: str = "contain"
 
     @classmethod
     def from_query(cls, query) -> _Options:
@@ -317,6 +366,7 @@ class _Options:
         try:
             percent = _parse_percent(query.get("percent"))
             period = _parse_period(query)
+            box = _parse_box(query.get("box"))
         except ValueError as err:
             raise _ImgservError(400, str(err)) from err
 
@@ -324,6 +374,7 @@ class _Options:
         return cls(
             width=width,
             height=height,
+            box=box,
             fg=fg,
             bg=bg,
             crop=_parse_flag(query.get("crop"), True),
@@ -336,7 +387,9 @@ class _Options:
             ),
             mode=mode,
             explicit_fg=bool(_first_param(query, "fg", "color")),
+            explicit_font_size=_parse_font_size(query.get("font_size")) is not None,
             period=period,
+            fit=_parse_fit(query.get("fit")),
         )
 
     def untinted(self) -> _Options:
@@ -349,6 +402,15 @@ class _Options:
         return replace(self, explicit_fg=False, mode="")
 
 
+def _parse_fit(raw: str | None) -> str:
+    if not raw:
+        return "contain"
+    fit = raw.strip().lower()
+    if fit not in ("contain", "fill"):
+        raise _ImgservError(400, "fit must be contain or fill")
+    return fit
+
+
 def _split_parts(source: str) -> tuple[str, ...]:
     """`split_source_parts`, with the cap every part of it is held to.
 
@@ -358,7 +420,13 @@ def _split_parts(source: str) -> tuple[str, ...]:
     """
     parts = split_source_parts(source)
     if not parts:
-        raise _ImgservError(400, "Provide a source (mdi:name, text:string, file:path)")
+        raise _ImgservError(400, "Provide a source (mdi:name, text:string, media:url)")
+    # Every part is rendered and every picture fetched: one request must not
+    # fan out into an unbounded number of either.
+    if len(parts) > _MAX_PARTS:
+        raise _ImgservError(400, f"at most {_MAX_PARTS} parts")
+    if sum(p.startswith("media:") for p in parts) > _MAX_MEDIA_PARTS:
+        raise _ImgservError(400, f"at most {_MAX_MEDIA_PARTS} pictures")
     for part in parts:
         if part.startswith("text:") and len(part) - len("text:") > _MAX_TEXT_LENGTH:
             # The same cap as a lone `text:`, and for the same reason: the
@@ -371,7 +439,7 @@ def _split_parts(source: str) -> tuple[str, ...]:
 def _split_source(source: str) -> tuple[str, str]:
     """Split ``type:value``."""
     if not source:
-        raise _ImgservError(400, "Provide a source (mdi:name, text:string, file:path)")
+        raise _ImgservError(400, "Provide a source (mdi:name, text:string, media:url)")
 
     if ":" not in source:
         raise _ImgservError(400, "Source must be type:value (e.g. mdi:home)")
@@ -396,9 +464,34 @@ def _source_def_for(source_type: str) -> _Source:
     return source_def
 
 
-def _png_response(data: bytes, content_type: str = "image/png") -> web.Response:
+def _png_response(
+    data: bytes, content_type: str = "image/png", *, private: bool = False,
+) -> web.Response:
     """Return a cached image response."""
-    return web.Response(body=data, content_type=content_type, headers=_CACHE_HEADERS)
+    headers = _PRIVATE_CACHE_HEADERS if private else _CACHE_HEADERS
+    return web.Response(body=data, content_type=content_type, headers=headers)
+
+
+def _resolve_reference(source: str, query):
+    """Expand ``ref:<djb2>`` back into the request it stands for.
+
+    A reference stands for a whole URL -- source *and* options -- so it is
+    expanded before anything is parsed and then read exactly as the
+    spelled-out URL would have been. The stored source part is still
+    percent-encoded, as in a real path, so it holds no literal ``?``.
+
+    TEMPORARY: remove once LZIP-8 is implemented (see ``media_refs``).
+    """
+    if not source.startswith("ref:"):
+        return source, query
+
+    key = source[len("ref:"):]
+    stored = media_refs.lookup(key)
+    if stored is None:
+        raise _ImgservError(404, f"Unknown reference '{key}'")
+
+    path, _, raw_query = stored.partition("?")
+    return unquote(path), MultiDict(parse_qsl(raw_query))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -414,7 +507,6 @@ class LizaIPImageView(HomeAssistantView):
         /api/imgserv/mdi:battery?fg=green&percent=40&size=tile
         /api/imgserv/text:22°C?fg=FF8800&size=64x64&font=filson-light&font_size=28
         /api/imgserv/logo:spotify?size=60
-        /api/imgserv/file:icons/play.png?size=64x64&alpha=1
         /api/imgserv/history:sensor.outdoor_temperature?hours=24&size=title&fg=FF8800
         /api/imgserv/history:sensor.outdoor_temperature?days=7&size=title
         /api/imgserv/history:sensor.house_power?start_time=2026-10-10T08:00:00Z&end_time=2026-10-10T20:00:00Z
@@ -429,9 +521,11 @@ class LizaIPImageView(HomeAssistantView):
         """Parse, dispatch, finalize — the only place a response is built."""
         hass: HomeAssistant = request.app["hass"]
         _LOGGER.debug("imgserv GET %s", request.rel_url)
+        started = time.monotonic()
 
         try:
-            options = _Options.from_query(request.query)
+            source, query = _resolve_reference(source, request.query)
+            options = _Options.from_query(query)
             parts = _split_parts(source)
             resolved = []
             for part in parts:
@@ -457,16 +551,6 @@ class LizaIPImageView(HomeAssistantView):
         except _ImgservError as err:
             return web.Response(status=err.status, text=err.message)
 
-        passthrough = [p for p in rendered if isinstance(p, web.Response)]
-        if passthrough:
-            # media: passthrough of bytes Pillow could not decode. There is
-            # nothing to compose such a part *with*, so it may only stand alone.
-            if len(rendered) > 1:
-                return web.Response(
-                    status=400, text="This source cannot be drawn beside another",
-                )
-            return passthrough[0]
-
         if len(rendered) > 1:
             # Before `finalize_png`, so the composed picture is cropped,
             # dimmed, mounted and encoded as one subject -- the same five
@@ -490,16 +574,21 @@ class LizaIPImageView(HomeAssistantView):
         else:
             image = rendered[0]
 
-        image = _fill_requested_size(image, options)
-        return _png_response(
-            *finalize_png(
-                image,
-                options.keep_alpha,
-                options.percent,
-                options.bg,
-                crop=_crop_mode(options, resolved),
-            )
+        # Cropping, mounting and above all PNG encoding are CPU work: done on
+        # the event loop they stall every other request -- nine cover tiles
+        # asked for at once were answered one after another -- and the
+        # remote's own websocket with them.
+        response = _png_response(
+            *await hass.async_add_executor_job(
+                _finish, image, options, _crop_mode(options, resolved),
+            ),
+            private=any(stype == "media" for stype, _value, _def in resolved),
         )
+        _LOGGER.debug(
+            "imgserv answered %s in %d ms",
+            str(request.rel_url)[:60], (time.monotonic() - started) * 1000,
+        )
+        return response
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -581,29 +670,14 @@ async def _handle_text(hass, value, options: _Options):
         raise _ImgservError(400, "Missing text (e.g. text:Hello)")
     if len(value) > _MAX_TEXT_LENGTH:
         raise _ImgservError(400, f"text exceeds {_MAX_TEXT_LENGTH} characters")
+    # A font size the caller named is theirs to keep, however wide the words
+    # come out -- the device scrolls a title. Without one, the words are made
+    # to fit the picture asked for: a tile does not scroll.
+    draw = render_text if options.explicit_font_size else render_text_fitted
     return await hass.async_add_executor_job(
-        render_text, value, options.width, options.height, options.fg,
+        draw, value, options.width, options.height, options.fg,
         options.font_size, options.font_id, user_fonts_dir(hass),
     )
-
-
-async def _handle_file(hass, value, options: _Options):
-    if not value:
-        raise _ImgservError(400, "Missing filename (e.g. file:icon.png)")
-    www_dir = Path(hass.config.path("www"))
-    try:
-        file_path = (www_dir / value).resolve()
-        if not file_path.is_relative_to(www_dir.resolve()):
-            raise _ImgservError(403, "Forbidden")
-    except (OSError, ValueError) as err:
-        raise _ImgservError(403, "Forbidden") from err
-
-    img = await hass.async_add_executor_job(
-        load_static_image, file_path, options.width, options.height
-    )
-    if img is None:
-        raise _ImgservError(404, f"File '{value}' not found")
-    return img
 
 
 async def _handle_history(hass, value, options: _Options):
@@ -624,6 +698,33 @@ async def _handle_history(hass, value, options: _Options):
 
 _upstream_failures_logged: set[str] = set()
 
+#: The largest answer a picture host may send, and the largest picture decoded.
+_MEDIA_MAX_BYTES = 10 * 1024 * 1024
+_MEDIA_MAX_PIXELS = 40_000_000
+#: Redirects followed for an outside picture; an HA path gets none.
+_MEDIA_MAX_REDIRECTS = 3
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+#: What a fetched picture may be. Anything else is not decoded at all.
+_MEDIA_FORMATS = ("JPEG", "PNG", "WEBP", "GIF", "BMP")
+#: The HA paths that serve pictures: a player's cover, a camera's or image
+#: entity's frame, a user's picture, the `www` folder, a media source. imgserv
+#: answers without auth and fetches as HA, so no other path of HA's own is
+#: reachable through it -- in particular not imgserv itself.
+_HA_PICTURE_PATHS = (
+    "/local/",
+    "/api/media_player_proxy/",
+    "/api/camera_proxy/",
+    "/api/image_proxy/",
+    "/api/image/serve/",
+    "/media/",
+)
+
+
+def _redacted(url: str) -> str:
+    """*url* without its query or fragment, for the log: covers carry tokens."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}{parts.path}" if parts.netloc else parts.path
+
 
 def _warn_upstream_once(value: str, status: int) -> None:
     """Say why a remote got a 502 for a cover -- once per URL.
@@ -636,20 +737,54 @@ def _warn_upstream_once(value: str, status: int) -> None:
     if len(_upstream_failures_logged) >= 100:
         _upstream_failures_logged.clear()
     _upstream_failures_logged.add(value)
-    _LOGGER.warning("media: %s answered HTTP %s for %s", urlsplit(value).netloc or "HA", status, value)
+    _LOGGER.warning(
+        "media: %s answered HTTP %s for %s",
+        urlsplit(value).netloc or "HA", status, _redacted(value),
+    )
+
+
+def _check_ha_path(value: str) -> None:
+    """Refuse an HA path that is not one of HA's picture paths."""
+    path = value.split("?", 1)[0].split("#", 1)[0]
+    low = path.lower()
+    # Before the prefix test: `..`, an encoded dot or slash or a backslash
+    # could be normalised by the client into a path the prefix never saw.
+    if ".." in path or "\\" in path or "%2e" in low or "%2f" in low or "%5c" in low:
+        raise _ImgservError(403, "Not a picture path")
+    if not path.startswith(_HA_PICTURE_PATHS):
+        raise _ImgservError(403, "Not a picture path")
+
+
+def _check_outside_url(value: str) -> None:
+    """Refuse an outside URL that is not http(s), or whose host is ambiguous.
+
+    A value that hides a `/`, `?` or `#` behind percent-encoding can make the
+    client read its host from what was meant as the path.
+    """
+    if urlsplit(value).scheme.lower() not in ("http", "https"):
+        raise _ImgservError(400, "media: takes an http(s) URL or an HA path")
+    if urlsplit(value).netloc.lower() != urlsplit(unquote(value)).netloc.lower():
+        raise _ImgservError(400, "Ambiguous media URL")
 
 
 async def _handle_media(hass, value, options: _Options):
     """Proxy and resize a media thumbnail HA can reach.
 
     Usage:  /api/imgserv/media:<url-or-ha-path>?size=tile
-
-    Returns a raw ``web.Response`` — the one exception to "handlers return
-    images" — when Pillow cannot decode what came back, so an unusual but valid
-    image format still reaches the caller instead of an error.
     """
     if not value:
         raise _ImgservError(400, "Missing media URL path")
+    # Deliberately open: imgserv answers anyone who can reach port 8123, and
+    # so fetches any http(s) address it is asked for -- the remote has no token
+    # to prove where a request came from, and every picture it shows passes
+    # through here. What is limited is what HA itself is asked for (picture
+    # paths only), how much is read and decoded, and that the answer is a PNG.
+    # See "imgserv is open by design" in the README before adding a gate.
+    internal = value.startswith("/") and not value.startswith("//")
+    if internal:
+        _check_ha_path(value)
+    else:
+        _check_outside_url(value)
 
     from homeassistant.helpers.network import get_url
     try:
@@ -657,28 +792,158 @@ async def _handle_media(hass, value, options: _Options):
     except Exception:
         ha_base = "http://localhost:8123"
 
-    url = f"{ha_base}{value}" if value.startswith("/") else value
+    url = f"{ha_base}{value}" if internal else value
+    if urlsplit(url).scheme.lower() not in ("http", "https"):
+        raise _ImgservError(400, "media: takes an http(s) URL or an HA path")
+    key = (url, options.width, options.height, options.fit)
 
-    session = async_get_clientsession(hass)
+    cached = _media_cache.get(key)
+    if cached is not None and cached[0] > _media_clock():
+        # A copy: what follows crops and mounts, and the next tile needs the
+        # same picture untouched.
+        return cached[1].copy()
+
+    result = await _fetch_and_scale(
+        hass, url, value, options.width, options.height, options.fit, internal=internal,
+    )
+    # The nine tiles of a cover name the same picture: the remote asks for
+    # them one after another, and all but the first are answered from here.
+    _media_cache.pop(key, None)
+    _media_cache[key] = (_media_clock() + _MEDIA_CACHE_TTL, result)
+    if len(_media_cache) > _MEDIA_CACHE_SIZE:
+        del _media_cache[next(iter(_media_cache))]
+    return result.copy()
+
+
+#: Scaled media pictures by (url, width, height, fit): (expiry, image), oldest first.
+_media_cache: dict[tuple[str, int, int, str], tuple[float, Image.Image]] = {}
+#: Long enough for a page's tiles and the remote's refetch after a page change;
+#: short enough that a picture changed under an unchanged URL is soon seen.
+_MEDIA_CACHE_TTL = 30.0
+_MEDIA_CACHE_SIZE = 16
+#: The cache's own clock, so a test can age it without stopping the event loop's.
+_media_clock = time.monotonic
+
+
+async def _check_redirect(hass, current: str, target: str) -> None:
+    """Refuse a redirect an outside picture may not follow.
+
+    Only to http(s). To the same host it may go; to another only when every
+    address that host resolves to is a public one, so a signed cover cannot
+    be bounced onto the LAN, an add-on or HA itself.
+    """
+    nxt = urlsplit(target)
+    if nxt.scheme.lower() not in ("http", "https") or not nxt.hostname:
+        raise _ImgservError(502, "Upstream redirected somewhere else")
+    if nxt.hostname.lower() == (urlsplit(current).hostname or "").lower():
+        return
     try:
-        async with session.get(url, timeout=10) as resp:
-            if resp.status != 200:
-                _warn_upstream_once(value, resp.status)
-                raise _ImgservError(502, f"Upstream returned {resp.status}")
-            img_bytes = await resp.read()
+        infos = await hass.loop.getaddrinfo(nxt.hostname, nxt.port or 443)
+        addresses = {ipaddress.ip_address(info[4][0].split("%", 1)[0]) for info in infos}
+    except (OSError, ValueError) as err:
+        raise _ImgservError(502, "Upstream redirected somewhere else") from err
+    if not addresses or not all(addr.is_global for addr in addresses):
+        raise _ImgservError(502, "Upstream redirected somewhere else")
+
+
+async def _read_capped(resp) -> bytes:
+    """The body of *resp*, refused once it outgrows ``_MEDIA_MAX_BYTES``."""
+    if (resp.content_length or 0) > _MEDIA_MAX_BYTES:
+        raise _ImgservError(502, "Upstream picture is too large")
+    body = bytearray()
+    async for chunk in resp.content.iter_chunked(64 * 1024):
+        body.extend(chunk)
+        if len(body) > _MEDIA_MAX_BYTES:
+            raise _ImgservError(502, "Upstream picture is too large")
+    return bytes(body)
+
+
+async def _fetch_and_scale(
+    hass, url: str, value: str, width: int, height: int, fit: str = "contain",
+    *, internal: bool = False,
+):
+    """The picture at *url* at *width*×*height*; always an image, or a 502."""
+    session = async_get_clientsession(hass)
+    started = time.monotonic()
+    current = url
+    try:
+        for _hop in range(_MEDIA_MAX_REDIRECTS + 1):
+            async with session.get(current, timeout=10, allow_redirects=False) as resp:
+                if resp.status in _REDIRECT_STATUSES:
+                    location = resp.headers.get("Location")
+                    if internal or not location:
+                        raise _ImgservError(502, "Upstream redirected somewhere else")
+                    target = str(resp.url.join(URL(location)))
+                    await _check_redirect(hass, current, target)
+                    current = target
+                    continue
+                if resp.status != 200:
+                    _warn_upstream_once(value, resp.status)
+                    raise _ImgservError(502, f"Upstream returned {resp.status}")
+                img_bytes = await _read_capped(resp)
+                break
+        else:
+            raise _ImgservError(502, "Upstream redirected too often")
     except _ImgservError:
         raise
     except Exception as exc:
-        _LOGGER.warning("media: fetch failed for %s: %s", value[:80], exc)
+        _LOGGER.warning("media: fetch failed for %s: %s", _redacted(value), exc)
         raise _ImgservError(502, "Failed to fetch media image") from exc
+    fetched = time.monotonic()
 
+    img = await hass.async_add_executor_job(_decode_and_scale, img_bytes, width, height, fit)
+    _LOGGER.debug(
+        "media: %s fetched in %d ms (%d bytes), scaled to %dx%d in %d ms",
+        _redacted(value), (fetched - started) * 1000, len(img_bytes), width, height,
+        (time.monotonic() - fetched) * 1000,
+    )
+    if img is None:
+        # imgserv answers with a PNG or not at all.
+        raise _ImgservError(502, "Upstream did not return a picture")
+    return img
+
+
+def _decode_and_scale(img_bytes: bytes, width: int, height: int, fit: str = "contain"):
+    """Decode and resize; ``None`` when Pillow cannot or may not read the bytes.
+
+    ``contain`` scales the picture as large as fits *width*×*height* without
+    changing its proportions -- a square cover in a title stays square;
+    ``fill`` stretches it to exactly that size, for a picture whose size was
+    written on it (the cover cut into a 3×3 grid of tiles).
+
+    Only the formats a cover comes in are decoded, and only up to
+    ``_MEDIA_MAX_PIXELS``: opening reads the header alone, so a picture that
+    would decode to gigabytes is refused before it does.
+    """
     try:
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-        return img.resize((options.width, options.height), Image.LANCZOS)
-    except Exception as exc:
+        img = Image.open(io.BytesIO(img_bytes), formats=_MEDIA_FORMATS)
+        if img.width * img.height > _MEDIA_MAX_PIXELS:
+            _LOGGER.warning("media: %dx%d is too large to decode", img.width, img.height)
+            return None
+        if fit != "fill" and img.width and img.height:
+            scale = min(width / img.width, height / img.height)
+            width = max(1, round(img.width * scale))
+            height = max(1, round(img.height * scale))
+        # A JPEG can be decoded at 1/2, 1/4 or 1/8 scale for a fraction of the
+        # work; draft never goes below the size asked for, so the resize that
+        # follows still has the pixels it needs.
+        img.draft("RGB", (width, height))
+        return img.convert("RGBA").resize((width, height), Image.LANCZOS)
+    except Exception as exc:  # noqa: BLE001 - answered as a 502
         _LOGGER.warning("media: resize failed: %s", exc)
-        content_type = "image/jpeg" if img_bytes[:3] == b"\xff\xd8\xff" else "image/png"
-        return _png_response(img_bytes, content_type)
+        return None
+
+
+def _finish(image, options: _Options, crop: bool | str) -> tuple[bytes, str]:
+    """Box, fill and finalize *image* -- every step after the renderer."""
+    if options.box:
+        # The piece asked for is the picture from here on: a `bg=` fills
+        # the tile rather than the whole image it was cut from.
+        image = _cut_box(image, options.box)
+        options = replace(options, width=image.width, height=image.height)
+
+    image = _fill_requested_size(image, options)
+    return finalize_png(image, options.keep_alpha, options.percent, options.bg, crop=crop)
 
 
 def _fill_requested_size(image, options: _Options):
@@ -706,8 +971,10 @@ def _crop_mode(options: _Options, resolved) -> bool | str:
 
     Nothing when a ``bg=`` paints something: the background is meant to fill
     the whole picture asked for, and a crop would shrink it to the subject.
+    Nothing either when a ``box=`` named the piece to answer with -- trimming
+    a tile to its ink would leave the tiles beside it out of line.
     """
-    if not options.crop or options.bg[3] > 0:
+    if not options.crop or options.bg[3] > 0 or options.box:
         return False
     modes = {d.crop for _, _, d in resolved}
     if "none" in modes:
@@ -731,24 +998,13 @@ class _Source:
     crop: str = "full"
 
 
-async def _handle_ref(hass, value, options: _Options):
-    """A long ``media:`` source sent by reference (see ``media_refs``).
-
-    TEMPORARY: remove once LZIP-8 is implemented.
-    """
-    source = media_refs.lookup(value)
-    if source is None:
-        raise _ImgservError(404, f"Unknown reference '{value}'")
-    return await _handle_media(hass, source, options)
-
-
 _SOURCES: dict[str, _Source] = {
     "mdi": _Source(_handle_mdi),
     "logo": _Source(_handle_logo),
     "text": _Source(_handle_text, crop="vertical"),
-    "file": _Source(_handle_file),
     "media": _Source(_handle_media),
-    "ref": _Source(_handle_ref),
+    # No "ref": a reference stands for a whole request, not for a subject to
+    # draw, so it is expanded in ``get`` before anything is parsed.
     # Not croppable: trimming would stretch the time axis to the drawn part.
     "history": _Source(_handle_history, crop="none"),
 }

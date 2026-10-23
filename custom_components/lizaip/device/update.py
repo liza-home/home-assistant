@@ -19,6 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .connection import LizaIPConnection
 from ..const import DOMAIN
+from ..shared.logs import device_logger
 from .const import MODEL_ID
 from .entity import LizaIPEntity
 
@@ -48,6 +49,10 @@ _OTA_STATUS_MAX_LEN = 80
 # delays the next one), for up to 5 minutes.
 _OTA_POLL_INTERVAL = 1
 _OTA_POLL_TIMEOUT = 300
+#: Consecutive unanswered status polls before polling gives up. A busy device
+#: skips the odd reply, but a run this long means it has stopped talking, and
+#: polling on in silence tells the user nothing.
+_OTA_POLL_MAX_ERRORS = 15
 
 # After the image is committed the device reboots. Keep the update card in
 # "installing" state until it is back, so the reported version is the new one.
@@ -118,7 +123,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         connection: LizaIPConnection,
     ) -> None:
         super().__init__(connection, entry)
-        self._entry_title = entry.title
+        self._logger = device_logger(_LOGGER, entry)
         self._attr_unique_id = f"{entry.entry_id}_firmware"
         self._latest_version: str | None = None
         self._release_url: str | None = None
@@ -127,6 +132,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         self._ota_status: str | None = None
         self._firmware_url: str | None = None
         self._attr_in_progress: bool = False
+        self._first_check_task: asyncio.Task | None = None
 
     async def async_added_to_hass(self) -> None:
         """Register availability + trigger first firmware check."""
@@ -134,10 +140,24 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         # HA won't poll until SCAN_INTERVAL expires; force an immediate check.
         # A *background* task is cancelled automatically at shutdown — a plain
         # async_create_task would linger and delay HA's stop sequence.
-        self.hass.async_create_background_task(
+        self._first_check_task = self.hass.async_create_background_task(
             self._first_check(),
             name=f"lizaip_first_fw_check_{self.unique_id}",
         )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the pending first check so it cannot outlive this entity.
+
+        Without this a reload leaves the old entity's sleeping task behind; it
+        wakes up afterwards and writes state for an entity HA has already
+        dropped, while the replacement entity schedules a check of its own.
+        """
+        task = self._first_check_task
+        self._first_check_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await super().async_will_remove_from_hass()
 
     async def _first_check(self) -> None:
         await asyncio.sleep(10)
@@ -207,14 +227,14 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
                 headers={"Accept": "application/json"},
             ) as resp:
                 if resp.status != 200:
-                    _LOGGER.debug(
+                    self._logger.debug(
                         "Firmware release check returned HTTP %s — skipping",
                         resp.status,
                     )
                     return
                 release = await resp.json()
         except Exception as err:
-            _LOGGER.warning("Failed to fetch firmware release info from %s: %s", FIRMWARE_RELEASE_API, err)
+            self._logger.warning("Failed to fetch firmware release info from %s: %s", FIRMWARE_RELEASE_API, err)
             return
 
         tag = str(release.get("tag_name", "")).strip()
@@ -238,7 +258,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         if not self._firmware_url:
             self._firmware_url = fallback_url
 
-        _LOGGER.debug(
+        self._logger.debug(
             "Firmware update check: installed=%s latest=%s url=%s",
             self.installed_version,
             self._latest_version,
@@ -262,11 +282,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
                 translation_domain=DOMAIN,
                 translation_key="no_firmware_url",
             )
-        _LOGGER.info(
-            "Triggering firmware update on %s → %s",
-            self._entry_title,
-            url,
-        )
+        self._logger.info("Triggering firmware update → %s", url)
 
         # The device reports stages, not a percentage: the card shows an
         # indeterminate bar, and the dialog heading the stage (see `title`).
@@ -286,9 +302,8 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             self.async_write_ha_state()
             # Log the underlying cause: the UI only shows the translated message,
             # which loses the exception chain.
-            _LOGGER.error(
-                "Firmware update failed for %s (url=%s): %s",
-                self._entry_title, url, err, exc_info=True,
+            self._logger.error(
+                "Firmware update failed (url=%s): %s", url, err, exc_info=True,
             )
             # A failed OTA request is a runtime/transport failure, not bad user
             # input, so this must be HomeAssistantError — ServiceValidationError
@@ -305,8 +320,12 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         try:
             await self._poll_ota_completion(previous)
         finally:
-            # HA writes the state right after async_install returns or raises.
+            # Unconditional: a cancellation (reload, HA stop) or an unexpected
+            # failure during polling must not leave the card stuck on
+            # "installing" forever. HA writes the state right after
+            # async_install returns or raises.
             self._ota_status = None
+            self._attr_in_progress = False
 
     async def _poll_ota_completion(self, previous: str | None = None) -> None:
         """Poll OTA status until commit, disconnect or timeout.
@@ -315,19 +334,19 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         from before the update; while the device still answers with it, it is
         not this update's report.
         """
-        _LOGGER.debug("Starting OTA status polling for %s", self._entry_title)
+        self._logger.debug("Starting OTA status polling")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _OTA_POLL_TIMEOUT
         attempt = 0
+        consecutive_errors = 0
         while loop.time() < deadline:
             attempt += 1
             await asyncio.sleep(_OTA_POLL_INTERVAL)
 
             if not self._connection.connected:
                 # The device only reboots once the image is committed.
-                _LOGGER.debug(
-                    "OTA poll [%s]: device disconnected (rebooting?), stopping poll",
-                    self._entry_title,
+                self._logger.debug(
+                    "OTA poll: device disconnected (rebooting?), stopping poll",
                 )
                 break
 
@@ -335,15 +354,22 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             try:
                 reply = await self._connection.get_ota_reply()
             except Exception as err:  # noqa: BLE001 - keep polling
-                _LOGGER.debug(
-                    "OTA poll [%s] attempt %d error: %s",
-                    self._entry_title, attempt, err,
-                )
+                consecutive_errors += 1
+                self._logger.debug("OTA poll attempt %d error: %s", attempt, err)
+                if consecutive_errors >= _OTA_POLL_MAX_ERRORS:
+                    # Polling on in silence until the outer timeout leaves the
+                    # user watching an "installing" card for minutes with no
+                    # idea the device stopped answering.
+                    self._logger.warning(
+                        "Device stopped answering OTA status %d times in a row; "
+                        "giving up on polling. The update may still be running — "
+                        "check the device.",
+                        consecutive_errors,
+                    )
+                    break
                 continue
-            _LOGGER.debug(
-                "OTA poll [%s] attempt %d: %r",
-                self._entry_title, attempt, reply.raw,
-            )
+            consecutive_errors = 0
+            self._logger.debug("OTA poll attempt %d: %r", attempt, reply.raw)
             if previous is not None and reply.raw == previous:
                 continue
 
@@ -357,9 +383,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
 
             normalized = status.lower()
             if "commit success" in normalized or "image commit" in normalized:
-                _LOGGER.info(
-                    "OTA completed on %s: %s", self._entry_title, status
-                )
+                self._logger.info("OTA completed: %s", status)
                 break
 
         # The device reboots into the new image. Stay "in progress" until it is
@@ -382,7 +406,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         if self._connection.connected:
             return
 
-        _LOGGER.debug("Waiting for %s to reboot after OTA", self._entry_title)
+        self._logger.debug("Waiting for the device to reboot after OTA")
         back = asyncio.Event()
 
         def _on_availability(available: bool) -> None:
@@ -394,16 +418,15 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         try:
             await asyncio.wait_for(back.wait(), _OTA_REBOOT_TIMEOUT)
         except TimeoutError:
-            _LOGGER.warning(
-                "%s did not reconnect within %ss after the firmware update",
-                self._entry_title, _OTA_REBOOT_TIMEOUT,
+            self._logger.warning(
+                "Did not reconnect within %ss after the firmware update",
+                _OTA_REBOOT_TIMEOUT,
             )
             return
         finally:
             self._connection.unregister_availability(_on_availability)
-        _LOGGER.info(
-            "%s reconnected after OTA (version %s)",
-            self._entry_title, self._connection.device_version,
+        self._logger.info(
+            "Reconnected after OTA (version %s)", self._connection.device_version,
         )
 
     def _set_installing(self) -> None:

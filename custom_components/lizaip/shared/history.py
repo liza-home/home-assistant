@@ -30,26 +30,51 @@ def history_entity(image: Any) -> str | None:
     """The entity a ``history:`` image graphs, or ``None`` for anything else."""
     if not isinstance(image, str) or not image.startswith(HISTORY_SCHEME):
         return None
-    entity_id = image[len(HISTORY_SCHEME):].split("?", 1)[0].strip().lower()
+    # `&` too: in a combination, the whole value's `&v=` may follow the entity.
+    entity_id = image[len(HISTORY_SCHEME):].split("?", 1)[0].split("&", 1)[0].strip().lower()
     return entity_id if _ENTITY_ID_RE.fullmatch(entity_id) else None
 
 
-def versioned_history_image(image: Any, hass: HomeAssistant | None) -> Any:
-    """*image* with the entity's last state change as its version.
+def _history_parts(image: Any) -> list[str]:
+    """Every ``history:`` part of *image*, a lone graph or a composite's."""
+    if not isinstance(image, str) or HISTORY_SCHEME not in image:
+        return []
+    from ..imgserv.const import split_source_parts
 
-    Anything that is not a ``history:`` image is returned unchanged. A version
-    already in the value is replaced, so resolving twice is harmless.
-    """
-    entity_id = history_entity(image)
-    if entity_id is None:
-        return image
+    return [p for p in split_source_parts(image) if history_entity(p) is not None]
+
+
+def history_entities(image: Any) -> set[str]:
+    """The entities every ``history:`` part of *image* graphs."""
+    return {history_entity(p) for p in _history_parts(image)}
+
+
+_VERSION_PARAM_RE: Final = re.compile(r"([?&])v=[^&\s]*&?")
+
+
+def _last_changed(entity_id: str, hass: HomeAssistant | None) -> int:
     _servable.add(entity_id)
     state = hass.states.get(entity_id) if hass is not None else None
-    version = int(state.last_changed.timestamp()) if state is not None else 0
-    base, _, query = image.partition("?")
-    params = [p for p in query.split("&") if p and not p.startswith("v=")]
-    params.append(f"v={version}")
-    return f"{base.strip()}?{'&'.join(params)}"
+    return int(state.last_changed.timestamp()) if state is not None else 0
+
+
+def versioned_history_image(image: Any, hass: HomeAssistant | None) -> Any:
+    """*image* with a version that moves when one of its graphs does.
+
+    The remote caches a picture by its whole URL, so one ``v=`` is added to the
+    value as a whole -- a lone graph or a combination (``Battery … +
+    history:sensor.x``) alike -- and only when at least one part is a graph:
+    the newest last state change among them. Anything without a ``history:``
+    part is returned unchanged; a version already in the value is replaced, so
+    resolving twice is harmless.
+    """
+    parts = _history_parts(image)
+    if not parts:
+        return image
+    version = max(_last_changed(history_entity(p), hass) for p in parts)
+    image = _VERSION_PARAM_RE.sub(lambda m: m.group(1) if m.group(0).endswith("&") else "", image)
+    image = image.rstrip("?&").strip()
+    return f"{image}{'&' if '?' in image else '?'}v={version}"
 
 
 def is_servable(entity_id: str) -> bool:

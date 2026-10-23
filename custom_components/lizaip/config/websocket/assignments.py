@@ -12,18 +12,23 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import _get_store, remember_panel_language
-from ...shared.history import history_entity
+from ...shared.history import history_entities
+from ...shared.logs import device_id_logger
 from ...shared.tokens import (
     entity_token_entities,
     resolve_image_tokens,
     substitute_entity_tokens,
 )
-from ...variables_calc import variables_scope
 from ..blueprint import async_get_blueprint
-from ..const import PAGE_ID_SCHEMA
+from ..const import ASSIGNMENTS_SCHEMA, PAGE_ID_SCHEMA
 from ..events import fire_config_changed
 from .assignment_entry import build_assignment_entry, drop_own_device_target
-from .common import refresh_state_listener, requires_device, schedule_push_rescan
+from .common import (
+    refresh_state_listener,
+    requires_device,
+    schedule_push_rescan,
+    send_failure,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,11 +53,8 @@ async def ws_resolve_variables(hass: HomeAssistant, connection, msg: dict) -> No
     titles (:func:`substitute_entity_tokens`), *images* are pictures
     (:func:`resolve_image_tokens`, None when a variable has no value). *entities*
     lists every entity the answers read, so the panel knows when to ask again.
-    With *entry_id*, that remote's Variables switch applies: off, nothing is read.
     """
-    entry = hass.config_entries.async_get_entry(msg["entry_id"]) if msg.get("entry_id") else None
-    with variables_scope(getattr(entry, "options", None)):
-        _reply_variables(hass, connection, msg)
+    _reply_variables(hass, connection, msg)
 
 
 def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
@@ -61,9 +63,7 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
     entities: set[str] = set()
     for item in (*texts, *images):
         entities |= entity_token_entities(item)
-        graphed = history_entity(item)
-        if graphed is not None:
-            entities.add(graphed)
+        entities |= history_entities(item)
     connection.send_result(msg["id"], {
         "texts": {t: substitute_entity_tokens(t, hass) for t in texts},
         "images": {i: resolve_image_tokens(i, hass) for i in images},
@@ -99,7 +99,10 @@ async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id:
 
         connection.send_result(msg["id"], {"success": True})
     except Exception as exc:
-        connection.send_error(msg["id"], "save_failed", str(exc))
+        send_failure(
+            hass, connection, msg, "save_failed", exc,
+            logger=_LOGGER, what="Saving the action library",
+        )
 
 
 @websocket_api.websocket_command({
@@ -149,7 +152,7 @@ async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, dev
     "type": "lizaip_config/save_assignments",
     "entry_id": str,
     vol.Optional("page_id", default=1): PAGE_ID_SCHEMA,
-    vol.Required("assignments"): dict,
+    vol.Required("assignments"): ASSIGNMENTS_SCHEMA,
     vol.Optional("language"): str,
 })
 @websocket_api.require_admin
@@ -163,6 +166,7 @@ async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device
     Response:
       {success: true}
     """
+    log = device_id_logger(_LOGGER, hass, device_id)
     if "language" in msg:
         remember_panel_language(hass, msg["language"])
 
@@ -206,11 +210,12 @@ async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device
         # Re-scan after whole-page saves so push subscriptions match stored bindings.
         schedule_push_rescan(hass, msg["entry_id"])
 
-        _LOGGER.info(
-            "Saved %d assignments for %s (page=%s)",
-            len(full_assignments), msg["entry_id"], page_id,
+        log.info(
+            "Saved %d assignments (page=%s)", len(full_assignments), page_id,
         )
         connection.send_result(msg["id"], {"success": True})
     except Exception as exc:
-        _LOGGER.error("Save assignments failed: %s", exc)
-        connection.send_error(msg["id"], "save_failed", str(exc))
+        send_failure(
+            hass, connection, msg, "save_failed", exc,
+            logger=_LOGGER, what="Saving the assignments",
+        )

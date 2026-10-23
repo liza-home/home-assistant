@@ -58,6 +58,7 @@ from .diagnostics import (
     async_settings_snapshot,
 )
 from .runtime import debug_available, entry_connection, find_store, _resolve_device_id
+from .shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class _Collector:
     ) -> None:
         self.hass = hass
         self.entry = entry
+        self._log = device_logger(_LOGGER, entry)
         #: Which build this is: the support bundle, or a copy of the stored
         #: configuration. Sections read it rather than being written twice.
         self.scope = scope
@@ -174,7 +176,7 @@ class _Collector:
         try:
             return await factory()
         except Exception as err:  # noqa: BLE001 — diagnostics must never raise
-            _LOGGER.debug("Diagnostics bundle: %s failed", name, exc_info=True)
+            self._log.debug("Diagnostics bundle: %s failed", name, exc_info=True)
             self.skip(name, f"{err.__class__.__name__}: {err}")
             return None
 
@@ -773,7 +775,7 @@ _INVENTORY: tuple[tuple[str, str], ...] = (
                                     "page: the config entry's data and options "
                                     "in full, installed fonts, icon rendering "
                                     "settings, the custom icon sets in use, the "
-                                    "model's blueprint and available layouts."),
+                                    "model's blueprint and available templates."),
     ("configuration/yaml/", "The same configuration as it sits on disk, copied "
                             "verbatim, including the page files."),
     ("homeassistant/entities.json", "This remote's entities and their current "

@@ -26,6 +26,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .. import provisioning
+from .http import error_detail
 
 
 class OtaReply(NamedTuple):
@@ -60,11 +61,14 @@ def _parse_ota_reply(text: str) -> str:
     status = next((v for k, v in node.items() if str(k).lower() == "status"), None)
     return str(status or "").strip() or text
 from ..const import DOMAIN
+from ..imgserv.media_refs import with_references
+from ..shared.logs import device_logger
 from .const import LIZAIP_AVAILABILITY_EVENT, LIZAIP_EVENT, LIZAIP_HELLO_EVENT
 from .page_cache import PageCache
 from .protocol import (
     DEFAULT_REQUEST_TIMEOUT,
     ERR_INTERNAL,
+    ERR_NOT_FOUND,
     PROTOCOL_VERSION,
     LizaIPProtocol,
     ProtocolError,
@@ -79,6 +83,12 @@ if TYPE_CHECKING:
 
 # Consecutive disconnects before a repair issue is raised.
 MAX_FAILURES = 3
+
+#: How long a replacement connection waits for the connection it evicted to
+#: finish unwinding before giving up and proceeding anyway. Short on purpose:
+#: the device is already waiting, and a reader that will not die must not hold
+#: the reconnect hostage.
+REPLACED_SESSION_DRAIN = 5.0
 
 BRIGHTNESS_MIN = 1
 BRIGHTNESS_MAX = 255
@@ -97,11 +107,12 @@ class LizaIPConnection:
     ) -> None:
         self._hass = hass
         self._entry = entry
+        self._logger = device_logger(_LOGGER, entry)
         self._device_id = device_id
         self._ws: web.WebSocketResponse | None = None
         # The socket whose hello was answered; `ready` compares it with `_ws`.
         self._hello_ws: web.WebSocketResponse | None = None
-        self._protocol = LizaIPProtocol()
+        self._protocol = LizaIPProtocol(entry)
 
         # Compiled action Scripts for this entry, keyed on (page_id, button_key).
         # Scripts register themselves in `hass.data` with a strong reference, so
@@ -149,6 +160,10 @@ class LizaIPConnection:
         # what an optional feature started, only that it must not outlive the
         # connection it was started for.
         self._aux_tasks: list[asyncio.Task] = []
+        # Set when the currently-running accept() has finished tearing its
+        # session down. A replacement connection waits on it so the old read
+        # loop is definitely gone before the new one starts talking.
+        self._session_done: asyncio.Event | None = None
         # The port the device's HTTP management API listens on. Seeded from
         # the mDNS SRV record stored in entry.data at provisioning time;
         # confirmed/updated by _probe_device() after every hello.
@@ -166,6 +181,10 @@ class LizaIPConnection:
         self._protocol.on_event("gotopage", self._on_goto_page_event)
         self._protocol.on_event("diag", self._on_diag_event)
         self._protocol.on_request("hello", self._on_hello_request)
+        # The remote may also pull what it should show, rather than waiting to
+        # be pushed (PROTOCOL.md §8).
+        self._protocol.on_request("get_pages", self._on_get_pages_request)
+        self._protocol.on_request("get_page", self._on_get_page_request)
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -299,54 +318,70 @@ class LizaIPConnection:
         """
         self._peer_ip = peer_ip
         old_ws = self._ws
+        old_done = self._session_done
         if old_ws is not None and not old_ws.closed:
-            _LOGGER.warning(
-                "New connection for %s arrived while the previous one was still alive — "
+            self._logger.warning(
+                "New connection arrived while the previous one was still alive — "
                 "closing the old connection",
-                self._entry.title,
             )
             await old_ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"replaced by new connection")
 
+        session_done = asyncio.Event()
         self._ws = ws
+        self._session_done = session_done
         self._hello_ws = None
         self._protocol.set_ws(ws)
+
+        # The old session's teardown is now a no-op (its identity check fails),
+        # but its read loop may still be mid-frame. Wait for it to finish before
+        # this connection starts talking, so two readers never share _protocol.
+        if old_done is not None and not old_done.is_set():
+            try:
+                async with asyncio.timeout(REPLACED_SESSION_DRAIN):
+                    await old_done.wait()
+            except TimeoutError:
+                self._logger.warning(
+                    "Previous connection did not finish tearing down within %.0fs; "
+                    "continuing with the new one",
+                    REPLACED_SESSION_DRAIN,
+                )
+
         self._notify_availability(True)
-        _LOGGER.info("Device connected: %s", self._entry.title)
+        self._logger.info("Device connected")
 
         read_task = asyncio.create_task(self._read_loop(ws))
         try:
             await self._send_hello()
             self._consecutive_failures = 0  # successful hello — clear failure count
             await read_task
-        except asyncio.CancelledError:
-            read_task.cancel()
-            raise
         finally:
+            # Cancelled *and* awaited: a bare cancel() returns before the loop
+            # has unwound, which can leave a half-finished write behind and
+            # hides anything the reader raised on the way out.
             read_task.cancel()
+            await asyncio.gather(read_task, return_exceptions=True)
             # Only tear down state that still belongs to *this* socket. If a newer
             # connection has already replaced self._ws, leave it alone.
             if self._ws is ws:
                 self._ws = None
+                self._session_done = None
                 self._protocol.set_ws(None)
                 # Unknown device state after disconnect — must re-query on next connect
                 self.page_cache.reset()
-                _LOGGER.warning(
-                    "Device %s is unavailable (WebSocket disconnected)",
-                    self._entry.title,
-                )
+                self._logger.warning("Device is unavailable (WebSocket disconnected)")
                 self._consecutive_failures += 1
                 if self._consecutive_failures == MAX_FAILURES:
-                    _LOGGER.error(
-                        "%s disconnected %d times in a row without completing "
+                    self._logger.error(
+                        "Disconnected %d times in a row without completing "
                         "the handshake. Check its Wi-Fi signal and power.",
-                        self._entry.title, self._consecutive_failures,
+                        self._consecutive_failures,
                     )
                 self._notify_availability(False)
             else:
-                _LOGGER.debug(
-                    "Old connection for %s finished tearing down after being replaced",
-                    self._entry.title,
+                self._logger.debug(
+                    "Old connection finished tearing down after being replaced",
                 )
+            session_done.set()
 
     async def disconnect(self) -> None:
         """Close the connection gracefully."""
@@ -372,13 +407,10 @@ class LizaIPConnection:
         for task in tasks:
             if not task.done():
                 task.cancel()
-        for task in tasks:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                # One task that will not die must not block the others, and a
-                # failure here cannot be acted on: the connection is closing.
-                pass
+        # return_exceptions keeps one task that will not die from blocking the
+        # others, and a failure here cannot be acted on: the connection is
+        # closing either way.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def async_device_control(self, payload: dict[str, Any]) -> tuple[int, str]:
         """Send a ``Device.Control`` payload and check the device accepted it.
@@ -428,9 +460,13 @@ class LizaIPConnection:
         splatted in as ``**page_data``, and the device has no ``timeout`` field,
         so keeping it out of ``kwargs`` is what lets the caller pick a deadline
         without the value being mistaken for page content.
+
+        Image URLs travel as ``imgserv://ref:<djb2>`` (see ``media_refs``).
         """
         return await self._protocol.send_request(
-            "set_page", {"page_id": validate_page_id(page_id), **kwargs}, timeout=timeout
+            "set_page",
+            {"page_id": validate_page_id(page_id), **with_references(kwargs)},
+            timeout=timeout,
         )
 
     async def clear_all(self) -> dict[str, Any]:
@@ -542,13 +578,12 @@ class LizaIPConnection:
         try:
             value, automatic = await self.get_brightness()
         except ProtocolError as err:
-            _LOGGER.debug("get_brightness unavailable on %s: %s", self._entry.title, err)
+            self._logger.debug("get_brightness unavailable: %s", err)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("get_brightness failed for %s: %s", self._entry.title, err)
+            self._logger.debug("get_brightness failed: %s", err)
         else:
-            _LOGGER.debug(
-                "Brightness read from %s: value=%s automatic=%s",
-                self._entry.title, value, automatic,
+            self._logger.debug(
+                "Brightness read: value=%s automatic=%s", value, automatic,
             )
 
     # ── HTTP management API (OTA) ─────────────────────────────────────────
@@ -584,9 +619,7 @@ class LizaIPConnection:
             async with session.request(method, url, **kwargs) as resp:
                 return resp.status, await resp.text()
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            # A bare `str(err)` is empty for a timeout, which leaves the message
-            # ending in a colon with nothing after it.
-            err_msg = f"{err.__class__.__name__}: {err}" if str(err) else err.__class__.__name__
+            err_msg = error_detail(err)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key=unreachable_key,
@@ -612,9 +645,8 @@ class LizaIPConnection:
         if swipe_time is not None:
             control_payload["DemoModeSwipeMsec"] = swipe_time
 
-        _LOGGER.debug(
-            "DemoMode request for %s (%s): %s",
-            self._entry.title,
+        self._logger.debug(
+            "DemoMode request (%s): %s",
             self._peer_ip,
             control_payload,
         )
@@ -624,9 +656,8 @@ class LizaIPConnection:
             json={"Device": {"Control": control_payload}},
             timeout=ClientTimeout(total=10),
         )
-        _LOGGER.debug(
-            "DemoMode response for %s (%s): HTTP %s body=%r",
-            self._entry.title,
+        self._logger.debug(
+            "DemoMode response (%s): HTTP %s body=%r",
             self._peer_ip,
             status,
             text[:300],
@@ -651,9 +682,7 @@ class LizaIPConnection:
         The device downloads, verifies, and applies the firmware, then reboots — so
         the WebSocket connection closes shortly after this returns.
         """
-        _LOGGER.info(
-            "Sending OTA request to %s (%s): %s", self._entry.title, self._peer_ip, url
-        )
+        self._logger.info("Sending OTA request (%s): %s", self._peer_ip, url)
         status, text = await self._ota_request(
             "POST",
             json={"Device": {"OTA": {"URL": url}}},
@@ -720,7 +749,7 @@ class LizaIPConnection:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 self._protocol.handle_raw(msg.data)
             elif msg.type == aiohttp.WSMsgType.ERROR:
-                _LOGGER.warning("WebSocket error from %s: %s", self._entry.title, ws.exception())
+                self._logger.warning("WebSocket error: %s", ws.exception())
                 break
 
     async def _send_hello(self) -> None:
@@ -738,7 +767,7 @@ class LizaIPConnection:
             # report a model must not erase one an earlier build told us.
             self._device_model_id = result.get("model_id") or self._device_model_id
             self._persist_hello_facts()
-            _LOGGER.info(
+            self._logger.info(
                 "Hello: id=%s ver=%s proto=%s",
                 self._device_mac, self._device_version, self._device_protocol_version,
             )
@@ -746,11 +775,11 @@ class LizaIPConnection:
                 self._device_protocol_version is not None
                 and self._device_protocol_version != PROTOCOL_VERSION
             ):
-                _LOGGER.error(
-                    "%s speaks protocol version %s, Home Assistant speaks %s. "
+                self._logger.error(
+                    "Speaks protocol version %s, Home Assistant speaks %s. "
                     "Some features may not work until the firmware and the "
                     "integration are updated to match.",
-                    self._entry.title, self._device_protocol_version, PROTOCOL_VERSION,
+                    self._device_protocol_version, PROTOCOL_VERSION,
                 )
             # Notify listeners (e.g. config/panel.py) that hello completed — triggers page sync
             self._hass.bus.async_fire(LIZAIP_HELLO_EVENT, {"entry_id": self._entry.entry_id})
@@ -759,7 +788,7 @@ class LizaIPConnection:
                 fire_and_forget(self._probe_device(self._peer_ip))
                 fire_and_forget(self._repair_ha_address(self._peer_ip))
         except ProtocolError as err:
-            _LOGGER.error("Hello handshake failed: %s", err)
+            self._logger.error("Hello handshake failed: %s", err)
 
     async def _repair_ha_address(self, peer_ip: str) -> None:
         """Write our address to a device that is not holding one.
@@ -784,7 +813,7 @@ class LizaIPConnection:
         and it cannot report the problem itself.
         """
         if not self._device_http_port:
-            _LOGGER.debug("No device HTTP port stored — skipping address repair")
+            self._logger.debug("No device HTTP port stored — skipping address repair")
             return
 
         cfg = await provisioning.async_read_ha_config(
@@ -793,19 +822,18 @@ class LizaIPConnection:
         if cfg is None:
             # Not rounded down to "fine": a device we could not ask is exactly
             # the one that may be sitting there unprovisioned.
-            _LOGGER.debug(
-                "Could not read the Home Assistant address from %s at %s",
-                self._entry.title, peer_ip,
+            self._logger.debug(
+                "Could not read the Home Assistant address at %s", peer_ip,
             )
             return
 
         if str(cfg.get("ha_hostname") or "").strip():
             return
 
-        _LOGGER.info(
-            "%s holds no Home Assistant address — writing ours over its own "
+        self._logger.info(
+            "Holds no Home Assistant address — writing ours over its own "
             "connection from %s",
-            self._entry.title, peer_ip,
+            peer_ip,
         )
         await provisioning.async_provision(
             self._hass, [peer_ip], self._device_http_port
@@ -820,7 +848,7 @@ class LizaIPConnection:
         capability payload will arrive in the hello handshake instead.
         """
         if not self._device_http_port:
-            _LOGGER.debug("No device HTTP port stored — skipping probe")
+            self._logger.debug("No device HTTP port stored — skipping probe")
             return
 
         session = async_get_clientsession(self._hass)
@@ -830,11 +858,11 @@ class LizaIPConnection:
             async with session.get(url, timeout=ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
                     info = await resp.json(content_type=None)
-                    _LOGGER.debug("Device HTTP port %d confirmed", self._device_http_port)
+                    self._logger.debug("Device HTTP port %d confirmed", self._device_http_port)
                 else:
-                    _LOGGER.debug("GET %s returned %s", url, resp.status)
+                    self._logger.debug("GET %s returned %s", url, resp.status)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("GET %s failed: %s", url, err)
+            self._logger.debug("GET %s failed: %s", url, err)
 
         if info is None:
             return
@@ -857,9 +885,7 @@ class LizaIPConnection:
                 },
             },
         )
-        _LOGGER.info(
-            "Capabilities fetched from %s and stored for %s", peer_ip, self._entry.title
-        )
+        self._logger.info("Capabilities fetched from %s and stored", peer_ip)
 
         # Fire discovery callbacks so entities get created
         self._last_discovery = self._build_discovery(caps)
@@ -905,7 +931,7 @@ class LizaIPConnection:
         except Exception as err:  # noqa: BLE001
             # The device page is cosmetic next to the connection itself; a
             # registry entry that has gone away must not break the handshake.
-            _LOGGER.debug("Device registry update after hello failed: %s", err)
+            self._logger.debug("Device registry update after hello failed: %s", err)
 
     def _on_hello_request(self, seq_id: int, data: dict) -> None:
         self._device_protocol_version = data.get("protocol_version")
@@ -917,8 +943,53 @@ class LizaIPConnection:
             self._protocol.send_response("hello", seq_id, {"protocol_version": PROTOCOL_VERSION})
         )
 
+    def _on_get_pages_request(self, seq_id: int, data: dict) -> None:
+        """Answer the remote's own ``get_pages`` with an id/hash listing."""
+        fire_and_forget(self._answer_page_request("get_pages", seq_id, None))
+
+    def _on_get_page_request(self, seq_id: int, data: dict) -> None:
+        """Answer the remote's own ``get_page`` with the page it named."""
+        fire_and_forget(self._answer_page_request("get_page", seq_id, data.get("page_id")))
+
+    async def _answer_page_request(
+        self, name: str, seq_id: int, page_id: Any
+    ) -> None:
+        """Build and send the answer to a page query from the remote.
+
+        Each query answers the way it does when HA is the one asking:
+        ``get_pages`` lists ``page_id`` and ``hash`` so the remote can see what
+        it is missing, ``get_page`` returns the page a sync would have pushed,
+        references and all (``media_refs``), so a pulled page costs the remote
+        no more heap than a pushed one. A failure is answered rather than
+        dropped: the remote is waiting on this ``seq_id`` and would otherwise
+        sit out its timeout.
+        """
+        from ..config.page_requests import async_page_listing, async_page_payloads
+
+        try:
+            if name == "get_pages":
+                listing = await async_page_listing(self._hass, self._entry)
+                await self._protocol.send_response(name, seq_id, {"pages": listing})
+                return
+            wanted = validate_page_id(page_id)
+            pages = await async_page_payloads(self._hass, self._entry, wanted)
+        except ProtocolError as err:
+            await self._protocol.send_error(name, seq_id, err.code, err.message)
+            return
+        except Exception as err:
+            self._logger.exception("Failed to answer '%s' from the device", name)
+            await self._protocol.send_error(name, seq_id, ERR_INTERNAL, str(err))
+            return
+
+        if not pages:
+            await self._protocol.send_error(
+                name, seq_id, ERR_NOT_FOUND, f"Unknown page_id {page_id}",
+            )
+            return
+        await self._protocol.send_response(name, seq_id, with_references(pages[0]))
+
     def _on_button_event(self, data: dict) -> None:
-        _LOGGER.debug(
+        self._logger.debug(
             "Button event from device: name=%s interaction=%s page_id=%s",
             data.get("name"), data.get("interaction"), data.get("page_id"),
         )

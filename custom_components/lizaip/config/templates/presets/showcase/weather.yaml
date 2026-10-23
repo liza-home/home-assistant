@@ -1,0 +1,77 @@
+# Weather — the conditions outside, without a template helper
+#
+# Bound to nothing: Home Assistant sets up a weather service on its own
+# (`weather.forecast_home`, from Met.no), so the page looks up the first weather
+# entity there is when it is added and writes it into the tiles. After that the
+# tiles are ordinary values: edit one in the panel to point it at another.
+#
+#   1      the condition as its own icon: a weather entity on its own is drawn
+#          as the icon of what it reports
+#   2      the condition in words, in your language
+#   3      the temperature, rounded
+#   4      the same in Fahrenheit, worked out on the way to the remote
+#   5      humidity as a mark with the value under it (stacked on a square tile)
+#   6      the same humidity as a fill level, with `?percent=`
+#   7      wind speed beside a wind mark; the tooltip carries the unit
+#   8      wind direction in degrees
+#   9      air pressure
+#   10     cloud cover as a fill level
+#   11     how far the temperature is from a comfortable 21 degrees, `abs()`
+#   12     the dew point, where the service reports one
+#
+# Weather services differ in what they report: a value a service leaves out
+# collapses away, and that tile falls back to its plain icon. The forecast is
+# not an attribute any more -- Home Assistant hands it out on request -- so a
+# tile showing tomorrow needs a template helper that asks for it.
+
+name: "Weather"
+icon: mdi:weather-partly-snowy-rainy
+page_image: "mdi:weather-partly-cloudy text:Weather"
+description: The weather outside as icons, words, sums and fill levels — no helpers
+unbound: true
+
+placeholders:
+  weather:
+    source: entities
+    spec: {domain: weather}
+
+buttons:
+  button_1:
+    label: "${{@weather[1].entity_id}}"
+    image: "${{@weather[1].entity_id}}"
+  button_2:
+    label: "${{@weather[1].entity_id}.friendly_name}: ${{@weather[1].entity_id}}"
+    image: "text:${{@weather[1].entity_id}}"
+  button_3:
+    label: "Now ${{@weather[1].entity_id}.temperature} ${{@weather[1].entity_id}.temperature_unit}"
+    image: "text:${round({@weather[1].entity_id}.temperature)}°"
+  button_4:
+    label: "${round({@weather[1].entity_id}.temperature * 9 / 5 + 32, 1)} °F"
+    image: "text:${round({@weather[1].entity_id}.temperature * 9 / 5 + 32)}°F?font_size=24"
+
+  button_5:
+    label: "Humidity ${{@weather[1].entity_id}.humidity}%"
+    image: "mdi:water-percent ${{@weather[1].entity_id}.humidity}%"
+  button_6:
+    label: "Humidity ${{@weather[1].entity_id}.humidity}%"
+    image: "mdi:water?percent=${round({@weather[1].entity_id}.humidity)}"
+
+  button_7:
+    label: "Wind ${{@weather[1].entity_id}.wind_speed} ${{@weather[1].entity_id}.wind_speed_unit}"
+    image: "mdi:weather-windy ${round({@weather[1].entity_id}.wind_speed)}"
+  button_8:
+    label: "Wind from ${round({@weather[1].entity_id}.wind_bearing)}°"
+    image: "mdi:compass-outline ${round({@weather[1].entity_id}.wind_bearing)}°"
+  button_9:
+    label: "Pressure ${{@weather[1].entity_id}.pressure} ${{@weather[1].entity_id}.pressure_unit}"
+    image: "mdi:gauge ${round({@weather[1].entity_id}.pressure)}"
+  button_10:
+    label: "Cloud cover ${{@weather[1].entity_id}.cloud_coverage}%"
+    image: "mdi:cloud?percent=${round({@weather[1].entity_id}.cloud_coverage)}"
+
+  button_11:
+    label: "${round(abs({@weather[1].entity_id}.temperature - 21), 1)}° from a comfortable 21°"
+    image: "mdi:sofa ${round(abs({@weather[1].entity_id}.temperature - 21))}°"
+  button_12:
+    label: "Dew point ${{@weather[1].entity_id}.dew_point}°"
+    image: "mdi:water-thermometer ${round({@weather[1].entity_id}.dew_point)}°"

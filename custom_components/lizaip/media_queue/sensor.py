@@ -3,7 +3,7 @@
 Once the queue is a sensor, ``${_queue.next_song}`` is an alias for one of its
 attributes (see :mod:`.alias`), and from there it is an ordinary variable:
 watched by the variable listener, throttled by the remote's own interval,
-silenced by the Variables switch, visible in Developer Tools.
+visible in Developer Tools.
 
 There is one sensor per Sonos speaker a button points at, whichever remote
 the button is on, and it goes away when the last button stops pointing at it.

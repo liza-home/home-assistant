@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Callable
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Final
 
@@ -34,12 +32,6 @@ _EXPR_TOKEN_RE = re.compile(
     r"|([A-Za-z_]\w*)(?=\s*\()|([-+*/%(),]))"
 )
 
-#: Per remote: whether its ``${…}`` variables are read at all. Off, every
-#: entity variable and calculation reads as nothing, so it drops out of a
-#: tooltip and an image with one falls back to its derived icon.
-CONF_VARIABLES_ENABLED: Final = "variables_enabled"
-DEFAULT_VARIABLES_ENABLED: Final = True
-
 #: Per remote: the shortest gap, in milliseconds, between two pushes of a
 #: value that keeps changing. The first change after a quiet spell always goes
 #: out at once; this only paces a burst, such as a lamp being dimmed.
@@ -49,21 +41,6 @@ VARIABLES_INTERVAL_MIN: Final = 100
 VARIABLES_INTERVAL_MAX: Final = 5000
 VARIABLES_INTERVAL_STEP: Final = 100
 
-#: The remote being worked for has variables switched on. The substitution
-#: helpers are called from deep inside page building and live pushes, where
-#: the config entry is long out of reach; the few places that start that work
-#: for one remote set this with `variables_scope` instead.
-_VARIABLES_ENABLED: ContextVar[bool] = ContextVar("lizaip_variables_enabled", default=True)
-
-
-def read_variables_enabled(options: object) -> bool:
-    """Whether an entry's ``options`` keep variables on. Only a real False turns them off."""
-    get = getattr(options, "get", None)
-    if get is None:
-        return DEFAULT_VARIABLES_ENABLED
-    return get(CONF_VARIABLES_ENABLED) is not False
-
-
 def read_variables_interval(options: object) -> int:
     """An entry's variable update interval in ms; a damaged value reads as the default."""
     get = getattr(options, "get", None)
@@ -71,21 +48,6 @@ def read_variables_interval(options: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return DEFAULT_VARIABLES_INTERVAL
     return min(max(value, VARIABLES_INTERVAL_MIN), VARIABLES_INTERVAL_MAX)
-
-
-def variables_enabled() -> bool:
-    """Whether the remote this code is working for reads its variables."""
-    return _VARIABLES_ENABLED.get()
-
-
-@contextmanager
-def variables_scope(options: Mapping | object | None) -> Iterator[None]:
-    """Read variables as the entry with *options* has them set, inside the block."""
-    token = _VARIABLES_ENABLED.set(read_variables_enabled(options))
-    try:
-        yield
-    finally:
-        _VARIABLES_ENABLED.reset(token)
 
 
 def _format_number(value: float) -> str:

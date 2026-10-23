@@ -23,12 +23,13 @@ from ..action_controller import (
 from ..const import DOMAIN, SIGNAL_ICON_UPDATE
 from ..shared.i18n import action_labels
 from ..shared.icon_urls import resolve_tooltip_url
+from ..shared.logs import device_logger
 from ..runtime import entry_connection, _get_store
 from .const import CONFIG_CHANGED_EVENT
-from .icon_push import IconPushQueue
+from .icon_push import GATHER_WINDOW, IconPushQueue
 from .panel_entry import add_panel_entry, pop_panel_entry
 from . import device_sync as _device_sync_mod
-from .layouts import refresh as _layout_refresh
+from .templates import refresh as _template_refresh
 from .variables import async_setup_variable_listener
 from .websocket import register_commands
 from ..device.const import LIZAIP_HELLO_EVENT
@@ -36,7 +37,10 @@ from ..device.const import LIZAIP_HELLO_EVENT
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_DIR = os.path.join(os.path.dirname(__file__), "panel")
+GUIDE_IMAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "images")
 PANEL_URL_BASE = "/lizaip_config_panel"
+# The only subdirectories of PANEL_DIR the asset route serves from, one level deep.
+PANEL_SUBDIRS = frozenset({"styles", "buttons", "actions"})
 FRONTEND_URL_PATH = "lizaip"
 
 
@@ -47,16 +51,37 @@ def _panel_version() -> str:
     when a file actually changes, and always moves when one does — otherwise the
     browser keeps serving the previous bundle from cache.
 
+    The walk recurses, because the modules are no longer all one directory deep:
+    the stylesheet is split across `panel/styles/`. A non-recursive listing
+    would leave every nested file invisible here, so editing one would not move
+    the version and the browser would go on serving the stale slice from cache
+    — the exact failure the version-in-path scheme exists to prevent.
+
+    The guide's screenshots are counted too. They are served under the same
+    version prefix and cached hard, so a re-exported screenshot has to move the
+    version or the browser would go on showing the old one for a year.
+
     Touches the disk, so callers inside the event loop hand it to an executor.
     """
-    try:
-        newest = max(
-            os.path.getmtime(os.path.join(PANEL_DIR, name))
-            for name in os.listdir(PANEL_DIR)
-            if name.endswith(".js")
+    def _newest(directory: str, suffix: str) -> float:
+        return max(
+            os.path.getmtime(os.path.join(dirpath, name))
+            for dirpath, _dirnames, filenames in os.walk(directory)
+            for name in filenames
+            if name.endswith(suffix)
         )
+
+    try:
+        newest = _newest(PANEL_DIR, ".js")
     except (OSError, ValueError):
         return "0"
+    try:
+        newest = max(newest, _newest(GUIDE_IMAGE_DIR, ".png"))
+    except (OSError, ValueError):
+        # A tree without the screenshots still has a working panel; the guide
+        # dialog is the only thing that notices, and it degrades to broken
+        # images rather than to an unregistered panel.
+        pass
     return str(int(newest))
 
 
@@ -65,24 +90,45 @@ class LizaIPPanelView(HomeAssistantView):
 
     The version lives in the *path* rather than a `?v=` query string because the
     panel has no build step: its modules import each other with plain relative
-    specifiers (`./liza-remote-svg.js`), which the browser resolves against the
+    specifiers (`./lizaip-svg.js`), which the browser resolves against the
     importing module's URL. Versioning the directory therefore busts the whole
     module graph at once. Versioning only the entry point (the previous
     approach) left the browser free to satisfy those relative imports from cache,
     producing a mixed old/new graph and errors such as
     "Importing binding name 'getPathBounds' is not found".
+
+    The path may name a module in a subdirectory (`styles/base.js`), so the
+    route takes a multi-segment match. It is pinned to `.js` in the pattern
+    itself rather than only in the handler, so this route cannot swallow the
+    guide's `/{version}/guide/*.png` URLs — aiohttp resolves to the first
+    matching resource and does not fall through to a later one, so a looser
+    pattern here would 404 every screenshot depending on registration order.
     """
 
-    url = PANEL_URL_BASE + "/{version}/{filename}"
+    url = PANEL_URL_BASE + r"/{version}/{filename:.+\.js}"
     name = "lizaip:config_panel"
     requires_auth = False  # panel modules are fetched by the browser without a token
 
     async def get(self, request: web.Request, version: str, filename: str) -> web.StreamResponse:
         """Return one panel asset, or 404 for anything outside the panel dir."""
-        # Reject traversal: only a bare filename directly inside PANEL_DIR is served.
-        if filename != os.path.basename(filename) or not filename.endswith(".js"):
+        # Now that the path may contain separators, the old "a bare filename"
+        # rule no longer holds and containment has to be checked properly:
+        # resolve the whole thing and require the result to still sit under the
+        # panel directory. realpath first, so neither `..` nor a symlink
+        # pointing out of the tree can be used to climb out of it. An absolute
+        # or drive-qualified `filename` would make os.path.join discard the root
+        # entirely, and that lands outside too, so the same check covers it.
+        if not filename.endswith(".js"):
             return web.Response(status=404)
-        path = os.path.join(PANEL_DIR, filename)
+        # Allowlist on top of containment: a bare module, or one directly inside
+        # a known slice directory. Anything else under the panel dir stays unserved.
+        parts = filename.split("/")
+        if len(parts) > 2 or (len(parts) == 2 and parts[0] not in PANEL_SUBDIRS):
+            return web.Response(status=404)
+        root = os.path.realpath(PANEL_DIR)
+        path = os.path.realpath(os.path.join(root, filename))
+        if path != root and not path.startswith(root + os.sep):
+            return web.Response(status=404)
         if not os.path.isfile(path):
             return web.Response(status=404)
         return web.FileResponse(
@@ -93,6 +139,45 @@ class LizaIPPanelView(HomeAssistantView):
                 # no-cache keeps a stale bundle from surviving a version bump that
                 # the browser has not noticed yet (e.g. an open tab).
                 "Cache-Control": "no-cache, must-revalidate",
+            },
+        )
+
+
+class LizaIPGuideImageView(HomeAssistantView):
+    """Serve the user guide's screenshots to the panel's guide drawer.
+
+    A separate route from the module one above because the two carry different
+    things from different directories, and because a single handler would have
+    to tell `.js` from `.png` by extension anyway. The version prefix is the
+    same one, so a rebuilt guide and its pictures are busted out of the browser
+    cache together.
+
+    Unauthenticated, for the same reason the module route is: these arrive as
+    `<img src>`, which cannot carry a bearer token. Product screenshots of an
+    empty demo configuration are not the user's data.
+    """
+
+    url = PANEL_URL_BASE + "/{version}/guide/{filename}"
+    name = "lizaip:guide_image"
+    requires_auth = False  # <img> cannot send a token; these are product screenshots
+
+    async def get(self, request: web.Request, version: str, filename: str) -> web.StreamResponse:
+        """Return one guide screenshot, or 404 for anything outside its directory."""
+        # Same traversal rule as the module view: a bare filename, directly
+        # inside the one directory, with an extension we put there ourselves.
+        if filename != os.path.basename(filename) or not filename.endswith(".png"):
+            return web.Response(status=404)
+        path = os.path.join(GUIDE_IMAGE_DIR, filename)
+        if not os.path.isfile(path):
+            return web.Response(status=404)
+        return web.FileResponse(
+            path,
+            headers={
+                "Content-Type": "image/png",
+                # Unlike the modules, these may be cached hard: the version
+                # in the path changes whenever the panel does, and the guide
+                # asks for every screenshot it has in one pass.
+                "Cache-Control": "public, max-age=31536000, immutable",
             },
         )
 
@@ -131,6 +216,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
     await action_labels.async_preload(hass)
 
     hass.http.register_view(LizaIPPanelView)
+    hass.http.register_view(LizaIPGuideImageView)
 
     await async_register_frontend_panel(hass)
 
@@ -150,9 +236,11 @@ async def async_register_frontend_panel(hass: HomeAssistant) -> None:
     async_remove_panel(hass, FRONTEND_URL_PATH, warn_if_unknown=False)
     await async_register_panel(
         hass,
-        webcomponent_name="liza-remote-panel",
+        # The custom element name: it has to match the tag lizaip-panel.js
+        # defines, so the two move together.
+        webcomponent_name="lizaip-panel",
         frontend_url_path=FRONTEND_URL_PATH,
-        module_url=f"{PANEL_URL_BASE}/{version}/liza-remote-panel.js",
+        module_url=f"{PANEL_URL_BASE}/{version}/lizaip-panel.js",
         sidebar_title="lizaIP",
         sidebar_icon="mdi:remote",
         require_admin=True,
@@ -167,6 +255,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
     # but action_controller.setup() is idempotent, so calling it here is a cheap
     # safety net that also covers a listener lost to a partial/failed setup.
     setup_action_dispatch(hass)
+    log = device_logger(_LOGGER, entry)
 
     panel_entry = add_panel_entry(hass, entry.entry_id)
 
@@ -193,12 +282,12 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     async def _on_device_hello(event: Event) -> None:
         if event.data.get("entry_id") == entry.entry_id:
-            _LOGGER.debug("Device hello received, syncing config for %s", entry.title)
+            log.debug("Device hello received, syncing config")
             # Refresh dynamic bindings first, so the sync that follows carries
             # current items. HA may have been down while the user reorganised
             # their favorites, which is exactly when the stored snapshot is
             # least trustworthy.
-            await _layout_refresh.async_handle_hello(hass, entry)
+            await _template_refresh.async_handle_hello(hass, entry)
             await _device_sync_mod.sync_config_to_device(hass, entry)
 
     async def _send_page(
@@ -218,12 +307,19 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         fields: dict = {"buttons": buttons} if buttons else {}
         if img_title is not None:
             fields["img_title"] = img_title
+        # The page's new hash goes with the change, so the device's copy says
+        # what it now shows (see `patched_page`).
+        patched = _device_sync_mod.patched_page(conn, page_id, buttons, img_title)
+        if patched is not None:
+            fields["hash"] = patched["hash"]
         await conn.set_page(page_id, **fields)
         _device_sync_mod.note_partial_page(conn, page_id, buttons, img_title)
 
     push_queue = IconPushQueue(
         _send_page,
         current_page=lambda: get_current_page(entry.entry_id),
+        device=entry,
+        gather=GATHER_WINDOW,
     )
     panel_entry.icon_push_queue = push_queue
 
@@ -290,15 +386,15 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
     panel_entry.on_close(hass.bus.async_listen(LIZAIP_HELLO_EVENT, _on_device_hello))
 
     # Dynamic-source refresh triggers (goto_page navigation).
-    for stop in _layout_refresh.async_setup_entry_triggers(hass, entry):
+    for stop in _template_refresh.async_setup_entry_triggers(hass, entry):
         panel_entry.on_close(stop)
-    _layout_refresh.async_register_service(hass)
+    _template_refresh.async_register_service(hass)
 
     # Source-side push triggers.
     try:
-        panel_entry.push_triggers = await _layout_refresh.async_setup_push_triggers(hass, entry)
+        panel_entry.push_triggers = await _template_refresh.async_setup_push_triggers(hass, entry)
     except Exception as err:  # noqa: BLE001 - an optimisation must never break setup
-        _LOGGER.debug("Dynamic push triggers unavailable for %s: %s", entry.title, err)
+        log.debug("Dynamic push triggers unavailable: %s", err)
 
     # Initial device sync (best-effort; device likely not connected yet on first boot)
     hass.async_create_task(_device_sync_mod.sync_config_to_device(hass, entry))

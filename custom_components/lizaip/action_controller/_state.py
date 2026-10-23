@@ -73,6 +73,13 @@ class RemoteState:
     #: Touches being timed on buttons with a long touch: button key →
     #: ``longtouch._Gesture``.
     button_gestures: dict[str, Any] = field(default_factory=dict)
+    #: Key repeat in progress: button key → the task pressing it again.
+    repeat_tasks: dict[str, Any] = field(default_factory=dict)
+    #: When each held button last said it is still down (monotonic seconds).
+    #: The remote sends ``repeat`` every ~0.24 s while a button is held; a
+    #: repeat loop whose button has gone quiet stops, so a lost ``release``
+    #: cannot leave it running.
+    repeat_heartbeat: dict[str, float] = field(default_factory=dict)
     #: Cycle position per cycling button: ``(page_id, button_key)`` → index.
     #:
     #: The index of the step the **next** press will run, not the one the last
@@ -87,7 +94,7 @@ class RemoteState:
     #: keeps ``toggle`` purely declarative on disk, so the page hash never
     #: moves because somebody pressed a button.
     #:
-    #: Keyed by page as well as button because two pages built from one layout
+    #: Keyed by page as well as button because two pages built from one template
     #: share button keys. Kept across page changes on purpose: navigating away
     #: from a transport page and back should not put the button back on *play*.
     cycle_positions: dict[tuple[int, str], int] = field(default_factory=dict)
@@ -117,6 +124,10 @@ class RemoteState:
         for gesture in self.button_gestures.values():
             gesture.cancel()
         self.button_gestures.clear()
+        for task in self.repeat_tasks.values():
+            task.cancel()
+        self.repeat_tasks.clear()
+        self.repeat_heartbeat.clear()
         # Page changes reset fixed-button overrides; resolve_fixed_action also
         # re-checks that the context button is still present.
         self.selected_button = None

@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .connection import LizaIPConnection
 from ..const import DOMAIN
+from ..shared.logs import device_logger
 from .const import WS_PATH
 from .protocol import PING_INTERVAL
 
@@ -42,12 +43,16 @@ class LizaIPWebSocketView(HomeAssistantView):
         connection = self._find_connection(hass, device_id)
         if connection is None:
             # Check if a config entry exists but hasn't finished setup yet
-            entry_exists = any(
-                e.unique_id == device_id
-                for e in hass.config_entries.async_entries(DOMAIN)
+            pending = next(
+                (
+                    e
+                    for e in hass.config_entries.async_entries(DOMAIN)
+                    if e.unique_id == device_id
+                ),
+                None,
             )
-            if entry_exists:
-                _LOGGER.debug(
+            if pending is not None:
+                device_logger(_LOGGER, pending).debug(
                     "Device '%s' has a config entry but runtime_data is not ready yet "
                     "(HA still starting or setup failed)",
                     device_id,
@@ -71,7 +76,7 @@ class LizaIPWebSocketView(HomeAssistantView):
         # this covers the device rebooting/reconnecting before HA's heartbeat noticed
         # the old socket was dead.
         if connection.connected:
-            _LOGGER.info(
+            device_logger(_LOGGER, connection).info(
                 "Device '%s' reconnected while a previous connection was still marked alive — "
                 "replacing it",
                 device_id,

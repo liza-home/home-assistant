@@ -1,0 +1,13 @@
+# Sonos group — the card the four Sonos templates hide behind.
+#
+# A directory under `presets/` is a group: its templates are offered behind one
+# card in the add-page picker instead of four side by side. This file names
+# that card. It is metadata, not a template — the leading underscore is what
+# keeps it out of the template listing.
+#
+# Everything here is optional; without the file the folder name is title-cased
+# and the card falls back to a generic icon.
+
+name: Sonos
+icon: logo:sonos
+description: Speaker control, favourites, radio and album art

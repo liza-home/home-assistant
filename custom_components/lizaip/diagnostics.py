@@ -41,12 +41,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .config.layouts import refresh as layout_refresh
+from .config.templates import refresh as template_refresh
 from .const import DOMAIN
 from .device import report as device_report
 from .device.const import MODEL_ID
 from .device.connection import LizaIPConnection
 from .runtime import find_store, _resolve_device_id
+from .shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ async def _async_device_report(
     remote hand over what it got. The ZIP does: without this it would ask the
     same nine questions twice and take about twice as long.
     """
+    log = device_logger(_LOGGER, connection)
     out: dict[str, Any] = {}
     if probe is not None:
         probe = dict(probe)
@@ -123,7 +125,7 @@ async def _async_device_report(
             connection, prefetched=known or None
         )
     except Exception as err:  # noqa: BLE001 — diagnostics must never raise
-        _LOGGER.debug("Diagnostics could not collect the device report: %s", err)
+        log.debug("Diagnostics could not collect the device report: %s", err)
         out["report"] = {"error": f"{err.__class__.__name__}: {err}"}
 
     sections = (out.get("report") or {}).get("sections")
@@ -152,6 +154,7 @@ def _traffic_snapshot(connection: LizaIPConnection) -> dict[str, Any] | None:
     ``None``, which is passed on as-is: an empty snapshot would read as a
     remote that said nothing, which is a different and much worse fault.
     """
+    log = device_logger(_LOGGER, connection)
     protocol = getattr(connection, "_protocol", None)
     traffic = getattr(protocol, "traffic", None)
     if traffic is None:
@@ -159,7 +162,7 @@ def _traffic_snapshot(connection: LizaIPConnection) -> dict[str, Any] | None:
     try:
         return traffic.snapshot(50)
     except Exception as err:  # noqa: BLE001 — diagnostics must never raise
-        _LOGGER.debug("Diagnostics could not read the traffic snapshot: %s", err)
+        log.debug("Diagnostics could not read the traffic snapshot: %s", err)
         return None
 
 #: Entry data keys whose value is replaced by ``"**redacted**"``.
@@ -292,7 +295,7 @@ def _system_log(hass: HomeAssistant) -> dict[str, Any]:
 async def async_settings_snapshot(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
-    """Everything configurable that is not a page: fonts, icons, blueprint, layouts.
+    """Everything configurable that is not a page: fonts, icons, blueprint, templates.
 
     Each of these is a thing the installation *has* and the integration reads,
     and none of it is in the config entry. "The label is blank" and "the icon
@@ -338,7 +341,7 @@ async def async_settings_snapshot(
         blueprint = await async_get_blueprint(hass, entry.entry_id)
         settings["blueprint"] = {
             "id": entry_blueprint_id(hass, entry.entry_id),
-            # The layout itself is large and is the same for everyone with this
+            # The template itself is large and is the same for everyone with this
             # model; what varies, and what matters, is which one, and how many
             # buttons it claims the remote has.
             "name": blueprint.get("name"),
@@ -349,11 +352,11 @@ async def async_settings_snapshot(
         settings["blueprint"] = {"error": str(err)}
 
     try:
-        from .config.layouts import list_layouts
+        from .config.templates import list_templates
 
-        settings["layouts"] = await hass.async_add_executor_job(list_layouts)
+        settings["templates"] = await hass.async_add_executor_job(list_templates)
     except Exception as err:  # noqa: BLE001
-        settings["layouts"] = {"error": str(err)}
+        settings["templates"] = {"error": str(err)}
 
     return settings
 
@@ -602,7 +605,7 @@ async def async_get_config_entry_diagnostics(
         # actually exist is answered by `entities` below.
         "capabilities": (connection.last_discovery or {}).get("capabilities"),
         "config": await _async_config_summary(hass, entry),
-        # Fonts, icons, blueprint and layouts: what the installation has, as
+        # Fonts, icons, blueprint and templates: what the installation has, as
         # opposed to what it is configured to want. Nothing personal is in
         # here, which is why it is carried whole rather than counted.
         "settings": await async_settings_snapshot(hass, entry),
@@ -614,7 +617,7 @@ async def async_get_config_entry_diagnostics(
         "traffic": traffic,
         # A stale binding is invisible on the remote, so this is the one place
         # the count is actually legible.
-        "dynamic": await layout_refresh.async_binding_summary(hass, entry.entry_id),
+        "dynamic": await template_refresh.async_binding_summary(hass, entry.entry_id),
         # The two places a fault leaves a trace in Home Assistant itself. Both
         # pass through the entity-id mask on the way out, because a binding
         # error names the entity it failed on and this file is pasted into

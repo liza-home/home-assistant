@@ -16,6 +16,8 @@ from typing import Any
 
 from aiohttp import web
 
+from ..shared.logs import device_logger
+
 try:
     from .traffic import TrafficLog
 except ImportError:  # stable builds ship without the traffic recorder
@@ -72,7 +74,10 @@ SPEC_EVENTS = frozenset({"button", "slider", "goto_page", "diag"})
 #: on either way -- these are listed here only so the check below stops
 #: reporting a working event as a protocol violation.
 SPEC_EVENT_ALIASES = frozenset({"gotopage"})
-SPEC_DEVICE_REQUESTS = frozenset({"hello"})
+#: Requests a remote may send to Home Assistant (PROTOCOL.md §4, §6): the
+#: handshake, and the two page queries it uses to pull what it should show
+#: instead of waiting to be pushed.
+SPEC_DEVICE_REQUESTS = frozenset({"hello", "get_pages", "get_page"})
 
 # `page_id` bounds — see PROTOCOL.md §3 "Rules". A page_id is a 32-bit UNSIGNED
 # integer; 0 is reserved to mean "no page" and is never a valid identifier.
@@ -84,11 +89,29 @@ MAX_PAGE_ID = 0xFFFFFFFF
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
-def fire_and_forget(coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+def _retire_background_task(task: asyncio.Task) -> None:
+    """Drop a finished task and report whatever it raised.
+
+    Retrieving the exception is the point: without it a handler that fails
+    leaves the device without a response and Python only prints "Task
+    exception was never retrieved" at garbage-collection time, long after the
+    log line would have been useful.
+    """
+    _BACKGROUND_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _LOGGER.error(
+            "Background task %s failed", task.get_name(), exc_info=exc,
+        )
+
+
+def fire_and_forget(coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> asyncio.Task:
     """Run a coroutine in the background, holding a strong reference until it finishes."""
-    task = asyncio.create_task(coro)
+    task = asyncio.create_task(coro, name=name)
     _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    task.add_done_callback(_retire_background_task)
     return task
 
 
@@ -201,7 +224,14 @@ class LizaIPProtocol:
     Used by LizaIPConnection to communicate with the device.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, source: Any = None) -> None:
+        """*source* names the remote this protocol speaks to in the log.
+
+        Whatever the caller holds -- its config entry, a name, a callable --
+        is enough; the connection itself cannot be taken, since importing it
+        here would close the import cycle.
+        """
+        self._logger = device_logger(_LOGGER, source)
         self._seq = SeqIdGenerator()
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         # The name each pending request went out with; its reply must match.
@@ -214,7 +244,7 @@ class LizaIPProtocol:
         self._last_rx: float = float("-inf")
         self._rx_signal = asyncio.Event()
         self.max_silent_wait: float = MAX_SILENT_WAIT
-        self.traffic = TrafficLog() if TrafficLog else _NoTraffic()
+        self.traffic = TrafficLog(source) if TrafficLog else _NoTraffic()
 
     def set_ws(self, ws: web.WebSocketResponse | None) -> None:
         """Attach the WebSocket transport.
@@ -251,7 +281,7 @@ class LizaIPProtocol:
         """Write a pre-encoded message; returns False if the transport is gone."""
         if self._ws is None or self._ws.closed:
             return False
-        _LOGGER.debug("TX: %s", msg)
+        self._logger.debug("TX: %s", msg)
         await self._ws.send_str(msg)
         self.traffic.tx(msg_type, name, seq_id, len(msg), msg)
         return True
@@ -348,15 +378,14 @@ class LizaIPProtocol:
 
     # ── Receiving ─────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _protocol_error(problem: str, raw: Any) -> None:
+    def _protocol_error(self, problem: str, raw: Any) -> None:
         """Log, at once and every time, that the remote broke PROTOCOL.md."""
         text = raw if isinstance(raw, str) else json.dumps(raw, separators=(",", ":"))
-        _LOGGER.error("PROTOCOL_ERROR: %s: %s", problem, text[:300])
+        self._logger.error("PROTOCOL_ERROR: %s: %s", problem, text[:300])
 
     def handle_raw(self, raw: str) -> None:
         """Process an incoming raw message. Dispatches to appropriate handler."""
-        _LOGGER.debug("RX: %s", raw)
+        self._logger.debug("RX: %s", raw)
         try:
             self._last_rx = asyncio.get_running_loop().time()
         except RuntimeError:
@@ -413,7 +442,7 @@ class LizaIPProtocol:
         seq_id, future = waiting[0]
         error = msg.get("error") if isinstance(msg.get("error"), dict) else {}
         message = error.get("message", "Unknown error")
-        _LOGGER.debug(
+        self._logger.debug(
             "Error reply without seq_id taken as the answer to seq_id=%s: %s",
             seq_id, raw[:200],
         )
@@ -467,7 +496,7 @@ class LizaIPProtocol:
         self._check_response(msg, self._pending_names.get(seq_id))
         if future is None:
             # Not a violation: a reply that arrives after its request timed out.
-            _LOGGER.warning("Response with unknown seq_id=%s", seq_id)
+            self._logger.warning("Response with unknown seq_id=%s", seq_id)
             return
         if future.done():
             return
@@ -498,7 +527,7 @@ class LizaIPProtocol:
         if handler := self._event_handlers.get(name):
             handler(msg.get("data", {}))
         elif name in SPEC_EVENTS or name in SPEC_EVENT_ALIASES:
-            _LOGGER.warning("Unhandled device event: %s (data=%s)", name, msg.get("data", {}))
+            self._logger.warning("Unhandled device event: %s (data=%s)", name, msg.get("data", {}))
 
     def _handle_request(self, msg: dict) -> None:
         """Dispatch device-initiated request to registered handler."""
@@ -513,7 +542,7 @@ class LizaIPProtocol:
             handler(seq_id, msg.get("data", {}))
         else:
             if name in SPEC_DEVICE_REQUESTS:
-                _LOGGER.warning("Unhandled device request: %s (seq_id=%s)", name, seq_id)
+                self._logger.warning("Unhandled device request: %s (seq_id=%s)", name, seq_id)
             # Send error for unrecognized commands
             fire_and_forget(
                 self.send_error(name, seq_id, ERR_BAD_REQUEST, f"Unknown command: {name}")

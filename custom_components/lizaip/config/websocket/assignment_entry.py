@@ -25,7 +25,9 @@ from ...action_controller import (
 )
 from ...shared.assignment import (
     ASSIGNMENT_LONGTOUCH_KEY,
+    ASSIGNMENT_REPEAT_KEY,
     longtouch_steps,
+    repeats,
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
     ASSIGNMENT_LABEL_EDITED_KEY,
@@ -38,7 +40,7 @@ from .common import EMPTY_BUTTON
 
 
 # Sensitivity bounds for the drag factor. Defined by the executor, which is the
-# one point downstream of both this path and layout YAML — see
+# one point downstream of both this path and template YAML — see
 # ``action_controller.SLIDER_FACTOR_MIN`` for why they are enforced at all.
 _FACTOR_MIN = SLIDER_FACTOR_MIN
 
@@ -49,7 +51,7 @@ _FACTOR_MAX = SLIDER_FACTOR_MAX
 def _clamped_factor(raw) -> float:
     """Panel drag factor, coerced and clamped once for both slider modes.
 
-    The executor is downstream of both panel saves and layout YAML, so the
+    The executor is downstream of both panel saves and template YAML, so the
     shared bounds are enforced there too; keeping this path in step prevents a
     saved value the executor would immediately clamp or reject.
     """
@@ -301,6 +303,9 @@ def build_assignment_entry(
     longtouch = longtouch_steps(assign_data)
     if longtouch:
         entry[ASSIGNMENT_LONGTOUCH_KEY] = longtouch
+    # A flag: stored only when on, so absence keeps meaning "runs once".
+    if repeats(assign_data):
+        entry[ASSIGNMENT_REPEAT_KEY] = True
     # ``toggle`` is a sibling of ``config`` for the same reason before/after are:
     # ``config[0]`` must keep meaning "the step that represents this button" for
     # icons, tooltips, the watched-entity set and the panel's action matcher.

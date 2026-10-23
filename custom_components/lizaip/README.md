@@ -68,7 +68,7 @@ lizaip/
     device_sync.py      # When and how pages are sent to the device
     icon_push.py        # Queued delivery of icon updates to one device
     variables.py        # Keeps ${…} variables current on the remote
-    layouts/            # Dynamic layouts (favorites, scenes, ...)
+    templates/            # Dynamic templates (favorites, scenes, ...)
     panel/              # Frontend JS assets
     blueprints/         # Button geometry, one file per hardware SKU (3029-000.yaml)
 
@@ -186,7 +186,7 @@ Home Assistant is worth comparing, but it does not settle the question:
 | `hui-light-color-temp-card-feature` (horizontal) | no | left |
 
 So HA's actual rule is "the warm end comes first in the gradient" — left when horizontal,
-top when vertical — not a claim that up means warmer. HA can treat direction as a layout
+top when vertical — not a claim that up means warmer. HA can treat direction as a template
 choice because its sliders are *absolute* and draw the gradient: you look at the colours and
 touch the one you want. A blind relative drag has no equivalent affordance, so direction has
 to carry the meaning on its own. The vertical picker agreeing with us is corroboration, not
@@ -322,7 +322,7 @@ which only mean something for `text:` and for the words of a pair.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `size` | `tile` (50×50), `title` (200×50), `tooltip` (200×40), `WxH` in pixels, or single integer (square) | `tile` |
+| `size` | `tile` (50×52), `title` (200×50), `tooltip` (200×40), `WxH` in pixels, or single integer (square) | `tile` |
 | `fg` | Foreground color: hex `RRGGBB` / `RRGGBBAA`, or name (see below) | `white` |
 | `color` | Alias for `fg`. If both are given, `fg` wins | — |
 | `bg` | Background color mounted behind the subject: same format as `fg` | transparent |
@@ -350,12 +350,12 @@ logo:hue text:Hue mdi:lightbulb
 ```
 
 A new part starts at any word shaped like a source — `logo:`, `text:`, `mdi:`,
-`file:` — so no separator is needed between two of them. A `logo:` value is a
+`media:` — so no separator is needed between two of them. A `logo:` value is a
 shipped filename and an `mdi:` value is a hyphenated slug, so neither can hold
 a space: after one of those, plain words start a part too and are read as the
 `text:` they would have to be spelled as anywhere else. A lone `-` or `+`
 between parts is punctuation and is dropped, but one that would otherwise
-change a value is kept, so `file:my + photo.png` is still one filename.
+change a value is kept, so `text:1 + 1` is still one phrase.
 
 **Words set the scale.** A mark beside a name is drawn at the name's own font
 size, so `logo:hue Wohnzimmer` is a roundel as tall as the W next to it rather
@@ -373,8 +373,7 @@ They are drawn in `fg`, or white — never in `mode`'s colour, a title strip
 being black whoever is looking at it — and they take `font`/`font_size` like
 any other words.
 
-Spaces around a `+` are part of the separator, so a file called
-`file:my + photo.png` still addresses its file and `text:1+1` is still a sum.
+Spaces around a `+` are part of the separator, so `text:1+1` is still a sum.
 
 A `percent` outside `0`–`100` is answered with `400 Bad Request` before any
 rendering work is done.
@@ -499,23 +498,24 @@ case-insensitive fuzzy match over the bundled fonts (hyphens, underscores, space
 interchangeable). If the requested font is not found, the default font (Filson Soft
 Light) is used; DejaVu Sans Bold is only the last resort when even that is missing.
 
-#### `file:<filename>` — Static files
-
-Serves and resizes a static image from Home Assistant's `/config/www/` directory.
-
-```
-imgserv://file:image.png?size=tile
-imgserv://file:icons/custom-logo.png?size=title
-imgserv://file:icons/custom-logo.png?size=tile&alpha=1&crop=0
-```
-
-> **Security:** Path traversal is blocked — only files under `/config/www/` are accessible.
-
 #### `media:<url-or-ha-path>` — Media thumbnails
 
 Proxies and resizes any image HA can reach — album art from `/api/media_player_proxy/`,
-files in `/local/`, or artwork on an external CDN. The value is either the **path**
-portion of an HA-internal URL (starting with `/`) or a full `http(s)://` URL.
+files in `/local/` (Home Assistant's `/config/www/`), or artwork on an external CDN. The
+value is either the **path** portion of an HA-internal URL (starting with `/`) or a full
+`http(s)://` URL; no other scheme is fetched.
+
+> **imgserv is open by design.** It answers anyone who can reach port 8123, without
+> authentication, because the remote fetches its pictures without a token — and so
+> `media:` fetches any `http(s)` picture it is asked for. This is a deliberate decision;
+> a signature on outside addresses was tried and removed. Port 8123 is the boundary:
+> keep it off networks you do not trust. What is limited: HA paths must be one of HA's
+> picture paths (`/local/`, `/api/media_player_proxy/`, `/api/camera_proxy/`,
+> `/api/image_proxy/`, `/api/image/serve/`, `/media/`) and follow no redirect.
+> An outside picture follows at most three redirects, to another host only when
+> it resolves to public addresses. The answer is always a PNG: only JPEG, PNG,
+> WebP, GIF and BMP up to 10 MB and 40 megapixels are decoded, anything else is
+> a `502`. A title holds at most 8 parts, 4 of them pictures.
 
 Percent-encode the value into a single path segment so any query string it carries does
 not collide with imgserv's own options:
@@ -530,8 +530,24 @@ External `http(s)://` icons are rewritten to this form automatically during devi
 so the device never fetches third-party hosts itself. Values without a query string may
 still be written unencoded — existing configs keep working.
 
+In a button field (`media:<url>` or a bare URL), imgserv's options are written in the
+URL's own query and `shared.icon_urls.split_media_options` moves them onto the imgserv
+URL: `size`, `box`, `fit` (`contain`/`fill`), `mode`, `fg`, `bg`, `crop`, `alpha`,
+`percent` (0–100, wins over the field's derived one). A second `?` counts as `&`, so
+`media:${_device.entity_picture}?size=120x120` works behind a URL that already has a
+query. A quoted URL (`"…"`/`'…'`, matching pair) is sent to its host verbatim; only the
+query after the closing quote is imgserv's.
+
 HA fetches the image using its own internal session (authentication is handled
-automatically), resizes it to the requested `size`, and returns a PNG.
+automatically), resizes it and returns a PNG. With `fit=contain` (the default) the
+picture keeps its proportions and is as large as fits `size`; with `fit=fill` it is
+stretched to exactly `size`. The URL builder writes `fit=fill` when a `size` was written
+on the picture itself (the 3×3 cover grid needs its 180×186), and nothing otherwise.
+
+A picture may stand in a composite title beside other parts:
+`${_device.entity_picture} + logo:sonos + ${_device.friendly_name}`. `media:`, a bare HA
+path and an `http(s)://` URL each start a part of their own and end at the first space.
+The builder encodes each picture as its own `media:<encoded>` part.
 
 **Notes:**
 - If the media player is idle or the proxy returns a non-200 response, imgserv responds
@@ -611,24 +627,20 @@ State changes are debounced (500 ms) and deduplicated to avoid unnecessary devic
 ### Now playing: `${_device.media_title}`
 
 Not a token of its own. `${_device.attribute}` already named the page's device for a
-layout page title; it now survives a Tooltip field too, so
+template page title; it now survives a Tooltip field too, so
 `play:5 ${_state} - ${_device.media_title}` reaches the device as
 "play:5 Pause - Bohemian Rhapsody".
 
 - **What actually changed.** `DOTTED_TOKEN_RE` in `shared/labels.py` widened from
   `_queue\.` to `(?:_queue|_device)\.`, so `is_token_only_label` strips the token and
-  sees a label made only of placeholders. Without that, `"${_state} - ${_device.media_title}"`
-  counted as a name the user chose: the entity-name prefix was dropped and
-  `clean_label_text` threw the unresolved `${…}` away. The classification decides
+  sees a label made only of placeholders. The classification decides
   *tooltips* only — page titles never call it.
 - **The page, not the target.** This is the cost of reusing the page device. The
   removed `${_song}` resolved against the *button's* own target and worked anywhere;
-  `${_device.media_title}` resolves against the page's layout entity through the
+  `${_device.media_title}` resolves against the page's template entity through the
   `page_scope` ContextVar, so it says nothing on a hand-made page. Accepted
   deliberately: one reader of `media_title` beats two spellings to keep in step.
   Pinned by `test_the_same_label_off_the_page_says_only_the_state`.
-- **It obeys the Variables switch.** Being an ordinary variable cuts both ways — a
-  remote with **Variables** off blanks it along with everything else.
 - **No state gate.** The attribute's presence is the test, not the state word. A paused
   Sonos still reports its track, and so does one Home Assistant calls `idle` while the
   app shows a loaded queue; gating on `playing`/`paused` blanked tooltips that had a
@@ -640,13 +652,13 @@ layout page title; it now survives a Tooltip field too, so
 - **One consequence on the picture branch.** In a `text:` picture a blank value reaches
   `resolve_image_tokens`, which treats it as missing and falls back to the button's
   default icon.
-- **Panel**: `_expandPageDevice` in `liza-remote-helpers.js` rewrites the token to the
+- **Panel**: `_expandPageDevice` in `lizaip-helpers.js` rewrites the token to the
   page entity before `_substituteEntityTokens` resolves it, so the Tooltip preview shows
   the real current track — a beat late, because that resolution is an async websocket
   round-trip. `_labelHasMediaToken` and `_targetsMediaPlayer` gate the
   `label_media_hint` under the field, which is shown whenever the button targets a media
   player — discovery, not just explanation.
-- **Suggestion list**: `matchLabelTokens` (`liza-remote-helpers.js`) puts the
+- **Suggestion list**: `matchLabelTokens` (`lizaip-helpers.js`) puts the
   panel-side tokens at the head of the `${…}` completion list, which until then
   offered only the backend's variables. `_labelTokenOptions` builds the gated set
   per button — `${_state}` wherever there is a service, `${_queue.…}` only off a
@@ -684,7 +696,7 @@ into an entity, and the token into an alias for one of its attributes.
 - **`${_queue.x}` is an alias.** `expand_queue_alias` rewrites it to
   `${sensor.<speaker>_queue.x}`. The sensor's entity id is set to exactly that, so the
   alias needs no lookup (renaming the sensor's entity id breaks it). From there it is an ordinary
-  variable: watched by the state listener, silenced by the **Variables** switch,
+  variable: watched by the state listener,
   visible in Developer Tools, and none of that had to be written. The bespoke
   substitution pass this feature used to need is gone.
 - **Sonos only, in one file.** `media_queue/queue.py` calls `sonos.get_queue`
@@ -733,9 +745,10 @@ into an entity, and the token into an alias for one of its attributes.
 
 ### A label made of tokens is a shape
 
-`is_token_only_label` decides whether a stored tooltip is a *name* the user chose
-or a *shape* for the device to fill in. A shape gets the entity in front of it
-("Sonos Pause"); a name is printed as typed.
+`is_token_only_label` decides whether a stored tooltip is a *name* or a *shape*
+made only of placeholders. Either is printed as it reads; the classification only
+keeps a shape from being handed out as the live tooltip's static fallback, and lets
+the panel offer the derived `${_state}` in place of an auto-filled name.
 
 A separator left between two placeholders is part of the shape, not a word:
 `"${_state} - ${_device.media_title}"` is as unnamed as `"${_state}"`. The same character class
@@ -743,19 +756,12 @@ decides both this and which dangling separator `DANGLING_SEPARATOR_RE` takes awa
 when a token resolves to nothing — `SEPARATOR_CHARS` in `shared/labels.py` is the
 one definition.
 
-This matters for **layout presets specifically**. A preset's label is not
-user-named, and `generate.py` mints the action library entry from that same label,
-so the stored-name rung's two guards (`user_named or not token_only`,
-`stored_name != action_def["name"]`) both refuse it. The only rung left that
-resolves tokens is the `token_only` one — which is why classifying
-`"${_state} - ${_device.media_title}"` as a name meant the label fell through to the static path
-and `clean_label_text` threw the unresolved `${…}` away as wreckage. The Sonos
-play/pause button read "Sonos Pause", song silently missing.
-
-A label the user typed is untouched by this: the rung above short-circuits on
-`label_edited`, so it is still printed verbatim and unprefixed. `_isTokenOnlyLabel`
-in `liza-remote-helpers.js` is the panel's twin, held to the same answers by
-`tests/label_parity_cases.json`.
+A stored label -- the user's, a template's, a source's -- is printed as it reads with
+its placeholders filled, and nothing is put in front of it; if it reads as nothing,
+the tooltip is empty. Only a label that is empty, or merely the library entry's own
+name and not marked `label_edited`, is derived (attribute state, next state, static
+name, service word). `_isTokenOnlyLabel` in `lizaip-helpers.js` is the panel's
+twin, held to the same answers by `tests/label_parity_cases.json`.
 
 #### `action_name:` on a preset button
 
@@ -787,14 +793,14 @@ helper for battery icons: [README.public.md → Live values on the remote](../..
   `clean_label_text` leaves it alone.
 - **Images and titles** (`button_rendering.with_resolved_image`): all or nothing — if
   any token is empty the image is dropped and the derived icon is used (a title is
-  blank). The unit is only added when the image is drawn text (`text:` or no scheme
-  before the token).
+  blank). A token keeps its unit, as in a tooltip, unless it is glued into a name
+  (`mdi:battery-${…}`): a unit there is not an icon.
 - **Live updates** (`config/variables.py`): watches every entity named in a label, image
   or page title, refreshes that set on `CONFIG_CHANGED_EVENT`, and on a state change
   runs `sync_config_to_device` at most every 2 s. The value is part of the page payload
   and therefore of the page hash, so only pages whose output changed are resent.
 - **Panel**: `_entityTokenValue`, `_substituteEntityTokens`, `_resolveImageVariables`
-  and `_pageTitleImage` in `liza-remote-helpers.js` mirror the Python, reading
+  and `_pageTitleImage` in `lizaip-helpers.js` mirror the Python, reading
   `hass.states` and `hass.entities[…].display_precision`.
 
 ### Pages
@@ -846,7 +852,7 @@ The frontend panel communicates with HA via these WebSocket commands (admin-only
 | Command | Description |
 |---------|-------------|
 | `lizaip_config/list_devices` | List all configured lizaIP devices |
-| `lizaip_config/get_blueprint` | Get the button layout blueprint for a device's model (default when no `entry_id`) |
+| `lizaip_config/get_blueprint` | Get the button template blueprint for a device's model (default when no `entry_id`) |
 | `lizaip_config/get_actions` | Get the action library for a device |
 | `lizaip_config/save_actions` | Save the action library |
 | `lizaip_config/get_assignments` | Get button→action assignments for a page |
@@ -1041,7 +1047,7 @@ snaps between a handful of poses reads as a status light, not as a level:
   stored in `entry.options`; it used to be an options-flow section)
   overrides it per entry, anywhere from 1 to 25. The table says what the
   renderer can draw; it cannot say what a given install should pay for, and the
-  two considerations pull apart on a layout that repeats one lamp across many
+  two considerations pull apart on a template that repeats one lamp across many
   pages, where each extra level multiplies into that many more `set_page`
   pushes and cached images. Reading it is `state_brightness.read_fill_step`,
   which is deliberately unshockable — options outlive the version that wrote
@@ -1241,7 +1247,7 @@ targeting an area or a device previews in the page colour, because the panel
 resolves a step's entity from the config alone and has no area registry to
 expand; the device still tints those correctly. The panel cannot call
 `state_color.py`, so
-`liza-remote-helpers._entityIconColor` is a second implementation of the same
+`lizaip-helpers._entityIconColor` is a second implementation of the same
 algorithm — including Python's banker's rounding in the quantiser, which
 `Math.round` does not share.
 
@@ -1405,7 +1411,7 @@ data:
   built from an application ID silently do nothing. Neither Home Assistant nor lizaIP can work
   around it: the remote protocol's launch message carries a URI, never a package name. Use the
   app's deep link instead (e.g. `https://on.orf.at/` for ORF ON) — the shipped Android TV
-  layout already does. Note that the app picker still offers package names, because it lists
+  template already does. Note that the app picker still offers package names, because it lists
   the apps configured on the Android TV Remote entry itself; putting the deep link in that
   entry's *Application ID* field fixes the picker and every button made from it at once.
 

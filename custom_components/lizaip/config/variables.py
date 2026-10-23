@@ -14,7 +14,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from homeassistant.config_entries import (
     SIGNAL_CONFIG_ENTRY_CHANGED,
@@ -22,7 +22,10 @@ from homeassistant.config_entries import (
     ConfigEntryChange,
 )
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -35,17 +38,22 @@ from ..action_controller.toggle import rule_icon, rule_label, toggle_rules
 from ..variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
-    read_variables_enabled,
     DEFAULT_VARIABLES_INTERVAL,
     read_variables_interval,
 )
 from ..media_queue.alias import expand_queue_alias
-from ..shared.history import history_entity
+from ..shared.history import history_entities, history_entity
+from ..shared.logs import device_logger
 from ..shared.tokens import (
+    COMPUTED_FACTS,
+    DEVICE_FACT_TOKEN_RE,
+    DEVICE_FACTS,
     DEVICE_TOKEN_RE,
     ENTITY_TOKEN_RE,
-    current_page_layout,
+    current_page_template,
     expand_device_alias,
+    template_target_device,
+    template_target_entity,
     page_scope,
 )
 from .const import CONFIG_CHANGED_EVENT
@@ -70,11 +78,25 @@ def _token_reads(text, subjects: tuple[str, ...] = ()) -> _Reads:
     if graphed is not None:
         # A graph moves when its entity's state does.
         return {graphed: {None}}
+    # A graph that is one part of a composite moves the same way.
+    found_graphs: _Reads = {e: {None} for e in history_entities(text)}
     if not isinstance(text, str) or "${" not in text:
-        return {}
+        return found_graphs
+    named_by = ""
     if "_device" in text:
+        template = current_page_template()
+        facts = {m.group(1) for m in DEVICE_FACT_TOKEN_RE.finditer(text)}
+        # The name can be the page entity's own: it is whenever the page is
+        # bound to an entity with no device behind it, as a KNX light set up
+        # in YAML has none. A device rename arrives by another road
+        # (`async_device_title_targets`); an entity rename only arrives here.
+        if DEVICE_TOKEN_RE.search(text) or facts:
+            named_by = template_target_entity(template)
+        # A fact read from the device has no state to subscribe to. Dropped
+        # before the rest, so only what is left is watched.
+        text = DEVICE_FACT_TOKEN_RE.sub("", text)
         # `${_device.attr}` is the entity of the page in scope.
-        text = expand_device_alias(text, current_page_layout())
+        text = expand_device_alias(text, template)
     # `${_queue.x}` is an attribute of the queue sensor of whichever speaker
     # the button points at, so each of them is a separate text to scan. Read
     # as the literal id `_queue.x`, nothing subscribed to what it named.
@@ -88,7 +110,9 @@ def _token_reads(text, subjects: tuple[str, ...] = ()) -> _Reads:
         for m in FUNCTION_TOKEN_RE.finditer(candidate):
             for e in _EXPR_ENTITY_RE.finditer(m.group(1)):
                 found.setdefault(e.group(1).lower(), set()).add(e.group(2))
-    return found
+    if named_by:
+        found.setdefault(named_by.lower(), set()).add("friendly_name")
+    return _merge(found, found_graphs)
 
 
 def _merge(into: _Reads, more: _Reads) -> _Reads:
@@ -184,15 +208,15 @@ async def async_variable_uses(hass: HomeAssistant, device_id: str) -> dict[str, 
             use.pages.add(page_id)
 
     actions_by_page: dict[int, set[str]] = {}
-    layouts: dict[int, Any] = {}
+    templates: dict[int, Any] = {}
     for page in await store.async_get_pages(device_id):
         if not isinstance(page, dict):
             continue
         page_id = page.get("id", 1)
-        layouts[page_id] = page.get("layout")
+        templates[page_id] = page.get("template")
         assignments = await store.async_get_assignments(device_id, page_id)
         # `${_device.attr}` is the page's own entity under another name.
-        with page_scope(layouts[page_id]):
+        with page_scope(templates[page_id]):
             _note(_token_reads(page.get("image")), page_id)
             for assign in (assignments or {}).values():
                 _note(_assignment_reads(assign, hass), page_id)
@@ -205,16 +229,41 @@ async def async_variable_uses(hass: HomeAssistant, device_id: str) -> dict[str, 
             if isinstance(a, dict)
         }
         for page_id, action_ids in actions_by_page.items():
-            with page_scope(layouts[page_id]):
+            with page_scope(templates[page_id]):
                 for action_id in action_ids:
                     _note(_action_reads(library.get(action_id)), page_id)
     return uses
 
 
+#: The device registry fields a ``${_device…}`` can draw, by the name the
+#: registry's update event calls them: the two a name is made of, the room it
+#: is filed under, the labels stuck on it, and the facts that are their own
+#: field.
+#:
+#: Which facts are *not* its fields is taken from :data:`COMPUTED_FACTS`
+#: rather than written out again here. Written out, this would be a second
+#: place to remember, and forgetting it is silent -- the integration would
+#: watch a field the registry does not have while the fact it should repaint
+#: for went unwatched, and the page would simply stop keeping up.
+_DEVICE_FACT_FIELDS: Final = frozenset(
+    {"name", "name_by_user", "area_id", "labels"}
+    | {f for f in DEVICE_FACTS if f not in COMPUTED_FACTS},
+)
+
+#: The fields that can move a hub page to a different bridge: which entries a
+#: device belongs to, and whether it sits behind another.
+_BRIDGE_FIELDS: Final = frozenset({"config_entries", "primary_config_entry", "via_device_id"})
+
+#: What an entity can carry of its own, overriding or standing in for its
+#: device's: the room it is filed under and the labels stuck on it. Nothing
+#: else reports either moving.
+_ENTITY_OWN_FIELDS: Final = frozenset({"area_id", "labels"})
+
+
 def _names_device(value: Any) -> bool:
-    """Whether ``${_device}`` (the name) is anywhere in *value*."""
+    """Whether ``${_device}`` or a fact about it is anywhere in *value*."""
     if isinstance(value, str):
-        return bool(DEVICE_TOKEN_RE.search(value))
+        return bool(DEVICE_TOKEN_RE.search(value) or DEVICE_FACT_TOKEN_RE.search(value))
     if isinstance(value, dict):
         return any(_names_device(v) for v in value.values())
     if isinstance(value, list):
@@ -225,11 +274,17 @@ def _names_device(value: Any) -> bool:
 async def async_device_title_targets(
     hass: HomeAssistant, device_id: str,
 ) -> dict[str, set[int]]:
-    """The layout targets named by ``${_device}`` on a page, and where.
+    """The template targets named by ``${_device}`` on a page, and where.
 
     The title counts, every button, and the action each button runs. Keyed by
     what the name is read from: the bound device's registry id, or the hub's
-    config entry id.
+    config entry id -- and a hub page under its bridge's registry id as well,
+    because the name it draws comes from that device first.
+
+    A page bound to an entity alone is keyed by that entity, because it has
+    neither of the other two and would otherwise be in no group at all: the
+    room and the labels it draws are the entity's own, and the repaint that
+    follows a rename of either reaches only the pages this map holds.
     """
     store = _get_store(hass)
     targets: dict[str, set[int]] = {}
@@ -237,8 +292,8 @@ async def async_device_title_targets(
     for page in await store.async_get_pages(device_id):
         if not isinstance(page, dict):
             continue
-        layout = page.get("layout")
-        if not isinstance(layout, dict):
+        template = page.get("template")
+        if not isinstance(template, dict):
             continue
         named = _names_device(page.get("image"))
         if not named:
@@ -257,12 +312,21 @@ async def async_device_title_targets(
                 )
         if not named:
             continue
-        target = layout.get("target") if isinstance(layout, dict) else None
+        target = template.get("target") if isinstance(template, dict) else None
         if not isinstance(target, dict):
             continue
-        key = target.get("config_entry") or target.get("device")
+        page_id = page.get("id", 1)
+        key = (
+            target.get("config_entry")
+            or target.get("device")
+            or target.get("entity_id")
+        )
         if key:
-            targets.setdefault(key, set()).add(page.get("id", 1))
+            targets.setdefault(key, set()).add(page_id)
+        if target.get("config_entry"):
+            bridge = template_target_device(hass, template)
+            if bridge is not None:
+                targets.setdefault(bridge.id, set()).add(page_id)
     return targets
 
 
@@ -304,6 +368,8 @@ async def async_setup_variable_listener(
     timer: list[asyncio.TimerHandle | None] = [None]
     stop_tracking: list[Callable[[], None]] = [lambda: None]
 
+    log = device_logger(_LOGGER, entry)
+
     async def _refresh_watched() -> None:
         uses.clear()
         title_targets.clear()
@@ -320,8 +386,8 @@ async def async_setup_variable_listener(
                 if hub is not None:
                     hub_titles[key] = hub.title
         except Exception as err:  # noqa: BLE001 - live values must never break setup
-            _LOGGER.debug("Variable listener: cannot read pages: %s", err)
-        _LOGGER.debug("Variable listener: watching %s", sorted(uses))
+            log.debug("Variable listener: cannot read pages: %s", err)
+        log.debug("Variable listener: watching %s", sorted(uses))
         # Subscribe to exactly the entities read now; HA skips all others.
         stop_tracking[0]()
         stop_tracking[0] = async_track_state_change_event(
@@ -349,7 +415,7 @@ async def async_setup_variable_listener(
     @callback
     def _on_state_change(event: Event) -> None:
         use = uses.get(event.data.get("entity_id"))
-        if use is None or not read_variables_enabled(getattr(entry, "options", None)):
+        if use is None:
             return
         if not variable_value_changed(
             event.data.get("old_state"), event.data.get("new_state"), use.reads,
@@ -357,14 +423,83 @@ async def async_setup_variable_listener(
             return
         _queue(use.pages)
 
+    def _hub_pages(device: dr.DeviceEntry | None = None) -> set[int]:
+        """Hub pages whose bridge *device* may have changed; all of them if none."""
+        entries = set(hub_titles)
+        if device is not None:
+            entries &= set(device.config_entries) | {
+                getattr(device, "primary_config_entry", None),
+            }
+        return {page for entry in entries for page in title_targets.get(entry, ())}
+
     @callback
-    def _on_device_renamed(event: Event) -> None:
-        pages = title_targets.get(event.data.get("device_id"))
+    def _on_device_changed(event: Event) -> None:
+        device_id = event.data.get("device_id")
+        action = event.data.get("action")
         changes = event.data.get("changes") or {}
-        if pages and event.data.get("action") == "update" and (
-            "name" in changes or "name_by_user" in changes
-        ):
+        # Every fact a page can draw off the device, not the name alone: a
+        # firmware update moves `${_device.sw_version}` and the page should
+        # say so without waiting for a reload.
+        pages = title_targets.get(device_id)
+        if pages and action == "update" and changes.keys() & _DEVICE_FACT_FIELDS:
             _queue(pages)
+            # No return: one update can carry a fact and the topology both --
+            # a device renamed as it is re-parented changes `name` and
+            # `via_device_id` together. Returning here would repaint the page
+            # and leave the mapping pointing at the bridge that was, so the
+            # next rename of the real one would go nowhere.
+        if action == "remove":
+            # The gone device cannot be read, and its leaving may hand the
+            # entry to a bridge that was one root among several.
+            stale = _hub_pages()
+        elif action == "create":
+            device = dr.async_get(hass).async_get(device_id)
+            stale = _hub_pages(device) if device is not None else set()
+        elif changes.keys() & _BRIDGE_FIELDS:
+            # Not filtered by the device, as a creation is. A membership it
+            # has just left is no longer among the ones it holds, so asking
+            # which hubs it belongs to now would skip the very hub it left --
+            # the one page that must go looking for its bridge again.
+            stale = _hub_pages()
+        else:
+            return
+        if stale:
+            # The repaint reads the bridge afresh, so it needs no help; the
+            # mapping is what has gone stale. Which device answers for a hub
+            # is resolved once and then watched by its registry id, so a
+            # bridge that is replaced leaves the old id listening and the new
+            # one unheard. Ask again, or the next rename goes nowhere.
+            _queue(stale)
+            hass.async_create_task(_refresh_watched())
+
+    def _repaint_every_titled_page() -> None:
+        # Neither the area nor the label registry says in its event which
+        # device was affected, and what a page draws from them is read afresh
+        # on every repaint, so there is no mapping to rebuild -- only the
+        # repaint is owed, by every page that names a device.
+        pages = {page for group in title_targets.values() for page in group}
+        if pages:
+            _queue(pages)
+
+    @callback
+    def _on_named_registry_changed(_event: Event) -> None:
+        # The area and the label registry are watched for the same reason and
+        # answered the same way, so they share one listener rather than two
+        # that would have to be kept saying the same thing.
+        _repaint_every_titled_page()
+
+    @callback
+    def _on_entity_changed(event: Event) -> None:
+        # An entity can be filed under a room of its own, and labelled on its
+        # own -- and a KNX light set up in YAML has no device, so its own are
+        # the only ones it has. Nothing else reports either moving.
+        if event.data.get("action") != "update":
+            return
+        if not _ENTITY_OWN_FIELDS & set(event.data.get("changes") or {}):
+            return
+        use = uses.get(event.data.get("entity_id"))
+        if use is not None:
+            _queue(use.pages)
 
     @callback
     def _on_hub_changed(change: ConfigEntryChange, hub: ConfigEntry) -> None:
@@ -385,7 +520,10 @@ async def async_setup_variable_listener(
     await _refresh_watched()
     unsubs = [
         hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed),
-        hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _on_device_renamed),
+        hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _on_device_changed),
+        hass.bus.async_listen(ar.EVENT_AREA_REGISTRY_UPDATED, _on_named_registry_changed),
+        hass.bus.async_listen(lr.EVENT_LABEL_REGISTRY_UPDATED, _on_named_registry_changed),
+        hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, _on_entity_changed),
         async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _on_hub_changed),
     ]
 

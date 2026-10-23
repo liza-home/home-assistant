@@ -41,7 +41,7 @@ _MARK_OVERSHOOT = 1
 _ELLIPSIS = "\u2026"
 
 #: A box at least this much wider than it is tall draws its parts in a row.
-#: ``title`` (200×50) is such a box; a ``tile`` (50×50) stacks instead.
+#: ``title`` (200×50) is such a box; a ``tile`` (50×52) stacks instead.
 _SIDE_BY_SIDE_RATIO = 1.5
 
 

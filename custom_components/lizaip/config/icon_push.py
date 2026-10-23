@@ -30,10 +30,16 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 
+from ..shared.logs import device_logger
+
 _LOGGER = logging.getLogger(__name__)
 
 #: One page's worth of buttons: button name -> the fields to send for it.
 _PageButtons = dict[str, dict]
+
+#: How long a drain waits before its first send, so updates that one state
+#: change produces a few milliseconds apart go out as one `set_page`.
+GATHER_WINDOW = 0.05
 
 
 class IconPushQueue:
@@ -43,14 +49,18 @@ class IconPushQueue:
     well when a page title is waiting. *current_page* is
     consulted for the page the user is actually looking at, and may return
     ``None`` when that is not known -- after a restart or reconnect, before the
-    device has reported where it is.
+    device has reported where it is. *device* is the remote these pushes go to,
+    named in this queue's log lines.
     """
 
     def __init__(
         self,
         send: Callable[[int, list[dict]], Awaitable[object]],
         current_page: Callable[[], int | None] | None = None,
+        device: object | None = None,
+        gather: float = 0.0,
     ) -> None:
+        self._log = device_logger(_LOGGER, device)
         self._send = send
         self._current_page = current_page
         self._pending: dict[int, _PageButtons] = {}
@@ -65,6 +75,7 @@ class IconPushQueue:
         # `schedule` see "already draining" and wedge the pump for good.
         self._draining = False
         self._closed = False
+        self._gather = gather
 
     def submit(
         self, page_id: int, buttons: Iterable[dict], *, img_title: str | None = None,
@@ -133,6 +144,13 @@ class IconPushQueue:
     async def _drain(self) -> None:
         """Send pending pages until none are left, one round-trip at a time."""
         try:
+            if self._gather:
+                # One state change reaches this queue twice -- the icon
+                # listener and the variable push, 12-23 ms apart on a Sonos
+                # track change -- and sent as they came, the second waited a
+                # whole round-trip behind the first. Waiting a moment sends
+                # both as one `set_page`.
+                await asyncio.sleep(self._gather)
             while self._pending and not self._closed:
                 page_id = self._next_page()
                 # Popped *before* the await, so anything that arrives during
@@ -151,7 +169,7 @@ class IconPushQueue:
                     # One bad page must not stop the pump; the tile stays as it
                     # was until its entity next changes. Already popped, so a
                     # persistently failing page cannot spin the loop either.
-                    _LOGGER.warning(
+                    self._log.warning(
                         "set_page (partial) failed for page %s: %s", page_id, err,
                     )
         finally:

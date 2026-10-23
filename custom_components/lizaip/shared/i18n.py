@@ -128,14 +128,14 @@ class ActionLabels:
         return slug if slug in self.load(FALLBACK_LANGUAGE) else ""
 
     def localize(self, name: str, lang: str, user_named: bool = False) -> str:
-        """Translate an English name a layout wrote; a user's own name stays as is."""
+        """Translate an English name a template wrote; a user's own name stays as is."""
         if not name or user_named:
             return name
         key = self.wording_key(name)
         if not key:
             return name
         translated = self.get(key, lang)
-        # A wording that only respells the layout's English ("Play/Pause" vs
+        # A wording that only respells the template's English ("Play/Pause" vs
         # "Play / Pause") must not replace it.
         return name if self.wording_key(translated) == key else translated
 

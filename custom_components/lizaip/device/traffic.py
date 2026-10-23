@@ -24,6 +24,8 @@ import time
 from collections import deque
 from typing import Any
 
+from ..shared.logs import device_logger
+
 #: The logger frames are written to when `log_enabled` is set. Its own name, so
 #: the HA log page can be filtered to it and it can be raised without making
 #: the rest of the integration chatty.
@@ -59,8 +61,9 @@ def _percentile(values: list[float], pct: float) -> float | None:
 class TrafficLog:
     """Frames, round trips and losses for one remote's connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, source: Any = None) -> None:
         self.log_enabled = False
+        self._logger = device_logger(TRAFFIC_LOGGER, source)
         self.reset()
 
     def reset(self) -> None:
@@ -85,7 +88,7 @@ class TrafficLog:
         frame["t"] = time.time()
         self.frames.append(frame)
         if self.log_enabled:
-            TRAFFIC_LOGGER.info("%s", self.format_frame(frame))
+            self._logger.info("%s", self.format_frame(frame))
 
     def _keep_body(self, frame: dict[str, Any], raw: str | None) -> None:
         """Keep the message text beside the frame that describes it.

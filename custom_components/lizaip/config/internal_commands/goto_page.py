@@ -29,7 +29,7 @@ from .base import InternalCommand, InternalCommandError
 
 #: ``image`` is an image spec first and a page name second.
 _TITLE_SCHEMES = (
-    "text:", "mdi:", "logo:", "phu:", "file:", "media:",
+    "text:", "mdi:", "logo:", "phu:", "media:",
     "imgserv://", "http://", "https://", "data:",
 )
 
@@ -99,7 +99,7 @@ def page_title(page: dict) -> str:
     if not scheme and not value.startswith("/"):
         return value
 
-    # file:, media:, URLs and bare paths: the last path segment is the only
+    # media:, URLs and bare paths: the last path segment is the only
     # part that was ever meant to be read.
     segment = re.split(r"[/:]", value.rstrip("/"))[-1]
     segment = _humanise_slug(_EXT_RE.sub("", segment))

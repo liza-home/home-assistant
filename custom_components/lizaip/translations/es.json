@@ -152,7 +152,7 @@
     },
     "refresh_dynamic_sources": {
       "name": "Actualizar fuentes dinámicas",
-      "description": "Vuelve a resolver los enlaces de diseño dinámico y envía los cambios a los mandos afectados. Las páginas cuyo contenido no ha cambiado no generan tráfico hacia el dispositivo.",
+      "description": "Vuelve a resolver los enlaces dinámicos de plantilla y envía los cambios a los mandos afectados. Las páginas cuyo contenido no ha cambiado no generan tráfico hacia el dispositivo.",
       "fields": {
         "entry_id": {
           "name": "Dispositivo",

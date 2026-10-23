@@ -11,6 +11,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
+from ..shared.logs import device_logger
 from .alias import QUEUE_ALIAS_RE, expand_queue_alias, queue_entity_id
 from .queue import QUEUE_KEYS
 
@@ -53,14 +54,16 @@ async def async_queue_targets(hass: HomeAssistant) -> set[str]:
             for page in await store.async_get_pages(device_id):
                 page_id = page.get("id", 1)
                 # The page's own player, for `${_device.media_title_prev}`.
-                layout_target = (page.get("layout") or {}).get("target") or {}
-                if isinstance(layout_target.get("entity_id"), str):
-                    targets.add(layout_target["entity_id"])
+                template_target = (page.get("template") or {}).get("target") or {}
+                if isinstance(template_target.get("entity_id"), str):
+                    targets.add(template_target["entity_id"])
                 for _button, assign in await _get_assignments(hass, device_id, page_id):
                     for config in _configs(assign, toggle_rules):
                         targets.update(resolve_target_entities(config, hass))
         except Exception as err:  # noqa: BLE001 - discovery must never break setup
-            _LOGGER.debug("Queue sensors: cannot read %s: %s", entry.entry_id, err)
+            device_logger(_LOGGER, entry).debug(
+                "Queue sensors: cannot read the configuration: %s", err,
+            )
 
     return {
         entity_id

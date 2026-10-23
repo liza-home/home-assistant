@@ -1,0 +1,123 @@
+# Light studio — one lamp, every way a tile can talk about it
+#
+# Pick any lamp. Every tile reads it through `${_device…}`, so the page follows
+# whichever lamp it was created for, and every value is live.
+#
+#   1      the lamp itself: the icon takes the lamp's own colour and fills to
+#          its brightness on its own; the tooltip prints `${_state}`
+#   2      brightness as big text, computed from 0-255: `round(x * 100 / 255)`
+#   3      colour temperature in kelvin, straight from an attribute
+#   4      device facts rather than state: manufacturer, model, firmware
+#   5-8    brightness presets, each icon pre-filled to the level it sets with
+#          `?percent=` -- the picture *is* the label
+#   9-11   colour temperature presets, each icon tinted the white it gives
+#          with `?fg=` and a hex colour
+#   12     off, drawn in the `disabled` state colour
+#
+# A value with nothing behind it -- brightness while the lamp is off, kelvin on
+# a lamp that has no colour temperature -- collapses away, and the tile falls
+# back to the icon its action would show anyway.
+
+name: "Light studio"
+icon: mdi:lightbulb-group
+# A mark, the lamp's name and its room, in one title strip.
+page_image: "mdi:lightbulb-group ${_device} · ${_device.area_name}"
+description: Live values, fill levels and tinted presets for one lamp
+
+target_selector:
+  device:
+    integration: [hue, homekit_controller, nanoleaf]
+    primary_domain: light
+
+buttons:
+  button_1:
+    label: "${_device} ${_state}"
+    action_name: Toggle
+    image: mdi:lightbulb
+    config:
+      - action: light.toggle
+
+  button_2:
+    label: "Brightness ${round(_device.brightness * 100 / 255)}%"
+    image: "text:${round(_device.brightness * 100 / 255)}%"
+
+  button_3:
+    label: "Colour temperature ${_device.color_temp_kelvin} K"
+    image: "text:${_device.color_temp_kelvin}K?font_size=20"
+
+  button_4:
+    label: "${_device.manufacturer} ${_device.model} · ${_device.sw_version}"
+    image: mdi:information-outline
+
+  # The fill is the level each one sets.
+  button_5:
+    label: Brightness 25 %
+    action_name: 25 %
+    image: mdi:lightbulb-on?percent=25
+    config:
+      - action: light.turn_on
+        data:
+          brightness_pct: 25
+  button_6:
+    label: Brightness 50 %
+    action_name: 50 %
+    image: mdi:lightbulb-on?percent=50
+    config:
+      - action: light.turn_on
+        data:
+          brightness_pct: 50
+  button_7:
+    label: Brightness 75 %
+    action_name: 75 %
+    image: mdi:lightbulb-on?percent=75
+    config:
+      - action: light.turn_on
+        data:
+          brightness_pct: 75
+  button_8:
+    label: Brightness 100 %
+    action_name: 100 %
+    image: mdi:lightbulb-on?percent=100
+    config:
+      - action: light.turn_on
+        data:
+          brightness_pct: 100
+
+  # The tint is the white each one gives.
+  button_9:
+    label: Warm white 2700 K
+    action_name: Warm
+    image: mdi:thermometer-low?fg=FFB46B
+    config:
+      - action: light.turn_on
+        data:
+          color_temp_kelvin: 2700
+  button_10:
+    label: Neutral white 4000 K
+    action_name: Neutral
+    image: mdi:thermometer?fg=FFE4CE
+    config:
+      - action: light.turn_on
+        data:
+          color_temp_kelvin: 4000
+  button_11:
+    label: Daylight 6500 K
+    action_name: Daylight
+    image: mdi:thermometer-high?fg=CCDDFF
+    config:
+      - action: light.turn_on
+        data:
+          color_temp_kelvin: 6500
+
+  button_12:
+    label: "Off"
+    action_name: "Off"
+    image: mdi:power?fg=disabled
+    config:
+      - action: light.turn_off
+
+  button_power:
+    label: "Off"
+    image: mdi:power
+    config:
+      - action: light.turn_off

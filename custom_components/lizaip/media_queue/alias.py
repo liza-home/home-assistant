@@ -4,8 +4,7 @@ The four queue values live on a sensor (see :mod:`.sensor`), so they are
 already readable as ``${sensor.kitchen_queue.next_song}``. That spelling is
 correct and nobody would type it, so ``${_queue.x}`` is rewritten to it before
 anything else looks at the text, exactly as ``${_device.x}`` is. From there it
-is an ordinary variable: the variable listener subscribes to it and the
-remote's Variables switch silences it. A speaker without a queue sensor names
+is an ordinary variable: the variable listener subscribes to it. A speaker without a queue sensor names
 an entity that does not exist, which reads as nothing like any other variable.
 """
 

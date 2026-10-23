@@ -70,7 +70,7 @@ OVERRIDABLE_FIXED_BUTTONS: frozenset[str] = frozenset({
 #: 0–255. An entity id and a capability id carry no range to go stale.
 #:
 #: A similar argument covers the buttons, which is why they accept both shapes
-#: and layouts only ever write the string one. A frozen ``button_power`` holds
+#: and templates only ever write the string one. A frozen ``button_power`` holds
 #: an entity id that :func:`_retarget_entity_keys` does not walk, so a refresh
 #: that replaced the lamp behind a slot would leave power switching off the
 #: previous one. A service name has no entity in it.
@@ -225,7 +225,7 @@ def sanitize_slider_override(value: Any) -> dict:
     """The storable form of a slider block, or ``{}`` for anything unusable.
 
     The one gate every writer passes through — the WebSocket sanitiser, the
-    store's last-chance stripper and the layout generator — so "what may reach
+    store's last-chance stripper and the template generator — so "what may reach
     disk" is answered once rather than three times in three dialects.
 
     ``entity_id`` must be present and a string: it is the opt-in, and a block
@@ -264,7 +264,7 @@ def resolve_fixed_action(
     2. nothing is selected.
     3. the selection names a button not on *this* page. The weaker of two guards
        against a stale selection — the other being that every page change clears
-       it — and not a substitute for it, since two pages built from one layout
+       it — and not a substitute for it, since two pages built from one template
        share button keys. Deliberately not a timeout either: a button that
        changes meaning after N seconds, on a device whose glyphs cannot show
        which context is live, is a hidden state machine.
@@ -305,7 +305,7 @@ def resolve_fixed_action(
 def _live_fixed_action(selected: dict, fixed_key: str) -> dict | None:
     """A press synthesised from a live override, against the selection's entity.
 
-    The counterpart to the frozen table: the layout named a service, and the
+    The counterpart to the frozen table: the template named a service, and the
     entity is whatever is selected *now*. Nothing is stored per pair, so nothing
     can go stale when a refresh moves the item behind the slot.
 
