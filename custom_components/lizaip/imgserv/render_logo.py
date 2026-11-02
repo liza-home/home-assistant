@@ -36,11 +36,10 @@ from .render import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Bundled brand logos, a sibling of this module. Resolved once at import,
-# because ``_resolve_under`` checks containment against it — an unresolved base
-# (a symlinked install path) would make every containment test fail and turn
-# every logo into a 404.
-LOGOS_DIR = Path(os.path.dirname(os.path.abspath(__file__)), "logos").resolve()
+# Bundled brand logos. Resolved once at import, because ``_resolve_under``
+# checks containment against it — an unresolved base (a symlinked install path)
+# would make every containment test fail and turn every logo into a 404.
+LOGOS_DIR = (Path(__file__).resolve().parents[1] / "assets" / "logos").resolve()
 
 # Some brands publish two marks: an upright one and a wide wordmark. A file
 # named ``<logo>_wide`` beside ``<logo>`` is taken as the second, and whichever

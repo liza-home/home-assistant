@@ -11,7 +11,7 @@ from ...runtime import _get_store
 from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
 from ..const import PAGE_ID_SCHEMA
 from ..events import fire_config_changed
-from ..templates import (
+from ...config.page_templates import (
     DEFAULT_MAX_ITEMS,
     DEFAULT_TRACKED_FIELDS,
     SOURCES,

@@ -6,13 +6,13 @@ import logging
 from collections.abc import Mapping
 
 import voluptuous as vol
-from homeassistant.core import Context, HomeAssistant
+from homeassistant.core import Context, HomeAssistant, State
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.script import SCRIPT_MODE_PARALLEL, Script
 
 from ..config.internal_commands import get_internal_command
-from ..config.text_style import longtouch_enabled, toggle_enabled
+from ..config.text_style import longtouch_enabled, settings_theme, toggle_enabled
 from ..const import CONF_OPTIMISTIC_UPDATES, DOMAIN, SIGNAL_ICON_UPDATE
 from ..shared.preludes import (
     ENSURE_ON_SETTLE,
@@ -26,10 +26,10 @@ from ..shared.services import (
     catchall_state_icon,
     is_state_toggle_service,
     normalise_payload,
-    scope_action_states,
     service_name,
 )
 from ..shared.tokens import (
+    button_scope,
     clean_label_text,
     page_scope,
     resolve_image_tokens,
@@ -46,7 +46,7 @@ from ._state import (
     get_selected_button,
 )
 from .helpers import _get_store, _resolve_device_id, first_step, resolve_step_entity
-from .icons import toggle_icon
+from .icons import _match_state_icon, toggle_icon
 from .overrides import resolve_fixed_action
 from .toggle import (
     MODE_CYCLE,
@@ -345,7 +345,9 @@ async def _fire_cycle_update(
         if page.get("id", _DEFAULT_PAGE_ID) == page_id:
             template = page.get("template")
             break
-    with page_scope(template):
+    with page_scope(template), button_scope(
+        resolve_step_entity(first_step(dict(assign)), hass), hass,
+    ):
         await _fire_cycle_update_in_scope(
             hass, device_id, page_id, button_key, assign, entry_id,
         )
@@ -376,11 +378,13 @@ async def _fire_cycle_update_in_scope(
     ``toggle_icon`` reads the step that comes next — which is exactly the one
     the tile should advertise.
     """
+    store = _get_store(hass)
+    theme = settings_theme(await store.async_get_settings(device_id))
     entity = resolve_step_entity(first_step(dict(assign)), hass)
     icon = toggle_icon(
         assign, None, entry_id, page_id, button_key,
         entity.split(".")[0] if entity else "",
-        hass=hass,
+        hass=hass, icons=theme.icons,
     )
     if not icon:
         # Rule icons are optional, and a cycle with none is a button the user
@@ -393,7 +397,6 @@ async def _fire_cycle_update_in_scope(
         return
     index = cycle_index(entry_id, page_id, button_key, len(rules))
 
-    store = _get_store(hass)
     pages = await store.async_get_pages(device_id)
     page_color = ""
     for page in pages:
@@ -429,7 +432,7 @@ async def _fire_cycle_update_in_scope(
     async_dispatcher_send(hass, SIGNAL_ICON_UPDATE.format(device_id), [{
         "page_id": page_id,
         "button_key": button_key,
-        "icon": resolve_icon_url(icon, color=page_color),
+        "icon": resolve_icon_url(icon, color=page_color, theme=theme.theme_id),
         "tooltip": tooltip,
         "page_color": page_color,
     }])
@@ -481,20 +484,6 @@ async def _fire_optimistic_update(
         log.debug("Optimistic: entity %s has no state — skipping", entity_id)
         return
 
-    action_id = assign.get("action_id")
-    if not action_id:
-        log.debug("Optimistic: no action_id on assignment — skipping")
-        return
-
-    store = _get_store(hass)
-    lib = await store.async_get_action_library(device_id)
-    action_def = next((a for a in lib if a.get("id") == action_id), None)
-    if not action_def:
-        log.debug(
-            "Optimistic: action_id '%s' not found in library — skipping", action_id,
-        )
-        return
-
     # Predict from state-machine knowledge, not icon rule ordering.
     predicted_ha_state = PREDICTED_HA_STATE_MAP.get(state.state)
     if not predicted_ha_state:
@@ -504,29 +493,23 @@ async def _fire_optimistic_update(
         )
         return
 
-    # Look up the icon for the predicted state from the action library's rules.
-    state_rules = [
-        r for r in scope_action_states(
-            action_def.get("service", ""), action_def.get("states"),
-        )
-        if not r.get("attribute")  # Attribute rules are not predictable from state alone.
-    ]
-    matching_rule = next(
-        (r for r in state_rules if r.get("state") == predicted_ha_state), None,
+    store = _get_store(hass)
+    # The remote's theme picks the icon table and rides in the URL built below,
+    # so this repaint and the correcting state listener cannot disagree.
+    theme = settings_theme(await store.async_get_settings(device_id))
+
+    # Asked against the *predicted* state through the table the listener reads,
+    # so the optimistic glyph is the one confirmation lands on.
+    action_icon = _match_state_icon(
+        service,
+        State(entity_id, predicted_ha_state, state.attributes),
+        theme.icons,
     )
-    if not matching_rule:
-        log.debug(
-            "Optimistic: no icon rule for predicted state '%s' in action '%s' "
-            "(available rules: %s) — skipping",
-            predicted_ha_state, action_id,
-            [r.get("state") for r in state_rules],
-        )
-        return
-
-    action_icon = matching_rule.get("icon")
-
     if not action_icon:
-        log.debug("Optimistic: predicted rule has no icon — skipping")
+        log.debug(
+            "Optimistic: theme has no icon for predicted state '%s' — skipping",
+            predicted_ha_state,
+        )
         return
 
     # Tooltip action keys can differ from HA states; NEXT_STATE_MAP has the key.
@@ -538,7 +521,7 @@ async def _fire_optimistic_update(
     )
 
     # Variables read as the sync reads them; one with no value falls back to
-    # the action's own icon, and with neither there is nothing to predict.
+    # the themed icon, and with neither there is nothing to predict.
     pages = await store.async_get_pages(device_id)
     page_color = ""
     template = None
@@ -548,7 +531,9 @@ async def _fire_optimistic_update(
             template = p.get("template")
             break
 
-    with page_scope(template):
+    with page_scope(template), button_scope(
+        resolve_step_entity(first_step(dict(assign)), hass), hass,
+    ):
         icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
     if not icon:
         log.debug("Optimistic: predicted icon has no value — skipping")
@@ -572,6 +557,7 @@ async def _fire_optimistic_update(
 
     resolved = resolve_icon_url(
         icon, color=tile_style.color, percent=tile_style.percent,
+        theme=theme.theme_id,
     )
 
     # Same entry as the style above; the correcting state listener uses it too.
@@ -752,10 +738,6 @@ async def execute_action(
             "execute_action: no assignment for button '%s' on page %s",
             button_key, page_id,
         )
-        return
-
-    if not assign.get("action_id"):
-        log.debug("execute_action: no action_id for %s/%s", page_id, button_key)
         return
 
     # Asked only of a button that actually carries a block. This runs on every

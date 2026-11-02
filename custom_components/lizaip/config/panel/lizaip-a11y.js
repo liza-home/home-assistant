@@ -9,8 +9,29 @@ const NATIVE = "a[href], button, input, select, textarea";
 // root querySelectorAll cannot see -- without them a card built only from
 // them would have no focusable child at all.
 const HA_FIELDS =
-  "ha-icon-picker, ha-entity-picker, ha-textfield, ha-select, ha-combo-box, ha-picker-field";
-const FOCUSABLE = `${NATIVE}, [tabindex="0"], ${HA_FIELDS}`;
+  "ha-icon-picker, ha-entity-picker, ha-textfield, ha-select, ha-combo-box, ha-picker-field, "
+  + "ha-input, ha-input-search, ha-switch";
+// HA's buttons, for the same reason: the <button> they wrap is in a shadow
+// root, so the `button` above never sees it. They are listed separately from
+// the fields because typing goes to a field and not to these.
+const HA_BUTTONS = "ha-button, ha-icon-button, ha-icon-button-arrow-prev";
+const FOCUSABLE = `${NATIVE}, [tabindex="0"], ${HA_FIELDS}, ${HA_BUTTONS}`;
+
+// Controls that consume typing, Delete and Backspace included.
+const TEXT_HOSTS = new Set([
+  "textarea", "ha-textfield", "ha-icon-picker", "ha-entity-picker", "ha-combo-box", "ha-picker-field",
+  "ha-input", "ha-input-search",
+]);
+const NON_TEXT_INPUTS = new Set([
+  "button", "checkbox", "radio", "submit", "reset", "range", "color", "file", "image",
+]);
+
+/** Whether *el* takes typing, so the Delete key would edit it. */
+function takesText(el) {
+  const tag = (el.localName || "").toLowerCase();
+  if (tag === "input") return !NON_TEXT_INPUTS.has((el.type || "text").toLowerCase());
+  return TEXT_HOSTS.has(tag) || !!el.isContentEditable || el.getAttribute?.("role") === "textbox";
+}
 
 // Marks a tabindex this file wrote, so a later pass may correct its own work
 // (a control that became disabled) without ever overwriting the templates'.
@@ -51,10 +72,29 @@ const isHidden = (el) => {
 
 // Focusing a text field from script leaves the caret at character zero, so the
 // user types in front of their own text. Only where we move focus ourselves.
+// HA's ha-input draws its <input> a microtask after it is created, so a caret
+// placed on a freshly rendered one is placed again once it has drawn.
+const putCaret = (el, start, end) => {
+  const put = () => {
+    try { el.setSelectionRange(start, end); } catch { /* a field type with no caret */ }
+  };
+  put();
+  el.updateComplete?.then?.(put);
+};
+
 const caretToEnd = (el) => {
   if (typeof el?.setSelectionRange !== "function") return;
   const end = typeof el.value === "string" ? el.value.length : 0;
-  try { el.setSelectionRange(end, end); } catch { /* a field type with no caret */ }
+  putCaret(el, end, end);
+};
+
+// The caret of whatever has focus, looking through HA's field to the native
+// input inside it: the host itself does not report one.
+const caretOf = (el) => {
+  for (let n = el, depth = 0; n && depth < 4; n = n.shadowRoot?.activeElement, depth++) {
+    if (typeof n.selectionStart === "number") return { start: n.selectionStart, end: n.selectionEnd };
+  }
+  return null;
 };
 
 // Selectors that find the same control after a re-render, most specific first.
@@ -207,7 +247,7 @@ export const A11yMixin = {
     if (opened) {
       // Opening reveals the editor, so focus follows in rather than staying on
       // a face shape whose panel just changed underneath it.
-      this._a11yFocusConfigView();
+      this._a11yFocusConfigView({ firstControl: !!this._a11yFirstControlNext });
       this._a11yAnnounce(openMsg);
     } else {
       // The trigger can be gone -- closing after deleting the page it lived
@@ -297,9 +337,7 @@ export const A11yMixin = {
     if (!candidates.length && !after) return null;
     // Where the caret was, so restoring focus to a field the user is typing in
     // does not send them back to character zero.
-    const caret = typeof active.selectionStart === "number"
-      ? { start: active.selectionStart, end: active.selectionEnd }
-      : null;
+    const caret = caretOf(active);
     return { candidates, caret, after };
   },
 
@@ -338,20 +376,23 @@ export const A11yMixin = {
       if (found.length !== 1) continue;
       const el = found[0];
       if (typeof el.focus !== "function" || isHidden(el)) continue;
-      el.focus();
+      // `preventScroll`: this is focus going back where it already was, and
+      // the render has just put the page back there too. Letting the platform
+      // scroll to it as well is what used to yank the view around.
+      el.focus({ preventScroll: true });
       // HA's pickers keep their real control in a shadow root and the host
       // itself does not take focus. Either way the document reports the host
       // as the active element, so the check below still answers for both.
       if (sr.activeElement !== el && el.shadowRoot) {
         const inner = el.shadowRoot.querySelector(NATIVE);
-        if (inner && typeof inner.focus === "function") inner.focus();
+        if (inner && typeof inner.focus === "function") inner.focus({ preventScroll: true });
       }
       // `focus()` on an element that is no longer focusable is a silent no-op,
       // and reporting success there is how focus gets lost while every check
       // still passes. Ask the document, do not assume.
       if (sr.activeElement !== el) continue;
       if (token.caret && typeof el.setSelectionRange === "function") {
-        try { el.setSelectionRange(token.caret.start, token.caret.end); } catch { /* not a text field after all */ }
+        putCaret(el, token.caret.start, token.caret.end);
       }
       return true;
     }
@@ -360,7 +401,7 @@ export const A11yMixin = {
     if (token.after) {
       const next = sr.querySelector(token.after);
       if (next && typeof next.focus === "function" && !isHidden(next)) {
-        next.focus();
+        next.focus({ preventScroll: true });
         if (sr.activeElement === next) { caretToEnd(next); return true; }
       }
     }
@@ -370,8 +411,8 @@ export const A11yMixin = {
   /** Focus the first usable control in the open button's config card.
    *  Selecting reveals an editor, so focus follows into it. Returns false when
    *  the card has nothing that will take focus. */
-  _a11yFocusConfigView() {
-    if (this._a11yFocusConfigViewOnce()) return true;
+  _a11yFocusConfigView(opts = {}) {
+    if (this._a11yFocusConfigViewOnce(opts)) return true;
     // HA's own controls are not always upgraded by the time the markup lands,
     // and an un-upgraded component refuses focus. Give the frame a chance.
     if (typeof requestAnimationFrame === "function") {
@@ -380,18 +421,30 @@ export const A11yMixin = {
         // Still nothing that will take focus -- an editor built only from HA
         // components that never upgraded. Focus is on the shape the render
         // destroyed, so it has to go somewhere rather than nowhere.
-        if (!this._a11yFocusConfigViewOnce()) this._a11yFocusFallback();
+        if (!this._a11yFocusConfigViewOnce(opts)) this._a11yFocusFallback();
       });
     }
     return false;
   },
 
-  _a11yFocusConfigViewOnce() {
+  /** `firstControl`: the first control in document order, text field or not --
+   *  what Enter on a face button asks for. Otherwise one that takes no typing
+   *  comes first, so a click leaves the Delete key to the button. */
+  _a11yFocusConfigViewOnce({ firstControl = false } = {}) {
     const sr = this.shadowRoot;
     const card = sr?.querySelector(".config-card");
     if (!card) return false;
-    for (const el of card.querySelectorAll(FOCUSABLE)) {
-      if (el.disabled || el.getAttribute("aria-hidden") === "true") continue;
+    // A control that takes no typing first: a focused text field would take
+    // the Delete key that deletes the button and turn a quick delete into
+    // editing the image. Only a card holding nothing but text fields gets
+    // one, so focus still always lands on a real control.
+    const usable = [...card.querySelectorAll(FOCUSABLE)]
+      .filter((el) => !el.disabled && el.getAttribute("aria-hidden") !== "true");
+    const ordered = firstControl ? usable : [
+      ...usable.filter((el) => !takesText(el)),
+      ...usable.filter((el) => takesText(el)),
+    ];
+    for (const el of ordered) {
       // `preventScroll`: the caller scrolls the editor into view on purpose a
       // frame later, and focus() doing it first makes the two fight.
       el.focus({ preventScroll: true });

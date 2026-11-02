@@ -39,7 +39,7 @@ from ..shared.assignment import (
     ASSIGNMENT_LABEL_EDITED_KEY,
 )
 from .const import PAGE_SUBPAGE_KEY, is_subpage
-from .templates import async_load_template, template_bindings, load_template
+from ..config.page_templates import async_load_template, template_bindings, load_template
 from .text_style import normalize_settings
 
 _LOGGER = logging.getLogger(__name__)
@@ -574,13 +574,14 @@ class LizaRemoteStore:
                 if page_id <= 0:
                     continue
                 page_path = os.path.join(pages_dir, fname)
-                parsed = await self._async_read_page(page_path)
+                parsed = await self._async_read_page_as_stored(page_path)
                 if parsed is None:
                     continue
-                meta, buttons = parsed
+                meta, buttons, on_disk = parsed
                 pages.append({"id": page_id, **meta})
                 if buttons:
                     assignments[page_id] = buttons
+                self._prime_page_digest(page_path, {"id": page_id, **meta}, buttons, on_disk)
 
         # The page order is the source of truth for which pages exist; orphan
         # page files are ignored until a later write removes them. A subpage
@@ -710,12 +711,33 @@ class LizaRemoteStore:
 
     async def _async_read_page(self, path: str) -> tuple[dict, dict] | None:
         """Read one page file off the loop and parse it on it."""
+        parsed = await self._async_read_page_as_stored(path)
+        return parsed[:2] if parsed is not None else None
+
+    async def _async_read_page_as_stored(self, path: str) -> tuple[dict, dict, dict] | None:
+        """:meth:`_async_read_page`, plus the file as read before any migration.
+
+        The third element is for :meth:`_prime_page_digest`.
+        """
         raw = await self._hass.async_add_executor_job(self._read_yaml, path)
         if not isinstance(raw, dict):
             return None
+        on_disk = deepcopy(raw)
         _migrate_page_file(raw)
         await self._async_template_ready(raw)
-        return self._parse_page_file_data(raw)
+        return (*self._parse_page_file_data(raw), on_disk)
+
+    def _prime_page_digest(self, path: str, page_meta: dict, buttons: dict, on_disk: dict) -> None:
+        """Remember a loaded page file as written, when it is what a save would write.
+
+        Without this the digest cache starts empty at every start, so the first
+        save after it rewrote every page file however little it changed. Only a
+        file that matches the payload exactly is primed: one that load migrated
+        or normalised still differs, and is rewritten once on the next save.
+        """
+        built = self._build_page_file_data(page_meta, buttons or {})
+        if built == on_disk:
+            self._written_page_digests[path] = self._page_file_digest(built)
 
     @staticmethod
     def _clean_action_library(actions: Any) -> list[dict]:

@@ -36,7 +36,7 @@ from .const import (
     LANGUAGE_AUTO,
     SUPPORTED_LANGUAGES,
 )
-from .slider_throttle import (
+from .shared.slider_throttle import (
     CONF_SLIDER_MIN_INTERVAL_MS,
     DEFAULT_SLIDER_MIN_INTERVAL_MS,
     SLIDER_MIN_INTERVAL_MS_MAX,

@@ -1,8 +1,10 @@
-"""The per-remote settings: which font and size titles and tooltips use,
-whether buttons react to a long touch, and whether they may toggle.
+"""The per-remote settings: which theme supplies its defaults, which font and
+size titles and tooltips use, whether buttons react to a long touch, and
+whether they may toggle.
 
 Stored as ``settings.yaml`` in the remote's folder::
 
+    theme: high-contrast
     title:
       font: filsonsoft-light
       font_size: 48
@@ -24,10 +26,24 @@ from __future__ import annotations
 
 from typing import Any, Final
 
-from ..imgserv.const import SIZE_IDS
-from ..imgserv.fonts import DEFAULT_FONT_ID
+from ..imgserv.const import MIN_FONT_SIZE, SIZE_IDS
+from ..shared.theme import (
+    DEFAULT_THEME_ID,
+    FACET_NAMES,
+    Theme,
+    compose_id,
+    get_theme,
+    is_theme_id,
+    split_id,
+    theme_ids,
+)
 
 TEXT_KINDS: Final = ("title", "tooltip")
+
+#: Which theme supplies this remote's defaults. One key rather than a file of
+#: its own: a theme *is* a default, and the defaults already live here. Its
+#: value is a theme id, or a mapping naming one per facet.
+THEME_KEY: Final = "theme"
 
 #: Off by default: with it on, a button with a long touch holds its click back
 #: until the finger lifts, which a remote set up before long touch existed
@@ -61,15 +77,19 @@ KEY_REPEAT_DELAY_MAX_MS: Final = 2000
 KEY_REPEAT_RATE_MIN: Final = 1
 KEY_REPEAT_RATE_MAX: Final = 50
 
-# Smaller than this is unreadable on the remote's screen.
-MIN_FONT_SIZE: Final = 6
 
+def default_settings(theme: Theme | None = None) -> dict[str, Any]:
+    """The defaults a remote on *theme* starts from; the default theme if none.
 
-def default_settings() -> dict[str, dict[str, Any]]:
-    settings: dict[str, dict[str, Any]] = {
-        kind: {"font": DEFAULT_FONT_ID, "font_size": SIZE_IDS[kind].font_size}
-        for kind in TEXT_KINDS
+    The text block comes from the theme, which is what makes a theme a
+    *default* rather than an override: everything the file on disk actually
+    says still wins, because the reader below applies it afterwards.
+    """
+    theme = theme or get_theme(DEFAULT_THEME_ID)
+    settings: dict[str, Any] = {
+        kind: dict(theme.text_style(kind)) for kind in TEXT_KINDS
     }
+    settings[THEME_KEY] = theme_setting(split_id(theme.theme_id))
     settings[LONGTOUCH_SECTION] = {"enabled": False}
     settings[TOGGLE_SECTION] = {"enabled": False}
     settings[MEMORY_SECTION] = {"enabled": False}
@@ -77,6 +97,56 @@ def default_settings() -> dict[str, dict[str, Any]]:
         "delay_ms": DEFAULT_KEY_REPEAT_DELAY_MS, "rate": DEFAULT_KEY_REPEAT_RATE,
     }
     return settings
+
+
+def _facet_id(value: Any) -> str | None:
+    """*value* as a theme id, or ``None`` when it is not one."""
+    if not isinstance(value, str):
+        return None
+    wanted = value.strip().lower()
+    return wanted if is_theme_id(wanted) else None
+
+
+def theme_facets(settings: Any) -> tuple[str, str, str]:
+    """Which theme supplies each facet, ``default`` for any left unnamed.
+
+    ``theme: monochrome`` means all three, which is what every remote set up
+    before facets existed says and has to keep meaning. A mapping names them
+    one at a time.
+    """
+    given = settings.get(THEME_KEY) if isinstance(settings, dict) else None
+    if isinstance(given, dict):
+        return tuple(  # type: ignore[return-value]
+            _facet_id(given.get(facet)) or DEFAULT_THEME_ID for facet in FACET_NAMES
+        )
+    whole = _facet_id(given) or DEFAULT_THEME_ID
+    return (whole, whole, whole)
+
+
+def theme_setting(facets: tuple[str, str, str]) -> str | dict[str, str]:
+    """How *facets* are written down: a plain id while all three agree.
+
+    A remote on one theme throughout keeps the single line it has always had
+    on disk; only mixing earns the longer form.
+    """
+    if facets[0] == facets[1] == facets[2]:
+        return facets[0]
+    return dict(zip(FACET_NAMES, facets, strict=True))
+
+
+def theme_id(settings: Any) -> str:
+    """The one id *settings* resolve to, facets and all."""
+    return compose_id(*theme_facets(settings))
+
+
+def settings_theme(settings: Any) -> Theme:
+    """The theme *settings* resolve to.
+
+    A theme that is not installed resolves to the default one while it is
+    missing, exactly as a missing font falls back: the name stays on disk and
+    the look returns the moment the file is put back.
+    """
+    return get_theme(theme_id(settings))
 
 
 def _key_repeat_value(key: str, value: Any) -> bool:
@@ -134,15 +204,19 @@ def _font_size_ok(kind: str, value: Any) -> bool:
     return isinstance(value, int) and low <= value <= high
 
 
-def normalize_settings(raw: Any) -> dict[str, dict[str, Any]]:
+def normalize_settings(raw: Any) -> dict[str, Any]:
     """Settings read from disk, with every missing or unusable value defaulted.
+
+    The defaults are the ones the remote's theme supplies, so a key the file
+    leaves out follows the theme rather than a constant.
 
     A font that is not installed is kept: the text falls back to the default
     font while it is missing, and comes back once the file is put back.
     """
-    settings = default_settings()
+    settings = default_settings(settings_theme(raw))
     if not isinstance(raw, dict):
         return settings
+    settings[THEME_KEY] = theme_setting(theme_facets(raw))
     for kind in TEXT_KINDS:
         given = raw.get(kind)
         if not isinstance(given, dict):
@@ -168,7 +242,7 @@ def normalize_settings(raw: Any) -> dict[str, dict[str, Any]]:
 
 def validate_settings(
     raw: Any, font_ids: set[str], current: Any = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, Any]:
     """Settings sent by the editor, checked strictly; raises ``ValueError``.
 
     Unlike a file on disk, a save can say what is wrong, so nothing is
@@ -183,14 +257,36 @@ def validate_settings(
     have nothing to do with fonts, could not be changed again until the font
     file came back. An unchanged font is therefore kept, exactly as the file
     reader keeps it, while *picking* one that is not installed is still an
-    error.
+    error. A theme file that has been taken away is kept for the same reason.
     """
     if not isinstance(raw, dict):
         raise ValueError("settings must be a mapping")
-    unknown = set(raw) - set(TEXT_KINDS) - set(FEATURE_SECTIONS) - {KEY_REPEAT_SECTION}
+    unknown = (
+        set(raw) - set(TEXT_KINDS) - set(FEATURE_SECTIONS)
+        - {KEY_REPEAT_SECTION, THEME_KEY}
+    )
     if unknown:
         raise ValueError(f"unknown setting: {', '.join(sorted(unknown))}")
-    settings = default_settings()
+    chosen: tuple[str, str, str] = (DEFAULT_THEME_ID,) * 3
+    if THEME_KEY in raw:
+        given = raw[THEME_KEY]
+        if isinstance(given, dict):
+            unknown_facets = set(given) - set(FACET_NAMES)
+            if unknown_facets:
+                raise ValueError(f"unknown theme facet: {', '.join(sorted(unknown_facets))}")
+        elif not isinstance(given, str):
+            raise ValueError(f"theme {given!r} is not installed")
+        chosen = theme_facets(raw)
+        spelled = [given] if isinstance(given, str) else list(given.values())
+        if any(_facet_id(one) is None for one in spelled):
+            raise ValueError(f"theme {given!r} is not installed")
+        kept = set(theme_facets(current)) if isinstance(current, dict) else set()
+        installed = theme_ids()
+        missing = [one for one in chosen if one not in installed and one not in kept]
+        if missing:
+            raise ValueError(f"theme {missing[0]!r} is not installed")
+    settings = default_settings(get_theme(compose_id(*chosen)))
+    settings[THEME_KEY] = theme_setting(chosen)
     if KEY_REPEAT_SECTION in raw:
         given = raw[KEY_REPEAT_SECTION]
         if not isinstance(given, dict) or set(given) - {"delay_ms", "rate"}:
@@ -214,7 +310,7 @@ def validate_settings(
                 raise ValueError(f"{section}: enabled must be true or false")
             settings[section]["enabled"] = given["enabled"]
     for kind, given in raw.items():
-        if kind in FEATURE_SECTIONS or kind == KEY_REPEAT_SECTION:
+        if kind in FEATURE_SECTIONS or kind in (KEY_REPEAT_SECTION, THEME_KEY):
             continue
         if not isinstance(given, dict):
             raise ValueError(f"{kind} must be a mapping")

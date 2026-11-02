@@ -108,6 +108,9 @@
       "battery": {
         "name": "Batterie"
       },
+      "ha_address": {
+        "name": "Home-Assistant-Adresse"
+      },
       "ip_address": {
         "name": "IP-Adresse"
       }
@@ -161,7 +164,7 @@
       }
     },
     "goto_page": {
-      "name": "goto page",
+      "name": "Gehe zu Seite",
       "description": "Zeigt eine Seite auf der Fernbedienung. Auf einer Taste wird daraus eine geräteinterne Aktion, die die Fernbedienung selbst ausführt.",
       "fields": {
         "page_id": {

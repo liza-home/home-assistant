@@ -33,104 +33,25 @@ export const STYLES_DEBUG = `
     gap: 8px;
     margin-top: 16px;
   }
-  /* Native buttons in the same shape the rest of the panel uses. Sized to the
-     44px touch target the panel is operated at on a tablet, which is also what
-     makes them read as pressable rather than as text. */
-  .debug-btn {
-    /* The reset is deliberate even though most buttons here omit it: a native
-       button keeps the platform's own text colour until its appearance is
-       cleared, and these are read on a tablet WebKit as well as in Chrome. */
-    appearance: none;
-    -webkit-appearance: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 40px;
-    padding: 0 18px;
-    border: 1px solid var(--primary-color, #03a9f4);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--liza-accent-text);
-    font-family: inherit;
-    font-size: var(--liza-font-s);
-    font-weight: 500;
-    cursor: pointer;
-    transition: background .15s, box-shadow .15s, transform .05s;
-  }
-  .debug-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--primary-color, #03a9f4) 10%, transparent);
-  }
-  /* A pressed state, because the two slowest actions here take a round trip to
-     the device and the only other feedback is the label changing. */
-  .debug-btn:active:not(:disabled) { transform: translateY(1px); }
-  .debug-btn:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 2px;
-  }
-  /* The filled variant takes the pre-darkened accent rather than the raw theme
-     colour. Two reasons, both measured: white on --primary-color is 2.63:1,
-     under the 4.5:1 AA floor, while white on this fill is 4.89:1; and the theme
-     defines --primary-color through another token with no fallback of its own,
-     so when that token is missing the background collapses to transparent and
-     white label sits on a white card. The fill token carries its own fallback,
-     which keeps the surface solid either way. */
-  .debug-btn.primary {
-    background: var(--liza-accent-fill);
-    color: #fff;
-    border-color: transparent;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
-  }
-  .debug-btn.primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--liza-accent-fill) 88%, black);
-  }
-  /* A switch, styled like HA's own: a track the thumb slides in. Native, so it
-     needs the same appearance reset, and :disabled dims the whole control
-     rather than hiding it -- it is unavailable for one round trip, not gone.
-     NB: no backticks in this comment; it sits inside a template literal. */
+  /* The actions are ha-button. Everything that used to be drawn here -- the
+     fill, the radius, the hover, the pressed nudge, the focus ring, the
+     disabled dimming -- is the theme's job now, so only the row geometry is
+     left. The accent/filled split that the .primary modifier used to make is
+     carried by the element's own variant and appearance attributes. */
+  .debug-btn { flex: 0 0 auto; }
+
+  /* HA's switch with its words beside it, sitting in the button row. */
   .debug-switch {
-    appearance: none;
-    -webkit-appearance: none;
     display: inline-flex;
     align-items: center;
     gap: 10px;
     min-height: 40px;
-    padding: 0;
-    border: none;
-    background: none;
-    /* inherit, not a token: the label has to match whatever the surrounding
-       card already renders text in, and a button would otherwise fall back to
-       the UA's own buttontext, which is dark on a dark card. */
-    color: inherit;
-    font-family: inherit;
+  }
+  .debug-switch label {
     font-size: var(--liza-font-s);
     font-weight: 500;
     cursor: pointer;
   }
-  .debug-switch-track {
-    position: relative;
-    width: 40px;
-    height: 22px;
-    border-radius: 999px;
-    background: var(--divider-color, #9e9e9e);
-    transition: background .18s;
-    flex: none;
-  }
-  .debug-switch-thumb {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
-    transition: transform .18s;
-  }
-  .debug-switch[aria-checked="true"] .debug-switch-track { background: var(--primary-color, #03a9f4); }
-  .debug-switch[aria-checked="true"] .debug-switch-thumb { transform: translateX(18px); }
-  .debug-switch:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; border-radius: 8px; }
-  .debug-switch:disabled { opacity: .5; cursor: default; }
   /* Where the stream's output actually goes. A shadow root does not inherit
      the document's link colour, so the anchor has to be told -- the same
      reason .empty-state a exists. */
@@ -156,13 +77,6 @@ export const STYLES_DEBUG = `
   .debug-live a { color: var(--liza-accent-text); text-decoration: none; font-weight: 500; }
   .debug-live a:hover, .debug-live a:focus-visible { text-decoration: underline; }
 
-  .debug-btn:disabled {
-    /* Dimmed rather than hidden: a control that vanishes mid-request reads as
-       a fault, and these disable themselves for the length of one call. */
-    opacity: .5;
-    cursor: default;
-    box-shadow: none;
-  }
   .debug-verdict {
     font-size: var(--liza-font-l);
     font-weight: 600;
@@ -179,35 +93,13 @@ export const STYLES_DEBUG = `
   }
   .debug-facts dt { color: var(--liza-muted-text); }
   .debug-facts dd { margin: 0; overflow-wrap: anywhere; }
-  /* One row per module: the name left, its level right. A grid rather than a
-     table because the pair is a label and its control, not tabular data, and a
-     screen reader should meet them as such. */
+  /* One select per module, named by the module. A grid so the selects line
+     up in columns however many modules the device reports. */
   .debug-levels {
     display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 6px 16px;
-    align-items: center;
-    font-size: var(--liza-font-m);
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px 16px;
   }
-  /* The row is a grid item that lays its own two cells into the parent grid,
-     so every select lines up across rows however long the module names are. */
-  .debug-level-row { display: contents; }
-  .debug-level-row label { color: var(--liza-muted-text); }
-  /* A shadow root inherits no form styling from the document, so the select
-     would otherwise render in the browser's own colours -- which on a dark
-     theme means black text on a black card. */
-  .debug-level-select {
-    width: 100%;
-    max-width: 220px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    border: 1px solid var(--divider-color, rgba(127,127,127,0.4));
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color, #212121);
-    font-family: inherit;
-    font-size: var(--liza-font-m);
-  }
-  .debug-level-select:disabled { opacity: 0.6; }
   .debug-error {
     color: var(--error-color, #f44336);
     font-size: var(--liza-font-m);
@@ -262,24 +154,6 @@ export const STYLES_DEBUG = `
     padding: 4px 10px 8px;
     font-size: 12px;
     color: var(--warning-color, #ffa600);
-  }
-  .debug-pretty-btn {
-    /* The panel loads none of Home Assistant's form components, so a button
-       here gets no inherited colour at all -- without these it renders as
-       black text on a black surface. */
-    font: inherit;
-    font-size: 0.85em;
-    cursor: pointer;
-    padding: 2px 10px;
-    border-radius: 12px;
-    border: 1px solid var(--divider-color, #444);
-    background: var(--secondary-background-color, #2b2b2b);
-    color: var(--primary-text-color, #e0e0e0);
-  }
-  .debug-pretty-btn:hover { border-color: var(--primary-color, #5c8cd6); }
-  .debug-pretty-btn.on {
-    border-color: var(--primary-color, #5c8cd6);
-    color: var(--primary-color, #5c8cd6);
   }
   .debug-dump .a-fg-0  { color: #3f3f3f; }
   .debug-dump .a-fg-1  { color: #cc4b4b; }

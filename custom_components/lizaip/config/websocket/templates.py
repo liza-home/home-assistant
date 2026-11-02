@@ -13,16 +13,17 @@ from typing import Any, Final
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 
 from ...runtime import _get_store
 from ...shared.assignment import ASSIGNMENT_LONGTOUCH_KEY, ASSIGNMENT_DYNAMIC_KEY
 from ...shared.logs import device_id_logger
 from ..blueprint import async_get_blueprint
-from ..const import PAGE_ID_SCHEMA, generate_page_id
+from ..const import PAGE_ID_SCHEMA, PAGE_SUBPAGE_KEY, generate_page_id
 from ..device_entities import _resolve_device_domain_entities
 from ..events import fire_config_changed
-from ..templates import (
+from ...config.page_templates import (
     list_templates,
     load_template,
     resolve_template_variables,
@@ -146,6 +147,9 @@ def _eligible_devices(hass: HomeAssistant, device_sel: dict) -> list[dict]:
     primary_domain = device_sel.get("primary_domain")
     entry_domains = _entry_domains(hass) if integrations else {}
     device_domains = _device_domains(hass)
+    # Read only if something actually has an area: most templates resolve
+    # without one, and the registry is a real lookup.
+    areas = None
     devices = []
     for device in dr.async_get(hass).devices:
         if device.disabled_by is not None:
@@ -155,9 +159,16 @@ def _eligible_devices(hass: HomeAssistant, device_sel: dict) -> list[dict]:
         domains = device_domains.get(device.id, set())
         if not domains or (primary_domain and primary_domain not in domains):
             continue
+        area_name = ""
+        if device.area_id:
+            if areas is None:
+                areas = ar.async_get(hass)
+            area = areas.async_get_area(device.area_id)
+            area_name = area.name if area else ""
         devices.append({
             "id": device.id,
             "name": device.name_by_user or device.name or device.id,
+            "area": area_name,
             "domains": sorted(domains),
         })
     devices.sort(key=lambda d: d["name"].lower())
@@ -190,9 +201,10 @@ def _template_has_target(
 
     Asks the same thing as the device picker -- a device of one of the
     template's integrations carrying its primary domain -- from *index*
-    (``_target_index``) when given. An unbound template needs nothing.
+    (``_target_index``) when given. An unbound template needs nothing, and
+    neither does a card that runs a panel routine instead of writing a page.
     """
-    if template.get("unbound"):
+    if template.get("unbound") or template.get("action"):
         return True
     selector = template.get("target_selector") or {}
     entry_sel = selector.get("config_entry") or {}
@@ -378,101 +390,16 @@ async def ws_add_template_page(hass: HomeAssistant, connection, msg: dict, devic
     target_device = msg.get("target_device") or ""
     target_config_entry = msg.get("target_config_entry") or ""
 
-
-    template = await hass.async_add_executor_job(load_template, template_id)
-    if not template:
-        connection.send_error(msg["id"], "template_error", f"Template '{template_id}' not found")
+    try:
+        new_page_id = await async_create_page_from_template(
+            hass, entry_id, device_id, template_id,
+            target_device=target_device, target_config_entry=target_config_entry,
+        )
+    except TemplatePageError as err:
+        connection.send_error(msg["id"], err.code, str(err))
         return
-
-    error, target_entity, domain_entities = _resolve_template_target(
-        hass, template_id, template, target_device, target_config_entry,
-    )
-    if error:
-        connection.send_error(msg["id"], *error)
-        return
-
-    template = await resolve_template_variables(
-        hass, template, target_entity, domain_entities or None, target_config_entry,
-        remote_entry=entry_id,
-    )
-
-    # Template generation is the only place target-specific variables become
-    # stored action-library entries and button assignments.
-    new_actions, assignments = template_generate_assignments(
-        template_id, target_entity, template, domain_entities or None, hass
-    )
-
-    if not assignments:
-        connection.send_error(msg["id"], "template_error", f"Template '{template_id}' produced no assignments")
-        return
-
+    target_entity = target_device or target_config_entry
     store = _get_store(hass)
-
-    existing_lib = await store.async_get_action_library(device_id)
-    existing_by_id = {a["id"]: i for i, a in enumerate(existing_lib) if "id" in a}
-    for action in new_actions:
-        if action["id"] in existing_by_id:
-            existing_lib[existing_by_id[action["id"]]] = action
-        else:
-            existing_lib.append(action)
-    await store.async_set_action_library(device_id, existing_lib)
-
-    template_meta = None
-    all_templates = await hass.async_add_executor_job(list_templates)
-    for lt in all_templates:
-        if lt["id"] == template_id:
-            template_meta = lt
-            break
-
-    # `page_image` may hold `${…}` variables, which the picker cannot draw, so
-    # it is kept apart from the `icon` the picker shows.
-    page_icon = (
-        (template_meta.get("page_image") or template_meta["icon"])
-        if template_meta else "mdi:remote"
-    )
-
-    pages = await store.async_get_pages(device_id)
-    existing_ids = {p["id"] for p in pages if isinstance(p, dict)}
-    new_page_id = generate_page_id(
-        await reserved_page_ids(store, device_id, existing_ids)
-    )
-
-    new_page = {
-        "id": new_page_id,
-        "image": page_icon,
-        "hash": 0,
-    }
-    # An unbound template leaves an ordinary page: there is no device to change
-    # it to, nothing to refresh from, and no `${_device}` to answer.
-    if not template.get("unbound"):
-        new_page["template"] = {
-            "type": template_id,
-            "target": {
-                "entity_id": target_entity,
-                **({"device": target_device} if target_device else {}),
-                **(
-                    {"config_entry": target_config_entry}
-                    if target_config_entry else {}
-                ),
-            },
-        }
-    pages.append(new_page)
-    await store.async_set_pages(device_id, pages)
-
-    bp = await async_get_blueprint(hass, msg["entry_id"])
-    all_keys = [btn["key"] for btn in bp.get("buttons", [])]
-    for key in all_keys:
-        if key not in assignments:
-            assignments[key] = dict(EMPTY_BUTTON)
-
-    await store.async_set_assignments(device_id, new_page_id, assignments)
-    await store.async_recompute_page_hash(device_id, new_page_id)
-
-    await refresh_state_listener(hass, entry_id)
-    fire_config_changed(hass, entry_id)
-    # Re-scan after writes so new dynamic bindings get push subscriptions; the
-    # scanner re-reads stored pages.
-    schedule_push_rescan(hass, entry_id)
 
     pages = await store.async_get_pages(device_id)
 
@@ -700,20 +627,181 @@ async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, 
     await store.async_set_pages(device_id, pages)
     await store.async_recompute_page_hash(device_id, page_id)
 
-    await refresh_state_listener(hass, entry_id)
-    fire_config_changed(hass, entry_id)
-    schedule_push_rescan(hass, entry_id)
-    # Dynamic buttons list what the *new* device offers -- its apps, its
-    # inputs -- and only a refresh reads that.
-    _schedule_page_refresh(hass, entry_id, page_id)
-
     device_id_logger(_LOGGER, hass, device_id).info(
         "Moved template page %s (%s) from %s to %s: %d button(s) changed",
         page_id, template_id, old_target, new_target, buttons_changed,
     )
+    # Answered before the rest: rebuilding the remote's state listener reads
+    # every page and took seconds, all of which the dialog sat waiting for.
     connection.send_result(msg["id"], {
         "success": True,
         "pages": await store.async_get_pages(device_id),
         "replaced": mapping,
         "buttons_changed": buttons_changed,
     })
+    fire_config_changed(hass, entry_id)
+    schedule_push_rescan(hass, entry_id)
+    # Dynamic buttons list what the *new* device offers -- its apps, its
+    # inputs -- and only a refresh reads that.
+    _schedule_page_refresh(hass, entry_id, page_id)
+    await refresh_state_listener(hass, entry_id)
+
+
+class TemplatePageError(Exception):
+    """A template that cannot become a page; ``code`` is the websocket error code."""
+
+    def __init__(self, message: str, code: str = "template_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+async def async_create_page_from_template(
+    hass: HomeAssistant,
+    entry_id: str,
+    device_id: str,
+    template_id: str,
+    *,
+    target_device: str = "",
+    target_config_entry: str = "",
+    subpage: bool = False,
+) -> int:
+    """Add a page made from the shipped template *template_id*; return its id.
+
+    What **Add page → Template** does, for the panel and for the LLM tools
+    alike: the target is checked against the template's selector, the
+    template's variables are resolved against it and the remote, and the page
+    is written by :func:`async_add_template_page`.
+    """
+    template = await hass.async_add_executor_job(load_template, template_id)
+    if not template:
+        raise TemplatePageError(f"Template '{template_id}' not found")
+
+    error, target_entity, domain_entities = _resolve_template_target(
+        hass, template_id, template, target_device, target_config_entry,
+    )
+    if error:
+        code, message = error
+        raise TemplatePageError(message, code)
+
+    template = await resolve_template_variables(
+        hass, template, target_entity, domain_entities or None, target_config_entry,
+        remote_entry=entry_id,
+    )
+
+    template_meta = None
+    all_templates = await hass.async_add_executor_job(list_templates)
+    for lt in all_templates:
+        if lt["id"] == template_id:
+            template_meta = lt
+            break
+
+    # `page_image` may hold `${…}` variables, which the picker cannot draw, so
+    # it is kept apart from the `icon` the picker shows.
+    page_icon = (
+        template_meta.get("page_image", template_meta["icon"])
+        if template_meta else "mdi:remote"
+    )
+
+    return await async_add_template_page(
+        hass, entry_id, device_id, template_id, template,
+        page_image=page_icon,
+        target_entity=target_entity,
+        target_device=target_device,
+        target_config_entry=target_config_entry,
+        domain_entities=domain_entities or None,
+        subpage=subpage,
+    )
+
+
+async def async_add_template_page(
+    hass: HomeAssistant,
+    entry_id: str,
+    device_id: str,
+    template_id: str,
+    template: dict,
+    *,
+    page_image: str,
+    target_entity: str = "",
+    target_device: str = "",
+    target_config_entry: str = "",
+    domain_entities: dict[str, str] | None = None,
+    subpage: bool = False,
+    generated: tuple[list[dict], dict[str, dict]] | None = None,
+) -> int:
+    """Turn a *resolved* template into a new page on a remote; return its id.
+
+    The one path from a template to a stored page, shared by the panel's
+    ``add_template_page`` and the LLM tools (``llm_api.py``, which append an
+    ordinary page through an unbound definition): generation makes
+    the action-library entries and assignments, the page is appended, every
+    button the template leaves alone is written empty, and the remote, the
+    state listener and the push triggers are told.
+    """
+    # Template generation is the only place target-specific variables become
+    # stored action-library entries and button assignments. A caller that has
+    # already generated them -- and renamed what it made -- hands them in.
+    new_actions, assignments = generated or template_generate_assignments(
+        template_id, target_entity, template, domain_entities, hass
+    )
+    # A definition that lists buttons and resolves to none is broken; one that
+    # lists none is a deliberately empty page, which is what the blank-page
+    # option adds.
+    if template.get("buttons") and not assignments:
+        raise TemplatePageError(f"Template '{template_id}' produced no assignments")
+
+    store = _get_store(hass)
+
+    existing_lib = await store.async_get_action_library(device_id)
+    existing_by_id = {a["id"]: i for i, a in enumerate(existing_lib) if "id" in a}
+    for action in new_actions:
+        if action["id"] in existing_by_id:
+            existing_lib[existing_by_id[action["id"]]] = action
+        else:
+            existing_lib.append(action)
+    await store.async_set_action_library(device_id, existing_lib)
+
+    pages = await store.async_get_pages(device_id)
+    existing_ids = {p["id"] for p in pages if isinstance(p, dict)}
+    new_page_id = generate_page_id(
+        await reserved_page_ids(store, device_id, existing_ids)
+    )
+
+    new_page: dict[str, Any] = {
+        "id": new_page_id,
+        "image": page_image,
+        "hash": 0,
+    }
+    if subpage:
+        new_page[PAGE_SUBPAGE_KEY] = True
+    # An unbound template leaves an ordinary page: there is no device to change
+    # it to, nothing to refresh from, and no `${_device}` to answer.
+    if not template.get("unbound"):
+        new_page["template"] = {
+            "type": template_id,
+            "target": {
+                "entity_id": target_entity,
+                **({"device": target_device} if target_device else {}),
+                **(
+                    {"config_entry": target_config_entry}
+                    if target_config_entry else {}
+                ),
+            },
+        }
+    pages.append(new_page)
+    await store.async_set_pages(device_id, pages)
+
+    bp = await async_get_blueprint(hass, entry_id)
+    all_keys = [btn["key"] for btn in bp.get("buttons", [])]
+    for key in all_keys:
+        if key not in assignments:
+            assignments[key] = dict(EMPTY_BUTTON)
+
+    await store.async_set_assignments(device_id, new_page_id, assignments)
+    await store.async_recompute_page_hash(device_id, new_page_id)
+
+    await refresh_state_listener(hass, entry_id)
+    fire_config_changed(hass, entry_id)
+    # Re-scan after writes so new dynamic bindings get push subscriptions; the
+    # scanner re-reads stored pages.
+    schedule_push_rescan(hass, entry_id)
+    return new_page_id

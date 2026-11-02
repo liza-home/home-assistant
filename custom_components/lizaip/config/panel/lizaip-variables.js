@@ -142,9 +142,10 @@ export const VariablesMixin = {
     // A field still holding what the last render put there loses nothing to a
     // render (focus is put back), and it is usually the very field whose
     // variable was just answered. Only unsaved typing waits.
-    const typing = active && /^(INPUT|TEXTAREA)$/.test(active.tagName)
-      && active.value !== active.defaultValue;
-    if (typing || active?.tagName === "SELECT") {
+    // HA's field has no defaultValue; the attribute the render wrote is it.
+    const typing = active && /^(INPUT|TEXTAREA|HA-INPUT)$/.test(active.tagName)
+      && active.value !== (active.defaultValue ?? active.getAttribute("value") ?? "");
+    if (typing || /^(SELECT|HA-SELECT)$/.test(active?.tagName || "")) {
       // Draw it once the typing is committed or the field is left, not never:
       // one listener for whichever of the two comes first, instead of a timer.
       const root = this.shadowRoot;

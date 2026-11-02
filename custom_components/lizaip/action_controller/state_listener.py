@@ -13,11 +13,12 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .. import optimistic
-from ..config.text_style import toggle_enabled
+from ..config.text_style import settings_theme, toggle_enabled
 from ..const import SIGNAL_ICON_UPDATE, SIGNAL_PREDICTED_UPDATE
+from ..config.const import step_service
 from ..shared.services import catchall_state_icon
 from ..shared.logs import device_logger
-from ..shared.tokens import page_scope, resolve_image_tokens
+from ..shared.tokens import button_scope, page_scope, resolve_image_tokens
 from ..shared.icon_urls import resolve_icon_url
 from ..state_icon import (
     icon_style_for_entities,
@@ -52,7 +53,6 @@ async def _index_buttons_by_entity(
     store: Any,
     device_id: str,
     pages: list[dict],
-    lib_by_id: dict[str, dict],
     toggles: bool,
 ) -> dict[str, list[_IndexedButton]]:
     """Map each watched entity to the buttons a change to it can repaint.
@@ -62,12 +62,11 @@ async def _index_buttons_by_entity(
     target resolution) is read under the flush lock and cannot change while
     the flush runs. Without it the flush walked entities x actions x pages and
     asked the store for a page's assignments inside that walk, so a remote
-    with a full action library paid thousands of store reads and target
+    with a full page set paid thousands of store reads and target
     resolutions for a single light turning on.
 
-    Buttons whose action is not in the library are dropped here rather than
-    skipped in the loop: the library is what supplies the glyph, so there is
-    nothing to paint without it.
+    A button with no step is dropped here rather than skipped in the loop: its
+    service is what selects the glyph, so there is nothing to paint without it.
     """
     index: dict[str, list[_IndexedButton]] = {}
     for page in pages:
@@ -81,15 +80,15 @@ async def _index_buttons_by_entity(
         # was when this happened inside the flush loop.
         with page_scope(template):
             for btn_key, assign in await _get_assignments(hass, device_id, pid):
-                action_id = assign.get("action_id")
-                if not action_id or action_id not in lib_by_id:
-                    continue
                 assign = runtime_assign(assign, toggles)
                 config = assign.get("config", [])
                 step = config[0] if isinstance(config, list) and config else {}
+                service = step_service(config) or ""
+                if not service:
+                    continue
                 targets = resolve_target_entities(step, hass)
                 entry: _IndexedButton = (
-                    pid, page_color, template, btn_key, assign, action_id, targets,
+                    pid, page_color, template, btn_key, assign, service, targets,
                 )
                 for eid in targets:
                     index.setdefault(eid, []).append(entry)
@@ -180,9 +179,12 @@ async def setup_state_listener(
         # top-level import re-enters a half-built package (and `lizaip.reload`
         # re-executes both in its own order). Reusing the full sync's resolver
         # is what keeps the live push and the sync agreeing on the glyph.
-        from ..config.button_rendering import _get_service_icons, _resolve_button_icon
+        from ..config.button_rendering import (
+            _get_service_icons,
+            _resolve_button_icon,
+            library_names,
+        )
 
-        current_lib = await store.async_get_action_library(device_id)
         current_pages = await store.async_get_pages(device_id)
         # Lazy, at most once per flush: only the one-way branch needs it, and it
         # is the expensive part of this function.
@@ -195,51 +197,49 @@ async def setup_state_listener(
         # Read once per flush for the same reason as the options above: the
         # remote's settings cannot change mid-flush, and the per-button filter
         # below must not ask the store once per button.
-        toggles = toggle_enabled(await store.async_get_settings(device_id))
-        # Library entries are user/panel-authored; every other consumer
-        # (device_sync, websocket) guards for a missing "id". A bare subscript
-        # anywhere below would abort the whole flush and silently stop icon
-        # updates for the device.
-        lib_by_id = {
-            action["id"]: action
-            for action in current_lib
-            if isinstance(action, dict) and action.get("id")
-        }
+        flush_settings = await store.async_get_settings(device_id)
+        toggles = toggle_enabled(flush_settings)
+        # The remote's theme, read with the settings it lives in: it decides
+        # the icon table below and rides in every URL this flush builds, so a
+        # live repaint and a full sync cannot draw different pictures.
+        flush_theme = settings_theme(flush_settings)
+        # As the sync reads it: a label that is only its library entry's name
+        # gives way to the derived one, any other label is printed as it reads.
+        names = library_names(await store.async_get_action_library(device_id))
+        theme_icons = flush_theme.icons
         # Built once per flush, keyed by the entity that can move it, so an
-        # event costs a dict lookup instead of a walk over every action x page
-        # x button. Everything folded in here is flush-stable for the same
-        # reason the options and toggles above are: the store cannot change
-        # while the flush lock is held. The store reads in particular used to
-        # happen once per (entity, action, page) -- thousands of them on a
-        # remote with a full library.
+        # event costs a dict lookup instead of a walk over every page x
+        # button. Flush-stable: the store cannot change under the flush lock.
         buttons_by_entity = await _index_buttons_by_entity(
-            hass, store, device_id, current_pages, lib_by_id, toggles,
+            hass, store, device_id, current_pages, toggles,
         )
         for eid in entities:
             state = hass.states.get(eid)
             if not state:
                 continue
-            # Memoised across the buttons this entity moves: one action
+            # Memoised across the buttons this entity moves: one service
             # commonly backs several of them, and the match only depends on
-            # the action and the state.
+            # the service and the state.
             state_icon_cache: dict[str, str | None] = {}
-            for pid, page_color, template, btn_key, assign, action_id, targets in (
+            for pid, page_color, template, btn_key, assign, service, targets in (
                 buttons_by_entity.get(eid, ())
             ):
-                action = lib_by_id[action_id]
-                if action_id in state_icon_cache:
-                    action_icon = state_icon_cache[action_id]
+                if service in state_icon_cache:
+                    action_icon = state_icon_cache[service]
                 else:
-                    action_icon = _match_state_icon(action, state)
-                    state_icon_cache[action_id] = action_icon
+                    action_icon = _match_state_icon(service, state, theme_icons)
+                    state_icon_cache[service] = action_icon
                 # No early-out on a missing `action_icon` here. A one-way
                 # service (light.turn_on / turn_off) has a fixed glyph, so
                 # `_match_state_icon` returns None, and so does a toggle's
                 # derived action -- yet both can still need a repaint, one for
                 # its tint and one for its next rule. Neither is knowable until
                 # the button is in hand, so the decision is taken below.
-                # `${_device}` in a tile or tooltip is this page's device.
-                with page_scope(template):
+                # `${_device}` in a tile or tooltip is this page's device, or
+                # on a plain page the button's own entity.
+                with page_scope(template), button_scope(
+                    targets[0] if targets else None, hass,
+                ):
                     # A toggle rule outranks every other source: it is
                     # the only one that knows the button is about to do
                     # something other than its declared action, so letting
@@ -247,7 +247,7 @@ async def setup_state_listener(
                     # optional, so None falls through to the usual ladder.
                     rule_glyph = toggle_icon(
                         assign, state, entry.entry_id, pid, btn_key,
-                        eid.split(".")[0], hass=hass,
+                        eid.split(".")[0], hass=hass, icons=theme_icons,
                     )
                     tooltip: str | None
                     # A label with a placeholder reads the entity, so
@@ -260,7 +260,7 @@ async def setup_state_listener(
                             state_icons,
                             eid.split(".")[0],
                             state.state,
-                            action.get("service", ""),
+                            service,
                         )
                         # A rule glyph outranks the rest and arrives
                         # already resolved from `toggle_icon`. The other
@@ -275,7 +275,8 @@ async def setup_state_listener(
                         if not icon:
                             continue
                         tooltip = _compute_next_state_tooltip(
-                            action, assign, state, hass, entry,
+                            assign, state, hass, entry,
+                            names.get(assign.get("action_id")),
                         )
                     elif is_styleable(eid) or dynamic_label:
                         # Colour-only: resolve the glyph through the *same*
@@ -284,7 +285,7 @@ async def setup_state_listener(
                         if service_icons is None:
                             service_icons = await _get_service_icons(hass)
                         icon = _resolve_button_icon(
-                            action, assign, hass, service_icons,
+                            assign, hass, service_icons, icons=theme_icons,
                         )
                         if not icon:
                             continue
@@ -292,7 +293,8 @@ async def setup_state_listener(
                         # keeps the label the sync gave it. Present
                         # when the label itself reads the entity.
                         tooltip = _compute_next_state_tooltip(
-                            action, assign, state, hass, entry,
+                            assign, state, hass, entry,
+                            names.get(assign.get("action_id")),
                         ) if dynamic_label else None
                     else:
                         # Nothing to say: no rule, no state glyph, no
@@ -309,11 +311,13 @@ async def setup_state_listener(
                     tile_style = icon_style_for_entities(
                         hass, targets, page_color, step=style_options.step,
                         fill=style_options.fill, tint=style_options.tint,
+                        service=service,
                     )
                     resolved = resolve_icon_url(
                         icon,
                         color=tile_style.color,
                         percent=tile_style.percent,
+                        theme=flush_theme.theme_id,
                     )
                     updates.append({
                         "page_id": pid,

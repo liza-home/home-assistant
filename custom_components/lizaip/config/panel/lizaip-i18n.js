@@ -53,7 +53,6 @@ export const STRINGS = {
   filter: { ha: "ui.components.related-filter-menu.filter", en: "Filter…" },
   move: { ha: "ui.common.move", en: "Move" },
   clear: { ha: "ui.common.clear", en: "Clear" },
-  select_device: { ha: "ui.components.device-picker.placeholder", en: "Select a device" },
   actions: { ha: "ui.panel.config.generic.headers.actions", en: "Actions" },
   delete_failed: { ha: "ui.common.deleting_failed", en: "Deleting failed" },
   attribute: { ha: "ui.components.selectors.selector.types.attribute", en: "Attribute" },
@@ -66,8 +65,8 @@ export const STRINGS = {
   // can never differ.
 
   // ── tabs and section headings ──────────────────────────────────────
-  tab_buttons: {
-    en: "Buttons", de: "Tasten", fr: "Touches", it: "Tasti", es: "Botones",
+  tab_pages: {
+    en: "Pages", de: "Seiten", fr: "Pages", it: "Pagine", es: "Páginas",
   },
 
   // ── settings tab ───────────────────────────────────────────────────
@@ -80,18 +79,8 @@ export const STRINGS = {
   settings_tooltip: {
     en: "Tooltip", de: "Tooltip", fr: "Info-bulle", it: "Descrizione comando", es: "Información sobre herramientas",
   },
-  settings_font: {
-    en: "Font", de: "Schriftart", fr: "Police", it: "Carattere", es: "Fuente",
-  },
   settings_font_size: {
     en: "Font size", de: "Schriftgröße", fr: "Taille de police", it: "Dimensione carattere", es: "Tamaño de fuente",
-  },
-  settings_font_size_hint: {
-    en: "In pixels, from {min} to {max}.",
-    de: "In Pixeln, von {min} bis {max}.",
-    fr: "En pixels, de {min} à {max}.",
-    it: "In pixel, da {min} a {max}.",
-    es: "En píxeles, de {min} a {max}.",
   },
   settings_font_user: {
     en: "{name} (your font)", de: "{name} (eigene Schrift)", fr: "{name} (votre police)",
@@ -101,8 +90,262 @@ export const STRINGS = {
     en: "{name} (not installed)", de: "{name} (nicht installiert)", fr: "{name} (non installée)",
     it: "{name} (non installato)", es: "{name} (no instalada)",
   },
-  settings_preview: {
-    en: "Preview", de: "Vorschau", fr: "Aperçu", it: "Anteprima", es: "Vista previa",
+  settings_theme: {
+    en: "Theme", de: "Design", fr: "Thème", it: "Tema", es: "Tema",
+  },
+  settings_theme_download: {
+    en: "Download theme", de: "Design herunterladen", fr: "Télécharger le thème",
+    it: "Scarica tema", es: "Descargar tema",
+  },
+  settings_theme_download_failed: {
+    en: "Could not download the theme: {error}",
+    de: "Design konnte nicht heruntergeladen werden: {error}",
+    fr: "Impossible de télécharger le thème : {error}",
+    it: "Impossibile scaricare il tema: {error}",
+    es: "No se pudo descargar el tema: {error}",
+  },
+  settings_theme_drop_hint: {
+    en: "or drop a theme file here, or drag a theme here to copy it",
+    de: "oder eine Design-Datei hier ablegen, oder ein Design hierher ziehen, um es zu kopieren",
+    fr: "ou déposez un fichier de thème ici, ou faites glisser un thème ici pour le copier",
+    it: "o trascina qui un file tema, oppure trascina qui un tema per copiarlo",
+    es: "o suelta aquí un archivo de tema, o arrastra aquí un tema para copiarlo",
+  },
+  settings_theme_import_done: {
+    en: "Added theme “{name}”", de: "Design „{name}“ hinzugefügt",
+    fr: "Thème « {name} » ajouté", it: "Tema “{name}” aggiunto",
+    es: "Tema «{name}» añadido",
+  },
+  settings_theme_import_failed: {
+    en: "This file could not be added as a theme: {error}",
+    de: "Diese Datei konnte nicht als Design hinzugefügt werden: {error}",
+    fr: "Ce fichier n’a pas pu être ajouté comme thème : {error}",
+    it: "Impossibile aggiungere questo file come tema: {error}",
+    es: "No se pudo añadir este archivo como tema: {error}",
+  },
+  settings_theme_import_too_big: {
+    en: "it is too large to be a theme file", de: "sie ist zu groß für eine Design-Datei",
+    fr: "il est trop volumineux pour un fichier de thème",
+    it: "è troppo grande per essere un file tema",
+    es: "es demasiado grande para ser un archivo de tema",
+  },
+  settings_theme_apply: {
+    en: "Apply", de: "Anwenden", fr: "Appliquer",
+    it: "Applica", es: "Aplicar",
+  },
+  settings_theme_view_heading: {
+    en: "View theme", de: "Design ansehen", fr: "Voir le thème",
+    it: "Visualizza tema", es: "Ver tema",
+  },
+  settings_theme_edit_heading: {
+    en: "Edit theme", de: "Design bearbeiten", fr: "Modifier le thème",
+    it: "Modifica tema", es: "Editar tema",
+  },
+  settings_theme_close_confirm: {
+    en: "Close without saving?", de: "Ohne Speichern schließen?",
+    fr: "Fermer sans enregistrer ?", it: "Chiudere senza salvare?",
+    es: "¿Cerrar sin guardar?",
+  },
+  settings_theme_close_hint: {
+    en: "The changes you made here have not been written to a theme file yet.",
+    de: "Die hier gemachten Änderungen wurden noch in keine Designdatei geschrieben.",
+    fr: "Les modifications faites ici n'ont pas encore été écrites dans un fichier de thème.",
+    it: "Le modifiche fatte qui non sono ancora state scritte in un file di tema.",
+    es: "Los cambios hechos aquí todavía no se han escrito en un archivo de tema.",
+  },
+  settings_theme_close_discard: {
+    en: "Discard", de: "Verwerfen", fr: "Abandonner",
+    it: "Scarta", es: "Descartar",
+  },
+  settings_theme_readonly_hint: {
+    en: "This theme comes with the integration, so it can be read but not changed. Make a copy to change it.",
+    de: "Dieses Design kommt mit der Integration und lässt sich lesen, aber nicht ändern. Lege eine Kopie an, um es zu ändern.",
+    fr: "Ce thème est fourni avec l'intégration : il se lit mais ne se modifie pas. Faites-en une copie pour le changer.",
+    it: "Questo tema è incluso nell'integrazione: si può leggere ma non modificare. Creane una copia per cambiarlo.",
+    es: "Este tema viene con la integración: se puede leer pero no cambiar. Haz una copia para cambiarlo.",
+  },
+  settings_theme_add: {
+    en: "Create…", de: "Erstellen…", fr: "Créer…",
+    it: "Crea…", es: "Crear…",
+  },
+  settings_theme_new_title: {
+    en: "New theme", de: "Neues Design", fr: "Nouveau thème",
+    it: "Nuovo tema", es: "Tema nuevo",
+  },
+  settings_theme_create: {
+    en: "Create theme", de: "Design anlegen", fr: "Créer le thème",
+    it: "Crea tema", es: "Crear tema",
+  },
+  settings_theme_copy: {
+    en: "Make a copy I can change",
+    de: "Kopie anlegen, die ich ändern kann",
+    fr: "En faire une copie modifiable",
+    it: "Creane una copia che posso modificare",
+    es: "Hacer una copia que pueda cambiar",
+  },
+  settings_theme_delete: {
+    en: "Delete theme", de: "Design löschen", fr: "Supprimer le thème",
+    it: "Elimina tema", es: "Eliminar tema",
+  },
+  settings_theme_delete_confirm: {
+    en: "Delete “{name}”?",
+    de: "„{name}“ löschen?",
+    fr: "Supprimer « {name} » ?",
+    it: "Eliminare “{name}”?",
+    es: "¿Eliminar «{name}»?",
+  },
+  settings_theme_delete_hint: {
+    en: "This theme will be permanently deleted. A remote using it keeps the name and falls back to the default look.",
+    de: "Dieses Design wird endgültig gelöscht. Eine Fernbedienung, die es verwendet, behält den Namen und fällt auf das Standardaussehen zurück.",
+    fr: "Ce thème sera définitivement supprimé. Une télécommande qui l’utilise gardera son nom et reviendra à l’apparence par défaut.",
+    it: "Questo tema verrà eliminato definitivamente. Un telecomando che lo usa manterrà il nome e tornerà all’aspetto predefinito.",
+    es: "Este tema se eliminará permanentemente. Un mando que lo use conservará el nombre y volverá al aspecto predeterminado.",
+  },
+  settings_theme_delete_remote_text: {
+    en: "Remote Text: {text}",
+    de: "Fernbedienungstext: {text}",
+    fr: "Texte de la télécommande : {text}",
+    it: "Testo del telecomando: {text}",
+    es: "Texto del mando: {text}",
+  },
+  settings_theme_name: {
+    en: "Theme name", de: "Name des Designs", fr: "Nom du thème",
+    it: "Nome del tema", es: "Nombre del tema",
+  },
+  settings_theme_name_hint: {
+    en: "Saved in {path} as a file you can also edit by hand.",
+    de: "Wird in {path} als Datei gespeichert, die Sie auch von Hand bearbeiten können.",
+    fr: "Enregistré dans {path} comme un fichier que vous pouvez aussi modifier à la main.",
+    it: "Salvato in {path} come file che puoi anche modificare a mano.",
+    es: "Se guarda en {path} como un archivo que también puedes editar a mano.",
+  },
+  settings_theme_new_name: {
+    en: "Copy of {name}", de: "Kopie von {name}", fr: "Copie de {name}",
+    it: "Copia di {name}", es: "Copia de {name}",
+  },
+  settings_theme_blank_name: {
+    en: "My theme", de: "Mein Design", fr: "Mon thème",
+    it: "Il mio tema", es: "Mi tema",
+  },
+  settings_theme_states: {
+    en: "Tile colour by state", de: "Kachelfarbe nach Zustand",
+    fr: "Couleur de tuile selon l'état", it: "Colore della casella per stato",
+    es: "Color de la casilla según el estado",
+  },
+  settings_theme_states_hint: {
+    en: "What a button falls back to, tinted by what the entity behind it is doing. A page's icon colour, an icon given its own colour, and a lit lamp's own colour each win over this.",
+    de: "Worauf eine Taste zurückfällt, eingefärbt danach, was die Entität dahinter gerade tut. Die Symbolfarbe einer Seite, ein Symbol mit eigener Farbe und die Farbe einer eingeschalteten Lampe gehen jeweils vor.",
+    fr: "Ce à quoi une touche revient, teinté selon ce que fait l'entité derrière elle. La couleur d'icône d'une page, une icône à la couleur propre et la couleur d'une lampe allumée l'emportent chacune.",
+    it: "Ciò a cui un tasto ricade, colorato in base a ciò che fa l'entità dietro di esso. Il colore dell'icona di una pagina, un'icona con un colore proprio e il colore di una luce accesa prevalgono su questo.",
+    es: "Aquello a lo que recurre un botón, teñido según lo que hace la entidad detrás de él. El color de icono de una página, un icono con color propio y el color de una lámpara encendida tienen prioridad sobre esto.",
+  },
+  settings_theme_palette: {
+    en: "Colours a page can be given",
+    de: "Farben, die eine Seite bekommen kann",
+    fr: "Couleurs qu'une page peut recevoir",
+    it: "Colori che una pagina può ricevere",
+    es: "Colores que puede recibir una página",
+  },
+  settings_theme_palette_hint: {
+    en: "The six swatches offered under a page's icon colour, captioned with the colour each one now holds. A page keeps the colour, not the swatch, so repainting one here leaves pages already set alone.",
+    de: "Die sechs Farbfelder, die unter der Symbolfarbe einer Seite angeboten werden, jeweils benannt nach der Farbe, die sie gerade haben. Eine Seite behält die Farbe, nicht das Feld — wer hier eines umfärbt, ändert bereits gesetzte Seiten nicht.",
+    fr: "Les six échantillons proposés sous la couleur d'icône d'une page, chacun nommé d'après la couleur qu'il contient. Une page retient la couleur, pas l'échantillon : en repeindre un ici ne touche pas aux pages déjà réglées.",
+    it: "I sei campioni offerti sotto il colore dell'icona di una pagina, ognuno intitolato con il colore che ha ora. Una pagina conserva il colore, non il campione: ridipingerne uno qui non tocca le pagine già impostate.",
+    es: "Las seis muestras que se ofrecen bajo el color de icono de una página, cada una con el nombre del color que tiene ahora. Una página guarda el color, no la muestra: repintar una aquí no cambia las páginas ya configuradas.",
+  },
+  settings_theme_state_default: {
+    en: "Default", de: "Standard", fr: "Par défaut",
+    it: "Predefinito", es: "Predeterminado",
+  },
+  settings_theme_state_on: {
+    en: "On", de: "An", fr: "Allumé", it: "Acceso", es: "Encendido",
+  },
+  settings_theme_state_off: {
+    en: "Off", de: "Aus", fr: "Éteint", it: "Spento", es: "Apagado",
+  },
+  settings_theme_state_unavailable: {
+    en: "Unavailable", de: "Nicht verfügbar", fr: "Indisponible",
+    it: "Non disponibile", es: "No disponible",
+  },
+  settings_theme_glyphs_hint: {
+    en: "The icon a button falls back to when it names none of its own; an icon set on the button wins. Leave a field empty to keep the built-in one for that state.",
+    de: "Das Icon, auf das eine Taste zurückfällt, wenn sie kein eigenes nennt; ein an der Taste gesetztes Icon geht vor. Leer lassen, um das eingebaute für diesen Zustand zu behalten.",
+    fr: "L'icône à laquelle une touche revient quand elle n'en nomme aucune ; une icône définie sur la touche l'emporte. Laissez vide pour conserver celle intégrée pour cet état.",
+    it: "L'icona a cui un tasto ricade quando non ne indica una propria; un'icona impostata sul tasto prevale. Lascia vuoto per mantenere quella integrata per quello stato.",
+    es: "El icono al que recurre un botón cuando no indica ninguno propio; un icono definido en el botón tiene prioridad. Déjalo vacío para mantener el integrado de ese estado.",
+  },
+  settings_theme_save_failed: {
+    en: "The theme could not be saved", de: "Das Design konnte nicht gespeichert werden",
+    fr: "Le thème n'a pas pu être enregistré", it: "Il tema non è stato salvato",
+    es: "No se pudo guardar el tema",
+  },
+  settings_theme_colors: {
+    en: "Colours", de: "Farben", fr: "Couleurs", it: "Colori", es: "Colores",
+  },
+  settings_theme_text: {
+    en: "Text size", de: "Textgröße", fr: "Taille du texte",
+    it: "Dimensione testo", es: "Tamaño del texto",
+  },
+  settings_theme_icons: {
+    en: "Icons", de: "Icons", fr: "Icônes",
+    it: "Icone", es: "Iconos",
+  },
+  settings_theme_mix: {
+    en: "Your earlier mix", de: "Ihre frühere Mischung", fr: "Votre ancien mélange",
+    it: "La tua vecchia combinazione", es: "Tu mezcla anterior",
+  },
+  settings_theme_name_missing: {
+    en: "Give the theme a name before saving it.",
+    de: "Gib dem Theme einen Namen, bevor du es speicherst.",
+    fr: "Donnez un nom au thème avant de l'enregistrer.",
+    it: "Dai un nome al tema prima di salvarlo.",
+    es: "Dale un nombre al tema antes de guardarlo.",
+  },
+  settings_theme_name_unusable: {
+    en: "That name has no letters or numbers to make a file name from.",
+    de: "Dieser Name enthält keine Buchstaben oder Ziffern für einen Dateinamen.",
+    fr: "Ce nom ne contient ni lettre ni chiffre pour en faire un nom de fichier.",
+    it: "Quel nome non ha lettere o numeri da cui ricavare un nome di file.",
+    es: "Ese nombre no tiene letras ni números con los que formar un nombre de archivo.",
+  },
+  settings_theme_name_taken: {
+    en: "{name} already goes by this name — pick another, or the two would share one file.",
+    de: "{name} heißt bereits so — wähle einen anderen Namen, sonst teilen sich beide eine Datei.",
+    fr: "{name} porte déjà ce nom — choisissez-en un autre, sinon les deux partageraient un fichier.",
+    it: "{name} si chiama già così — scegline un altro, altrimenti i due condividerebbero un file.",
+    es: "{name} ya se llama así — elige otro, o ambos compartirían un archivo.",
+  },
+  settings_theme_glyph_light_on: {
+    en: "A light that's on", de: "Ein eingeschaltetes Licht",
+    fr: "Une lumière allumée", it: "Una luce accesa", es: "Una luz encendida",
+  },
+  settings_theme_glyph_light_off: {
+    en: "A light that's off", de: "Ein ausgeschaltetes Licht",
+    fr: "Une lumière éteinte", it: "Una luce spenta", es: "Una luz apagada",
+  },
+  settings_theme_glyph_switch_on: {
+    en: "A switch that's on", de: "Ein eingeschalteter Schalter",
+    fr: "Un interrupteur allumé", it: "Un interruttore acceso", es: "Un interruptor encendido",
+  },
+  settings_theme_glyph_switch_off: {
+    en: "A switch that's off", de: "Ein ausgeschalteter Schalter",
+    fr: "Un interrupteur éteint", it: "Un interruttore spento", es: "Un interruptor apagado",
+  },
+  settings_theme_glyph_fan_on: {
+    en: "A fan that's running", de: "Ein laufender Ventilator",
+    fr: "Un ventilateur en marche", it: "Un ventilatore in funzione", es: "Un ventilador en marcha",
+  },
+  settings_theme_glyph_fan_off: {
+    en: "A fan that's stopped", de: "Ein stehender Ventilator",
+    fr: "Un ventilateur arrêté", it: "Un ventilatore fermo", es: "Un ventilador parado",
+  },
+  settings_theme_glyph_lock_locked: {
+    en: "A lock that's locked", de: "Ein verriegeltes Schloss",
+    fr: "Une serrure verrouillée", it: "Una serratura chiusa", es: "Una cerradura bloqueada",
+  },
+  settings_theme_glyph_lock_unlocked: {
+    en: "A lock that's unlocked", de: "Ein entriegeltes Schloss",
+    fr: "Une serrure déverrouillée", it: "Una serratura aperta", es: "Una cerradura desbloqueada",
   },
   settings_sample_title: {
     en: "Living room", de: "Wohnzimmer", fr: "Salon", it: "Soggiorno", es: "Salón",
@@ -115,11 +358,11 @@ export const STRINGS = {
     it: "Caricamento impostazioni…", es: "Cargando ajustes…",
   },
   settings_fonts_hint: {
-    en: "To use a font of your own, put its .ttf or .otf file in {path} and reopen this tab.",
-    de: "Für eine eigene Schrift legen Sie die .ttf- oder .otf-Datei in {path} ab und öffnen diesen Tab erneut.",
-    fr: "Pour utiliser votre propre police, placez son fichier .ttf ou .otf dans {path} et rouvrez cet onglet.",
-    it: "Per usare un carattere tuo, metti il file .ttf o .otf in {path} e riapri questa scheda.",
-    es: "Para usar una fuente propia, coloca su archivo .ttf u .otf en {path} y vuelve a abrir esta pestaña.",
+    en: "To use a font of your own, put its .ttf, .otf, .woff or .woff2 file in {path} and reopen this tab.",
+    de: "Für eine eigene Schrift legen Sie die .ttf-, .otf-, .woff- oder .woff2-Datei in {path} ab und öffnen diesen Tab erneut.",
+    fr: "Pour utiliser votre propre police, placez son fichier .ttf, .otf, .woff ou .woff2 dans {path} et rouvrez cet onglet.",
+    it: "Per usare un carattere tuo, metti il file .ttf, .otf, .woff o .woff2 in {path} e riapri questa scheda.",
+    es: "Para usar una fuente propia, coloca su archivo .ttf, .otf, .woff u .woff2 en {path} y vuelve a abrir esta pestaña.",
   },
   // NotoColorEmoji.ttf is too large to ship, so colour emoji are opt-in.
   settings_emoji_hint: {
@@ -247,11 +490,11 @@ export const STRINGS = {
     it: "Ricostruzione…", es: "Reconstruyendo…",
   },
   settings_clear_pages_hint: {
-    en: "Removes every page from the remote and writes them all back from this configuration. Use it when the remote's pages no longer match what you see here. Nothing stored is lost.",
-    de: "Entfernt alle Seiten von der Fernbedienung und schreibt sie aus dieser Konfiguration neu. Nützlich, wenn die Seiten der Fernbedienung nicht mehr zu dem passen, was hier steht. Es geht nichts Gespeichertes verloren.",
-    fr: "Supprime toutes les pages de la télécommande puis les réécrit à partir de cette configuration. À utiliser quand les pages de la télécommande ne correspondent plus à ce qui est affiché ici. Rien d’enregistré n’est perdu.",
-    it: "Rimuove tutte le pagine dal telecomando e le riscrive da questa configurazione. Da usare quando le pagine del telecomando non corrispondono più a quanto mostrato qui. Non si perde nulla di salvato.",
-    es: "Elimina todas las páginas del mando y las vuelve a escribir desde esta configuración. Úsalo cuando las páginas del mando ya no coincidan con lo que ves aquí. No se pierde nada de lo guardado.",
+    en: "Writes every page on the remote again from this configuration. Use it when the remote no longer shows what you see here. Nothing saved here is lost.",
+    de: "Schreibt alle Seiten der Fernbedienung neu aus dieser Konfiguration. Nützlich, wenn die Fernbedienung nicht mehr zeigt, was hier steht. Es geht nichts Gespeichertes verloren.",
+    fr: "Réécrit toutes les pages de la télécommande à partir de cette configuration. À utiliser quand la télécommande n’affiche plus ce qui est montré ici. Rien d’enregistré n’est perdu.",
+    it: "Riscrive tutte le pagine del telecomando da questa configurazione. Da usare quando il telecomando non mostra più quanto vedi qui. Non si perde nulla di salvato.",
+    es: "Vuelve a escribir todas las páginas del mando desde esta configuración. Úsalo cuando el mando ya no muestre lo que ves aquí. No se pierde nada de lo guardado.",
   },
   settings_clear_pages_confirm: {
     en: "Clear every page from the remote and write them back from this configuration?",
@@ -807,9 +1050,6 @@ export const STRINGS = {
     fr: "Fragmentation du tas : plus grand bloc libre {largest} sur {free} libres", it: "Frammentazione heap: blocco libero più grande {largest} su {free} liberi",
     es: "Fragmentación del heap: bloque libre mayor {largest} de {free} libres",
   },
-  settings_editor: {
-    en: "Editor", de: "Editor", fr: "Éditeur", it: "Editor", es: "Editor",
-  },
   settings_page_links: {
     en: "Show page links",
     de: "Seitenverbindungen anzeigen",
@@ -818,11 +1058,11 @@ export const STRINGS = {
     es: "Mostrar enlaces entre páginas",
   },
   settings_page_links_hint: {
-    en: "While the pointer rests on a button, draws a line to the page that button opens. Resting it on a page instead draws every link that reaches that page. This editor only — the remote itself is unchanged.",
-    de: "Steht der Zeiger auf einer Taste, wird eine Linie zu der Seite gezeichnet, die sie öffnet. Steht er stattdessen auf einer Seite, werden alle Verbindungen gezeichnet, die auf diese Seite führen. Nur in diesem Editor; die Fernbedienung selbst bleibt unverändert.",
-    fr: "Tant que le pointeur repose sur un bouton, trace une ligne vers la page qu'il ouvre. S'il repose sur une page, trace tous les liens qui mènent à cette page. Dans cet éditeur seulement : la télécommande elle-même ne change pas.",
-    it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono. Solo in questo editor: il telecomando non cambia.",
-    es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella. Solo en este editor; el mando en sí no cambia.",
+    en: "While the pointer rests on a button, draws a line to the page that button opens. Resting it on a page instead draws every link that reaches that page.",
+    de: "Steht der Zeiger auf einer Taste, wird eine Linie zu der Seite gezeichnet, die sie öffnet. Steht er stattdessen auf einer Seite, werden alle Verbindungen gezeichnet, die auf diese Seite führen.",
+    fr: "Tant que le pointeur repose sur un bouton, trace une ligne vers la page qu'il ouvre. S'il repose sur une page, trace tous les liens qui mènent à cette page.",
+    it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono.",
+    es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella.",
   },
   // One switch for both cards: a shape's and a thumbnail's are the same card
   // and the same interruption, and two switches would have to be found and
@@ -835,14 +1075,67 @@ export const STRINGS = {
     es: "Mostrar detalles de botones y páginas",
   },
   settings_button_tips_hint: {
-    en: "While the pointer rests on a button, raises a card describing it: its label, what each press runs, its long touch, and the entity or page it acts on. Resting it on a page names that page and says how full it is. This editor only — the remote itself is unchanged.",
-    de: "Steht der Zeiger auf einer Taste, erscheint eine Karte, die sie beschreibt: Beschriftung, was jeder Druck ausführt, die lange Berührung und das Gerät oder die Seite, auf die sie wirkt. Steht er auf einer Seite, nennt die Karte deren Namen und wie voll sie ist. Nur in diesem Editor; die Fernbedienung selbst bleibt unverändert.",
-    fr: "Tant que le pointeur repose sur un bouton, affiche une carte qui le décrit : son libellé, ce que lance chaque appui, son appui long et l'entité ou la page concernée. S'il repose sur une page, la carte la nomme et indique son remplissage. Dans cet éditeur seulement : la télécommande elle-même ne change pas.",
-    it: "Finché il puntatore resta su un pulsante, mostra una scheda che lo descrive: l'etichetta, ciò che esegue ogni pressione, il tocco prolungato e l'entità o la pagina su cui agisce. Se resta su una pagina, la scheda la nomina e indica quanto è piena. Solo in questo editor: il telecomando non cambia.",
-    es: "Mientras el puntero descansa sobre un botón, muestra una tarjeta que lo describe: su etiqueta, lo que ejecuta cada pulsación, su toque largo y la entidad o página sobre la que actúa. Si descansa sobre una página, la tarjeta la nombra e indica cuán llena está. Solo en este editor; el mando en sí no cambia.",
+    en: "While the pointer rests on a button, raises a card describing it: its label, what each press runs, its long touch, and the entity or page it acts on. Resting it on a page names that page and says how full it is.",
+    de: "Steht der Zeiger auf einer Taste, erscheint eine Karte, die sie beschreibt: Beschriftung, was jeder Druck ausführt, die lange Berührung und das Gerät oder die Seite, auf die sie wirkt. Steht er auf einer Seite, nennt die Karte deren Namen und wie voll sie ist.",
+    fr: "Tant que le pointeur repose sur un bouton, affiche une carte qui le décrit : son libellé, ce que lance chaque appui, son appui long et l'entité ou la page concernée. S'il repose sur une page, la carte la nomme et indique son remplissage.",
+    it: "Finché il puntatore resta su un pulsante, mostra una scheda che lo descrive: l'etichetta, ciò che esegue ogni pressione, il tocco prolungato e l'entità o la pagina su cui agisce. Se resta su una pagina, la scheda la nomina e indica quanto è piena.",
+    es: "Mientras el puntero descansa sobre un botón, muestra una tarjeta que lo describe: su etiqueta, lo que ejecuta cada pulsación, su toque largo y la entidad o página sobre la que actúa. Si descansa sobre una página, la tarjeta la nombra e indica cuán llena está.",
   },
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
+  },
+  // The gear tab's chip row and the four pages behind it.
+  settings_groups: {
+    en: "Settings sections", de: "Einstellungsbereiche", fr: "Sections des réglages",
+    it: "Sezioni delle impostazioni", es: "Secciones de ajustes",
+  },
+  settings_group_appearance: {
+    en: "Appearance", de: "Darstellung", fr: "Apparence", it: "Aspetto", es: "Apariencia",
+  },
+  settings_group_behaviour: {
+    en: "Behaviour", de: "Verhalten", fr: "Comportement", it: "Comportamento", es: "Comportamiento",
+  },
+  settings_editor: {
+    en: "This editor", de: "Dieser Editor", fr: "Cet éditeur", it: "Questo editor", es: "Este editor",
+  },
+  settings_group_editor: {
+    en: "Editor", de: "Editor", fr: "Éditeur", it: "Editor", es: "Editor",
+  },
+  settings_search_placeholder: {
+    en: "Search settings", de: "Einstellungen durchsuchen", fr: "Rechercher dans les réglages",
+    it: "Cerca nelle impostazioni", es: "Buscar ajustes",
+  },
+  settings_search_results: {
+    en: "Search results ({count})", de: "Suchergebnisse ({count})", fr: "Résultats ({count})",
+    it: "Risultati ({count})", es: "Resultados ({count})",
+  },
+  settings_search_note: {
+    en: "From every section at once. Clear the box, or pick a section above, to go back.",
+    de: "Aus allen Bereichen zugleich. Leere das Feld oder wähle oben einen Bereich, um zurückzukehren.",
+    fr: "De toutes les sections à la fois. Videz le champ, ou choisissez une section ci-dessus, pour revenir.",
+    it: "Da tutte le sezioni insieme. Svuota il campo, o scegli una sezione sopra, per tornare.",
+    es: "De todas las secciones a la vez. Vacía el campo, o elige una sección arriba, para volver.",
+  },
+  settings_search_none: {
+    en: "No setting here mentions \u201c{query}\u201d.",
+    de: "Keine Einstellung hier erwähnt \u201e{query}\u201c.",
+    fr: "Aucun réglage ici ne mentionne «\u00a0{query}\u00a0».",
+    it: "Nessuna impostazione qui menziona \u201c{query}\u201d.",
+    es: "Ningún ajuste aquí menciona \u201c{query}\u201d.",
+  },
+  settings_key_repeat_demo: {
+    en: "Press and hold", de: "Gedrückt halten", fr: "Appuyer et maintenir",
+    it: "Tieni premuto", es: "Mantén pulsado",
+  },
+  settings_key_repeat_demo_hint: {
+    en: "Try the wait and the speed set above. Nothing is sent to the remote.",
+    de: "Probiere die oben eingestellte Wartezeit und Geschwindigkeit aus. An die Fernbedienung geht nichts.",
+    fr: "Essayez le délai et la vitesse réglés ci-dessus. Rien n'est envoyé à la télécommande.",
+    it: "Prova l'attesa e la velocità impostate sopra. Al telecomando non viene inviato nulla.",
+    es: "Prueba la espera y la velocidad definidas arriba. No se envía nada al mando.",
+  },
+  settings_variables_sample_value: {
+    en: "21.4 °C", de: "21,4 °C", fr: "21,4 °C", it: "21,4 °C", es: "21,4 °C",
   },
   settings_variables: {
     en: "Variables", de: "Variablen", fr: "Variables", it: "Variabili", es: "Variables",
@@ -852,11 +1145,11 @@ export const STRINGS = {
     it: "Intervallo di aggiornamento", es: "Intervalo de actualización",
   },
   settings_variables_interval_hint: {
-    en: "From {min} to {max}, default {default}. A change goes out at once; a value that keeps changing, like a lamp being dimmed, is sent at most this often.",
-    de: "Von {min} bis {max}, Standard {default}. Eine Änderung wird sofort gesendet; ein Wert, der sich laufend ändert, etwa beim Dimmen, höchstens so oft.",
-    fr: "De {min} à {max}, par défaut {default}. Un changement part aussitôt ; une valeur qui change sans cesse, comme une lampe en cours de variation, est envoyée au plus à ce rythme.",
-    it: "Da {min} a {max}, predefinito {default}. Una modifica parte subito; un valore che cambia di continuo, come una luce che si regola, viene inviato al massimo con questa frequenza.",
-    es: "De {min} a {max}, por defecto {default}. Un cambio se envía al instante; un valor que cambia sin parar, como una lámpara que se regula, se envía como mucho con esta frecuencia.",
+    en: "A value that changes once is sent straight away. One that keeps changing — a lamp being dimmed, say — is sent at most this often. From {min} to {max}, {default} by default.",
+    de: "Ein Wert, der sich einmal ändert, wird sofort gesendet. Einer, der sich laufend ändert — etwa eine Lampe beim Dimmen —, höchstens so oft. Von {min} bis {max}, standardmäßig {default}.",
+    fr: "Une valeur qui change une fois est envoyée aussitôt. Une valeur qui change sans cesse — une lampe en cours de variation, par exemple — est envoyée au plus à ce rythme. De {min} à {max}, {default} par défaut.",
+    it: "Un valore che cambia una volta viene inviato subito. Uno che cambia di continuo — una luce che si regola, per esempio — al massimo con questa frequenza. Da {min} a {max}, {default} come predefinito.",
+    es: "Un valor que cambia una vez se envía al instante. Uno que cambia sin parar — una lámpara que se regula, por ejemplo — se envía como mucho con esta frecuencia. De {min} a {max}, {default} por defecto.",
   },
   settings_icon_color_enabled: {
     en: "Tint icons with the light's colour",
@@ -889,23 +1182,12 @@ export const STRINGS = {
   settings_fill_step: {
     en: "Fill step", de: "Füllschritt", fr: "Pas de remplissage", it: "Passo di riempimento", es: "Paso de relleno",
   },
-  settings_icon_card_description: {
-    en: "How buttons bound to a light show what that light is doing. Each switch works on its own, and both affect every button on this remote.",
-    de: "Wie Tasten, die einer Lampe zugeordnet sind, deren Zustand anzeigen. Jeder Schalter wirkt für sich, und beide betreffen alle Tasten dieser Fernbedienung.",
-    fr: "Comment les boutons associés à une lampe montrent l'état de celle-ci. Chaque interrupteur agit séparément, et les deux affectent tous les boutons de cette télécommande.",
-    it: "Come i pulsanti associati a una luce mostrano il suo stato. Ogni interruttore agisce per conto proprio ed entrambi riguardano tutti i pulsanti di questo telecomando.",
-    es: "Cómo los botones asociados a una luz muestran su estado. Cada interruptor actúa por su cuenta y ambos afectan a todos los botones de este mando.",
-  },
   settings_fill_step_hint: {
     en: "From {min} to {max}. Smaller is smoother; larger makes dimming feel quicker, since the remote fetches a new image for every fill level.",
     de: "Von {min} bis {max}. Kleiner ist flüssiger; größer lässt das Dimmen schneller wirken, da die Fernbedienung für jede Füllstufe ein neues Bild lädt.",
     fr: "De {min} à {max}. Plus petit est plus fluide ; plus grand rend la variation plus réactive, car la télécommande charge une nouvelle image pour chaque niveau.",
     it: "Da {min} a {max}. Più piccolo è più fluido; più grande rende la regolazione più reattiva, perché il telecomando scarica una nuova immagine per ogni livello.",
     es: "De {min} a {max}. Más pequeño es más suave; más grande hace que la regulación se sienta más rápida, ya que el mando descarga una imagen nueva por cada nivel.",
-  },
-  settings_reset: {
-    en: "Restore fonts", de: "Schriften zurücksetzen", fr: "Rétablir les polices",
-    it: "Ripristina caratteri", es: "Restablecer fuentes",
   },
   settings_saved: {
     en: "Settings saved. The remote redraws its pages.",
@@ -1360,11 +1642,6 @@ export const STRINGS = {
     en: "Add new page", de: "Neue Seite hinzufügen", fr: "Ajouter une nouvelle page",
     it: "Aggiungi nuova pagina", es: "Añadir nueva página",
   },
-  add_template_page: {
-    en: "Add template page", de: "Seite aus Vorlage hinzufügen",
-    fr: "Ajouter une page modèle", it: "Aggiungi pagina da modello",
-    es: "Añadir página de plantilla",
-  },
   adding: {
     en: "Adding…", de: "Wird hinzugefügt…", fr: "Ajout en cours…",
     it: "Aggiunta in corso…", es: "Añadiendo…",
@@ -1389,9 +1666,11 @@ export const STRINGS = {
     en: "Make main page", de: "Zu Hauptseite machen", fr: "Convertir en page principale",
     it: "Rendi pagina principale", es: "Convertir en página principal",
   },
+  // The page menu's item: the menu is already about the page, so the noun
+  // is left out, as in Home Assistant's own menus.
   duplicate_page: {
-    en: "Duplicate page", de: "Seite duplizieren", fr: "Dupliquer la page",
-    it: "Duplica pagina", es: "Duplicar página",
+    en: "Duplicate", de: "Duplizieren", fr: "Dupliquer",
+    it: "Duplica", es: "Duplicar",
   },
   change_device: {
     en: "Change device…", de: "Gerät ändern…", fr: "Changer d'appareil…",
@@ -1429,6 +1708,65 @@ export const STRINGS = {
     fr: "{name} utilise le nouvel appareil : {n} bouton(s) mis à jour",
     it: "{name} usa ora il nuovo dispositivo: {n} pulsante/i aggiornato/i",
     es: "{name} usa ahora el nuevo dispositivo: {n} botón(es) actualizado(s)",
+  },
+  // A page no template made, given a device: `${_device…}` then reads it and
+  // "Change device…" moves it, as on a template page.
+  // A button's options: a subpage of its own that its long touch opens.
+  add_options: {
+    en: "Add options…", de: "Optionen hinzufügen…", fr: "Ajouter des options…",
+    it: "Aggiungi opzioni…", es: "Añadir opciones…",
+  },
+  options_page_title: {
+    en: "{name} options", de: "{name} Optionen", fr: "Options {name}",
+    it: "Opzioni {name}", es: "Opciones de {name}",
+  },
+  options_added: {
+    en: "Options page added for {name}: a long touch opens it",
+    de: "Optionsseite für {name} angelegt: ein langer Druck öffnet sie",
+    fr: "Page d'options ajoutée pour {name} : un appui long l'ouvre",
+    it: "Pagina opzioni aggiunta per {name}: una pressione lunga la apre",
+    es: "Página de opciones añadida para {name}: una pulsación larga la abre",
+  },
+  assign_device: {
+    en: "Assign device…", de: "Gerät zuweisen…", fr: "Attribuer un appareil…",
+    it: "Assegna dispositivo…", es: "Asignar dispositivo…",
+  },
+  assign_device_desc: {
+    en: "The page's device: ${_device} in its title and buttons reads it, and the page can later be moved to another device.",
+    de: "Das Gerät der Seite: ${_device} in Titel und Tasten liest es, und die Seite lässt sich später auf ein anderes Gerät umstellen.",
+    fr: "L'appareil de la page : ${_device} dans son titre et ses boutons le lit, et la page peut ensuite passer à un autre appareil.",
+    it: "Il dispositivo della pagina: ${_device} nel titolo e nei pulsanti lo legge, e la pagina può poi passare a un altro dispositivo.",
+    es: "El dispositivo de la página: ${_device} en su título y botones lo lee, y la página puede pasar después a otro dispositivo.",
+  },
+  assign_device_confirm: {
+    en: "Assign", de: "Zuweisen", fr: "Attribuer", it: "Assegna", es: "Asignar",
+  },
+  device_assigned: {
+    en: "{name} now uses this device", de: "{name} nutzt jetzt dieses Gerät",
+    fr: "{name} utilise maintenant cet appareil", it: "{name} usa ora questo dispositivo",
+    es: "{name} usa ahora este dispositivo",
+  },
+  save_as_template: {
+    en: "Save as template…", de: "Als Vorlage speichern…", fr: "Enregistrer comme modèle…",
+    it: "Salva come modello…", es: "Guardar como plantilla…",
+  },
+  save_as_template_desc: {
+    en: "Saved under My Templates. Adding it asks for a device of the same kind.",
+    de: "Wird unter „Meine Vorlagen“ gespeichert. Beim Hinzufügen wird nach einem gleichartigen Gerät gefragt.",
+    fr: "Enregistré dans Mes modèles. L'ajouter demande un appareil du même type.",
+    it: "Salvato in I miei modelli. Aggiungendolo viene chiesto un dispositivo dello stesso tipo.",
+    es: "Se guarda en Mis plantillas. Al añadirla se pide un dispositivo del mismo tipo.",
+  },
+  template_name: {
+    en: "Name", de: "Name", fr: "Nom", it: "Nome", es: "Nombre",
+  },
+  template_saved: {
+    en: "Saved as template {name}: {n} button(s)", de: "Als Vorlage {name} gespeichert: {n} Taste(n)",
+    fr: "Enregistré comme modèle {name} : {n} bouton(s)", it: "Salvato come modello {name}: {n} pulsante/i",
+    es: "Guardado como plantilla {name}: {n} botón(es)",
+  },
+  save: {
+    en: "Save", de: "Speichern", fr: "Enregistrer", it: "Salva", es: "Guardar",
   },
   // Same shape as device_changed, but a config-entry target is a hub, not a
   // device -- a page retargeted onto one was reporting "new device" in every
@@ -1514,20 +1852,55 @@ export const STRINGS = {
   },
 
   // ── templates ────────────────────────────────────────────────────────
+  // The add-page list labels its two groups the way Home Assistant's own
+  // pickers do, rather than leaving an unexplained rule between them.
+  // "Suggestions" and "Other" are both verbatim HA wording.
+  suggested_options: {
+    en: "Suggestions", de: "Vorschläge", fr: "Suggestions",
+    it: "Suggerimenti", es: "Sugerencias",
+  },
+  other_options: {
+    en: "Other", de: "Sonstige", fr: "Autres",
+    it: "Altri", es: "Otros",
+  },
   choose_template: {
     en: "Choose template", de: "Vorlage wählen", fr: "Choisir un modèle",
     it: "Scegli un modello", es: "Elegir plantilla",
   },
-  template_group_count: {
+  // What a folder holds, counted the way Home Assistant counts an
+  // integration's devices or entities: a measure of what is inside, not of
+  // the rows the next step happens to draw.
+  template_count: {
     en: "{count} templates", de: "{count} Vorlagen", fr: "{count} modèles",
     it: "{count} modelli", es: "{count} plantillas",
   },
-  choose_template_device: {
-    en: "Choose the device this template will control.",
-    de: "Wählen Sie das Gerät, das diese Vorlage steuern soll.",
-    fr: "Choisissez l'appareil que ce modèle va commander.",
-    it: "Scegli il dispositivo che questo modello controllerà.",
-    es: "Elija el dispositivo que controlará esta plantilla.",
+  template_count_one: {
+    en: "1 template", de: "1 Vorlage", fr: "1 modèle",
+    it: "1 modello", es: "1 plantilla",
+  },
+  search_templates: {
+    en: "Search templates…", de: "Vorlagen suchen…", fr: "Rechercher un modèle…",
+    it: "Cerca modelli…", es: "Buscar plantillas…",
+  },
+  search_result_count: {
+    en: "{count} results", de: "{count} Treffer", fr: "{count} résultats",
+    it: "{count} risultati", es: "{count} resultados",
+  },
+  search_no_matches: {
+    en: "Nothing matches “{query}”.", de: "Nichts passt zu „{query}“.",
+    fr: "Rien ne correspond à « {query} ».", it: "Nessun risultato per “{query}”.",
+    es: "Nada coincide con «{query}».",
+  },
+  search_no_matches_hint: {
+    en: "Try a device name, or clear the search to browse.",
+    de: "Versuchen Sie einen Gerätenamen, oder leeren Sie die Suche zum Blättern.",
+    fr: "Essayez un nom d'appareil, ou effacez la recherche pour parcourir.",
+    it: "Prova il nome di un dispositivo, o cancella la ricerca per sfogliare.",
+    es: "Pruebe con el nombre de un dispositivo, o borre la búsqueda para explorar.",
+  },
+  add_page_root: {
+    en: "Add page", de: "Seite hinzufügen", fr: "Ajouter une page",
+    it: "Aggiungi pagina", es: "Añadir página",
   },
   configure_manually: {
     en: "Configure buttons manually", de: "Tasten manuell einrichten",
@@ -1793,10 +2166,6 @@ export const STRINGS = {
     en: "Loading devices…", de: "Geräte werden geladen…",
     fr: "Chargement des appareils…", it: "Caricamento dispositivi…",
     es: "Cargando dispositivos…",
-  },
-  select_hub: {
-    en: "Select hub…", de: "Hub wählen…", fr: "Choisir un hub…",
-    it: "Seleziona hub…", es: "Seleccionar hub…",
   },
   // The link is a `{link}` slot rather than markup in the table: the URL then
   // lives in one place, and each language can put the link where its own
@@ -2319,23 +2688,16 @@ export const STRINGS = {
     it: "Pagine che mostrano cosa sanno fare i riquadri",
     es: "Páginas que muestran lo que pueden hacer los botones",
   },
-  debug_pages: {
-    en: "Debug", de: "Debug", fr: "Débogage", it: "Debug", es: "Depuración",
-  },
-  debug_pages_desc: {
-    en: "Demo and test pages", de: "Demo- und Testseiten", fr: "Pages de démo et de test",
-    it: "Pagine demo e di test", es: "Páginas de demostración y prueba",
-  },
   random_pages: {
     en: "Random pages", de: "Zufallsseiten", fr: "Pages aléatoires",
     it: "Pagine casuali", es: "Páginas aleatorias",
   },
   random_pages_desc: {
-    en: "Test pages titled \"page &lt;id&gt;\", with random icons on every button.",
-    de: "Testseiten mit dem Titel „page &lt;id&gt;“ und zufälligen Icons auf allen Tasten.",
-    fr: "Pages de test intitulées « page &lt;id&gt; », avec des icônes aléatoires sur chaque touche.",
-    it: "Pagine di prova intitolate \"page &lt;id&gt;\", con icone casuali su ogni tasto.",
-    es: "Páginas de prueba tituladas \"page &lt;id&gt;\", con iconos aleatorios en cada botón.",
+    en: "Test pages titled \"page <id>\", with random icons on every button.",
+    de: "Testseiten mit dem Titel „page <id>“ und zufälligen Icons auf allen Tasten.",
+    fr: "Pages de test intitulées « page <id> », avec des icônes aléatoires sur chaque touche.",
+    it: "Pagine di prova intitolate \"page <id>\", con icone casuali su ogni tasto.",
+    es: "Páginas de prueba tituladas \"page <id>\", con iconos aleatorios en cada botón.",
   },
   random_pages_count: {
     en: "Number of pages", de: "Anzahl der Seiten", fr: "Nombre de pages",
@@ -2461,27 +2823,6 @@ export const STRINGS = {
     fr: "Aucun hub trouvé. Configurez d'abord l'intégration requise.",
     it: "Nessun hub trovato. Configura prima l'integrazione richiesta.",
     es: "No se ha encontrado ningún concentrador. Configure primero la integración necesaria.",
-  },
-  hub_disabled: {
-    en: "That hub is disabled. Enable it first, or pick another.",
-    de: "Dieser Hub ist deaktiviert. Aktivieren Sie ihn zuerst oder wählen Sie einen anderen.",
-    fr: "Ce hub est désactivé. Activez-le d'abord, ou choisissez-en un autre.",
-    it: "Questo hub è disattivato. Attivalo prima, oppure scegline un altro.",
-    es: "Ese concentrador está desactivado. Actívelo primero o elija otro.",
-  },
-  hub_every_light: {
-    en: "Every light on this hub gets a button.",
-    de: "Jede Leuchte an diesem Hub erhält eine Taste.",
-    fr: "Chaque lumière de ce hub reçoit un bouton.",
-    it: "Ogni luce su questo hub riceve un pulsante.",
-    es: "Cada luz de este concentrador recibe un botón.",
-  },
-  hub_choose: {
-    en: "Choose the hub whose lights this page will control.",
-    de: "Wählen Sie den Hub, dessen Leuchten diese Seite steuern soll.",
-    fr: "Choisissez le hub dont cette page commandera les lumières.",
-    it: "Scegli l'hub le cui luci questa pagina controllerà.",
-    es: "Elija el concentrador cuyas luces controlará esta página.",
   },
   devices_load_failed: {
     en: "Could not load devices: {error}",
@@ -2656,6 +2997,12 @@ export const I18nMixin = {
    *  empty string and announcing "Editing ". */
   _tNamed(id, name) {
     return name ? this._t(id, { name }) : this._t(`${id}_generic`);
+  },
+
+  /** A count's wording, singular when there is one of it. `{count} templates`
+   *  otherwise reads "1 templates", which no language is. */
+  _tCount(id, count) {
+    return count === 1 ? this._t(`${id}_one`) : this._t(id, { count });
   },
 
   _t(id, vars) {

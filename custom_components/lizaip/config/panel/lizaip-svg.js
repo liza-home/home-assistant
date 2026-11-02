@@ -501,7 +501,7 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
           // scroll — so activating a button would also jump the view away from it.
           e.preventDefault();
           e.stopPropagation();
-          onSelect(idx);
+          onSelect(idx, { keyboard: true });
         } else if (opts?.onContext && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
           // The menu is otherwise reachable only by right-click or long-press,
           // so without this the whole secondary action is pointer-only.
@@ -704,13 +704,15 @@ export function tileFit(b, naturalWidth, naturalHeight) {
  * Sized from the picture's own pixels: the bar is 4:1 while the title area is
  * 10:3, so fitting a short label to the bar made it as large as a full-width
  * logo. One too long overflows, which is what the device does with it too.
+ * Centred in the bar, unless it is wider than the bar: then it starts at the
+ * left edge, so the start of the title shows and the rest is cut off.
  */
 export function titleFit(b, naturalWidth, naturalHeight) {
   const scale = Math.min(b.w / TITLE.w, b.h / TITLE.h);
   const w = (naturalWidth || TITLE.w) * scale;
   const h = (naturalHeight || TITLE.h) * scale;
   return {
-    left: ((b.w - w) / 2 / b.w * 100).toFixed(2) + "%",
+    left: (w > b.w ? 0 : (b.w - w) / 2 / b.w * 100).toFixed(2) + "%",
     top: ((b.h - h) / 2 / b.h * 100).toFixed(2) + "%",
     width: (w / b.w * 100).toFixed(2) + "%",
     height: (h / b.h * 100).toFixed(2) + "%",

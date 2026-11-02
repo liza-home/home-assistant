@@ -14,6 +14,14 @@ import {
 } from "../lizaip-svg.js";
 import { NON_BUTTON_KEYS } from "../lizaip-helpers.js";
 
+/** The line's width in px; must match `.goto-link-path { stroke-width }`. */
+const GOTO_LINK_STROKE = 2.5;
+/**
+ * How far, in stroke widths, the line stops short of the frame. The head's tip
+ * marks the true end; 1.5 keeps the line's round cap inside the head's flanks.
+ */
+const GOTO_LINK_HEAD_INSET = 1.5;
+
 export const ButtonsGotoLinksMixin = {
   _gotoPageOf(assign) {
     if (!assign?.action_id) return null;
@@ -307,7 +315,7 @@ export const ButtonsGotoLinksMixin = {
       // the line leaves the outline rather than starting under it.
       const end = gotoLinkEnd(rel(thumb), cx, cy);
       const start = gotoLinkEnd(box, end.x, end.y);
-      const d = gotoLinkPath(start.x, start.y, end.x, end.y);
+      const d = gotoLinkPath(start.x, start.y, end.x, end.y, GOTO_LINK_HEAD_INSET * GOTO_LINK_STROKE);
       paths.push(d);
       ends.push(shape, thumb);
       marks += `<path class="goto-link-path" d="${d}" marker-end="url(#goto-link-head)"/>`;
@@ -328,10 +336,13 @@ export const ButtonsGotoLinksMixin = {
     // The arrowhead is a marker so it stays on each curve's own end tangent
     // without the angle being computed here, and so that any number of links
     // share one definition. `markerUnits="strokeWidth"` ties its size to the
-    // line's, so the two cannot drift apart.
+    // line's, so the two cannot drift apart. The line stops
+    // GOTO_LINK_HEAD_INSET stroke widths short of the frame and the head is
+    // anchored that far behind its tip, so the tip ends on the frame's outer
+    // edge -- not past it -- and the line's round cap stays inside the head.
     layer.innerHTML = `
       <defs>
-        <marker id="goto-link-head" markerWidth="5" markerHeight="5" refX="4.4" refY="2.5"
+        <marker id="goto-link-head" markerWidth="5" markerHeight="5" refX="${5 - GOTO_LINK_HEAD_INSET}" refY="2.5"
                 orient="auto" markerUnits="strokeWidth">
           <path class="goto-link-head" d="M0,0 L5,2.5 L0,5 Z"/>
         </marker>

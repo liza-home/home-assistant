@@ -28,8 +28,9 @@ from ..runtime import entry_connection, _get_store
 from .const import CONFIG_CHANGED_EVENT
 from .icon_push import GATHER_WINDOW, IconPushQueue
 from .panel_entry import add_panel_entry, pop_panel_entry
+from .text_style import settings_theme
 from . import device_sync as _device_sync_mod
-from .templates import refresh as _template_refresh
+from ..config.page_templates import refresh as _template_refresh
 from .variables import async_setup_variable_listener
 from .websocket import register_commands
 from ..device.const import LIZAIP_HELLO_EVENT
@@ -37,7 +38,7 @@ from ..device.const import LIZAIP_HELLO_EVENT
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_DIR = os.path.join(os.path.dirname(__file__), "panel")
-GUIDE_IMAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "images")
+GUIDE_IMAGE_DIR = os.path.join(os.path.dirname(__file__), "docs", "images")
 PANEL_URL_BASE = "/lizaip_config_panel"
 # The only subdirectories of PANEL_DIR the asset route serves from, one level deep.
 PANEL_SUBDIRS = frozenset({"styles", "buttons", "actions"})
@@ -340,6 +341,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         # The same font and size the page sync drew the tooltip in; without
         # them a live update would redraw it in the defaults.
         tooltip_style = None
+        tooltip_theme = ""
         for upd in updates:
             btn_name = upd.get("button_key", "")
             if not btn_name:
@@ -359,9 +361,11 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             if tooltip is not None:
                 page_color = upd.get("page_color", "")
                 if tooltip_style is None:
-                    tooltip_style = store.cached_settings(device_id)["tooltip"]
+                    cached = store.cached_settings(device_id)
+                    tooltip_style = cached["tooltip"]
+                    tooltip_theme = settings_theme(cached).theme_id
                 btn_data["img_tooltip"] = resolve_tooltip_url(
-                    tooltip, page_color, tooltip_style,
+                    tooltip, page_color, tooltip_style, theme=tooltip_theme,
                 )
 
             if len(btn_data) > 1:  # has more than just "name"
@@ -420,4 +424,3 @@ async def async_unload_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     # entry reload unloads and sets up again. Unsubscribing here would leave the
     # listener dead with nothing to re-register it, so button presses would stop
     # working until Home Assistant restarted.
-

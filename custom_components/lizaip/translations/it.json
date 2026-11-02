@@ -156,6 +156,9 @@
       "battery": {
         "name": "Battery"
       },
+      "ha_address": {
+        "name": "Indirizzo di Home Assistant"
+      },
       "ip_address": {
         "name": "Indirizzo IP"
       }
@@ -209,7 +212,7 @@
       }
     },
     "goto_page": {
-      "name": "goto page",
+      "name": "Vai alla pagina",
       "description": "Show a page on the remote. On a button this becomes a device-local action the remote executes itself.",
       "fields": {
         "page_id": {

@@ -35,13 +35,13 @@ from ..action_controller.helpers import (
     resolve_target_entities,
 )
 from ..action_controller.toggle import rule_icon, rule_label, toggle_rules
-from ..variables_calc import (
+from ..shared.variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
     DEFAULT_VARIABLES_INTERVAL,
     read_variables_interval,
 )
-from ..media_queue.alias import expand_queue_alias
+from .media_queue.alias import expand_queue_alias
 from ..shared.history import history_entities, history_entity
 from ..shared.logs import device_logger
 from ..shared.tokens import (
@@ -50,6 +50,7 @@ from ..shared.tokens import (
     DEVICE_FACTS,
     DEVICE_TOKEN_RE,
     ENTITY_TOKEN_RE,
+    button_scope,
     current_page_template,
     expand_device_alias,
     template_target_device,
@@ -147,6 +148,12 @@ def _assignment_reads(assign, hass=None) -> _Reads:
     if not isinstance(assign, dict):
         return {}
     subjects = _queue_subjects(assign.get("config"), hass)
+    # On a plain page `${_device.x}` is the button's own entity, as drawn.
+    with button_scope(subjects[0] if subjects else None, hass):
+        return _assignment_reads_in_scope(assign, subjects, hass)
+
+
+def _assignment_reads_in_scope(assign: dict, subjects: tuple[str, ...], hass) -> _Reads:
     found = _button_reads(assign, subjects)
     overrides = assign.get("overrides")
     if isinstance(overrides, dict):

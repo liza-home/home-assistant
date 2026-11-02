@@ -93,9 +93,22 @@ export const DataMixin = {
     this._devices = (await this._fetchDevices()) || [];
   },
 
-  async _loadIconDefaults() {
-    try { this._iconDefaults = await this._hass.callWS({ type: "lizaip_config/get_icon_defaults" }); }
-    catch (e) { this._iconDefaults = null; }
+  async _loadIconDefaults(withShipped = true) {
+    // Both in one await: a second await point would let the caller's palette
+    // read land between them. The shipped table is read once and never
+    // themed -- a themed one would call a theme's own glyph "seeded".
+    const wantShipped = withShipped && !this._shippedIconDefaults;
+    const [shipped, themed] = await Promise.all([
+      wantShipped
+        ? this._hass.callWS({ type: "lizaip_config/get_icon_defaults", shipped: true })
+          .catch(() => null)
+        : Promise.resolve(this._shippedIconDefaults),
+      this._hass.callWS({
+        type: "lizaip_config/get_icon_defaults", entry_id: this._currentEntry || undefined,
+      }).catch(() => null),
+    ]);
+    this._shippedIconDefaults = shipped;
+    this._iconDefaults = themed;
   },
 
   // The slider capability table, owned by `action_controller.py`. An empty list
@@ -117,7 +130,11 @@ export const DataMixin = {
    * free-form hex input, which still works.
    */
   async _loadPalette() {
-    try { this._palette = (await this._hass.callWS({ type: "lizaip_config/get_palette" }))?.colors || null; }
+    try {
+      this._palette = (await this._hass.callWS({
+        type: "lizaip_config/get_palette", entry_id: this._currentEntry || undefined,
+      }))?.colors || null;
+    }
     catch (e) { this._palette = null; }
   },
 
@@ -189,6 +206,10 @@ export const DataMixin = {
       // The title previews are drawn in the remote's text settings.
       this._loadTextSettings(),
       this._loadIconOptions(),
+      // Both are the selected remote's theme's, so they are re-read on every
+      // switch rather than kept from the panel's first load.
+      this._loadIconDefaults(),
+      this._loadPalette(),
     ]);
     await this._loadAssignments();
     await this._loadGlobalUsage();
@@ -441,28 +462,13 @@ export const DataMixin = {
       const action = this._actions[ai];
       const service = action.service || "";
       const svc = service.split(".")[1] || "";
-      const domain = service.split(".")[0] || "";
 
+      // Only a fixed-icon action gets an icon written. A state-varying one is
+      // left with no `states`: a stored rule outranks the theme, so seeding
+      // froze the shipped glyphs onto the button for good.
       if (this._internalCommand(service) || this._isStatelessService(svc)) {
         if (!action.icon) {
           action.icon = this._getServiceIcon(service);
-        }
-      } else if (!action.states || action.states.length === 0) {
-        const statesInfo = this._getStatesForAction(action);
-        const attribute = statesInfo.attribute;
-        const stateVals = statesInfo.states || [];
-        if (stateVals.length > 0) {
-          const defaults = this._getDefaultIcons(domain, attribute);
-          action.states = [];
-          for (let si = 0; si < stateVals.length; si++) {
-            const sv = stateVals[si];
-            const icon = defaults[sv] || "";
-            if (icon) {
-              const entry = { state: sv, icon: icon };
-              if (attribute) entry.attribute = attribute;
-              action.states.push(entry);
-            }
-          }
         }
       }
     }
@@ -746,7 +752,14 @@ export const DataMixin = {
   async _loadTemplates() {
     try {
       const r = await this._hass.callWS({ type: "lizaip_config/list_templates" });
-      return r?.templates || [];
+      // A shipped template names its words in the panel's translation table
+      // rather than spelling one language, the way a folder's card does.
+      // Settled here so everything downstream reads a plain name.
+      return (r?.templates || []).map(t => ({
+        ...t,
+        name: this._groupLabel(t),
+        description: this._groupLabel(t, { desc: true }),
+      }));
     } catch (e) {
       console.warn("[LIZA] Failed to load templates:", e);
       return [];
@@ -810,15 +823,15 @@ export const DataMixin = {
    * new page, navigating the device to it, reloading — is identical for both,
    * and stays identical by living here rather than in two copies that drift.
    *
-   * `reloadActions` is the one step that is *not* free to share. A template page
-   * merges generated entries into the action library and has to re-read it; a
-   * blank page writes none. And `_loadActions` swallows a failed read as an
-   * empty library, which `_saveActionsToBackend` then persists wholesale — so
-   * re-reading a library that cannot have changed only exposes the stored one
-   * to being wiped by a dropped connection.
+   * `reloadActions` is the one step that is *not* free to share: only a path
+   * that merges generated entries into the action library has to re-read it.
+   * `_loadActions` swallows a failed read as an empty library, which
+   * `_saveActionsToBackend` then persists wholesale, so re-reading a library
+   * that cannot have changed only exposes the stored one to being wiped by a
+   * dropped connection.
    *
-   * Errors propagate: the blank path toasts, the template dialog keeps itself
-   * open so the target can be corrected.
+   * Errors propagate so the template dialog can keep itself open and let the
+   * target be corrected.
    */
   async _createPage(create, { reloadActions = false } = {}) {
     this._pageOpInFlight = true;
@@ -839,8 +852,8 @@ export const DataMixin = {
 
       this._pages = result.pages;
       // A duplicate lands next to its original, not at the end; a path that
-      // names its page is opened on that page. Only the blank path, which
-      // sends the whole list and gets no id back, relies on the append.
+      // names its page is opened on that page. A path that sends the whole
+      // list and gets no id back relies on the append.
       const newIdx = result.page_id != null
         ? this._pages.findIndex(p => p.id === result.page_id) : -1;
       this._currentPageIdx = newIdx >= 0 ? newIdx : this._pages.length - 1;
@@ -869,7 +882,7 @@ export const DataMixin = {
       this._scrollActivePageIntoView();
       return result;
     } finally {
-      this._pageOpInFlight = false;
+      this._endPageOp();
     }
   },
 
@@ -906,7 +919,7 @@ export const DataMixin = {
       if (page.id === this._currentPageId) await this._loadAssignments();
       return result;
     } finally {
-      this._pageOpInFlight = false;
+      this._endPageOp();
     }
   },
 
@@ -925,6 +938,50 @@ export const DataMixin = {
     } catch (e) {
       console.error("[LIZA] Add template page failed:", e);
       throw e;
+    }
+  },
+
+  /**
+   * Every device a page that no template made can be bound to, and the one
+   * proposed for *pageId*: the device most of its buttons act on.
+   * Returns {devices, suggested, error}, like `_loadTemplateDevices`.
+   */
+  async _loadAllDevices(pageId) {
+    try {
+      const r = await this._hass.callWS({
+        type: "lizaip_config/list_all_devices",
+        entry_id: this._currentEntry,
+        page_id: pageId,
+      });
+      return { devices: r?.devices || [], suggested: r?.suggested || "", error: null };
+    } catch (e) {
+      console.warn("[LIZA] Failed to load devices:", e);
+      return { devices: [], suggested: "", error: this._wsErrorText(e) };
+    }
+  },
+
+  /**
+   * Bind a page no template made to a device, or move it to another one.
+   *
+   * Saved first like a retarget is: moving rewrites the stored buttons, and an
+   * autosave landing afterwards would put the old device back.
+   */
+  async _bindPageDevice(page, target) {
+    this._pageOpInFlight = true;
+    try {
+      await this._flushAutoSave();
+      const result = await this._hass.callWS({
+        type: "lizaip_config/assign_page_device",
+        entry_id: this._currentEntry,
+        page_id: page.id,
+        target_device: target,
+      });
+      if (result?.pages) this._pages = result.pages;
+      delete this._pageCache[page.id];
+      if (page.id === this._currentPageId) await this._loadAssignments();
+      return result;
+    } finally {
+      this._endPageOp();
     }
   },
 };

@@ -62,6 +62,10 @@ export const STYLES_A11Y = `
   :host ha-entity-picker,
   :host ha-textfield,
   :host ha-select,
+  :host ha-input,
+  :host ha-input-search,
+  :host ha-button,
+  :host ha-switch,
   :host ha-combo-box,
   :host ha-picker-field {
     scroll-margin-top: 64px;
@@ -131,6 +135,21 @@ export const STYLES_A11Y = `
     outline: none !important;
   }
 
+  /* The add-page walk focuses its first row so the arrow keys have somewhere
+     to start, before the user has asked for anything. Until a key is pressed
+     that focus is a starting point, not a recommendation, so it is not drawn:
+     an opened step shows at most the row already chosen. The focus itself
+     stays (WCAG 2.4.7 is about the indicator once the user is driving by
+     keyboard, and the first keydown takes the class off). */
+  .template-dialog.focus-quiet .template-row:focus-visible {
+    outline: none !important;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  .template-dialog.focus-quiet .template-row.is-chosen:focus-visible {
+    border-color: var(--primary-color, #03a9f4);
+  }
+
   /* The add button is a dashed circle at rest, so an outset ring made two
      concentric circles. The dashes go solid instead -- one indicator, and
      broken-to-continuous reads without colour. border-width is restated
@@ -181,7 +200,6 @@ export const STYLES_A11Y = `
   }
   :host(.panel-narrow) .toolbar-tab {
     flex: 1;
-    text-align: center;
   }
   /* Only as wide as the gear: an equal share would give an icon the room
      of a word and push the labelled tabs into two lines. */
@@ -199,6 +217,10 @@ export const STYLES_A11Y = `
   :host(.panel-narrow) ha-entity-picker,
   :host(.panel-narrow) ha-textfield,
   :host(.panel-narrow) ha-select,
+  :host(.panel-narrow) ha-input,
+  :host(.panel-narrow) ha-input-search,
+  :host(.panel-narrow) ha-button,
+  :host(.panel-narrow) ha-switch,
   :host(.panel-narrow) ha-combo-box,
   :host(.panel-narrow) ha-picker-field {
     scroll-margin-top: 176px;

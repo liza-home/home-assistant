@@ -208,7 +208,7 @@ export const ButtonsWiringMixin = {
 
     this.shadowRoot.querySelector("#psTemplateTarget")?.addEventListener("click", () => {
       const page = this._pages[this._currentPageIdx];
-      if (page?.template?.type) this._changeTemplateTarget(page);
+      if (page?.template?.type || page?.template?.target?.device) this._changeTemplateTarget(page);
     });
 
     // --- Color picker wiring ---
@@ -566,7 +566,7 @@ export const ButtonsWiringMixin = {
       };
       const sliderControlSelect = this.shadowRoot.querySelector(".slider-control-select");
       if (sliderControlSelect) {
-        sliderControlSelect.addEventListener("change", () => {
+        this._wireHaSelect(sliderControlSelect, () => {
           if (!ctxKey) return applyControlById(sliderControlSelect.value);
           // A control *id* on the grid button, never mechanics — there is
           // nothing here that could be written down by halves, which is what
@@ -629,7 +629,12 @@ export const ButtonsWiringMixin = {
       SLIDER_FIELDS.forEach(([sel, key, parse, render]) => {
         const el = this.shadowRoot.querySelector(sel);
         if (!el) return;
-        el.addEventListener("change", () => {
+        // Attribute is a select over the entity's live attributes when there
+        // is one to read; a select reports a pick, a field a change.
+        const listen = (fn) => (el.localName === "ha-select"
+          ? this._wireHaSelect(el, fn)
+          : el.addEventListener("change", fn));
+        listen(() => {
           // Sensitivity is the one field of this set that can belong to a
           // selected button: the executor carries `factor` across a retarget
           // untouched, so a per-button value is something it can act on. The
@@ -798,9 +803,9 @@ export const ButtonsWiringMixin = {
     // longer draws a label for this field -- the picker names itself -- so the
     // fallback has to carry the name too, or it is an unlabelled text box.
     container.innerHTML =
-      `<input type="text" class="slider-entity-fallback" aria-label="${this._esc(entityLabel)}" value="${this._esc(value)}" placeholder="light.living_room" />`;
-    container.querySelector("input")
-      .addEventListener("change", (ev) => onChange(ev.target.value.trim()));
+      `<ha-input appearance="outlined" class="slider-entity-fallback" label="${this._esc(entityLabel)}" value="${this._esc(value)}" placeholder="light.living_room" autocomplete="off"></ha-input>`;
+    const fallback = container.querySelector(".slider-entity-fallback");
+    fallback.addEventListener("change", () => onChange(String(fallback.value ?? "").trim()));
   },
 
   /**

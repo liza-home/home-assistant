@@ -221,6 +221,7 @@ def step_icon(
     rule: Any,
     entity_domain: str = "",
     service_icons: dict | None = None,
+    icons=None,
 ) -> str | None:
     """A glyph for *rule* derived from the service it calls.
 
@@ -232,8 +233,8 @@ def step_icon(
     icon per step was the workaround; this is the fix.
 
     Same precedence the rest of the integration uses, so the derived glyph is
-    the one a plain button calling that service would already wear: our own
-    ``icon_defaults.yaml`` first, then Home Assistant's service registry when
+    the one a plain button calling that service would already wear: the
+    default theme's icons first, then Home Assistant's service registry when
     the caller has it, then the domain's icon.
 
     Keyed on the *entity's* domain for the yaml lookup and the *service's* for
@@ -248,7 +249,7 @@ def step_icon(
     if not svc_name:
         return None
 
-    override = service_fixed_icon(entity_domain or svc_domain, svc_name)
+    override = service_fixed_icon(entity_domain or svc_domain, svc_name, icons)
     if override:
         return override
 
@@ -257,7 +258,7 @@ def step_icon(
         if svc_icon:
             return svc_icon
 
-    return icon_defaults.domain_icons.get(svc_domain)
+    return (icons or icon_defaults).domain_icons.get(svc_domain)
 
 
 def rule_action_id(rule: Any) -> str | None:

@@ -190,6 +190,9 @@ export const STYLES_BUTTONS = `
 
   /* SVG container inside each page item */
   .pg-svg-container {
+    /* The light-theme washes; .face-dark below says why dark overrides both. */
+    --liza-btn-configured-fill: color-mix(in srgb, var(--primary-text-color) 12%, transparent);
+    --liza-btn-empty-fill: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
     width: 100%;
     flex: 1;
     display: flex;
@@ -224,8 +227,8 @@ export const STYLES_BUTTONS = `
   /* Sized in JS to the PNG's natural size times the device->user-unit scale, so
      the element already carries the image's aspect ratio and "fill" maps it 1:1.
      "contain" would re-fit it inside a box that already matches and only add
-     letterboxing from percentage rounding. Positioned by the same code, centred
-     on the bar on both axes. */
+     letterboxing from percentage rounding. Positioned by the same code: centred
+     on the bar, or from its left edge when wider than the bar. */
   .pg-svg-container .pg-title-img {
     object-fit: fill;
     object-position: center center;
@@ -285,6 +288,8 @@ export const STYLES_BUTTONS = `
     object-fit: contain;
     flex: 0 0 auto;
   }
+  /* The same tile the face shows, so it wants the same screen behind it. */
+  :host(.liza-dark) .liza-btn-tip-icon { background: #000; border-radius: 3px; }
   .liza-btn-tip-name {
     overflow-wrap: anywhere;
   }
@@ -339,8 +344,15 @@ export const STYLES_BUTTONS = `
     right: -12px;
     border-left-color: var(--card-background-color, #2b2b2b);
   }
+  /* Black is the screen the remote draws every tile on, so in dark mode the
+     whole face is black and an icon alone says a control is set up. Under a
+     light HA theme the same fill would be a hole in the card. */
+  .pg-svg-container.face-dark {
+    --liza-btn-configured-fill: #000;
+    --liza-btn-empty-fill: #000;
+  }
   .pg-svg-container .button[configured] {
-    fill: color-mix(in srgb, var(--primary-text-color) 12%, transparent);
+    fill: var(--liza-btn-configured-fill);
     stroke: var(--divider-color, rgba(127,127,127,.3));
     stroke-width: 0.6;
   }
@@ -350,12 +362,12 @@ export const STYLES_BUTTONS = `
     stroke-width: 1.5;
   }
   .pg-svg-container .button[selected]:not([configured]) {
-    fill: color-mix(in srgb, var(--primary-text-color) 12%, transparent);
+    fill: var(--liza-btn-configured-fill);
     stroke: var(--liza-selected);
     stroke-width: 1.5;
   }
   .pg-svg-container .button[empty] {
-    fill: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
+    fill: var(--liza-btn-empty-fill);
     stroke: color-mix(in srgb, var(--primary-text-color) 10%, transparent);
     stroke-width: 0.4;
   }
@@ -388,7 +400,7 @@ export const STYLES_BUTTONS = `
   .pg-svg-container .button[data-key="button_volume_down"][configured]:not([selected]),
   .pg-svg-container .button[data-key="button_volume_up"][configured]:not([selected]):hover,
   .pg-svg-container .button[data-key="button_volume_down"][configured]:not([selected]):hover {
-    fill: color-mix(in srgb, var(--primary-text-color) 12%, transparent);
+    fill: var(--liza-btn-configured-fill);
     stroke: var(--divider-color, rgba(127,127,127,.3));
     stroke-width: 0.6;
   }
@@ -397,13 +409,13 @@ export const STYLES_BUTTONS = `
      in sync with .button[empty] / .button[configured] above. */
   .pg-svg-container .button[data-key="slider_vertical"][empty]:not([selected]),
   .pg-svg-container .button[data-key="slider_vertical"][empty]:not([selected]):hover {
-    fill: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
+    fill: var(--liza-btn-empty-fill);
     stroke: color-mix(in srgb, var(--primary-text-color) 10%, transparent);
     stroke-width: 0.4;
   }
   .pg-svg-container .button[data-key="slider_vertical"][configured]:not([selected]),
   .pg-svg-container .button[data-key="slider_vertical"][configured]:not([selected]):hover {
-    fill: color-mix(in srgb, var(--primary-text-color) 12%, transparent);
+    fill: var(--liza-btn-configured-fill);
     stroke: var(--divider-color, rgba(127,127,127,.3));
     stroke-width: 0.6;
   }

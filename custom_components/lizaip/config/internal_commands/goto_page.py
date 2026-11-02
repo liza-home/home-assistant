@@ -264,7 +264,7 @@ GOTO_PAGE = InternalCommand(
     service="goto_page",
     action_type="goto_page",
     icon="mdi:page-next",
-    name="Go to page",
+    name="goto page",
     build_params=_goto_page_params,
     run=_goto_page_run,
     # Cross-field existence/range checks live in build_params for translations.

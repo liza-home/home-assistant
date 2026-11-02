@@ -19,39 +19,14 @@ export const STYLES_SLIDER = `
     display: block;
     width: 100%;
   }
-  input.slider-attribute-input,
-  select.slider-attribute-input,
+  /* Monospace because these are identifiers -- an attribute, a service, a
+     data key, an entity id -- where one wrong character is the whole bug. */
+  .slider-attribute-input,
   .slider-service-input,
   .slider-entity-fallback,
   .slider-datakey-input {
     width: 100%;
-    box-sizing: border-box;
-    padding: 8px 12px;
-    border: 1px solid var(--divider-color, rgba(127,127,127,.3));
-    border-radius: 6px;
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color, #333);
-    font-size: var(--liza-font-13);
     font-family: monospace;
-  }
-  /* Native <select> chevrons are drawn by the OS: a thin outline glyph jammed
-     against the right edge, which looks nothing like the filled Material
-     triangle ha-entity-picker and ha-icon-picker render immediately above and
-     below on the same card. Draw mdi:menu-down ourselves so every control
-     agrees, and inset it by the same 12px as the text padding so it isn't
-     flush to the border.
-
-     Must come after .slider-attribute-input above: that rule has the same
-     specificity as .config-field select, so an earlier padding-right here
-     would lose and the Attribute dropdown's text would run under the arrow. */
-  .config-field select {
-    -webkit-appearance: none;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23888888' d='M7,10L12,15L17,10H7Z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    background-size: 24px 24px;
-    padding-right: 44px;
   }
   .config-field-hint {
     display: block;
@@ -108,23 +83,7 @@ export const STYLES_SLIDER = `
     white-space: nowrap;
   }
   .slider-ctx-use-default {
-    appearance: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
     flex: none;
-    padding: 6px 14px;
-    border: 1px solid var(--primary-color);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-    color: var(--liza-accent-text);
-    font-size: var(--liza-font-13);
-    font-weight: 500;
-    line-height: 1.4;
-    cursor: pointer;
-  }
-  .slider-ctx-use-default:hover {
-    background: color-mix(in srgb, var(--primary-color) 20%, transparent);
   }
   /* The entity-derived section sits in a wrapper so it can be rebuilt without
      tearing down the action editor (see _refreshButtonEntitySections). The
@@ -175,23 +134,13 @@ export const STYLES_SLIDER = `
     flex-direction: row;
     gap: 12px;
   }
-  .slider-range-row > div {
+  .slider-range-row > ha-input {
     flex: 1;
-  }
-  .slider-range-row input[type="number"],
-  .slider-factor-input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 6px 8px;
-    border: 1px solid var(--divider-color, rgba(127,127,127,.3));
-    border-radius: 6px;
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color, #333);
-    font-size: var(--liza-font-13);
+    min-width: 0;
   }
   /* Sensitivity holds a single number like "1" — a full-width box for it
      looks broken, and unlike Min/Max it isn't sharing a row with anything. */
-  .slider-factor-input { width: 96px; }
+  .slider-factor-input { width: 140px; }
 
   /* Most domains offer exactly one control, so the Control field states a fact
      rather than offering a choice. Sized and spaced like the inputs it stands

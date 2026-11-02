@@ -18,8 +18,11 @@
   "after_dependencies": [
     "recorder"
   ],
-  "requirements": [],
-  "version": "2026.10.3",
+  "requirements": [
+    "fonttools>=4.50.0",
+    "brotli>=1.1.0"
+  ],
+  "version": "2026.11.1",
   "zeroconf": [
     {
       "type": "_lizaip._tcp.local."

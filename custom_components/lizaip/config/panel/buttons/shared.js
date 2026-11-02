@@ -253,12 +253,22 @@ export const controlsForEntity = (controls, entityId, stateObj) => (controls || 
 // Deterministic: every one of these strings is built in this file and opens
 // with a plain tag. A picker slot or static text matches nothing and is left
 // alone, correctly -- HA's pickers carry their label as a property.
+//
+// HA's own fields are named differently: a <label for> cannot reach into their
+// shadow root, so the caption goes on the field as its label attribute and is
+// drawn by HA inside the outline, the way every HA form shows it. Nor do they
+// forward aria-describedby, so the hint stays the visible line below them.
 let fieldUid = 0;
-const FIRST_CONTROL = /^([\s\S]*?<(?:select|textarea|input)\b)([^>]*)(>[\s\S]*)$/;
-export const nameControl = (control, describedBy) => {
+const FIRST_CONTROL = /^([\s\S]*?<(select|textarea|input|ha-input-search|ha-input|ha-select)\b)([^>]*)(>[\s\S]*)$/;
+export const nameControl = (control, describedBy, label = "") => {
   const m = FIRST_CONTROL.exec(control || "");
   if (!m) return { control, id: "" };
-  const [, head, attrs, tail] = m;
+  const [, head, tag, attrs, tail] = m;
+  if (tag.startsWith("ha-")) {
+    const named = /\s(?:accessible-)?label="/.test(attrs) || !label
+      ? "" : ` label="${String(label).replace(/"/g, "&quot;")}"`;
+    return { control: `${head}${named}${attrs}${tail}`, id: "", ha: true };
+  }
   // A control that already names itself keeps that name: the label still has
   // to point somewhere, and a second `id` would be invalid.
   const own = /\sid="([^"]*)"/.exec(attrs);
@@ -273,10 +283,10 @@ export const configFieldHtml = ({ label, control, hint = "", action = "" }) => {
   // page default applies" both change what a correct answer looks like, and
   // sighted users get them for free by looking down.
   const hintId = hint ? `liza-cf-hint-${++fieldUid}` : "";
-  const named = nameControl(control, hintId);
+  const named = nameControl(control, hintId, label);
   return `
         <div class="config-field">
-          ${label ? `<label${named.id ? ` for="${named.id}"` : ""}>${label}</label>` : ""}
+          ${label && !named.ha ? `<label${named.id ? ` for="${named.id}"` : ""}>${label}</label>` : ""}
           ${action ? `<div class="config-label-row">${named.control}${action}</div>` : named.control}
           ${hint ? `<span class="config-field-hint" id="${hintId}">${hint}</span>` : ""}
         </div>`;
@@ -288,9 +298,9 @@ export const configFieldHtml = ({ label, control, hint = "", action = "" }) => {
 // instead leaves nothing on the card to say a media player's slider means
 // Volume. So the choice is between a select and a readout, never between a
 // select and nothing.
-export const sliderControlFieldHtml = ({ useSelect, optionsHtml, activeLabel, selectClass, iconHtml }) =>
+export const sliderControlFieldHtml = ({ useSelect, selectAttrs, activeLabel, selectClass, iconHtml }) =>
   useSelect
-    ? `<select class="${selectClass}">${optionsHtml}</select>`
+    ? `<ha-select class="${selectClass}"${selectAttrs}></ha-select>`
     : `<div class="slider-control-static">
              ${iconHtml}
              <span>${activeLabel}</span>
@@ -677,12 +687,27 @@ export const sliderIconFor = (controls, assign) => {
 //
 // An unconfigured `slider_vertical` still drives: it follows the selection.
 // That is not this gate's business — it reports what the strip stores, and a
-// following slider stores nothing. The remote face asks this same question, for
-// the reasons below.
+// following slider stores nothing. The remote face asks a narrower question;
+// see `storesConfig` below.
 export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_actions?.mode || assign?.image
   || assign?.longtouch?.length);
 
-// The face paints from `isConfigured`, i.e. from what a control *stores*, and
+// `isConfigured` minus the one shape that stores the *absence* of a
+// configuration: a bare proportional blob with no target is how the save path
+// spells "follow the selection" (`last_touched_slider_actions`).
+//
+// Kept separate because `isConfigured` is parity-bound — `_mayBeContext`
+// mirrors the backend's `may_be_context`, which asks only for a mode. This one
+// answers "has the user set something up here", which is what the face paints.
+export const storesConfig = (assign) => {
+  const sa = assign?.slider_actions;
+  if (sa?.mode && targetsLastTouched(sa)) {
+    return !!(assign.action_id || assign.image || assign.longtouch?.length);
+  }
+  return isConfigured(assign);
+};
+
+// The face paints from `storesConfig`, i.e. from what a control *stores*, and
 // every control on it is read the same way. This is worth a note because it was
 // briefly otherwise.
 //
@@ -770,7 +795,7 @@ export function gotoLinkEnd(rect, fromX, fromY) {
  * already on screen to decide whether to touch the DOM, and raw float noise
  * from `getBoundingClientRect` would make every comparison differ.
  */
-export function gotoLinkPath(x1, y1, x2, y2) {
+export function gotoLinkPath(x1, y1, x2, y2, trim = 0) {
   const r = (n) => Math.round(n * 10) / 10;
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -779,5 +804,16 @@ export function gotoLinkPath(x1, y1, x2, y2) {
   const bow = Math.min(44, len * 0.2);
   const cx = (x1 + x2) / 2 + (-dy / len) * bow;
   const cy = (y1 + y2) / 2 + (dx / len) * bow;
-  return `M${r(x1)},${r(y1)} Q${r(cx)},${r(cy)} ${r(x2)},${r(y2)}`;
+  // *trim* pulls the end back along the end tangent (control point -> end),
+  // so the line stops inside the arrowhead whose tip marks the true end.
+  let ex = x2;
+  let ey = y2;
+  const tx = x2 - cx;
+  const ty = y2 - cy;
+  const tlen = Math.hypot(tx, ty);
+  if (trim > 0 && tlen > trim) {
+    ex = x2 - (tx / tlen) * trim;
+    ey = y2 - (ty / tlen) * trim;
+  }
+  return `M${r(x1)},${r(y1)} Q${r(cx)},${r(cy)} ${r(ex)},${r(ey)}`;
 }

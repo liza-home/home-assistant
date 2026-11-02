@@ -19,14 +19,14 @@ from homeassistant.components import websocket_api
 from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from ...config_restore import (
+from ..restore import (
     async_restore_files,
     async_take_upload,
 )
 from ...const import DOMAIN
-from ...diagnostics_bundle import (
+from ..diagnostics_bundle import (
     BUNDLE_URL_BASE,
     BundleAbandoned,
     SCOPE_STANDARD,
@@ -48,6 +48,7 @@ from ..const import PAGE_ID_SCHEMA
 from ..device_sync import sync_config_to_device
 from ..events import fire_config_changed
 from .common import live_connection, refresh_state_listener
+from .settings import async_reload_themes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -217,6 +218,23 @@ def _bundle_skipped(data: bytes, filename: str) -> list[dict[str, str]]:
         return []
 
 
+def _battery_entity(hass: HomeAssistant, entry_id: str) -> str | None:
+    """The remote's own battery sensor, by translation key rather than id.
+
+    The entity id is derived from the device name and so changes when the
+    device is renamed; ``translation_key`` is what the platform writes and
+    never moves. The panel is handed the id rather than a reading because it
+    already receives every state change with ``hass`` -- a number sent here
+    would be the value at list time and stay that way for as long as the panel
+    is open.
+    """
+    ent_reg = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(ent_reg, entry_id):
+        if entity.domain == "sensor" and entity.translation_key == "battery":
+            return entity.entity_id
+    return None
+
+
 @websocket_api.websocket_command({
     "type": "lizaip_config/list_devices",
     vol.Optional("language"): str,
@@ -246,7 +264,17 @@ async def ws_list_devices(hass: HomeAssistant, connection, msg: dict) -> None:
             "title": title,
             "available": available,
             "device_id": device_id,
+            # The remote's own short id -- the hex in its title -- stable and
+            # readable whether it is connected or not. `device_id` above is
+            # neither: it flips between registry id and short id.
+            #
+            # `__init__.py` writes the same value into `configuration_url`.
+            "slug": entry.unique_id or entry.data.get("device_id") or entry.entry_id,
             "sw_version": entry.data.get("sw_version"),
+            # The pill doubles as a battery gauge; the panel reads the level
+            # from `hass.states` so it stays live. None where the sensor has
+            # not been created yet, and the pill is then just a pill.
+            "battery_entity": _battery_entity(hass, entry.entry_id),
         })
     connection.send_result(msg["id"], devices)
 
@@ -383,6 +411,9 @@ async def _apply_restore(
         log.exception("Restoring the configuration failed")
         connection.send_error(msg["id"], "failed", str(err))
         return
+    # The archive may have brought a theme with it, and a page resolving a
+    # theme the registry has not read yet draws the default look instead.
+    await async_reload_themes(hass)
     # The sync this would otherwise start would race the wipe below, which is
     # the one thing an event-driven sync cannot do for itself.
     fire_config_changed(hass, msg["entry_id"], sync_handled=True)

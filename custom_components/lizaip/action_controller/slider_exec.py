@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from homeassistant.core import HomeAssistant
 
 from .. import optimistic
-from ..slider_throttle import has_moved, read_cooldown_seconds
+from ..shared.slider_throttle import has_moved, read_cooldown_seconds
 from ._state import (
     _DEFAULT_PAGE_ID,
     _live_touch,

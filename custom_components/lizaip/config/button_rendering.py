@@ -35,6 +35,7 @@ from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.icon import async_get_icons
 
 from ..shared.tokens import (
+    button_scope,
     entity_token_entities,
     resolve_image_tokens,
     clean_label_text,
@@ -48,6 +49,7 @@ from ..shared.services import (
     catchall_state_icon,
     is_attribute_state_service,
     is_state_toggle_service,
+    is_two_way_service,
     icon_varies_with_state,
     is_stateless_service,
     scope_action_states,
@@ -69,7 +71,6 @@ from ..shared.assignment import (
 from .const import (
     BROKEN_TARGET_ICON,
     UNCONFIGURED_ICON,
-    is_borrowed_identity_icon,
     is_payload_service,
     is_unconfigured_step,
     payload_display,
@@ -128,6 +129,50 @@ def _entity_id_for_assign(assign: dict, hass: HomeAssistant) -> str:
     return resolve_step_entity(first_step(assign), hass) or ""
 
 
+def library_names(library: Any) -> dict[str, str]:
+    """The action library's names, keyed by the ``action_id`` a button carries."""
+    return {
+        a["id"]: (a.get("name") or "").strip()
+        for a in library or ()
+        if isinstance(a, dict) and a.get("id")
+    }
+
+
+def _label_is_auto_filled(
+    stored: str, assign: dict, hass: HomeAssistant,
+    state: State | None = None,
+    library_name: str | None = None,
+) -> bool:
+    """Is *stored* only the auto-filled library name, standing in for a derived one?
+
+    The mirror of the panel's ``_labelIsAutoFilled`` with ``_computeLabel``: the
+    Tooltip field shows the derived label instead of the stored name in
+    exactly these cases -- ``${_state}``, or a payload button's own item over a
+    name copied from the shared library entry -- and the stored name everywhere
+    else. *library_name* is that entry's name; without one the stored name was
+    never copied from anywhere and is the button's own.
+    """
+    if not stored or name_is_user_written(assign):
+        return False
+    if stored != (library_name or "").strip():
+        return False
+    config = assign.get("config", []) if isinstance(assign, dict) else []
+    service = step_service(config) or ""
+    # `_computeLabel`'s rungs before `${_state}`: a command names its target, a
+    # payload its item, an unfinished step nothing.
+    if get_internal_command(service) is not None:
+        return False
+    if payload_display(assign)[0]:
+        return is_payload_service(service)
+    if is_unconfigured_step(config, service):
+        return False
+    svc = service_name(service)
+    if not (is_two_way_service(svc) or is_attribute_state_service(svc)):
+        return False
+    subject, state_obj = subject_for_assign(assign, hass, state)
+    return bool(subject or state_obj or _entity_id_for_assign(assign, hass))
+
+
 def _internal_target_hint(assign: dict) -> str:
     """The name a device-local command's target had when the button was saved.
 
@@ -145,7 +190,6 @@ def _internal_target_hint(assign: dict) -> str:
 
 def _fill_label_tokens(
     text: str,
-    action_def: dict,
     assign: dict,
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
@@ -161,7 +205,8 @@ def _fill_label_tokens(
     if not text or "${" not in text:
         return text
 
-    service = action_def.get("service", "")
+    config = assign.get("config", []) if isinstance(assign, dict) else []
+    service = step_service(config) or ""
     svc = service_name(service)
     lang = get_ui_language(hass, entry)
 
@@ -171,22 +216,17 @@ def _fill_label_tokens(
 
     # The step's own service data: a button that names a literal value for the
     # attribute it sets (`is_volume_muted: true`) says its own direction.
-    config = assign.get("config", []) if isinstance(assign, dict) else []
     step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
     data = step.get("data") or {}
 
     values = {"_state": state_token_label(svc, current_state, lang, attributes, data)}
 
-    # `${_name}` is a device-local command's token and nobody else's. The key is
-    # only added when the button actually carries one, so on a plain HA action
-    # the token stays unknown and collapses to nothing — rather than resolving
-    # to an empty string that reads as a supported-but-blank token. The step's
-    # service, not the library entry's, matching the internal-command rung: the
-    # command lives on the step.
-    internal_service = step_service(config) or service
-    if get_internal_command(internal_service) is not None:
+    # `${_name}` is a device-local command's token and nobody else's. The key
+    # is only added when the button carries one, so on a plain HA action the
+    # token collapses to nothing rather than to a supported-but-blank string.
+    if get_internal_command(service) is not None:
         values["_name"] = internal_command_target_name(
-            internal_service, data, internal_context, _internal_target_hint(assign)
+            service, data, internal_context, _internal_target_hint(assign)
         )
 
     return substitute_label_tokens(
@@ -195,13 +235,13 @@ def _fill_label_tokens(
 
 
 def _resolve_button_tooltip(
-    action_def: dict,
     assign: dict,
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
     button_ref: tuple[str, int, str] | None = None,
     state: State | None = None,
+    library_name: str | None = None,
 ) -> str:
     """Compute the text the remote prints under a button.
 
@@ -213,22 +253,24 @@ def _resolve_button_tooltip(
     brace there is rejected by the HTTP parser before any handler runs, which
     shows up on the device as a silently blank tooltip.
     """
-    return finish_tooltip(
-        _resolve_button_tooltip_ladder(
-            action_def, assign, hass, entry, internal_context, button_ref, state,
-        ),
-        hass,
-    )
+    with button_scope(_entity_id_for_assign(assign, hass), hass):
+        return finish_tooltip(
+            _resolve_button_tooltip_ladder(
+                assign, hass, entry, internal_context, button_ref, state,
+                library_name,
+            ),
+            hass,
+        )
 
 
 def _resolve_button_tooltip_ladder(
-    action_def: dict,
     assign: dict,
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
     internal_context: dict | None = None,
     button_ref: tuple[str, int, str] | None = None,
     state: State | None = None,
+    library_name: str | None = None,
 ) -> str:
     """Compute a dynamic tooltip showing the next state the button will trigger.
 
@@ -248,41 +290,44 @@ def _resolve_button_tooltip_ladder(
     if rule_text:
         return rule_text
 
-    service = action_def.get("service", "")
+    config = assign.get("config", [])
+    service = step_service(config) or ""
     svc = service_name(service)
 
-    # A payload-carrying button (play_media, select_source) names itself — the
-    # shared action-library entry would name a different media item entirely.
-    # A name the user actually typed still wins; a name that merely mirrors the
-    # library entry was auto-filled and must not shadow the payload.
-    # Stripped before the comparison below, as `action_controller` does. A
-    # stored "Toggle " is the library name with a stray space, but compared raw
-    # it read as the user's own words: the tooltip said "Toggle" at sync time
-    # and "Schreibtisch Off" on the next live update.
+    # A payload-carrying button (play_media, select_source) names itself, so a
+    # name it was merely given must not shadow the payload; one the user typed
+    # still wins. Stripped first, as `action_controller` does.
     stored_name = (assign.get("label") or "").strip()
-    # The panel records who wrote the name, so the comparison with the library
-    # entry is only the fallback for buttons stored before it did.
+    # The panel records who wrote the name.
     user_named = name_is_user_written(assign)
     # A stored label is printed as it reads, its placeholders filled -- empty
     # included: `${_device.media_title_prev}` with nothing before it reads as
-    # nothing, not as a derived "Previous".
-    if stored_name and (user_named or stored_name != (action_def.get("name") or "")):
+    # nothing, not as a derived "Previous". It is what the panel's Tooltip field
+    # shows, and the remote must print what that field says; the one exception
+    # is the field's own: see `_label_is_auto_filled`.
+    if stored_name and not _label_is_auto_filled(
+        stored_name, assign, hass, state, library_name,
+    ):
+        if "${" not in stored_name:
+            # As the panel's `_displayLabel`: a preset's English name in the
+            # remote's language, a name the user typed as typed.
+            return clean_label_text(
+                action_labels.localize(stored_name, get_ui_language(hass, entry), user_named)
+            )
         return clean_label_text(
             _fill_label_tokens(
-                stored_name, action_def, assign, hass, entry, internal_context, state
+                stored_name, assign, hass, entry, internal_context, state
             )
         )
 
     # An internal command has no entity, so none of the state machinery below
     # applies — it names itself after what it does ("Living Room" for the page
     # it opens), which beats the service-derived "Goto Page".
-    config = assign.get("config", [])
     internal_step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
-    internal_service = step_service(config) or service
-    internal_cmd = get_internal_command(internal_service)
+    internal_cmd = get_internal_command(service)
     if internal_cmd is not None:
         label = internal_command_label(
-            internal_service,
+            service,
             internal_step.get("data"),
             internal_context,
             _internal_target_hint(assign),
@@ -293,11 +338,7 @@ def _resolve_button_tooltip_ladder(
     if payload_title:
         return payload_title
 
-    # Static name fallback. Never borrow the library entry's name for a
-    # payload-carrying service — it describes whichever button created it.
-    static_name = stored_name or (
-        "" if is_payload_service(service) else (action_def.get("name") or "")
-    )
+    static_name = stored_name
 
     # The device's own language option first, then the panel/HA language.
     lang = get_ui_language(hass, entry)
@@ -316,7 +357,7 @@ def _resolve_button_tooltip_ladder(
     # read a frozen "Mute" while its own icon already showed the opposite.
     if is_attribute_state_service(svc):
         attr_label = _fill_label_tokens(
-            STATE_TOKEN, action_def, assign, hass, entry, state=state,
+            STATE_TOKEN, assign, hass, entry, state=state,
         )
         if attr_label:
             return attr_label
@@ -377,7 +418,6 @@ def button_image_wins(assign: dict, svc_name: str, payload_thumb: str | None) ->
 class _IconSubject:
     """Everything the icon ladder asks about one button, resolved once."""
 
-    action_def: dict
     assign: dict
     service: str
     svc_domain: str
@@ -398,11 +438,20 @@ class _IconSubject:
     # same way the assignment's own image does. Optional because the rungs that
     # existed before all answer from the fields already on this subject.
     hass: HomeAssistant | None = None
+    # The remote's icon table: the shipped one with its theme laid over it.
+    # Optional because most callers (tests, previews) speak for no remote, and
+    # the shipped table is what a remote without a theme reads anyway.
+    icons: Any = None
 
     @property
     def entity_domain(self) -> str:
         """The domain the icon tables are keyed by, falling back to the service's."""
         return self.entity_id.split(".")[0] if self.entity_id else self.svc_domain
+
+    @property
+    def icon_table(self):
+        """The table the rungs read. Never the singleton when a theme is set."""
+        return self.icons or icon_defaults
 
     @property
     def state_icons(self) -> dict:
@@ -430,25 +479,24 @@ def _derived_states(subject: _IconSubject, hass: HomeAssistant) -> list:
     Only for a service whose icon actually follows the entity -- deriving rows
     for a fixed-icon service is what let it borrow an unrelated state's glyph.
     """
-    states = scope_action_states(subject.service, subject.action_def.get("states"))
-    if states or not subject.service or not subject.varies_with_state:
-        return states
+    if not subject.service or not subject.varies_with_state:
+        return []
 
     attr = service_to_attribute(subject.svc_name)
     if attr:
         return [
             {"state": s, "icon": i, "attribute": attr}
-            for s, i in icon_defaults.attribute_icons.get(attr, {}).items() if i
+            for s, i in subject.icon_table.attribute_icons.get(attr, {}).items() if i
         ]
     if is_state_toggle_service(subject.svc_name):
         return scope_action_states(
             subject.service,
             [
                 {"state": s, "icon": i}
-                for s, i in icon_defaults.domain_state_icons.get(subject.svc_domain, {}).items() if i
+                for s, i in subject.icon_table.domain_state_icons.get(subject.svc_domain, {}).items() if i
             ],
         )
-    return states
+    return []
 
 
 def _icon_from_toggle_rule(s: _IconSubject) -> str | None:
@@ -467,7 +515,7 @@ def _icon_from_toggle_rule(s: _IconSubject) -> str | None:
         entry_id, page_id, button_key = s.button_ref
     return toggle_icon(
         s.assign, s.current_state, entry_id, page_id, button_key,
-        s.entity_domain, s.service_icons, hass=s.hass,
+        s.entity_domain, s.service_icons, hass=s.hass, icons=s.icon_table,
     )
 
 
@@ -539,25 +587,13 @@ def _icon_for_unresolvable(s: _IconSubject) -> str | None:
     return None
 
 
-def _icon_from_action(s: _IconSubject) -> str | None:
-    """Rungs 5-6: the action's own icon, then an internal command's registry default.
+def _icon_from_internal_command(s: _IconSubject) -> str | None:
+    """Rung 5: an internal command's registry default.
 
-    The action icon is honoured whenever the icon does not vary with state; if
-    it does, the state rules below are more specific and win. For payload
-    services the library entry is shared across buttons, so item artwork on it
-    belongs to whichever button created it -- a generic mdi: icon carries no
-    such identity and stays usable.
+    An internal command has no entity and no states, so every rung below would
+    have nothing to match against.
     """
-    action_icon = s.action_def.get("icon")
-    if action_icon and (not s.svc_name or not s.varies_with_state):
-        if not (is_payload_service(s.service) and is_borrowed_identity_icon(action_icon)):
-            return action_icon
-
-    # An internal command has no entity and no states, so every rung below would
-    # have nothing to match against.
-    if s.internal_cmd is not None:
-        return s.internal_cmd.icon
-    return None
+    return s.internal_cmd.icon if s.internal_cmd is not None else None
 
 
 def _icon_from_configured_states(s: _IconSubject) -> str | None:
@@ -583,12 +619,12 @@ def _icon_from_live_state(s: _IconSubject) -> str | None:
     attribute = service_to_attribute(s.svc_name)
     if attribute:
         attr_val = attr_str(s.current_state.attributes.get(attribute, ""))
-        return icon_defaults.for_state(s.entity_domain, attribute, attr_val) or None
+        return s.icon_table.for_state(s.entity_domain, attribute, attr_val) or None
     if is_state_toggle_service(s.svc_name):
         # A narrowed service reads the table through its catch-all, so an idle
         # speaker still shows "press to play".
         lookup = scoped_icon_state(s.svc_name, s.entity_domain, s.current_state.state)
-        return (icon_defaults.for_state(s.entity_domain, None, lookup) if lookup else None) or None
+        return (s.icon_table.for_state(s.entity_domain, None, lookup) if lookup else None) or None
     return None
 
 
@@ -612,14 +648,14 @@ def _icon_from_service(s: _IconSubject) -> str | None:
     if not s.varies_with_state:
         # One answer, whatever the entity is doing. Borrowing a row from the
         # state table here is what drew mdi:pause on Play and Search buttons.
-        override = service_fixed_icon(s.entity_domain, s.svc_name)
+        override = service_fixed_icon(s.entity_domain, s.svc_name, s.icon_table)
         if override:
             return override
     else:
         attribute = service_to_attribute(s.svc_name)
         icons = (
-            icon_defaults.attribute_icons.get(attribute, {}) if attribute
-            else icon_defaults.domain_state_icons.get(s.svc_domain, {})
+            s.icon_table.attribute_icons.get(attribute, {}) if attribute
+            else s.icon_table.domain_state_icons.get(s.svc_domain, {})
         )
         first_icon = next(iter(icons.values()), None)
         if first_icon:
@@ -635,7 +671,7 @@ def _icon_from_service(s: _IconSubject) -> str | None:
         if svc_icon:
             return svc_icon
 
-    return icon_defaults.domain_icons.get(s.svc_domain)
+    return s.icon_table.domain_icons.get(s.svc_domain)
 
 
 #: Tried in order; the first to answer wins. See each rung for why it sits here.
@@ -644,7 +680,7 @@ _ICON_LADDER = (
     _icon_from_button_overrides,
     _icon_from_button_identity,
     _icon_for_unresolvable,
-    _icon_from_action,
+    _icon_from_internal_command,
     _icon_from_configured_states,
     _icon_from_live_state,
     _icon_from_any_state_row,
@@ -672,21 +708,36 @@ def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
 
 
 def _resolve_button_icon(
-    action_def: dict,
     assign: dict,
     hass: HomeAssistant,
     service_icons: dict | None = None,
     internal_context: dict | None = None,
     button_ref: tuple[str, int, str] | None = None,
+    icons: Any = None,
+) -> str:
+    """Resolve the best icon for a button, ``${_device…}`` reading as it does."""
+    with button_scope(_entity_id_for_assign(assign, hass), hass):
+        return _resolve_button_icon_ladder(
+            assign, hass, service_icons, internal_context, button_ref, icons,
+        )
+
+
+def _resolve_button_icon_ladder(
+    assign: dict,
+    hass: HomeAssistant,
+    service_icons: dict | None = None,
+    internal_context: dict | None = None,
+    button_ref: tuple[str, int, str] | None = None,
+    icons: Any = None,
 ) -> str:
     """Resolve the best icon for a button, most specific rung first.
 
     The order is the whole contract -- see `_ICON_LADDER` and the rung each
     entry names.
     """
-    service = action_def.get("service", "")
-    svc_domain = service.split(".")[0] if "." in service else ""
     config = assign.get("config", [])
+    service = step_service(config) or ""
+    svc_domain = service.split(".")[0] if "." in service else ""
     assign = with_resolved_image(assign, hass)
 
     # The same state the label speaks about, so an area-bound button's face and
@@ -700,7 +751,6 @@ def _resolve_button_icon(
             current_state = hass.states.get(entity_id)
 
     subject = _IconSubject(
-        action_def=action_def,
         assign=assign,
         service=service,
         svc_domain=svc_domain,
@@ -708,7 +758,7 @@ def _resolve_button_icon(
         config=config,
         # An internal command fires and forgets on the device itself -- no
         # entity, no state, so the ladder answers from the registry.
-        internal_cmd=get_internal_command(step_service(config) or service),
+        internal_cmd=get_internal_command(service),
         current_state=current_state,
         entity_id=entity_id,
         states=[],
@@ -716,6 +766,7 @@ def _resolve_button_icon(
         internal_context=internal_context,
         button_ref=button_ref,
         hass=hass,
+        icons=icons,
     )
     subject = replace(subject, states=_derived_states(subject, hass))
 

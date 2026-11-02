@@ -15,6 +15,13 @@ from ..imgserv.const import (
     split_source_parts,
 )
 from ..imgserv.fonts import DEFAULT_FONT_ID
+from .theme import (
+    DEFAULT_THEME_ID,
+    compose_id,
+    get_theme,
+    split_id,
+    theme_revision,
+)
 
 #: imgserv options a picture may carry in its query: ``media:<url>?size=200x200``.
 MEDIA_OPTION_KEYS: Final = ("size", "box", "fit", "mode", "fg", "bg", "crop", "alpha", "percent")
@@ -232,6 +239,7 @@ def _ascii_safe_path(value: str) -> str:
 
 def resolve_icon_url(
     icon: str, size: str = "tile", color: str = "", percent: int | None = None,
+    theme: str = "",
 ) -> str:
     """Convert an icon value to a fetchable URL.
 
@@ -284,6 +292,7 @@ def resolve_icon_url(
     if not icon:
         return ""
     pct = f"percent={percent}" if percent is not None else ""
+    thm = _theme_part(icon, theme)
     # Scheme tests run against a lowercased copy; the returned value always uses the
     # original casing so signed URLs and file names stay byte-exact.
     low = icon.lower()
@@ -301,7 +310,7 @@ def resolve_icon_url(
         # its own, so its query stays its own and the words beside it stay words.
         return _with_query(
             composite, _size_part(composite, size), "mode=dark",
-            f"fg={fg}" if fg and _tintable(composite) else "", pct,
+            f"fg={fg}" if fg and _tintable(composite) else "", pct, thm,
         )
     if low.startswith(("http://", "https://")):
         return _media_url(icon, size, pct)
@@ -315,7 +324,8 @@ def resolve_icon_url(
         # with `&`, and only add the page colour when the value has none of its own.
         own = re.search(r"[?&](fg|color)=", icon)
         return _with_query(
-            icon, _size_part(icon, size), f"fg={fg}" if fg and not own else "", pct,
+            icon, _size_part(icon, size), f"fg={fg}" if fg and not own else "",
+            pct, thm,
         )
     if icon.startswith("media:"):
         # The value is a URL in its own right — encode it so its query survives.
@@ -330,10 +340,44 @@ def resolve_icon_url(
         color_suffix = fg if fg and _tintable(icon) and not re.search(r"[?&](fg|color)=", icon) else ""
         return _with_query(
             icon, _size_part(icon, size), "mode=dark",
-            f"fg={color_suffix}" if color_suffix else "", pct,
+            f"fg={color_suffix}" if color_suffix else "", pct, thm,
         )
 
-    return resolve_icon_url(_words_source(icon), size, color, percent)
+    return resolve_icon_url(_words_source(icon), size, color, percent, theme)
+
+
+def _theme_part(icon: str, theme: str) -> str:
+    """``theme=…&tv=…`` for a remote on a theme of its own, ``tv=…`` alone
+    for one on an edited default, or nothing for the untouched default.
+
+    Left out when the three facets all resolve to the default theme, so a
+    remote that has picked nothing keeps the URLs it had before themes
+    existed. The id is collapsed first: ``monochrome`` and its three-facet
+    spelling name the same pixels, and two addresses for one picture would
+    halve the device's cache.
+
+    It rides in the URL rather than being resolved here because the remote
+    caches images by URL: switching a theme has to change the address or the
+    old pictures stay on the screen. ``tv`` carries the theme's content
+    digest for the same reason -- editing a theme keeps its id, so the id
+    alone would leave every address untouched. imgserv ignores it.
+    """
+    theme = theme.strip().lower() if theme else ""
+    if re.search(r"[?&](theme|tv)=", icon):
+        return ""
+    # No theme at all is the default one: split_id reads "" as default.
+    collapsed = compose_id(*split_id(theme))
+    if collapsed == DEFAULT_THEME_ID:
+        # Never a theme=: imgserv draws a request without one in the default
+        # theme -- the edited one, when /config/lizaip/themes holds a
+        # default.yaml -- so an address needs no name to reach it. An
+        # untouched default adds nothing, so a remote that picked nothing
+        # keeps the URLs it had before themes existed; an edited one adds
+        # only its digest, because the remote caches by URL and the old
+        # pictures would otherwise stay on the screen.
+        default = get_theme(DEFAULT_THEME_ID)
+        return f"tv={default.revision}" if default.modified else ""
+    return f"theme={quote(collapsed, safe='')}&tv={theme_revision(collapsed)}"
 
 
 def _tintable(source: str) -> bool:
@@ -492,6 +536,7 @@ def _draws_words(url: str) -> bool:
 
 def resolve_tooltip_url(
     text: str, color: str = "", style: Mapping[str, Any] | None = None,
+    theme: str = "",
 ) -> str:
     """The URL for what is printed under a button; ``""`` clears it.
 
@@ -506,7 +551,7 @@ def resolve_tooltip_url(
     explicit = is_media_source(value)
     if not explicit:
         value = _words_source(value)
-    url = resolve_icon_url(value, size="tooltip", color=color)
+    url = resolve_icon_url(value, size="tooltip", color=color, theme=theme)
     if not _draws_words(url) or (
         explicit and (
             value.lower().startswith("imgserv://")
@@ -520,6 +565,7 @@ def resolve_tooltip_url(
 
 def resolve_title_url(
     image: str, color: str = "", style: Mapping[str, Any] | None = None,
+    theme: str = "",
 ) -> str:
     """The URL for a page's title strip; ``""`` when the page has none.
 
@@ -530,7 +576,7 @@ def resolve_title_url(
     not an override.
     """
     value = image.strip() if image else ""
-    url = resolve_icon_url(value, size="title", color=color)
+    url = resolve_icon_url(value, size="title", color=color, theme=theme)
     if (
         not _draws_words(url)
         or value.lower().startswith("imgserv://")

@@ -11,7 +11,7 @@ from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ..shared.logs import device_logger
-from ..slider_throttle import has_moved, read_cooldown_seconds
+from ..shared.slider_throttle import has_moved, read_cooldown_seconds
 from .connection import LizaIPConnection
 from .entity import LizaIPEntity
 

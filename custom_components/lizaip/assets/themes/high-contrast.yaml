@@ -1,0 +1,65 @@
+# lizaIP — High Contrast. Saturated colours on a dark remote, the largest text
+# the sizes allow, and heavier glyphs. Its icons: block is merged over
+# the default theme's icons one entry at a time, leaving every other row alone.
+name: High Contrast
+
+# Every colour here reaches at least 7:1 against the remote's black (WCAG AAA),
+# grey included: "off" must still be readable, it is told apart from "on" by
+# its hue, not by fading into the background.
+colors:
+  palette:
+    - { name: white, hex: "FFFFFF" }
+    - { name: yellow, hex: "FFFF00" }
+    - { name: blue, hex: "00E5FF" }
+    - { name: green, hex: "00FF66" }
+    - { name: red, hex: "FF6B6B" }
+    - { name: inactive, hex: "999999" }
+
+  states:
+    "on": "FFFF00"
+    "off": "999999"
+    unavailable: "FF6B6B"
+    default: "FFFFFF"
+
+# The top of both ranges: a theme for reading the remote from across the room
+# cannot have smaller text than the default one.
+text:
+  title: { font: filsonsoft-light, font_size: 50 }
+  tooltip: { font: filsonsoft-light, font_size: 40 }
+
+# Filled, circled and boxed glyphs carry more ink than the stock set, which is
+# what makes them readable at a distance. Like every icons: block these show
+# the NEXT state -- what pressing the button does.
+icons:
+  domain_state_icons:
+    light:
+      "on": mdi:lightbulb-on
+      "off": mdi:lightbulb-off
+    cover:
+      open: mdi:arrow-down-bold-box
+      closed: mdi:arrow-up-bold-box
+      opening: mdi:arrow-down-bold-outline
+      closing: mdi:arrow-up-bold-outline
+    lock:
+      locked: mdi:lock
+      unlocked: mdi:lock-open-variant
+    fan:
+      "on": mdi:fan-speed-3
+      "off": mdi:fan-off
+    media_player:
+      playing: mdi:pause-circle
+      paused: mdi:play-circle
+      idle: mdi:play-circle
+      "on": mdi:power-off
+      "off": mdi:power
+    climate:
+      heat: mdi:fire-circle
+      cool: mdi:snowflake
+      "off": mdi:power
+  domain_icons:
+    light: mdi:lightbulb-on
+    climate: mdi:thermostat-box
+    media_player: mdi:play-circle
+    vacuum: mdi:robot-vacuum-variant
+    camera: mdi:cctv
+    remote: mdi:remote-tv

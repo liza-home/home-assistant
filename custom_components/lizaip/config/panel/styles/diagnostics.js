@@ -12,54 +12,26 @@
  */
 export const STYLES_DIAGNOSTICS = `
   /* --- Diagnostics menu, pill and progress dialog --- */
-  /* The ⋮ that offers the three downloads. Sized like the toolbar's own icon
-     buttons so it sits level with the tabs beside it. */
+  /* The ⋮ that offers the three downloads. HA's icon button, so it is the
+     same size as every other icon control in the toolbar. */
   .diag-menu-btn {
     flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: transparent;
     color: var(--liza-muted-text);
-    cursor: pointer;
-    --mdc-icon-size: 20px;
-  }
-  .diag-menu-btn:hover {
-    background: var(--secondary-background-color, #e8e8e8);
-    color: var(--primary-text-color, #212121);
-  }
-  .diag-menu-btn:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 2px;
   }
   /* On the accent-filled toolbar the muted grey disappears; there the button
      borrows the bar's own text colour, as the tabs beside it do. */
   /* The help toggle, beside the overflow menu it came out of. Same metrics
      as the menu button so the pair reads as one group of toolbar controls. */
   .guide-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 36px; height: 36px;
     flex: 0 0 auto;
-    border: none; border-radius: 50%;
-    background: transparent; cursor: pointer;
     color: var(--liza-muted-text);
-  }
-  .guide-btn ha-icon { --mdc-icon-size: 22px; }
-  .guide-btn:hover { background: var(--secondary-background-color); color: var(--primary-text-color, #fff); }
-  .guide-btn:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 2px;
   }
   /* Pressed is a state, not a hover: with the guide docked the button stays
      lit, so the toolbar says where the panel's missing width went. */
   .guide-btn[aria-pressed="true"] {
     color: var(--primary-color, #03a9f4);
     background: var(--secondary-background-color);
+    border-radius: 50%;
   }
   .toolbar .guide-btn { color: var(--primary-text-color, #fff); }
   /* The device list has no tabs to take up the slack, so the help button sat
@@ -74,10 +46,6 @@ export const STYLES_DIAGNOSTICS = `
     color: inherit;
     margin-left: 4px;
   }
-  .toolbar .diag-menu-btn:hover {
-    background: rgba(255, 255, 255, 0.14);
-    color: inherit;
-  }
   /* In a device row the ⋮ must not shove the status badge around, and it is
      only worth noticing once the pointer is on the row it belongs to. */
   .device-item .diag-menu-btn {
@@ -85,7 +53,7 @@ export const STYLES_DIAGNOSTICS = `
     opacity: 0.55;
   }
   .device-item:hover .diag-menu-btn,
-  .device-item .diag-menu-btn:focus-visible {
+  .device-item .diag-menu-btn:focus-within {
     opacity: 1;
   }
 

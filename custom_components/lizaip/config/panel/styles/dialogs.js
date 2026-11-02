@@ -66,132 +66,349 @@ export const STYLES_DIALOGS = `
     gap: 8px;
     color: var(--primary-text-color, #fff);
   }
-  /* Room for four square cards in a row. Only the add-page dialog holds this
-     grid, so the other dialogs keep their width. */
-  .add-page-dialog:has(> .add-page-dialog-options) { max-width: 640px; }
-  .add-page-dialog-options {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-  .add-page-option {
-    /* Square, whatever the label. A card whose words need more height than
-       its width still grows rather than clipping them. */
-    aspect-ratio: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 12px;
-    text-align: center;
-    border: 2px solid var(--divider-color, #333);
-    border-radius: 12px;
-    background: transparent;
-    color: var(--primary-text-color, #fff);
-    cursor: pointer;
-    transition: border-color .2s, background .2s;
-    font-size: var(--liza-font-m);
-  }
-  .add-page-option:hover {
-    border-color: var(--primary-color, #03a9f4);
-    background: rgba(3,169,244,.08);
-  }
-  .add-page-option-desc {
-    font-size: var(--liza-font-11);
-    color: var(--liza-muted-text);
-    text-align: center;
-  }
-  .add-page-cancel {
-    display: block;
-    margin: 0 auto;
-    padding: 8px 24px;
-    background: transparent;
-    border: 1px solid var(--divider-color, #444);
-    border-radius: 8px;
-    color: var(--liza-muted-text);
-    cursor: pointer;
-    font-size: var(--liza-font-13);
-  }
-  .add-page-cancel:hover { color: var(--primary-text-color, #fff); border-color: var(--primary-text-color); }
+  /* Cancel, Save and the destructive commits are Home Assistant's own
+     ha-button now, so their look -- fill, radius, focus ring, disabled
+     state -- comes from the theme rather than from us. All that is left
+     here is where they sit. */
 
-  /* Template picker grid */
+  /* Template picker list */
   .template-dialog { max-width: 560px; }
   .template-dialog-desc {
     font-size: var(--liza-font-13);
     color: var(--liza-muted-text);
     margin: -8px 0 16px 0;
   }
-  .template-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 12px;
-    margin-bottom: 20px;
+  .template-name-input {
+    display: block;
+    width: 100%;
   }
-  .template-card {
+
+  /* A form step carries its own rhythm, so the gaps between its fields do not
+     depend on whatever margin the input component leaves behind. */
+  .add-page-body.is-form-body > .config-field { margin-bottom: 12px; }
+  .add-page-body.is-form-body > .config-field:last-of-type { margin-bottom: 0; }
+
+  /* One row, used by every step of the walk: the folders on the first
+     screen, the templates inside one, the search results and the devices the
+     last step offers are all the same shape, so the dialog never changes
+     form -- only what it is listing. */
+  .template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 4px 0 6px;
+  }
+  .template-row {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--primary-text-color, #fff);
+    font: inherit;
+    cursor: pointer;
+  }
+  .template-row:hover {
+    background: rgba(255,255,255,.055);
+    border-color: var(--divider-color, #333);
+  }
+  .template-row.is-chosen {
+    background: rgba(3,169,244,.1);
+    border-color: var(--primary-color, #03a9f4);
+  }
+  .template-row:focus-visible {
+    outline: none;
+    border-color: var(--primary-color, #03a9f4);
+    box-shadow: 0 0 0 3px rgba(3,169,244,.3);
+  }
+  /* The heading over each half of the first screen. Home Assistant labels
+     such a group rather than ruling an unexplained line between two, and the
+     panel already spells that role out in .config-section-title. */
+  .template-list-title {
+    margin: 0;
+    padding: 4px 12px 4px;
+    font-size: var(--liza-font-11);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--liza-muted-text);
+  }
+  /* The rule belongs between the two groups, not against either of them: at
+     4px it read as part of the heading under it. */
+  .template-list.is-lead + .template-list-title {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--divider-color, #333);
+  }
+  .template-list.is-lead { padding-bottom: 0; }
+  .template-row-text { flex: 1 1 auto; min-width: 0; }
+  .template-row-name {
+    display: block;
+    font-size: var(--liza-font-m);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .template-row-desc {
+    display: block;
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .template-row-tail {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+  }
+  /* Drawn rather than a glyph, so it needs no icon round-trip to say "this
+     one opens". */
+  .template-row-chevron {
+    width: 7px;
+    height: 7px;
+    border-right: 1.6px solid currentColor;
+    border-bottom: 1.6px solid currentColor;
+    transform: rotate(-45deg);
+  }
+  /* The last step chooses one of a few targets rather than browsing, and
+     Home Assistant's own visible single-choice lists head each option with
+     a radio. */
+  .template-row-radio {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--liza-muted-text);
+    box-sizing: border-box;
+  }
+  .template-row.is-chosen .template-row-radio {
+    border-color: var(--primary-color, #03a9f4);
+  }
+  .template-row.is-chosen .template-row-radio::after {
+    content: "";
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--primary-color, #03a9f4);
+  }
+  /* An area is optional per device, so a list that shows any reserves the
+     second line on all of them. */
+  .template-target-list.is-two-line .template-row-desc:empty::after {
+    content: "\\00a0";
+  }
+  .template-row mark {
+    background: rgba(3,169,244,.3);
+    color: inherit;
+    border-radius: 3px;
+    padding: 0 1px;
+  }
+
+  /* The picture is an imgserv raster, not a glyph CSS can tint, and the two
+     kinds are shaped nothing alike -- but the plate is one width for both,
+     so every name in the list starts at the same place. */
+  .tile-plate {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 40px;
+    width: 52px;
+    box-sizing: border-box;
+    border-radius: 9px;
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+
+  /* ── The add-page walk's own chrome ──────────────────────────────────
+     Scoped to the walk's host, because .add-page-dialog and .template-dialog
+     are shared by every other dialog in the panel. */
+  .add-page-dialog#liza-template-step {
+    max-width: 680px;
+    width: 92%;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  /* The crumb carries its own 6px of button padding, so the head is inset by
+     28px rather than 22px: that puts the crumb's text on the same left rail
+     as the group headings and the rows' plates below it. */
+  .add-page-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    height: var(--add-page-head-h);
+    padding: 16px 28px 8px;
+  }
+  /* The trail replaces both the step's title and a Back button, and stays on
+     one row however long it grows: a wrapped crumb would push the search and
+     the list down a step at a time. */
+  .add-page-crumbs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .add-page-crumb {
+    border: 0;
+    background: transparent;
+    padding: 2px 6px;
+    border-radius: 6px;
+    color: var(--liza-muted-text);
+    font-size: var(--liza-font-13);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .add-page-crumb:hover {
+    color: var(--primary-text-color, #fff);
+    background: rgba(255,255,255,.06);
+  }
+  .add-page-crumb.is-current {
+    color: var(--primary-text-color, #fff);
+    font-size: var(--liza-font-m);
+    font-weight: 600;
+    padding: 2px 6px;
+  }
+  .add-page-crumb-sep { color: var(--liza-muted-text); opacity: .5; }
+
+  .add-page-search {
+    display: flex;
+    align-items: center;
+    margin: 0 22px 6px;
+    /* Minus its own margin: the step without a bar reserves the same var, so
+       the two cannot drift apart. */
+    min-height: calc(var(--add-page-search-h) - 6px);
+  }
+  .add-page-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* One height for every step of the walk, the way HA pins its own stepped
+     pickers: dialog-add-integration sizes the sub-views to the list view it
+     measured. The 300px is the tallest step, so that one is exactly filled,
+     the shorter folders leave a strip rather than the dialog resizing under
+     the pointer, and only a genuinely longer list scrolls. The subtrahend is
+     the chrome around it -- head, search, foot and the dialog's own margins
+     -- measured rather than guessed, and keeps the foot reachable when the
+     screen is short or zoomed. */
+  .add-page-dialog {
+    --add-page-head-h: 44px;
+    --add-page-search-h: 46px;
+    --add-page-list-h: min(300px, calc(100vh - 172px));
+  }
+  .add-page-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: var(--add-page-list-h);
+    overflow-y: auto;
+    padding: 0 22px;
+  }
+  /* The last step asks for a device rather than offering a search, so it
+     takes the bar's height into the body: the dialog is the same height
+     there as on every step behind it, and the foot stays put. */
+  .add-page-body.is-form-body {
+    height: calc(var(--add-page-list-h) + var(--add-page-search-h));
+  }
+  .add-page-empty {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    padding: 18px 12px;
-    border: 2px solid var(--divider-color, #333);
-    border-radius: 12px;
-    background: transparent;
+    gap: 4px;
+    padding: 34px 12px 40px;
+    text-align: center;
+  }
+  .add-page-empty > img { opacity: .35; }
+  .add-page-empty-title {
+    margin: 8px 0 0;
+    font-size: var(--liza-font-m);
     color: var(--primary-text-color, #fff);
-    cursor: pointer;
-    transition: border-color .2s, background .2s;
   }
-  .template-card:hover {
-    border-color: var(--primary-color, #03a9f4);
-    background: rgba(3,169,244,.08);
-  }
-  .template-card-name { font-size: var(--liza-font-m); font-weight: 500; }
-  .template-card-desc { font-size: var(--liza-font-11); color: var(--liza-muted-text); text-align: center; }
-  /* A grouped step has a way back as well as a way out. */
-  .template-dialog-nav { display: flex; gap: 8px; justify-content: center; }
-  /* The cancel button centres itself with auto margins; inside the flex row
-     those absorb the free space and push the two buttons apart instead. */
-  .template-dialog-nav .add-page-cancel { margin: 0; }
-  .template-back {
-    padding: 8px 24px;
-    background: transparent;
-    border: 1px solid var(--divider-color, #444);
-    border-radius: 8px;
-    color: var(--liza-muted-text);
-    cursor: pointer;
+  .add-page-empty-hint {
+    margin: 0;
     font-size: var(--liza-font-13);
+    color: var(--liza-muted-text);
   }
-  .template-back:hover { color: var(--primary-text-color, #fff); border-color: var(--primary-text-color); }
+  .add-page-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 22px 14px;
+    border-top: 1px solid var(--divider-color, #333);
+  }
+  .add-page-count { font-size: var(--liza-font-11); color: var(--liza-muted-text); }
+  .add-page-foot .add-page-cancel { margin: 0; }
+  /* Home Assistant's own back arrow, sized down so it sits inside the head's
+     fixed height rather than overflowing it, and nudged onto the same left
+     rail the crumb text uses on the step before. */
+  .add-page-back {
+    --mdc-icon-button-size: 40px;
+    margin-left: -2px;
+    flex: 0 0 auto;
+    color: var(--liza-muted-text);
+  }
+  /* The count sits between the two, so it keeps them apart on its own. */
+  .add-page-foot .add-page-count { margin-right: auto; }
 
-  /* Device picker in template flow */
+  /* The last step of the walk asks one question rather than offering a grid,
+     so there is no count to hold the left and the pair that ends the walk
+     sits together on the right, where a hand expects a commit. */
+  .add-page-foot.is-form-foot { justify-content: flex-end; }
+
+  /* What the page is about to become, drawn as the card it was picked from:
+     the last screen is the only one that cannot show the thing itself. */
+  .template-receipt {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 6px 0 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--divider-color, #333);
+    border-radius: 14px;
+    background: rgba(255,255,255,.035);
+  }
+  .template-receipt-text { min-width: 0; }
+  .template-receipt-name {
+    display: block;
+    font-size: var(--liza-font-m);
+    font-weight: 600;
+  }
+  .template-receipt-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--liza-font-11);
+    color: var(--liza-muted-text);
+  }
+
+  /* What the template binds to, in the template flow */
   .template-entity-picker {
     margin-bottom: 20px;
   }
-  .template-entity-picker label {
-    display: block;
+  .template-entity-caption {
+    margin: 0 0 2px;
     font-size: var(--liza-font-13);
     color: var(--liza-muted-text);
-    margin-bottom: 6px;
   }
-  .template-entity-picker-container {
-    width: 100%;
-  }
-  .template-entity-picker-container ha-device-picker,
-  .template-entity-picker-container ha-config-entry-picker,
-  .template-entity-picker-container ha-form {
-    width: 100%;
-  }
-  .template-device-select {
-    width: 100%;
-    padding: 10px;
-    border-radius: 6px;
-    border: 1px solid var(--divider-color, #444);
-    background: var(--card-background-color, #1c1c1c);
-    color: var(--primary-text-color, #fff);
-    font-size: var(--liza-font-m);
-  }
+  .template-target-list { padding-bottom: 0; }
   .template-entity-hint {
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
@@ -202,25 +419,13 @@ export const STYLES_DIALOGS = `
     justify-content: flex-end;
     gap: 12px;
   }
-  .template-confirm-btn {
-    padding: 8px 20px;
-    background: var(--liza-accent-fill);
-    border: none;
-    border-radius: 8px;
-    color: #fff;
-    font-size: var(--liza-font-m);
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity .2s;
-  }
-  .template-confirm-btn:disabled { opacity: .4; cursor: not-allowed; }
-  .template-confirm-btn:hover:not(:disabled) { opacity: .85; }
+  .template-confirm-btn { flex: 0 0 auto; }
 
-  /* Destructive confirmation. --liza-error-fill rather than a raw --error-color
-     for the same reason the accent fill exists: white on it measures 4.85:1,
-     clear of WCAG 1.4.3's 4.5:1, which raw #db4437 is not. The message is a
-     normal paragraph in the theme's own body colour, so nothing here depends
-     on red to be read -- the red is emphasis, not information (1.4.1). */
+  /* Destructive confirmation. The red is ha-button's variant="danger", which
+     the theme guarantees a readable foreground on; we no longer mix it
+     ourselves. The message is a normal paragraph in the theme's own body
+     colour, so nothing here depends on red to be read -- the red is
+     emphasis, not information (1.4.1). */
   /* The title row is a flex row (icon + text) in other dialogs; a title that
      carries a subtitle stacks it underneath instead. */
   .add-page-dialog-title:has(.confirm-dialog-subtitle) {
@@ -241,18 +446,7 @@ export const STYLES_DIALOGS = `
     margin: 0 0 20px;
     color: var(--primary-text-color, #fff);
   }
-  .confirm-danger-btn {
-    padding: 8px 20px;
-    background: var(--liza-error-fill);
-    border: none;
-    border-radius: 8px;
-    color: #fff;
-    font-size: var(--liza-font-m);
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity .2s;
-  }
-  .confirm-danger-btn:hover { opacity: .85; }
+  .confirm-danger-btn { flex: 0 0 auto; }
 
   /* Restoring a configuration. One window walks the three steps -- choose a
      file, look at what is in it, watch it go in -- so its body changes under
@@ -293,11 +487,6 @@ export const STYLES_DIALOGS = `
     border-color: var(--liza-accent-fill);
     background: color-mix(in srgb, var(--liza-accent-fill) 5%, transparent);
   }
-  /* The input is the only focusable thing in here, so the box wears its ring. */
-  .restore-drop:focus-within {
-    outline: 2px solid var(--liza-accent-fill);
-    outline-offset: 2px;
-  }
   .restore-drop.over {
     border-color: var(--liza-accent-fill);
     background: color-mix(in srgb, var(--liza-accent-fill) 10%, transparent);
@@ -311,36 +500,15 @@ export const STYLES_DIALOGS = `
     background: color-mix(in srgb, var(--liza-accent-fill) 12%, transparent);
     color: var(--liza-accent-fill);
   }
-  /* A label wrapping a real file input rather than a button calling click()
-     on a detached one: the browser's own picker, opened by the user's own
-     click, is the only version every browser reports back from reliably. */
-  .restore-pick-btn {
-    padding: 9px 22px;
-    background: var(--liza-accent-fill);
-    border-radius: 8px;
-    color: #fff;
-    font-size: var(--liza-font-m);
-    font-weight: 500;
-    cursor: pointer;
-  }
-  .restore-drop:hover .restore-pick-btn { opacity: .85; }
-  .restore-drop .restore-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   .restore-drop-hint {
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
   }
   .restore-dialog { position: relative; }
-  .restore-dialog .add-page-dialog-title { padding-right: 32px; }
+  .restore-dialog .add-page-dialog-title { padding-right: 40px; }
   .restore-dialog-close {
-    position: absolute; top: 12px; right: 12px;
-    display: flex; align-items: center; justify-content: center;
-    width: 32px; height: 32px; padding: 0;
-    border: none; border-radius: 50%;
-    background: transparent; cursor: pointer;
-    color: var(--ha-color-on-neutral-normal, var(--liza-muted-text));
+    position: absolute; top: 8px; right: 8px;
   }
-  .restore-dialog-close:hover { background: var(--secondary-background-color); }
-  .restore-dialog-close ha-icon { --mdc-icon-size: 20px; }
   /* The three steps across the top. Numbered, and a tick for the ones that
      are behind: the user can see how much of the road is left. */
   .restore-steps {
@@ -490,21 +658,7 @@ export const STYLES_DIALOGS = `
     margin: 0 0 14px;
   }
   .restore-status.error { color: var(--error-color, #db4437); }
-  /* Its own cancel rather than .add-page-cancel, which is "margin: 0 auto"
-     because the Add Page dialog puts it alone on its row. Inside this flex
-     row that auto margin centred Cancel and stranded Delete at the far right,
-     so the pair no longer read as one choice. Same appearance, no margin. */
-  .confirm-cancel-btn {
-    padding: 8px 20px;
-    background: transparent;
-    border: 1px solid var(--divider-color, #444);
-    border-radius: 8px;
-    color: var(--liza-muted-text);
-    font-size: var(--liza-font-m);
-    cursor: pointer;
-  }
-  .confirm-cancel-btn:hover {
-    color: var(--primary-text-color, #fff);
-    border-color: var(--primary-text-color);
-  }
+  /* Cancel sits in a flex row beside the commit, so it must not carry the
+     auto margin that would centre it and strand its partner at the edge. */
+  .confirm-cancel-btn { flex: 0 0 auto; }
 `;

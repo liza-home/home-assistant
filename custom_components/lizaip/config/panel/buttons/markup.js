@@ -36,7 +36,7 @@ import {
   SLIDER_ICON_HIDDEN_KEY,
   resolveSliderIcon,
   sliderIconFor,
-  isConfigured,
+  storesConfig,
 } from "./shared.js";
 
 export const ButtonsMarkupMixin = {
@@ -59,7 +59,7 @@ export const ButtonsMarkupMixin = {
       // disagree about what this page has on it. A page whose vertical slider is
       // merely following the selection stores nothing and reads as blank, which
       // is what it is.
-      const filledCount = allBtnKeys.filter(k => isConfigured(pageAssigns[k])).length;
+      const filledCount = allBtnKeys.filter(k => storesConfig(pageAssigns[k])).length;
 
       // A subpage's only sighted cue is a darker tint and a lower position
       // (.page-thumb.subpage) -- neither reaches a screen reader, which would
@@ -165,10 +165,9 @@ ${pagesHtml}
     const allBtns = bp.buttons.filter(b => b.key !== "slider_horizontal");
     const assignedCount = allBtns.filter(b => this._isButtonAssigned(b.key)).length;
 
-    // Icon-tint swatches, served from imgserv's COLOR_NAMES (lizaip_config/get_palette)
-    // rather than hardcoded here: the hex a user clicks is stored as the page's
-    // default_color and handed straight back to imgserv as `?fg=`, so the two lists
-    // drifting apart would mean the panel offering colours the renderer never uses.
+    // Icon-tint swatches, served by lizaip_config/get_palette rather than
+    // hardcoded: the hex a user clicks is stored as default_color and handed
+    // back to imgserv as `?fg=`, and the list is the remote's theme's.
     const presets = this._palette || [];
     // Only used to seed the native picker, which needs some opening colour.
     // Looked up by name instead of by position so reordering PALETTE_NAMES cannot
@@ -232,12 +231,12 @@ ${pagesHtml}
             </div>
           </div>
           <div class="ps-title-reorder">
-            <button class="ps-reorder-btn ps-move-up" ${canMoveUp ? '' : 'disabled'} title="${this._esc(this._t("move_left"))}" aria-label="${this._esc(this._t("move_left"))}">
-              <ha-icon icon="mdi:arrow-left" style="--mdc-icon-size:18px;" aria-hidden="true"></ha-icon>
-            </button>
-            <button class="ps-reorder-btn ps-move-down" ${canMoveDown ? '' : 'disabled'} title="${this._esc(this._t("move_right"))}" aria-label="${this._esc(this._t("move_right"))}">
-              <ha-icon icon="mdi:arrow-right" style="--mdc-icon-size:18px;" aria-hidden="true"></ha-icon>
-            </button>
+            <ha-icon-button class="ps-reorder-btn ps-move-up" ${canMoveUp ? '' : 'disabled'} label="${this._esc(this._t("move_left"))}">
+              <ha-icon icon="mdi:arrow-left" aria-hidden="true"></ha-icon>
+            </ha-icon-button>
+            <ha-icon-button class="ps-reorder-btn ps-move-down" ${canMoveDown ? '' : 'disabled'} label="${this._esc(this._t("move_right"))}">
+              <ha-icon icon="mdi:arrow-right" aria-hidden="true"></ha-icon>
+            </ha-icon-button>
           </div>
         </div>`;
     // Below the banner rather than inside it, exactly as the button card puts
@@ -270,6 +269,9 @@ ${pagesHtml}
     // question simply is not being asked. Every colour handler in
     // `_wirePageSettingsPanel` is already null-guarded, and the swatches are
     // wired through `querySelectorAll`, which yields nothing on an empty list.
+    // Temporarily disabled: the per-page icon colour section.
+    const colorSectionHtml = '';
+    /*
     const colorSectionHtml = this._pageTitleSelected ? '' : `
           <div class="ps-section" style="margin-top:0;padding-top:0;border-top:none;">
             <h2 class="ps-section-title" title="${this._esc(this._t("tints_icons"))}">
@@ -278,15 +280,16 @@ ${pagesHtml}
             <div class="ps-color-presets">${swatchesHtml}</div>
             <div class="ps-color-row">
               <input type="color" class="ps-color-native" id="psColorNative" value="${pageDefaultColor ? '#' + pageDefaultColor : '#' + defaultHex}" aria-label="${this._esc(this._t("pick_custom_color"))}" title="${this._esc(this._t("pick_custom_color"))}" />
-              <input type="text" class="ps-color-input" id="psColorInput" value="${pageDefaultColor ? '#' + pageDefaultColor : ''}" aria-label="${this._esc(this._t("color_hex"))}" placeholder="#hex" />
-              ${pageDefaultColor ? `<button class="ps-color-clear" id="psColorClear" title="${this._esc(this._t("clear_color"))}" aria-label="${this._esc(this._t("clear_color"))}"><ha-icon icon="mdi:close" style="--mdc-icon-size:14px" aria-hidden="true"></ha-icon></button>` : ''}
+              <ha-input appearance="outlined" class="ps-color-input" id="psColorInput" value="${pageDefaultColor ? '#' + pageDefaultColor : ''}" accessible-label="${this._esc(this._t("color_hex"))}" placeholder="#hex" autocomplete="off"></ha-input>
+              ${pageDefaultColor ? `<ha-icon-button class="ps-color-clear" id="psColorClear" label="${this._esc(this._t("clear_color"))}"><ha-icon icon="mdi:close" aria-hidden="true"></ha-icon></ha-icon-button>` : ''}
             </div>
           </div>`;
+    */
 
     // A page made from a template drives one device (or hub); naming it here, as
     // the button that changes it, answers "what does this page control" without
     // a trip through the page strip's context menu.
-    const templateTargetHtml = this._pageTitleSelected || !page.template?.type ? '' : (() => {
+    const templateTargetHtml = this._pageTitleSelected || !(page.template?.type || page.template?.target?.device) ? '' : (() => {
       const hub = !!page.template.target?.config_entry;
       const name = this._templateTargetName(page);
       const changeLabel = this._t(hub ? "change_hub" : "change_device");
@@ -295,24 +298,23 @@ ${pagesHtml}
             <h2 class="ps-section-title">
               <ha-icon icon="${hub ? "mdi:hub" : "mdi:devices"}" style="--mdc-icon-size:16px;" aria-hidden="true"></ha-icon> ${this._t(hub ? "template_hub" : "template_device")}
             </h2>
-            <button class="ps-template-target-btn" id="psTemplateTarget" title="${this._esc(changeLabel)}" aria-label="${this._esc(`${changeLabel} ${name}`)}">
+            <ha-button appearance="outlined" class="ps-template-target-btn" id="psTemplateTarget" title="${this._esc(changeLabel)}">
+              <span class="liza-sr-only">${this._esc(changeLabel)}</span>
               <span class="ps-template-target-name">${this._esc(name)}</span>
-              <ha-icon icon="mdi:pencil" style="--mdc-icon-size:16px;" aria-hidden="true"></ha-icon>
-            </button>
+              <ha-icon slot="end" icon="mdi:pencil" aria-hidden="true"></ha-icon>
+            </ha-button>
           </div>`;
     })();
 
+    // The banner can be the whole card: with no title open, no template target
+    // and the colour section stood down, an empty body is padding and a rule
+    // under a row that has nothing below it.
+    const bodyHtml = `${titleEditorHtml}${templateTargetHtml}${colorSectionHtml}`;
     return `
       <ha-card outlined class="config-card">
         <h2 class="liza-sr-only">${this._esc(this._t("a11y_page_region"))}</h2>
         ${bannerHtml}
-        <div class="config-card-body ps-body">
-          ${titleEditorHtml}
-          ${templateTargetHtml}
-          ${colorSectionHtml}
-
-          </div>
-        </div>
+        ${bodyHtml.trim() ? `<div class="config-card-body ps-body">${bodyHtml}</div>` : ''}
       </ha-card>`;
   },
 
@@ -496,7 +498,7 @@ ${pagesHtml}
              // language.
              name: `<b>${this._esc(contextName)}</b>`,
            })}</span>
-           <button class="ctx-page-default" title="${this._esc(this._t("edit_page_default_title"))}">${this._t("page_default")}</button>
+           <ha-button appearance="outlined" size="s" class="ctx-page-default" title="${this._esc(this._t("edit_page_default_title"))}">${this._t("page_default")}</ha-button>
          </div>`
       : '';
 
@@ -903,14 +905,14 @@ ${pagesHtml}
         : available;
       // No "Custom…" entry: it is not a capability, and selecting it could only
       // ever be a no-op. Advanced below is the escape hatch. But a hand-edited
-      // config matches no preset, and a <select> with nothing selected shows
-      // its first option — silently claiming e.g. "Brightness". A disabled
-      // placeholder states the truth without offering a dead choice.
-      const controlOptionsHtml = [
-        activeControl ? "" : `<option value="" disabled selected>${this._t("set_under_advanced")}</option>`,
-        ...options.map(c =>
-          `<option value="${c.id}" ${activeControl === c ? "selected" : ""}>${this._esc(c.label)}</option>`),
-      ].join("");
+      // config matches no preset, and a select with nothing selected reads as
+      // blank or as its first option -- silently claiming e.g. "Brightness". A
+      // placeholder states the truth without offering a choice: picking it is
+      // ignored, as an empty value always is.
+      const controlOptions = [
+        ...(activeControl ? [] : [{ value: "", label: this._t("set_under_advanced"), disabled: true }]),
+        ...options.map(c => ({ value: c.id, label: c.label })),
+      ];
       // Most domains expose exactly one control — media_player, fan, number,
       // climate and humidifier all have a single entry in the table. A
       // <select> whose only option is the one already chosen looks operable and
@@ -918,7 +920,7 @@ ${pagesHtml}
       // as there is genuinely something to choose between.
       const controlFieldHtml = sliderControlFieldHtml({
         useSelect: !(options.length === 1 && activeControl),
-        optionsHtml: controlOptionsHtml,
+        selectAttrs: this._haSelectAttrs(controlOptions, activeControl ? activeControl.id : ""),
         activeLabel: activeControl ? this._esc(activeControl.label) : "",
         selectClass: "slider-control-select",
         iconHtml: activeControl ? this._renderIconHtml(activeControl.icon, 20) : "",
@@ -976,12 +978,11 @@ ${pagesHtml}
       // the entity (unknown or not yet picked).
       const liveAttrs = pageState?.attributes;
       const attributeFieldHtml = liveAttrs
-        ? `<select class="slider-attribute-input">
-             ${[...new Set([...Object.keys(liveAttrs), attribute].filter(Boolean))].sort()
-               .map(k => `<option value="${this._esc(k)}" ${k === attribute ? "selected" : ""}>${this._esc(k)}</option>`)
-               .join("")}
-           </select>`
-        : `<input type="text" class="slider-attribute-input" value="${this._esc(attribute)}" placeholder="volume_level" />`;
+        ? `<ha-select class="slider-attribute-input"${this._haSelectAttrs(
+            [...new Set([...Object.keys(liveAttrs), attribute].filter(Boolean))].sort()
+              .map(k => ({ value: k, label: k })),
+            attribute)}></ha-select>`
+        : `<ha-input appearance="outlined" class="slider-attribute-input" value="${this._esc(attribute)}" placeholder="volume_level" autocomplete="off"></ha-input>`;
 
       // Hand-editing any of the plumbing below makes matchControl return null,
       // which drops Control to the disabled placeholder with no route back
@@ -1040,7 +1041,7 @@ ${pagesHtml}
               ${sliderCtx.derivedIcon ? this._renderIconHtml(sliderCtx.derivedIcon, 18) : ""}
               <span>${this._esc(sliderCtx.derivedName)}</span>
             </span>
-            <button class="slider-ctx-use-default" data-entity="${this._esc(sliderCtx.derived)}">${this._t("use_for_slider")}</button>
+            <ha-button appearance="outlined" size="s" class="slider-ctx-use-default" data-entity="${this._esc(sliderCtx.derived)}">${this._t("use_for_slider")}</ha-button>
           </div>`;
       })();
 
@@ -1066,28 +1067,27 @@ ${pagesHtml}
             page_default: this._esc(this._t("page_default")),
           })}</span>` : ""}
           <div class="config-field slider-range-row">
-            <div>
-              <label for="liza-slider-min">${this._t("range_min")}</label>
-              <input type="number" id="liza-slider-min" class="slider-min-input" value="${valMin}" step="0.01" />
-            </div>
-            <div>
-              <label for="liza-slider-max">${this._t("range_max")}</label>
-              <input type="number" id="liza-slider-max" class="slider-max-input" value="${valMax}" step="0.01" />
-            </div>
+            <ha-input type="number" appearance="outlined" id="liza-slider-min" class="slider-min-input"
+              label="${this._esc(this._t("range_min"))}" value="${valMin}" step="0.01" inputmode="decimal"></ha-input>
+            <ha-input type="number" appearance="outlined" id="liza-slider-max" class="slider-max-input"
+              label="${this._esc(this._t("range_max"))}" value="${valMax}" step="0.01" inputmode="decimal"></ha-input>
           </div>
           <span class="config-field-hint">${this._t("slider_range_hint")}</span>
           <div class="config-section-divider"></div>
           ${configFieldHtml({ label: this._t("attribute"), control: attributeFieldHtml })}
           ${configFieldHtml({
             label: this._t("service"),
-            control: `<input type="text" class="slider-service-input" value="${this._esc(service)}" placeholder="media_player.volume_set" />`,
+            control: `<ha-input appearance="outlined" class="slider-service-input" value="${this._esc(service)}" placeholder="media_player.volume_set" autocomplete="off"></ha-input>`,
           })}
           ${configFieldHtml({
             label: this._t("data_key"),
-            control: `<input type="text" class="slider-datakey-input" value="${this._esc(dataKey)}" placeholder="volume_level" />`,
+            control: `<ha-input appearance="outlined" class="slider-datakey-input" value="${this._esc(dataKey)}" placeholder="volume_level" autocomplete="off"></ha-input>`,
           })}
           <span class="config-field-hint">${this._t("slider_plumbing_hint")}</span>
-          ${resetTarget ? `<button class="btn-test-config slider-reset-control" data-control="${resetTarget.id}">${this._esc(this._t("reset_control_defaults", { control: resetTarget.label }))}</button>` : ""}
+          ${resetTarget ? `<ha-button appearance="outlined" class="slider-reset-control" data-control="${resetTarget.id}">
+            <ha-icon slot="start" icon="mdi:restore" aria-hidden="true"></ha-icon>
+            ${this._esc(this._t("reset_control_defaults", { control: resetTarget.label }))}
+          </ha-button>` : ""}
           </div>
         </details>`;
 
@@ -1168,9 +1168,9 @@ ${pagesHtml}
             ${advancedHtml}
             ${configFieldHtml({
               label: this._t("sensitivity"),
-              control: `<input type="number" class="slider-factor-input" value="${factor}" step="0.1" min="${FACTOR_MIN}" max="${FACTOR_MAX}" />`,
+              control: `<ha-input type="number" appearance="outlined" class="slider-factor-input" value="${factor}" step="0.1" min="${FACTOR_MIN}" max="${FACTOR_MAX}" inputmode="decimal"></ha-input>`,
               action: sliderCtx?.factorOverridden
-                ? `<button class="slider-factor-reset" title="${this._esc(this._t("slider_use_page_factor", { value: sliderCtx.pageFactor }))}" aria-label="${this._esc(this._t("slider_use_page_factor", { value: sliderCtx.pageFactor }))}"><span aria-hidden="true">↺</span></button>`
+                ? `<ha-icon-button class="slider-factor-reset" label="${this._esc(this._t("slider_use_page_factor", { value: sliderCtx.pageFactor }))}"><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></ha-icon-button>`
                 : "",
               hint: sliderCtx
                 ? sliderCtx.factorHint
@@ -1603,7 +1603,7 @@ ${pagesHtml}
       previewClass: "icon-preview-title",
       slotId: "config-label-slot",
       action: (!labelNeedsAction && currentLabel && currentLabel !== autoLabel)
-        ? `<button class="config-label-reset" data-a11y-focus-after=".config-label-input" title="${this._esc(this._t("reset_tooltip"))}" aria-label="${this._esc(this._t("reset_tooltip"))}"><span aria-hidden="true">↺</span></button>`
+        ? `<ha-icon-button class="config-label-reset" data-a11y-focus-after=".config-label-input" label="${this._esc(this._t("reset_tooltip"))}"><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></ha-icon-button>`
         : '',
       hint: labelNeedsAction
         ? this._t("tooltip_needs_action")

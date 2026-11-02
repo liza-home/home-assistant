@@ -14,7 +14,7 @@ you decide what every button depicts and what it controls, all from a panel insi
 📸 **New here?** The user guide is a screenshot-illustrated walkthrough: installing,
 adding a device, defining pages, assigning button actions, the
 `mdi:`/`phu:`/`logo:`/`text:`/`media:` image schemes, and live entity variables.
-Read it [here on GitHub](custom_components/lizaip/docs/USER_GUIDE.md), or inside
+Read it [here on GitHub](custom_components/lizaip/config/docs/USER_GUIDE.md), or inside
 Home Assistant — open the **lizaIP** panel and press the **?** button in its
 toolbar, which needs no second window and works offline.
 
@@ -122,7 +122,7 @@ create library entries by hand, and a matching action is reused rather than dupl
 button and it becomes the *context*: the power, back, voice and volume buttons, and the
 vertical slider, then edit as overrides that apply only while that button is selected on
 the remote. The card header says which pair you are editing, and **Page default** takes
-you back to the page-wide setting. Clearing from the face menu removes just the
+you back to the page-wide setting. **Delete** in the face menu removes just the
 override in this mode, not the page default underneath it.
 
 ### Pages
@@ -131,10 +131,11 @@ override in this mode, not the page default underneath it.
   page**, or a **template** — a ready-made page for a device you already have in Home
   Assistant.
 - **Reorder** by dragging thumbnails, or with the arrows in Page settings.
-- **Delete** with the ✕ on a thumbnail.
-- With no button selected, the card shows **Page settings** and an **icon colour**
-  applied to that page's icons — a colour picker or a hex value. Cleared,
-  icons follow the theme. Images and logos keep their own colours.
+- **Delete** with the ✕ on a thumbnail. Buttons on other pages that opened it are
+  cleared with it.
+- With no button selected, the card shows **Page settings**. (The page's
+  **icon colour** picker is hidden for now; a colour set earlier still tints
+  that page's icons.)
 - To rename a page, click its **title** for the editor — plain text, an `mdi:` icon, a `logo:` name or an
   image URL.
 
@@ -391,21 +392,26 @@ has no visible affordance at all, so what it holds is written out here.
 **Tab** moves between the buttons on the face, one at a time, in the order they are
 drawn. **←**, **→**, **↑** and **↓** move in the direction you press, which is quicker
 across a remote than tabbing, and **Home** and **End** jump to the first and last button.
-**Enter** or **Space** selects the button you are on and opens
-its configuration below.
+**Enter** or **Space** selects the button you are on, opens
+its configuration below and puts you in its first field. On a button that is already open,
+**Enter** takes you back to that first field rather than closing it. Selecting a button
+with the mouse focuses its first control that takes no typing instead, so **Delete**
+still deletes the button.
 
 Moving between buttons does not select them, so you can explore the face without changing
 what the editor is showing. Tabbing back onto the face returns you to the selected button.
 
 **Shift+F10**, or the **Context Menu** key if your keyboard has one, opens that button's
 menu — the same menu you get from a right-click or a long-press. Nothing on screen
-advertises it, and it is the only way to reach **Move** and **Clear** without a pointer.
+advertises it, and it is the only way to reach **Move** and **Delete** without a pointer
+(for a selected button, the **Delete** key does the second as well).
 Inside the menu, **↑** and **↓** move between entries and wrap around, **Home** and
 **End** jump to the first and last, **Enter** chooses, and **Escape** closes the menu and
 puts focus back on the button you opened it from.
 
 **Move** arms the button; selecting a second button then swaps the two. **Escape** calls
-it off.
+it off. **Delete** empties the button; so does the **Delete** key (or **Backspace**, the
+key a Mac labels *delete*) while the button is selected.
 
 ### Everywhere else
 
@@ -415,7 +421,8 @@ it off.
 | An open configuration card | **Escape** closes it and returns focus to the button that opened it. |
 | Page order | The **Move left** and **Move right** arrows beside the page name do what dragging a page thumbnail does. |
 | A page thumbnail | **Shift+F10**, or the **Context Menu** key, opens that page's menu — the same one a right-click or long-press gives — where a page is duplicated, moved to another device (template pages), deleted, or turned into a subpage, or back. A thumbnail is a tab stop only while its page is not the open one, so to mark the page you are on, step to another page first. |
-| The open page | **Delete**, or **Backspace** (the key a Mac labels *delete*), deletes it after the same confirmation as its ✕ — unless you are typing in a field, or a dialog or menu is open. |
+| The selected button | **Delete**, or **Backspace** (the key a Mac labels *delete*), empties it, as **Delete** in its menu does — unless you are typing in a field, or a dialog or menu is open. |
+| The open page | With no button selected, **Delete** or **Backspace** deletes the page after the same confirmation as its ✕ — unless you are typing in a field, or a dialog or menu is open. |
 | The user guide | The **?** in the toolbar opens it beside the configuration. In its contents list, **↑** and **↓** move between entries, **Home** and **End** jump to the first and last, and **Enter** or **Space** opens the chapter. In the search box, **Enter** steps to the next match and **Shift+Enter** to the previous. **Escape** closes the guide. |
 | A guide screenshot | **Enter** or **Space** opens it full size. Inside the viewer, **←** and **→** step between screenshots, **Home** and **End** jump to the first and last, **+** and **-** zoom in and out, **0** fits the picture to the window again, and **Escape** closes it. |
 | Dialogs | **Tab** stays inside the dialog, **Escape** cancels. |

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -33,12 +33,13 @@ from .button_rendering import (
     _get_service_icons,
     _resolve_button_icon,
     _resolve_button_tooltip,
+    library_names,
     with_resolved_image,
 )
 from .const import step_service
 from .internal_commands import build_page_context
 from .internal_commands import resolve_action as resolve_internal_action
-from .text_style import longtouch_enabled, toggle_enabled
+from .text_style import longtouch_enabled, settings_theme, toggle_enabled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,10 +112,26 @@ class SyncContext:
     """
 
     text_settings: dict
-    lib_by_id: dict[str, dict]
     internal_context: Any
     style_options: IconStyleOptions
     service_icons: dict
+    #: The action library's names by id, so a label that is only its button's
+    #: library name can still be told from one somebody chose.
+    library_names: dict = field(default_factory=dict)
+
+    @property
+    def theme(self):
+        """The remote's theme, the default one when it has picked none."""
+        return settings_theme(self.text_settings)
+
+    @property
+    def theme_id(self) -> str:
+        return self.theme.theme_id
+
+    @property
+    def icons(self):
+        """The icon table this remote reads: the shipped one under its theme."""
+        return self.theme.icons
 
     @property
     def tooltip_style(self) -> dict:
@@ -137,8 +154,8 @@ async def build_sync_context(
     """Everything a page payload needs that is the same for every page.
 
     `build_page_payload` used to fetch all of this itself, once per page, even
-    though only the per-page assignments actually differ. The action library,
-    the text settings and the icon style options are per *device*; the service
+    though only the per-page assignments actually differ. The text settings and
+    the icon style options are per *device*; the service
     icon registry is per *installation*; and `build_page_context` walks the
     whole page list, so calling it inside the page loop made the sync O(N²) —
     20 pages cost 400 passes over the list, 100 pages cost 10,000.
@@ -153,13 +170,12 @@ async def build_sync_context(
     store = _get_store(hass)
     device_id = entry_device_id(entry)
 
-    library = await store.async_get_action_library(device_id)
     return SyncContext(
         text_settings=await store.async_get_settings(device_id),
-        lib_by_id={a["id"]: a for a in library if isinstance(a, dict) and "id" in a},
         internal_context=build_page_context(all_pages),
         style_options=read_icon_style_options(getattr(entry, "options", None)),
         service_icons=await _get_service_icons(hass),
+        library_names=library_names(await store.async_get_action_library(device_id)),
     )
 
 
@@ -212,10 +228,10 @@ async def _build_page_payload_in_scope(
         ctx = await build_sync_context(hass, entry, all_pages)
 
     text_settings = ctx.text_settings
+    theme_id = ctx.theme_id
     tooltip_style = ctx.tooltip_style
     longtouch = ctx.longtouch
     toggles = ctx.toggles
-    lib_by_id = ctx.lib_by_id
 
     page_store_id = page_config.get("id", 1)
     assignments = await store.async_get_assignments(device_id, page_store_id)
@@ -245,24 +261,31 @@ async def _build_page_payload_in_scope(
         # and long-touch steps from `assign`, so taking the block off at the top
         # of the loop is what makes the switch govern all of them at once.
         assign = runtime_assign(assign, toggles)
-        action_id = assign.get("action_id")
-        if not action_id:
-            # No action — still resolve per-button image and tooltip if configured
+        config = assign.get("config", [])
+        if not config:
+            # Nothing to run — still resolve per-button image and tooltip if
+            # configured. These are the sliders and the decorative image/label
+            # tiles; a button only acts once it carries a command step.
             assign_image = with_resolved_image(assign, hass).get("image")
-            img_tile = resolve_icon_url(assign_image, color=page_color) if assign_image else ""
+            img_tile = (
+                resolve_icon_url(assign_image, color=page_color, theme=theme_id)
+                if assign_image else ""
+            )
             buttons.append({
                 "name": button_name,
                 "img_tile": img_tile,
                 "img_tooltip": resolve_tooltip_url(
-                    _resolve_button_tooltip({}, assign, hass, entry, internal_context),
+                    _resolve_button_tooltip(
+                        assign, hass, entry, internal_context,
+                        library_name=ctx.library_names.get(assign.get("action_id")),
+                    ),
                     page_color,
                     tooltip_style,
+                    theme_id,
                 ),
                 "action": {"type": "ha_event", "params": {}},
             })
             continue
-
-        action_def = lib_by_id.get(action_id, {})
 
         # Resolve images — a button's own stored image is what the panel shows
         # for it (`_resolveButtonIcon` returns `a.image` before deriving
@@ -289,36 +312,36 @@ async def _build_page_payload_in_scope(
             (sync_entry_id, page_store_id, button_name) if sync_entry_id else None
         )
         resolved_icon = _resolve_button_icon(
-            action_def, assign, hass, service_icons, internal_context,
-            button_ref=button_ref,
+            assign, hass, service_icons, internal_context,
+            button_ref=button_ref, icons=ctx.icons,
         )
 
         # Still needed below, to decide whether the remote runs the command
         # itself or hands it to Home Assistant as a button event.
-        svc_full = action_def.get("service", "")
-        config = assign.get("config", [])
-        internal_service = step_service(config) or svc_full
+        internal_service = step_service(config)
         step_data = (
             config[0].get("data")
             if isinstance(config, list) and config and isinstance(config[0], dict)
             else None
         )
         device_logger(_LOGGER, entry).debug(
-            "Button %s: action_id=%s, action_def.icon=%s, service=%s, resolved=%s",
-            button_name, action_id, action_def.get("icon"), action_def.get("service"), resolved_icon,
+            "Button %s: service=%s, resolved=%s",
+            button_name, internal_service, resolved_icon,
         )
         tile_style = _button_icon_style(hass, assign, page_color, style_options)
         img_tile = resolve_icon_url(
             resolved_icon,
             color=tile_style.color,
             percent=tile_style.percent,
+            theme=theme_id,
         )
 
         # Tooltip: dynamic next-state label
         tooltip_text = _resolve_button_tooltip(
-            action_def, assign, hass, entry, internal_context, button_ref,
+            assign, hass, entry, internal_context, button_ref,
+            library_name=ctx.library_names.get(assign.get("action_id")),
         )
-        img_tooltip = resolve_tooltip_url(tooltip_text, page_color, tooltip_style)
+        img_tooltip = resolve_tooltip_url(tooltip_text, page_color, tooltip_style, theme_id)
 
         # Determine action type. A device-local ("internal") command is executed
         # by the remote itself; everything else travels to HA as a button event.
@@ -377,7 +400,9 @@ async def _build_page_payload_in_scope(
             page_config.get("image", ""), hass, page_config.get("template"),
         )}, hass,
     ).get("image") or ""
-    img_title = resolve_title_url(page_img_title, page_color, text_settings["title"])
+    img_title = resolve_title_url(
+        page_img_title, page_color, text_settings["title"], theme_id,
+    )
 
     page_data = {
         "page_id": page_id,

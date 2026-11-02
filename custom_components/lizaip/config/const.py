@@ -267,23 +267,8 @@ def is_unconfigured_step(config, fallback_service: str = "") -> bool:
     * A payload service with an empty payload is likewise a known action —
       ``media_player.play_media`` is a media play whatever it ends up playing.
 
-    What must never happen is borrowing another button's *item* identity; that is
-    :func:`is_borrowed_identity_icon`'s job, not this one's.
     """
     return not (step_service(config) or fallback_service)
-
-
-def is_borrowed_identity_icon(icon) -> bool:
-    """True when *icon* is artwork identifying one specific media item.
-
-    Action-library entries are keyed by service, so a ``media:``/``http`` icon on
-    one is the cover art of whichever button created it. Reusing that for another
-    button makes an app-launch button show an unrelated track's artwork. A plain
-    ``mdi:`` icon carries no item identity and is safe to share.
-    """
-    if not isinstance(icon, str) or not icon:
-        return False
-    return icon.startswith(("media:", "http://", "https://", "/"))
 
 
 def payload_display(assign: dict) -> tuple[str, str]:

@@ -50,10 +50,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 from PIL import Image
 
+from ..shared import theme as theme_registry
 from ..shared.history import is_servable
 from . import media_refs
 from .const import (
     COLOR_NAMES,
+    LEGACY_COLOR_ALIASES,
     DEFAULT_BG_COLOR,
     DEFAULT_FG_COLOR,
     DEFAULT_SIZE,
@@ -121,11 +123,17 @@ class _ImgservError(Exception):
         self.message = message
 
 
-def _try_parse_color(color_str: str | None) -> tuple | None:
-    """Parse a color value and return RGBA, or None when invalid/missing."""
+def _try_parse_color(color_str: str | None, names: dict | None = None) -> tuple | None:
+    """Parse a color value and return RGBA, or None when invalid/missing.
+
+    *names* is the symbolic vocabulary to read, which a remote's theme may have
+    re-coloured. It only ever re-points a name, never removes one, so a button
+    configured with ``?fg=blue`` keeps drawing under every theme.
+    """
     if not color_str:
         return None
-    named = COLOR_NAMES.get(color_str.lower())
+    key = color_str.lower()
+    named = (names or COLOR_NAMES).get(LEGACY_COLOR_ALIASES.get(key, key))
     if named:
         return named
     color_str = color_str.lstrip("#")
@@ -141,9 +149,9 @@ def _try_parse_color(color_str: str | None) -> tuple | None:
     return None
 
 
-def _parse_color(color_str: str | None, default: tuple) -> tuple:
+def _parse_color(color_str: str | None, default: tuple, names: dict | None = None) -> tuple:
     """Parse 'FF0000', 'FF0000FF', or a symbolic name like 'yellow'."""
-    return _try_parse_color(color_str) or default
+    return _try_parse_color(color_str, names) or default
 
 
 def _parse_size(size_str: str | None) -> tuple[int, int]:
@@ -315,16 +323,28 @@ def _resolve_colors(
     fg_raw: str | None,
     color_raw: str | None,
     bg_raw: str | None,
+    theme=None,
 ) -> tuple[tuple, tuple]:
     """Resolve fg/bg RGBA tuples from mode + explicit params.
 
     ``mode`` provides defaults for *both* fg and bg, but an explicit ``fg``/``color``
     or ``bg`` query parameter always takes priority over the mode-derived default for
     its own channel independently.
+
+    *theme* supplies the names and the default foreground for the remote that
+    asked. The default theme reproduces ``COLOR_NAMES`` and ``DEFAULT_FG_COLOR``
+    exactly, so a request without ``?theme=`` resolves as it always did.
     """
-    default_fg, default_bg = MODE_DEFAULTS.get(mode, (DEFAULT_FG_COLOR, DEFAULT_BG_COLOR))
-    fg = _parse_color(fg_raw or color_raw, default_fg)
-    bg = _parse_color(bg_raw, default_bg)
+    names = theme.colors if theme is not None else COLOR_NAMES
+    mode_fg, default_bg = MODE_DEFAULTS.get(mode, (DEFAULT_FG_COLOR, DEFAULT_BG_COLOR))
+    # Only ``light`` names a colour of its own; ``dark`` and no mode at all
+    # mean "whatever this remote draws in", which is the theme's.
+    fallback_fg = (
+        _parse_color("black", mode_fg, names) if mode == "light"
+        else (theme.color("default") or mode_fg if theme is not None else mode_fg)
+    )
+    fg = _parse_color(fg_raw or color_raw, fallback_fg, names)
+    bg = _parse_color(bg_raw, default_bg, names)
     return fg, bg
 
 
@@ -359,8 +379,10 @@ class _Options:
     def from_query(cls, query) -> _Options:
         """Parse a query mapping. Raises ``_ImgservError`` (400) on bad input."""
         mode = query.get("mode", "").lower()
+        theme = theme_registry.get_theme(query.get("theme"))
         fg, bg = _resolve_colors(
-            mode, _first_param(query, "fg", "color"), None, _first_param(query, "bg")
+            mode, _first_param(query, "fg", "color"), None,
+            _first_param(query, "bg"), theme,
         )
 
         try:

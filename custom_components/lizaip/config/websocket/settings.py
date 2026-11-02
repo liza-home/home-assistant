@@ -10,12 +10,22 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...action_controller import serialized_controls
-from ...imgserv.const import build_palette
+from ...const import DOMAIN
 from ...imgserv.fonts import list_fonts, user_fonts_dir
-from ...runtime import _get_store
+from ...runtime import _get_store, _resolve_device_id
 from ...shared.i18n import action_labels, get_ui_language
 from ...shared.icon_defaults import icon_defaults
 from ...shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
+from ...shared.theme import (
+    DEFAULT_THEME,
+    get_theme,
+    list_themes,
+    load_themes,
+    set_themes,
+    user_themes_dir,
+)
+from ...shared.theme_file import delete_user_theme, import_user_theme, save_user_theme
+from ...shared.theme_export import export_text
 from ...state_brightness import (
     CONF_ICON_FILL_ENABLED,
     CONF_ICON_FILL_STEP,
@@ -31,7 +41,7 @@ from ...state_color import (
     DEFAULT_ICON_COLOR_ENABLED,
     read_color_enabled,
 )
-from ...variables_calc import (
+from ...shared.variables_calc import (
     CONF_VARIABLES_INTERVAL,
     DEFAULT_VARIABLES_INTERVAL,
     VARIABLES_INTERVAL_MAX,
@@ -50,6 +60,8 @@ from ..text_style import (
     TEXT_KINDS,
     default_settings,
     font_size_limits,
+    settings_theme,
+    theme_facets,
     validate_settings,
 )
 from .common import requires_device
@@ -206,26 +218,60 @@ async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     connection.send_result(msg["id"], reply)
 
 
-@websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_icon_defaults"})
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/get_icon_defaults",
+    vol.Optional("entry_id"): str,
+    vol.Optional("shipped"): bool,
+})
 @websocket_api.async_response
 async def ws_get_icon_defaults(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    """Return icon default mappings loaded from icon_defaults.yaml."""
-    connection.send_result(msg["id"], icon_defaults.all)
+    """Return icon default mappings loaded from the default theme's icons: block.
+
+    With an ``entry_id`` the remote's theme is laid over them first, so the
+    editor offers the glyphs that remote will actually draw.
+
+    ``shipped`` asks for the file untouched by any theme, which is what tells a
+    chosen icon from one the panel seeded. It is not the same as naming no
+    remote: the default theme is editable, so that answers with the user's
+    default rather than with the shipped table.
+    """
+    if msg.get("shipped"):
+        connection.send_result(msg["id"], icon_defaults.all)
+        return
+    theme = await _entry_theme(hass, msg.get("entry_id"))
+    connection.send_result(msg["id"], theme.icons.all)
 
 
 async def async_list_fonts(hass: HomeAssistant) -> list[dict[str, str]]:
     return await hass.async_add_executor_job(list_fonts, user_fonts_dir(hass))
 
 
+async def _entry_theme(hass: HomeAssistant, entry_id: str | None):
+    """The theme the remote *entry_id* draws with, or the default one.
+
+    A caller that names no remote -- or names one that is gone -- asks a
+    question about no device in particular, and gets today's constants.
+    """
+    device_id = _resolve_device_id(hass, entry_id) if entry_id else None
+    if not device_id:
+        return DEFAULT_THEME
+    return settings_theme(await _get_store(hass).async_get_settings(device_id))
+
+
 def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
+    # Resolved here rather than in the panel: the editor's preview and the
+    # device must read one object, or they drift.
+    theme = settings_theme(settings)
     return {
         "settings": settings,
-        "defaults": default_settings(),
+        "defaults": default_settings(theme),
         "fonts": fonts,
+        "themes": list_themes(),
+        "theme": theme.as_payload(),
         "limits": {
             **{
                 kind: dict(zip(("min", "max"), font_size_limits(kind)))
@@ -271,6 +317,7 @@ _MAX_IMAGE_URLS = 400
             vol.Required("kind"): vol.In(("tile", "title", "tooltip")),
             vol.Optional("color", default=""): vol.Any(None, str),
             vol.Optional("percent"): vol.Any(None, vol.All(int, vol.Range(min=0, max=100))),
+            vol.Optional("theme"): vol.Any(None, str),
         }],
         vol.Length(max=_MAX_IMAGE_URLS),
     ),
@@ -286,18 +333,33 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
     value, a colour or a text style becomes a URL. Values come with their
     ``${…}`` variables already read: the panel reads them live, and this
     stays a pure translation.
+
+    An item may name a ``theme`` of its own, which is how the theme picker
+    shows a combination before it is saved. That item is drawn entirely in
+    the named theme, text style included, because what it is previewing is
+    the theme rather than this remote's settings.
     """
     settings = await _get_store(hass).async_get_settings(device_id)
+    # The *resolved* id, as the sync uses: a theme whose file is gone draws the
+    # default, and the preview must ask for the same picture the device does.
+    resolved = settings_theme(settings)
+    thm = resolved.theme_id
     urls = []
     for item in msg["items"]:
         value, color = item["value"], item.get("color") or ""
-        if item["kind"] == "title":
-            urls.append(resolve_title_url(value, color, settings["title"]))
-        elif item["kind"] == "tooltip":
-            urls.append(resolve_tooltip_url(value, color, settings["tooltip"]))
+        asked = item.get("theme")
+        theme = get_theme(asked) if asked else resolved
+        tid = theme.theme_id if asked else thm
+        if item["kind"] in TEXT_KINDS:
+            kind = item["kind"]
+            style = theme.text_style(kind) if asked else settings[kind]
+            resolve = resolve_title_url if kind == "title" else resolve_tooltip_url
+            urls.append(resolve(value, color, style, theme=tid))
         else:
             urls.append(
-                resolve_icon_url(value, color=color, percent=item.get("percent"))
+                resolve_icon_url(
+                    value, color=color, percent=item.get("percent"), theme=tid,
+                )
                 if value.strip() else ""
             )
     connection.send_result(msg["id"], {"urls": urls})
@@ -328,7 +390,10 @@ async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id:
     connection.send_result(msg["id"], _settings_reply(stored, fonts))
 
 
-@websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_palette"})
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/get_palette",
+    vol.Optional("entry_id"): str,
+})
 @websocket_api.async_response
 async def ws_get_palette(
     hass: HomeAssistant,
@@ -339,8 +404,170 @@ async def ws_get_palette(
 
     The panel stores the selected hex as ``default_color`` and sends it back as
     ``?fg=`` on icon URLs, so the choices must be colors imgserv can render.
+    With an ``entry_id`` the swatches are the remote's theme's.
     """
-    connection.send_result(msg["id"], {"colors": build_palette()})
+    theme = await _entry_theme(hass, msg.get("entry_id"))
+    connection.send_result(msg["id"], {"colors": theme.palette()})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_themes"})
+@websocket_api.async_response
+async def ws_get_themes(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Every theme the picker may offer, bundled and user-authored alike."""
+    connection.send_result(msg["id"], {"themes": list_themes()})
+
+
+async def async_reload_themes(hass: HomeAssistant) -> None:
+    """Re-read both theme folders, so a saved file is pickable at once."""
+    themes_dir = user_themes_dir(hass)
+    set_themes(await hass.async_add_executor_job(load_themes, themes_dir))
+
+
+async def _redraw_theme_users(hass: HomeAssistant, theme_id: str) -> None:
+    """Redraw every remote that draws with *theme_id*, facets included.
+
+    Writing the file changes what a page looks like but not what it says, so
+    without this nothing asks the device for the new pictures and the old
+    ones stay on the screen.
+    """
+    wanted = str(theme_id or "").strip().lower()
+    if not wanted:
+        return
+    store = _get_store(hass)
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        device_id = _resolve_device_id(hass, entry.entry_id)
+        if not device_id:
+            continue
+        settings = await store.async_get_settings(device_id)
+        if wanted in theme_facets(settings):
+            fire_config_changed(hass, entry.entry_id)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/save_theme",
+    vol.Required("theme"): dict,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_save_theme(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Write one theme and answer with the picker's new contents.
+
+    Editing a saved theme reuses its id, so a remote already drawing with it
+    follows the edit rather than being left on a file that no longer exists.
+    A shipped theme is refused: it can only be copied.
+    """
+    fonts = await async_list_fonts(hass)
+    themes_dir = user_themes_dir(hass)
+    try:
+        theme_id = await hass.async_add_executor_job(
+            save_user_theme, themes_dir, msg["theme"], {f["id"] for f in fonts})
+    except ValueError as exc:
+        connection.send_error(msg["id"], "invalid_format", str(exc))
+        return
+    except OSError as exc:
+        connection.send_error(msg["id"], "write_failed", str(exc))
+        return
+    await async_reload_themes(hass)
+    await _redraw_theme_users(hass, theme_id)
+    connection.send_result(msg["id"], {"id": theme_id, "themes": list_themes()})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/delete_theme",
+    vol.Required("theme_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_delete_theme(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Delete a theme of the user's own. A shipped theme is refused.
+
+    A remote still naming a deleted theme keeps the name in its settings and
+    falls back to the default look, which is what a missing theme has always
+    meant -- so putting the file back restores it.
+    """
+    themes_dir = user_themes_dir(hass)
+    try:
+        removed = await hass.async_add_executor_job(
+            delete_user_theme, themes_dir, msg["theme_id"])
+    except ValueError as exc:
+        connection.send_error(msg["id"], "invalid_format", str(exc))
+        return
+    except OSError as exc:
+        connection.send_error(msg["id"], "write_failed", str(exc))
+        return
+    await async_reload_themes(hass)
+    if removed:
+        await _redraw_theme_users(hass, msg["theme_id"])
+    connection.send_result(msg["id"], {"removed": removed, "themes": list_themes()})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/export_theme",
+    vol.Required("theme_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_export_theme(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """One theme's own file, for the panel to download."""
+    themes_dir = user_themes_dir(hass)
+    try:
+        filename, text = await hass.async_add_executor_job(
+            export_text, themes_dir, msg["theme_id"])
+    except ValueError as exc:
+        connection.send_error(msg["id"], "not_found", str(exc))
+        return
+    except OSError as exc:
+        connection.send_error(msg["id"], "read_failed", str(exc))
+        return
+    connection.send_result(msg["id"], {"filename": filename, "text": text})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/import_theme",
+    vol.Required("text"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_import_theme(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Add a dropped theme file as a new theme of the user's own.
+
+    Always a new file under a free name, so nothing already there -- shipped
+    or the user's own -- is written over.
+    """
+    fonts = await async_list_fonts(hass)
+    taken = {theme["id"] for theme in list_themes()}
+    try:
+        theme_id = await hass.async_add_executor_job(
+            import_user_theme, user_themes_dir(hass), msg["text"],
+            {f["id"] for f in fonts}, taken)
+    except ValueError as exc:
+        connection.send_error(msg["id"], "invalid_format", str(exc))
+        return
+    except OSError as exc:
+        connection.send_error(msg["id"], "write_failed", str(exc))
+        return
+    await async_reload_themes(hass)
+    connection.send_result(msg["id"], {"id": theme_id, "themes": list_themes()})
 
 
 @websocket_api.websocket_command({

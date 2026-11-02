@@ -16,7 +16,7 @@ import {
   SLIDER_ICON_HIDDEN_KEY,
   resolveSliderIcon,
   sliderIconFor,
-  isConfigured,
+  storesConfig,
 } from "./shared.js";
 import {
   drawSVG,
@@ -178,7 +178,7 @@ export const ButtonsFaceMixin = {
         );
       };
       const isSliderCtx = (key) => !!sliderCtx && key === SLIDER_VERTICAL_KEY;
-      // `isConfigured`, not the `isDriving` that used to be here. That predicate
+      // `storesConfig`, not the `isDriving` that used to be here. That predicate
       // was `isConfigured || sliderFollows`, and `sliderFollows` is true only for
       // `slider_vertical` — so on a page with nothing set up, the one control
       // nobody had configured was the only one painted as configured. The slider
@@ -186,7 +186,7 @@ export const ButtonsFaceMixin = {
       // above says, and it says it only while a button is actually in context.
       const hasAction = (key) => (isSliderCtx(key)
         ? sliderCtx.retargets
-        : isConfigured(assignFor(key)));
+        : storesConfig(assignFor(key)));
       // An inactive page's controls were wired to nothing at all, and the path
       // handler stops every click on itself — so clicking a button on another
       // page did not even switch to it, let alone open it. The click had to
@@ -194,7 +194,7 @@ export const ButtonsFaceMixin = {
       // thumbnail's own handler could see it. Both faces answer the same
       // gesture now; the far one just has a page to cross first.
       const onSelect = isActive
-        ? (idx) => this._selectFaceKey(bp.buttons[idx]?.key)
+        ? (idx, how) => this._selectFaceKeyBy(bp.buttons[idx]?.key, how)
         : (idx) => this._switchPageTo(pageIdx, bp.buttons[idx]?.key);
       const getIcon = (key) => {
         if (isSliderCtx(key)) return sliderCtxIcon();
@@ -222,6 +222,7 @@ export const ButtonsFaceMixin = {
       // preview must too. Never substitute the page id as a stand-in label.
       const rawTitle = this._pageTitleImage(page);
       const mode = this._getThemeMode();
+      container.classList.toggle("face-dark", mode === "dark");
       const pgColor = page.default_color || "";
       // The colour is sent as soon as one part can spend it; imgserv decides
       // which do. A title carrying its own fg= has already said what it wants.
@@ -336,7 +337,7 @@ export const ButtonsFaceMixin = {
         // everything else.
         const tileStyle = this._buttonIconStyle(overlayAssign, pgColor);
         const tile = this._buildTileImgUrl(
-          icon, mode, tileStyle.color, isConfigured(overlayAssign), tileStyle.percent,
+          icon, mode, tileStyle.color, storesConfig(overlayAssign), tileStyle.percent,
         );
         // "" is nothing to draw; null is a URL still being asked for.
         if (tile.src === "") return;
@@ -485,6 +486,27 @@ export const ButtonsFaceMixin = {
   _invalidateFaceCaches() {
     this._faceEpoch = (this._faceEpoch || 0) + 1;
     this._svgIconDeps = null;
+  },
+
+  /**
+   * A face button chosen with Enter or Space goes one step further than a
+   * click: focus moves to the editor's *first* control, text field or not,
+   * because the keyboard user asked to work on it. Enter on the button that is
+   * already open does the same instead of closing it.
+   */
+  _selectFaceKeyBy(key, how) {
+    if (!how?.keyboard) return this._selectFaceKey(key);
+    const idx = this._faceIdxFor(key);
+    if (idx >= 0 && idx === this._selectedButtonIdx) {
+      this._a11yFocusConfigViewOnce({ firstControl: true });
+      return true;
+    }
+    this._a11yFirstControlNext = true;
+    try {
+      return this._selectFaceKey(key);
+    } finally {
+      this._a11yFirstControlNext = false;
+    }
   },
 
   /**

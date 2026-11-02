@@ -9,7 +9,6 @@ from ..shared.services import (
     attr_str,
     is_state_toggle_service,
     is_stateless_service,
-    scope_action_states,
     scoped_icon_state,
     service_to_attribute,
     service_name,
@@ -37,11 +36,11 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _compute_next_state_tooltip(
-    action: dict,
     assign: dict,
     state: State | None,
     hass: HomeAssistant,
     entry=None,
+    library_name: str | None = None,
 ) -> str:
     """The tooltip a live update sends: the page sync's own ladder.
 
@@ -51,27 +50,22 @@ def _compute_next_state_tooltip(
     # Imported here: `button_rendering` imports this module.
     from ..config.button_rendering import _resolve_button_tooltip
 
-    return _resolve_button_tooltip(action, assign, hass, entry, state=state)
+    return _resolve_button_tooltip(
+        assign, hass, entry, state=state, library_name=library_name,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Icon / state matching
 # ---------------------------------------------------------------------------
 
-def _match_state_icon(action: dict, state: State) -> str | None:
-    """Return the icon for the first matching state rule, or None."""
-    for rule in scope_action_states(
-        action.get("service", ""), action.get("states"),
-    ):
-        attr = rule.get("attribute")
-        if attr:
-            if attr_str(state.attributes.get(attr, "")) == rule.get("state"):
-                return rule.get("icon")
-        else:
-            if rule.get("state") == state.state:
-                return rule.get("icon")
+def _match_state_icon(service: str, state: State, icons=None) -> str | None:
+    """Return the themed icon *service* wears for *state*, or None.
 
-    service = action.get("service", "")
+    *icons* is the asking remote's table; the shipped one when a caller speaks
+    for no remote.
+    """
+    table = icons or icon_defaults
     if not service:
         return None
     svc = service_name(service)
@@ -87,7 +81,7 @@ def _match_state_icon(action: dict, state: State) -> str | None:
     attribute = service_to_attribute(svc)
     if attribute:
         attr_val = attr_str(state.attributes.get(attribute, ""))
-        return icon_defaults.for_state(domain, attribute, attr_val)
+        return table.for_state(domain, attribute, attr_val)
 
     if is_state_toggle_service(svc):
         # A service narrower than its domain reads the shared icon table through
@@ -95,7 +89,7 @@ def _match_state_icon(action: dict, state: State) -> str | None:
         # rather than the power glyph that entry carries for `turn_on`. A
         # one-way service gets no state-keyed icon at all.
         lookup = scoped_icon_state(svc, domain, state.state)
-        return icon_defaults.for_state(domain, None, lookup) if lookup else None
+        return table.for_state(domain, None, lookup) if lookup else None
 
     return None
 
@@ -113,6 +107,7 @@ def toggle_icon(
     entity_domain: str = "",
     service_icons: dict | None = None,
     hass: HomeAssistant | None = None,
+    icons=None,
 ) -> str | None:
     """The glyph a ``toggle`` block asks this button to wear right now.
 
@@ -175,7 +170,7 @@ def toggle_icon(
         # one glyph that is certainly wrong, because the press is about to run
         # something else and no state will ever correct it. `step_icon` names
         # the step instead.
-        return icon or step_icon(rule, entity_domain, service_icons)
+        return icon or step_icon(rule, entity_domain, service_icons, icons)
 
     return None
 

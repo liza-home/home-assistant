@@ -9,6 +9,7 @@
 
 import { ActionsLibraryMixin, actionDomain } from "./actions/library.js";
 import { ActionsCleanupMixin } from "./actions/cleanup.js";
+import { domainLabel } from "./lizaip-helpers.js";
 
 /** Scope chips, in the order they are shown. */
 const ACTION_SCOPES = [
@@ -34,10 +35,9 @@ export const ActionsViewMixin = {
         <ha-card outlined class="actions-list-card">
           <div class="actions-card-header">
             <h2 class="actions-card-title">${this._t("action_library")}</h2>
-            <div class="actions-search">
-              <ha-icon icon="mdi:magnify" style="--mdc-icon-size:18px"></ha-icon>
-              <input type="text" class="search-input" aria-label="${this._esc(this._t("filter"))}" placeholder="${this._esc(this._t("filter"))}" value="${this._esc(this._actionFilter || '')}" />
-            </div>
+            <ha-input-search appearance="outlined" class="actions-search search-input"
+                             accessible-label="${this._esc(this._t("filter"))}" placeholder="${this._esc(this._t("filter"))}"
+                             value="${this._esc(this._actionFilter || '')}"></ha-input-search>
           </div>
           ${this._htmlActionsToolbar()}
           ${this._htmlActionsCleanupBar()}
@@ -65,18 +65,14 @@ export const ActionsViewMixin = {
     const chips = ACTION_SCOPES.map(({ id, label }) => {
       const n = counts[id];
       const disabled = n === 0 && id !== "all";
-      return `<button type="button" class="scope-chip${scope === id ? " active" : ""}" data-scope="${id}"
-                      aria-pressed="${scope === id ? "true" : "false"}"${disabled ? " disabled" : ""}>${this._t(label)}<span class="scope-chip-count">${n}</span></button>`;
+      return `<ha-filter-chip class="scope-chip" data-scope="${id}" no-leading-icon${scope === id ? " selected" : ""}${disabled ? " disabled" : ""}>${this._t(label)}<span class="scope-chip-count">${n}</span></ha-filter-chip>`;
     }).join("");
-    const options = ACTION_SORTS.map(({ id, label }) =>
-      `<option value="${id}"${(this._actionSort || "domain") === id ? " selected" : ""}>${this._esc(this._t(label))}</option>`).join("");
+    // ha-select takes its options and value as properties, which markup
+    // cannot carry; _wireActionsView hands them over.
     return `
       <div class="actions-toolbar">
-        <div class="scope-chips" role="group" aria-label="${this._esc(this._t("filter_by_usage"))}">${chips}</div>
-        <label class="actions-sort">
-          <span class="actions-sort-label" id="liza-action-sort-label">${this._t("sort_label")}</span>
-          <select class="action-sort-select" aria-labelledby="liza-action-sort-label">${options}</select>
-        </label>
+        <ha-chip-set class="scope-chips" aria-label="${this._esc(this._t("filter_by_usage"))}">${chips}</ha-chip-set>
+        <ha-select class="action-sort-select" label="${this._esc(this._t("sort_label"))}"></ha-select>
       </div>`;
   },
 
@@ -103,7 +99,7 @@ export const ActionsViewMixin = {
       if (!n) return "";
       return `<div class="actions-cleanup-bar">
         <span>${this._t("unused_explainer", { n })}</span>
-        <button type="button" class="cleanup-btn danger remove-unused-btn">${this._t("remove_unused_action", { n })}</button>
+        <ha-button appearance="outlined" variant="danger" class="cleanup-btn danger remove-unused-btn">${this._t("remove_unused_action", { n })}</ha-button>
       </div>`;
     }
     if (scope === "duplicates") {
@@ -111,7 +107,7 @@ export const ActionsViewMixin = {
       if (!n) return "";
       return `<div class="actions-cleanup-bar">
         <span>${this._t("duplicates_explainer", { n })}</span>
-        <button type="button" class="cleanup-btn merge-duplicates-btn">${this._t("merge_duplicates_action", { n })}</button>
+        <ha-button variant="brand" class="cleanup-btn merge-duplicates-btn">${this._t("merge_duplicates_action", { n })}</ha-button>
       </div>`;
     }
     return "";
@@ -119,7 +115,7 @@ export const ActionsViewMixin = {
 
   _htmlActionRows() {
     if (this._actions.length === 0) {
-      return `<p class="hint-text" style="padding: 16px 0; text-align: center;">${this._esc(this._t("no_actions_yet", { tab: "🎛️ " + this._t("tab_buttons") }))}</p>`;
+      return `<p class="hint-text" style="padding: 16px 0; text-align: center;">${this._esc(this._t("no_actions_yet", { tab: "🎛️ " + this._t("tab_pages") }))}</p>`;
     }
     const indices = this._visibleActionIndices();
     if (indices.length === 0) return this._htmlActionsEmptyState();
@@ -156,10 +152,7 @@ export const ActionsViewMixin = {
 
   /** `media_player` -> "Media player": a heading, not an identifier. */
   _domainLabel(domain) {
-    const localized = this._hass?.localize?.(`component.${domain}.title`);
-    if (localized) return localized;
-    const words = domain.replace(/_/g, " ");
-    return words.charAt(0).toUpperCase() + words.slice(1);
+    return domainLabel(this._hass, domain);
   },
 
   _renderActionRow(a, idx) {
@@ -189,9 +182,8 @@ export const ActionsViewMixin = {
         <div class="action-badges">
           ${this._htmlActionBadges(a, usage, stateCount)}
         </div>
-        <button class="action-delete-btn" data-idx="${idx}" title="${this._esc(this._t("delete"))}" aria-label="${this._esc(this._t("delete"))} ${this._esc(a.name)}"><ha-icon icon="mdi:delete-outline" style="--mdc-icon-size:18px" aria-hidden="true"></ha-icon></button>
-        <ha-icon icon="mdi:chevron-${isEditing ? 'up' : 'down'}" class="btn-expand-icon" style="--mdc-icon-size:18px"
-                 role="button" tabindex="0" aria-expanded="${isEditing ? 'true' : 'false'}" aria-label="${this._esc(a.name)}"></ha-icon>
+        <ha-icon-button class="action-delete-btn" data-idx="${idx}" label="${this._esc(this._t("delete"))} ${this._esc(a.name)}"><ha-icon icon="mdi:delete-outline" aria-hidden="true"></ha-icon></ha-icon-button>
+        <ha-icon-button class="btn-expand-icon" aria-expanded="${isEditing ? 'true' : 'false'}" label="${this._esc(a.name)}"><ha-icon icon="mdi:chevron-${isEditing ? 'up' : 'down'}" aria-hidden="true"></ha-icon></ha-icon-button>
       </div>`;
 
     if (isEditing) {
@@ -207,8 +199,8 @@ export const ActionsViewMixin = {
       html += `
         <div class="action-inline-editor">
           <div class="inline-editor-row">
-            <label for="liza-action-name-${idx}">${this._t("name")}</label>
-            <input type="text" id="liza-action-name-${idx}" class="meta-input action-name-input" value="${this._esc(a.name)}" />
+            <ha-input appearance="outlined" id="liza-action-name-${idx}" class="action-name-input"
+              label="${this._esc(this._t("name"))}" value="${this._esc(a.name)}" autocomplete="off"></ha-input>
           </div>
           <div class="assigned-to-section">
             <label id="liza-assigned-label-${idx}">${this._t("assigned_to")}</label>
@@ -260,7 +252,7 @@ export const ActionsViewMixin = {
   },
 
   _wireActionsView() {
-    const searchInput = this.shadowRoot.querySelector(".actions-search .search-input");
+    const searchInput = this.shadowRoot.querySelector(".actions-search");
     if (searchInput) {
       searchInput.addEventListener("input", () => {
         this._actionFilter = searchInput.value;
@@ -268,13 +260,28 @@ export const ActionsViewMixin = {
       });
     }
 
+    // A filter chip toggles itself before the click reaches us. The scopes
+    // are one-of-many, so pressing the chip already chosen must not unpick
+    // it: cancelling the click is how ha-filter-chip is told to stay put.
     this.shadowRoot.querySelectorAll(".scope-chip").forEach(el =>
-      el.addEventListener("click", () => this._setActionScope(el.dataset.scope)));
+      el.addEventListener("click", (ev) => {
+        if ((this._actionScope || "all") === el.dataset.scope) {
+          ev.preventDefault();
+          return;
+        }
+        this._setActionScope(el.dataset.scope);
+      }));
 
     const sortSelect = this.shadowRoot.querySelector(".action-sort-select");
     if (sortSelect) {
-      sortSelect.addEventListener("change", () => {
-        this._actionSort = sortSelect.value;
+      sortSelect.options = ACTION_SORTS.map(({ id, label }) => ({ value: id, label: this._t(label) }));
+      sortSelect.value = this._actionSort || "domain";
+      sortSelect.addEventListener("selected", (ev) => {
+        const value = ev.detail?.value;
+        if (!value || value === this._actionSort) return;
+        // ha-select reports the choice and leaves showing it to its owner.
+        sortSelect.value = value;
+        this._actionSort = value;
         this._repaintActionsList();
       });
     }

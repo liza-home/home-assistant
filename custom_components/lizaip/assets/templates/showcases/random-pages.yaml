@@ -1,0 +1,12 @@
+# Random pages — a generator, not a page.
+#
+# `action` names a routine the panel runs when the card is clicked, instead of
+# the usual "resolve this definition into a page". The panel maps the name to
+# `_showRandomPagesDialog`, which only ships with the debug tools, so a build
+# without them hides the card and never counts it. The `_key` names point at
+# the panel's translation table (`config/panel/lizaip-i18n.js`).
+
+name_key: random_pages
+description_key: random_pages_desc
+icon: mdi:dice-multiple
+action: random_pages

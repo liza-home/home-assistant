@@ -89,25 +89,8 @@ export const STYLES_TILE_MENU = `
     gap: 8px;
     margin-bottom: 8px;
   }
-  .inline-editor-row label {
-    font-size: var(--liza-font-s);
-    font-weight: 500;
-    color: var(--liza-muted-text);
-    min-width: 40px;
-  }
-  .inline-editor-row .meta-input {
+  .inline-editor-row .action-name-input {
     flex: 1;
-    padding: 6px 10px;
-    border: 1px solid var(--divider-color);
-    border-radius: 6px;
-    background: var(--card-background-color);
-    color: var(--primary-text-color);
-    font-size: var(--liza-font-13);
-    font-family: inherit;
-  }
-  .inline-editor-row .meta-input:focus {
-    outline: none;
-    border-color: var(--primary-color);
   }
   .btn-unassign {
     background: none;

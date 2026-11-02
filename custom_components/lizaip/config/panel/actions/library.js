@@ -108,7 +108,9 @@ export const ActionsLibraryMixin = {
       action.service || "",
       ...(this._globalUsageDetails[action.id] || []).flatMap(use => [use.page || "", use.buttonName || ""]),
     ];
-    return haystack.some(text => text.toLowerCase().includes(query));
+    // String(): a use's page is its number, and a number has no toLowerCase --
+    // so one used action used to throw here and leave the list unfiltered.
+    return haystack.some(text => String(text).toLowerCase().includes(query));
   },
 
   _actionMatchesScope(action) {

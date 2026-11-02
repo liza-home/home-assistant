@@ -126,7 +126,7 @@ export const SUBJECT_KINDS = ["device", "area", "floor", "label"];
  * reduces to. Anything else counts as active. Mirrors `helpers.py`.
  */
 const ABSENT_STATES = ["unavailable", "unknown"];
-const INACTIVE_STATES = [
+export const INACTIVE_STATES = [
   ...ABSENT_STATES,
   "off", "closed", "locked", "standby", "idle", "docked", "paused",
   "not_home", "disarmed",
@@ -149,10 +149,25 @@ function asIdList(value) {
  * NaN test stays for DOM shims that keep the raw text instead.
  */
 export function badNumber(el) {
-  if (!el || el.type !== "number") return false;
-  if (el.validity?.badInput) return true;
+  if (!el || (el.type || el.getAttribute?.("type")) !== "number") return false;
+  if ((el.validity ?? nativeInput(el)?.validity)?.badInput) return true;
   const raw = (el.value || "").trim();
   return !!raw && !Number.isFinite(Number(raw));
+}
+
+// The <input> inside HA's ha-input, which sits one or two shadow roots down
+// and is the only thing that knows the browser rejected what was typed.
+function nativeInput(el) {
+  let scope = [el];
+  for (let depth = 0; depth < 3 && scope.length; depth++) {
+    const roots = scope.map((n) => n.shadowRoot).filter(Boolean);
+    for (const r of roots) {
+      const hit = r.querySelector("input");
+      if (hit) return hit;
+    }
+    scope = roots.flatMap((r) => [...r.querySelectorAll("*")].filter((n) => n.shadowRoot));
+  }
+  return null;
 }
 
 /**
@@ -192,6 +207,14 @@ async function iconNameList(set) {
 /** HA's custom icon registry, as its own `custom_icons.ts` reads it. */
 function customIconRegistry() {
   return globalThis.customIcons || globalThis.parent?.customIcons || {};
+}
+
+/** `media_player` -> "Media player": a heading, not an identifier. */
+export function domainLabel(hass, domain) {
+  const localized = hass?.localize?.(`component.${domain}.title`);
+  if (localized) return localized;
+  const words = String(domain || "").replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /**
@@ -504,7 +527,7 @@ export function matchLabelTokens(term, tokens) {
 /**
  * `${_device.media_title_prev}` and friends: the page player's queue, read as
  * if the neighbouring tracks were attributes of the player. Mirrors
- * `DEVICE_QUEUE_ATTRIBUTES` in `media_queue/alias.py`.
+ * `DEVICE_QUEUE_ATTRIBUTES` in `config/media_queue/alias.py`.
  */
 export const DEVICE_QUEUE_ATTRIBUTES = {
   media_title_prev: "prev_song",
@@ -669,6 +692,39 @@ export const HelpersMixin = {
     }
   },
 
+  /**
+   * HA's ha-select takes its options as a property, which markup cannot carry.
+   * They ride along as data attributes instead, so a template stays one string
+   * and `_wireHaSelect` hands them over once the element exists.
+   */
+  _haSelectAttrs(options, value) {
+    return ` data-options="${this._esc(JSON.stringify(options || []))}" data-value="${this._esc(value ?? "")}"`;
+  },
+
+  /**
+   * Give an ha-select its options and current value, and call *onPick* with
+   * each choice. The element reports a pick and leaves showing it to its
+   * owner, so the value is written back here before anyone else sees it. A
+   * pick of the empty value is a placeholder, never a choice.
+   */
+  _wireHaSelect(el, onPick) {
+    if (!el) return;
+    try {
+      el.options = JSON.parse(el.dataset?.options || "[]");
+    } catch {
+      el.options = [];
+    }
+    el.value = el.dataset?.value ?? "";
+    el.addEventListener("selected", (ev) => {
+      const value = ev.detail?.value;
+      // A native select says "change" only on a change; so does this.
+      if (value === undefined || value === null || value === "" || value === el.value) return;
+      el.value = value;
+      if (el.dataset) el.dataset.value = value;
+      onPick(value, ev);
+    });
+  },
+
   /** Withdraw a `_setFieldError`, including the describedby it added. */
   _clearFieldError(el) {
     if (!el) return;
@@ -726,13 +782,20 @@ export const HelpersMixin = {
    * The picture is the remote's: a numeric *size* asks for the `tile` it
    * draws, `title` and `tooltip` for those strips, and *color* is spent by
    * the integration's rule, not this panel's.
+   *
+   * *opts.theme* draws it in a named theme instead of the remote's stored
+   * one, for a picture that is panel chrome rather than a preview.
    */
   // `box` is the space the preview occupies on screen and defaults to the
   // square a numeric size implies. The two are separate because a title is not
   // square: the strip the remote draws is shown whole, at the box's size.
-  _renderIconHtml(val, size = 20, color = "", box = null) {
+  _renderIconHtml(val, size = 20, color = "", box = null, opts = {}) {
     const boxW = box?.w ?? size;
     const boxH = box?.h ?? size;
+    // See _browserImgSrc: the remote's tile is far too few pixels for a
+    // picture this big, and the round trip that fills a late `src` in reads
+    // the number back off the element.
+    const srcSize = opts.srcSize ? Math.round(opts.srcSize) : 0;
     // Normalise once, like resolve_icon_url's icon.strip(): a value pasted with a
     // trailing space or newline must still match the startsWith branches below, or
     // the preview disagrees with what the device renders.
@@ -749,13 +812,27 @@ export const HelpersMixin = {
     const customKey = customIconKey(val);
     if (customKey) this._ensureCustomIcon(val);
     const kind = size === "title" || size === "tooltip" ? size : "tile";
-    const { src, key } = this._deviceImg(val, kind, color);
+    const { src, key } = this._deviceImg(val, kind, color, null, {
+      size: srcSize,
+      ...(opts.theme ? { theme: opts.theme } : {}),
+    });
     const attrs = [
       src ? `src="${this._esc(src)}"` : "",
       key ? `data-dev-key="${this._esc(key)}"` : "",
+      srcSize ? `data-img-size="${srcSize}"` : "",
       customKey ? `data-icon-key="${this._esc(customKey)}"` : "",
     ].filter(Boolean).join(" ");
-    return `<img ${attrs} alt="" style="width:${boxW}px;height:${boxH}px;object-fit:contain;border-radius:4px" />`;
+    return `<img ${attrs} class="liza-dev-img" alt="" style="width:${boxW}px;height:${boxH}px;object-fit:contain;border-radius:4px" />`;
+  },
+
+  /** An icon for the panel's own chrome, which is not a picture the remote
+   *  will ever draw: a vector the frontend theme tints, so a device theme
+   *  cannot colour it. A `logo:`/`phu:` source still has to come from imgserv. */
+  _renderChromeIconHtml(val, size = 20, ...rest) {
+    const icon = String(val ?? "").trim();
+    if (!icon.startsWith("mdi:")) return this._renderIconHtml(icon, size, ...rest);
+    return `<ha-icon icon="${this._esc(icon)}"
+      style="--mdc-icon-size:${size}px" aria-hidden="true"></ha-icon>`;
   },
 
   /** Teach imgserv this value's shape, and repaint what asked for it too early. */
@@ -1164,11 +1241,16 @@ export const HelpersMixin = {
    * and "" when there is nothing to draw.
    *
    * *opts.keepMode* leaves `mode=dark` alone, for a preview drawn on black.
+   * *opts.theme* draws the picture in a named theme instead of this remote's,
+   * which is how the theme picker shows a combination before it is saved.
    */
   _deviceImg(value, kind = "tile", color = "", percent = null, opts = {}) {
     const v = String(value ?? "").trim();
     if (!v || !this._currentEntry) return { src: "", key: "" };
-    const style = JSON.stringify(this._textSettings?.settings ?? null);
+    const theme = String(opts.theme || "");
+    // A picture asked for in a named theme does not depend on the stored
+    // settings, so it must not be re-fetched when they change.
+    const style = theme || JSON.stringify(this._textSettings?.settings ?? null);
     const key = JSON.stringify([
       this._currentEntry, style, kind, v, String(color || "").replace(/^#/, "").toUpperCase(),
       percent ?? null,
@@ -1177,6 +1259,7 @@ export const HelpersMixin = {
     if (cache.has(key)) return { src: this._browserImgSrc(cache.get(key), opts), key };
     (this._deviceUrlQueue ||= new Map()).set(key, {
       value: v, kind, color: String(color || "").replace(/^#/, ""),
+      ...(theme ? { theme } : {}),
       ...(percent === null || percent === undefined ? {} : { percent }),
     });
     if (!this._deviceUrlTimer) {
@@ -1185,11 +1268,20 @@ export const HelpersMixin = {
     return { src: null, key };
   },
 
-  /** What a browser asks for the remote's *url*: transparent, and legible on the theme. */
+  /**
+   * What a browser asks for the remote's *url*: transparent, and legible on
+   * the theme.
+   *
+   * *opts.size* asks imgserv for a picture that many pixels tall instead of
+   * the remote's own tile, which is 50x16 for a wordmark and is a smear once
+   * a screen of any density draws it at dialog size. The remote is still
+   * sent the tile; only this browser asks for more of it.
+   */
   _browserImgSrc(url, opts = {}) {
     if (!url) return "";
     if (!url.startsWith("imgserv://")) return url;
     let src = `/api/imgserv/${url.slice("imgserv://".length)}`;
+    if (opts.size) src = src.replace(/([?&]size=)tile\b/, `$1${Math.round(opts.size)}`);
     const q = src.indexOf("?");
     if (!opts.keepMode && this._getThemeMode() === "light") {
       // A light page under white glyphs would show nothing at all.
@@ -1225,13 +1317,23 @@ export const HelpersMixin = {
     }
   },
 
+  /** Forget every resolved picture address, so the next render asks again:
+   * a theme's URL only changes when its content does, and nothing else here
+   * would notice that it has. */
+  _forgetDeviceUrls() {
+    this._deviceUrlCache?.clear();
+  },
+
   /** Give every picture drawn before its URL was known the URL it now has. */
   _applyDeviceUrls() {
     const cache = this._deviceUrlCache;
     this.shadowRoot?.querySelectorAll?.("img[data-dev-key]").forEach((img) => {
       const key = img.getAttribute("data-dev-key");
       if (!cache?.has(key)) return;
-      const src = this._browserImgSrc(cache.get(key), { keepMode: img.hasAttribute("data-keep-mode") });
+      const src = this._browserImgSrc(cache.get(key), {
+        keepMode: img.hasAttribute("data-keep-mode"),
+        size: Number(img.getAttribute("data-img-size")) || 0,
+      });
       if (!src) {
         img.style.visibility = "hidden";
         return;
@@ -1280,7 +1382,7 @@ export const HelpersMixin = {
     const domain = (entityId && entityId.split(".")[0]) || svcDomain;
 
     // Same precedence as the device (device_sync._resolve_button_icon): our own
-    // icon_defaults.yaml wins over HA's service registry, so both surfaces agree.
+    // The default theme's icon table wins over HA's service registry, so both surfaces agree.
     // Per-domain first — see _serviceFixedIcon for why that layer exists.
     //
     // Entity domain here, service domain below: our override table is about
@@ -1520,6 +1622,15 @@ export const HelpersMixin = {
     return Math.max(quantum, Math.min(100, snapped));
   },
 
+  /** Which theme state colour *state* asks for, or "" -- a port of
+   * `state_color.entity_state_color`. A name, not a hex, so imgserv
+   * resolves it against the remote's theme as it does for the device. */
+  _entityStateColor(state) {
+    if (!state) return "";
+    if (ABSENT_STATES.includes(state.state)) return "unavailable";
+    return INACTIVE_STATES.includes(state.state) ? "off" : "on";
+  },
+
   /**
    * Tint and fill for a button's tile, from the light it is bound to.
    *
@@ -1528,22 +1639,30 @@ export const HelpersMixin = {
    * them in a single pass for the same reason.
    *
    * A facet that is switched off yields exactly what a button bound to nothing
-   * yields, so a disabled feature leaves no trace in the preview.
+   * yields, so a disabled feature leaves no trace in the preview. The state
+   * colour is not a facet and so is resolved either way: it is the theme
+   * speaking, and `icon_style_for_entities` ranks it the same.
    */
   _buttonIconStyle(assign, pageColor) {
-    if (!this._iconFillEnabled && !this._iconColorEnabled) {
-      return { color: pageColor, percent: null };
+    const step = Array.isArray(assign?.config) ? assign.config[0] : null;
+    const service = String(step?.action || step?.service || "");
+    const stateColor = this._showsStateColor(service)
+      ? this._entityStateColor(this._getTargetStateObj(assign?.config))
+      : "";
+    if (this._iconFillEnabled || this._iconColorEnabled) {
+      // Every member, not just the first, mirroring `icon_style_for_entities`:
+      // an area whose alphabetically first lamp is off would otherwise preview
+      // unstyled while the remote shows the lit lamp beside it.
+      for (const eid of this._getTargetEntitiesFromConfig(assign?.config) || []) {
+        const state = this._hass?.states?.[eid];
+        const color = this._iconColorEnabled ? this._entityIconColor(state) : "";
+        const percent = this._iconFillEnabled ? this._entityBrightnessPercent(state) : null;
+        if (color || percent !== null) {
+          return { color: color || pageColor || stateColor, percent };
+        }
+      }
     }
-    // Every member, not just the first, mirroring `icon_style_for_entities`:
-    // an area whose alphabetically first lamp is off would otherwise preview
-    // unstyled while the remote shows the lit lamp beside it.
-    for (const eid of this._getTargetEntitiesFromConfig(assign?.config) || []) {
-      const state = this._hass?.states?.[eid];
-      const color = this._iconColorEnabled ? this._entityIconColor(state) : "";
-      const percent = this._iconFillEnabled ? this._entityBrightnessPercent(state) : null;
-      if (color || percent !== null) return { color: color || pageColor, percent };
-    }
-    return { color: pageColor, percent: null };
+    return { color: pageColor || stateColor, percent: null };
   },
 
   /** HA frontend's `rgb2hsv`. Returns [h 0-360, s 0-1, v 0-255]. */
@@ -2197,6 +2316,27 @@ export const HelpersMixin = {
    *     instead of any default, because we do not yet know the target or action.
    */
   _resolveButtonIcon(assign, action, fallback = "", page = undefined) {
+    return this._withButtonDevice(
+      this._getTargetEntitiesFromConfig(assign?.config)[0],
+      () => this._resolveButtonIconInScope(assign, action, fallback, page),
+    );
+  },
+
+  /**
+   * Run *fn* with `${_device…}` reading *entityId* on a page with no device of
+   * its own -- the mirror of `button_scope`.
+   */
+  _withButtonDevice(entityId, fn) {
+    const previous = this._buttonDeviceEntity;
+    this._buttonDeviceEntity = entityId || "";
+    try {
+      return fn();
+    } finally {
+      this._buttonDeviceEntity = previous;
+    }
+  },
+
+  _resolveButtonIconInScope(assign, action, fallback = "", page = undefined) {
     const a = assign || {};
     const image = this._resolveImageVariables(a.image, page);
     if (a.image_pinned && image) return image;
@@ -2409,6 +2549,13 @@ export const HelpersMixin = {
    * template collapses into a frozen state on the next save.
    */
   _displayLabel(name, action, entityId, config, assign = null) {
+    return this._withButtonDevice(
+      entityId || this._getTargetEntitiesFromConfig(config)[0],
+      () => this._displayLabelInScope(name, action, entityId, config, assign),
+    );
+  },
+
+  _displayLabelInScope(name, action, entityId, config, assign = null) {
     // Unlike its Python counterpart this is a display path in its own right,
     // so it cleans on the way out too rather than only via `_resolveLabel`.
     if (!name || !name.includes("${")) {
@@ -2467,13 +2614,19 @@ export const HelpersMixin = {
    * user-typed label the remote would never print.
    */
   _labelIsAutoFilled(stored, action, autoLabel, assign = null) {
-    if (!stored || !this._isTokenOnlyLabel(autoLabel)) return false;
+    if (!stored) return false;
     // A name the user typed is never auto-filled, whatever it happens to equal.
     // Without this the field would offer the derived `${_state}` back to someone
     // who had just replaced it, and the ladder — which honours the edit —
     // would print something the field never showed.
     if (assign?.label_edited) return false;
-    return stored.trim() === (action?.name || "").trim();
+    if (stored.trim() !== (action?.name || "").trim()) return false;
+    if (this._isTokenOnlyLabel(autoLabel)) return true;
+    // A payload service's library entry is shared, so a name copied from it
+    // belongs to whichever item created it: the button's own item names it.
+    // Mirrors `_label_is_auto_filled` in button_rendering.py.
+    return !!autoLabel && this._isPayloadService(action?.service || "")
+      && autoLabel === this._getPayloadDisplay(assign?.config)?.title;
   },
 
   /**
@@ -2512,7 +2665,7 @@ export const HelpersMixin = {
    * Does *config* point at a player whose queue can be read?
    *
    * The gate for `${_queue.…}`: the integration keeps a queue sensor
-   * (`sensor.<speaker>_queue`, see `media_queue/alias.py`) for exactly those
+   * (`sensor.<speaker>_queue`, see `config/media_queue/alias.py`) for exactly those
    * speakers, so its existence is the answer -- no list of integrations to
    * keep in step here.
    */
@@ -2575,6 +2728,13 @@ export const HelpersMixin = {
    */
   _expandPageDevice(text, page = this._pages?.[this._currentPageIdx]) {
     if (typeof text !== "string" || !/\$\{[^{}]*(?<![\w.])_device\b/.test(text)) return text;
+    // A plain page has no device of its own: the button being drawn stands in,
+    // as `button_scope` has it on the remote.
+    const own = this._buttonDeviceEntity;
+    if (!page?.template?.target && own) {
+      const device = this._hass?.entities?.[own]?.device_id;
+      page = { ...(page || {}), template: { target: { entity_id: own, ...(device ? { device } : {}) } } };
+    }
     const entity = page?.template?.target?.entity_id || "";
     if (page?.template?.target) {
       const facts = this._pageDeviceFacts(page);
@@ -2595,7 +2755,7 @@ export const HelpersMixin = {
 
   /** The `device` option for a picker or input on *page*: `{}` off a template page. */
   _pageDeviceOption(page = this._pages?.[this._currentPageIdx]) {
-    if (!page?.template?.type) return {};
+    if (!page?.template?.type && !page?.template?.target?.device) return {};
     return {
       device: {
         entity: page.template.target?.entity_id || "",
@@ -2761,6 +2921,16 @@ export const HelpersMixin = {
     return this._statelessServices.includes(svc) || /^(browse|send|clear)_/.test(svc);
   },
 
+  /** Whether a button running *service* takes its entity's state colour.
+   * Mirrors `shows_state_color`: stateless services and the media transport
+   * commands keep the theme's `default` colour. */
+  _showsStateColor(service) {
+    const name = String(service || "").split(".").pop();
+    if (!name) return true;
+    return !(this._isStatelessService(name)
+      || ["media_play", "media_pause", "media_stop", "media_play_pause", "volume_mute"].includes(name));
+  },
+
   /** Services that flip an entity between two states. Mirrors `TOGGLE_SERVICES`. */
   _stateToggleServices: [
     "turn_on", "turn_off", "toggle",
@@ -2848,16 +3018,16 @@ export const HelpersMixin = {
     const lang = this._labelLang();
 
     const stored = (storedName || "").trim();
-    // The panel records who wrote the name; the library-name comparison is only
-    // the fallback for buttons stored before it did.
-    const userNamed = !!assign?.label_edited;
     // A stored label is printed as it reads, its placeholders filled -- empty
     // included: `${_device.media_title_prev}` with nothing before it reads as
-    // nothing, not as a derived "Previous". A name that merely mirrors the
-    // library entry was auto-filled and does not count.
-    if (stored && (userNamed || stored !== (action?.name || ""))) {
+    // nothing, not as a derived "Previous". It is what the Tooltip field shows,
+    // and the preview beside the field must say what the field says. The one
+    // exception is the field's own: a stored name standing in for `${_state}`,
+    // which the field replaces by `${_state}` too (`_labelIsAutoFilled`).
+    if (stored && !this._labelIsAutoFilled(stored, action, this._computeLabel(action, entityId, config), assign)) {
       return this._displayLabel(stored, action, entityId, config, assign);
     }
+    const userNamed = !!assign?.label_edited;
 
     const payload = this._getPayloadDisplay(config);
     if (payload?.title) return payload.title;
@@ -3049,6 +3219,23 @@ export const HelpersMixin = {
     return { dlg, close };
   },
 
+  /** Focus a control that may still be drawing. Home Assistant's elements
+   *  forward `focus()` to a native node their first render creates, so one
+   *  focused in the tick its markup was parsed throws on a null.
+   *
+   *  The throw is the point: from a promise executor it rejected the whole
+   *  dialog, which is how a page delete came to open its confirmation and
+   *  then do nothing at all. */
+  _focusWhenReady(el) {
+    if (typeof el?.focus !== "function") return;
+    const put = () => { try { el.focus(); } catch { /* gone with the next render */ } };
+    const tag = el.localName || "";
+    const upgraded = !tag.includes("-") || !!customElements?.get?.(tag);
+    Promise.resolve(upgraded ? null : customElements.whenDefined(tag))
+      .then(() => el.updateComplete)
+      .then(put, put);
+  },
+
   /** WCAG 3.3.4: confirm a destructive action. Built on `_openModal`, so the
    *  focus trap, Escape and focus-return are the platform's. The confirm
    *  button takes initial focus, so a deletion started from the keyboard
@@ -3061,38 +3248,40 @@ export const HelpersMixin = {
       const subtitleHtml = subtitle
         ? `<span class="confirm-dialog-subtitle">${this._esc(subtitle)}</span>`
         : "";
-      const { dlg, close } = this._openModal(`
-        <div class="add-page-dialog confirm-dialog" role="document">
-          <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(title)}${subtitleHtml}</h2>
-          <p class="confirm-dialog-message" id="liza-dlg-message">${this._esc(message)}</p>
-          <div class="template-dialog-actions">
-            <button type="button" class="confirm-cancel-btn">${this._esc(this._t("cancel"))}</button>
-            <button type="button" class="confirm-danger-btn">${this._esc(confirmText)}</button>
-          </div>
-        </div>
-      `, { labelledBy: "liza-dlg-title", describedBy: "liza-dlg-message", role: "alertdialog" });
-
       let settled = false;
       const settle = (answer) => {
         if (settled) return;
         settled = true;
         resolve(answer);
       };
-      // `close` fires for Escape, the scrim, our own buttons, and a stale
-      // dialog being cleared by the next `_openModal`. Anything that is not an
-      // explicit confirm is a no.
-      // Not a dismissal when the panel is only moving the dialog between
-      // renders: that fires `close` too, and settling there would answer the
-      // question with "cancel" while it is still on screen.
-      dlg.addEventListener("close", () => {
-        if (this._reattachingOverlays) return;
-        settle(false);
+      const { dlg, close } = this._openModal(`
+        <div class="add-page-dialog confirm-dialog" role="document">
+          <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(title)}${subtitleHtml}</h2>
+          <p class="confirm-dialog-message" id="liza-dlg-message">${this._esc(message)}</p>
+          <div class="template-dialog-actions">
+            <ha-button appearance="plain" class="confirm-cancel-btn">${this._esc(this._t("cancel"))}</ha-button>
+            <ha-button variant="danger" class="confirm-danger-btn">${this._esc(confirmText)}</ha-button>
+          </div>
+        </div>
+      `, {
+        labelledBy: "liza-dlg-title", describedBy: "liza-dlg-message", role: "alertdialog",
+        // Every way out runs this: the buttons below, Escape, the scrim, and
+        // being displaced by the next modal. Anything that is not an explicit
+        // confirm is a no.
+        //
+        // Not the dialog's `close` event, which browsers fire from a queued
+        // task: a re-render re-appends the dialog with `close(); showModal()`,
+        // so the event answered the question while it was still on screen.
+        onClose: () => settle(false),
       });
+
       dlg.querySelector(".confirm-cancel-btn")?.addEventListener("click", () => { settle(false); close(); });
       dlg.querySelector(".confirm-danger-btn")?.addEventListener("click", () => { settle(true); close(); });
       // Left/Right move between the two buttons, as Tab does. Not wrapped:
-      // the arrow points at the button it moves to.
-      const buttons = [...dlg.querySelectorAll(".template-dialog-actions button")];
+      // the arrow points at the button it moves to. They are ha-button now,
+      // so the pair is named by class rather than by tag.
+      const buttons = [...dlg.querySelectorAll(
+        ".template-dialog-actions .confirm-cancel-btn, .template-dialog-actions .confirm-danger-btn")];
       dlg.addEventListener("keydown", (e) => {
         if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
         const at = buttons.indexOf(e.target);
@@ -3102,7 +3291,7 @@ export const HelpersMixin = {
         e.preventDefault();
         next.focus();
       });
-      dlg.querySelector(".confirm-danger-btn")?.focus?.();
+      this._focusWhenReady(dlg.querySelector(".confirm-danger-btn"));
     });
   },
 
@@ -3130,4 +3319,3 @@ export const HelpersMixin = {
     if (fresh) requestAnimationFrame(show); else show();
   },
 };
-

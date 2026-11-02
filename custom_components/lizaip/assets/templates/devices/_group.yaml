@@ -1,0 +1,11 @@
+# Templates group — the device remotes most pages start from. The `_key` names
+# point at the panel's translation table (`config/panel/lizaip-i18n.js`), so the
+# folder keeps the five translations the add-page dialog already had for it.
+#
+# `primary: true` heads the first screen with this folder under "Suggested",
+# leaving the rest under "Other".
+
+name_key: template
+description_key: preconfigured_remote
+icon: mdi:remote
+primary: true

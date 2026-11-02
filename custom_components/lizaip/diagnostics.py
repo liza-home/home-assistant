@@ -41,7 +41,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .config.templates import refresh as template_refresh
+from .config.page_templates import refresh as template_refresh
 from .const import DOMAIN
 from .device import report as device_report
 from .device.const import MODEL_ID
@@ -232,7 +232,7 @@ async def _async_log_lines(hass: HomeAssistant) -> dict[str, Any]:
     Imported inside the function because the bundle imports this module; at
     module level the two would be a cycle.
     """
-    from .diagnostics_bundle import _filter_lines, _read_log_tail, _supervisor_log
+    from .config.diagnostics_bundle import _filter_lines, _read_log_tail, _supervisor_log
 
     mask = _entity_id_mask(hass)
     try:
@@ -352,7 +352,7 @@ async def async_settings_snapshot(
         settings["blueprint"] = {"error": str(err)}
 
     try:
-        from .config.templates import list_templates
+        from .config.page_templates import list_templates
 
         settings["templates"] = await hass.async_add_executor_job(list_templates)
     except Exception as err:  # noqa: BLE001

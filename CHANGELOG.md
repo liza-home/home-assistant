@@ -11,6 +11,148 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
+## [2026.11.1] - 2026-11-02
+
+### ⚠ Breaking changes
+
+- **A button is now drawn in your theme's colour for what it is doing.** A
+  theme lets you set a colour for **On**, **Off** and **Unavailable**, but
+  until now those three were never actually used — a button took the page's
+  icon colour, or the colour of the lamp behind it, and otherwise every button
+  on the remote came out in the same single colour whatever its entity was
+  doing. They now work as the editor says they do. With the shipped default
+  theme an entity that is off, or not answering, draws grey instead of white.
+  **What to do:** nothing, unless you liked the flat look — open the theme,
+  and set **Off** and **Unavailable** to the same colour as **Anything else**.
+  A page given an icon colour still overrides all three, as before.
+
+- **High Contrast now uses genuinely high-contrast colours.** Its yellow,
+  blue, green, red and grey colours now each have at least 7:1 contrast
+  against the remote's black background; previously its grey “Off” colour was
+  too dim to read clearly. The theme still uses its largest text and heavier
+  icons. **What to do:** nothing, unless you preferred its old colours — edit
+  your own copy of the theme to choose different colours.
+
+### Added
+
+- **The online pill shows the battery.** The green *Online* pill in the
+  configuration toolbar now fills from left to right with the remote's charge
+  and shows the percentage next to the word, so you can see how much is left
+  without opening the device page. If the battery sensor has not reported yet,
+  the pill stays as it was.
+- **See which Home Assistant your remote talks to.** The remote's device page
+  now lists *Home Assistant address* next to its own *IP address*, and the
+  **This remote** page shows it on a tile -- readable on the remote itself,
+  without an app or a browser, which is exactly where you want it when a
+  remote has stopped finding Home Assistant.
+- **Give any page a device.** Right-click a page you built yourself and choose
+  **Assign device…**; the dialog proposes the device most of its buttons already
+  control. `${_device}` on that page then reads it, and **Change device…** moves the
+  page to another device later.
+- **Options for a button.** Right-click a button and choose **Add options…**: a
+  new subpage is added, and the button's long touch opens it. Offered first in
+  the menu while long touch is switched on (gear tab), and again once you have
+  deleted the options page.
+- **Themes.** A theme sets the page-colour palette, the colours used for on,
+  off and unavailable buttons, the title and tooltip fonts and sizes, and the
+  default icons. The picker shows shipped themes first and custom themes next,
+  each with a preview; the **Create…** tile comes last. Picking a theme only
+  changes the preview. **Apply theme** is always available to set the previewed
+  theme on the remote; **Cancel** restores the saved choice when a different
+  theme is previewed. Leaving the page never applies a pending pick. Saving a
+  custom theme saves it and selects it for preview, but does not apply it.
+  Shipped themes have an eye to view their values read-only and a copy action;
+  they cannot be edited or deleted. Your own themes can be copied, edited,
+  downloaded as `<id>.yaml`, or deleted. **Create…** starts a new theme and is
+  also a drop target for theme YAML files. A dropped file is validated and
+  added under a free name, never used to overwrite an existing theme. There is
+  no separate import or share panel. Deleting a custom theme uses a destructive
+  confirmation that names the theme and current remote text and explains that
+  a remote still using it falls back to Default. Theme files live in
+  `/config/lizaip/themes/`; themes are also included in configuration
+  downloads and restored without overwriting existing files.
+  The editor starts from a theme or **Blank**, and its **Colours**, **Text
+  size** and **Icons** sections let you change each facet. The icon editor
+  filters entries by action and lists all changed icons. Page/button-level
+  choices continue to take precedence over the theme. Save an edit and every
+  remote using that theme is redrawn with it.
+
+- **Let an AI assistant build pages.** Tell Home Assistant's assistant (for
+  example Claude) *"make me a page to control my shades"* or *"create a page for
+  my Sonos in the Wohnzimmer"*, and it builds the page on your remote — using a
+  ready-made template where one fits. It can also rename a button, give it
+  another picture, swap two buttons, and rename or move a page. Turn it on by
+  ticking **liza** in your conversation agent's settings (**Settings → Voice
+  assistants**). It only uses entities you exposed to the assistant.
+
+- **An Overview page.** **Add page → Template → Overview** makes a page with a
+  button for each of the remote's pages: it shows the picture from that page's
+  title (or a short text of its name) and goes there when pressed. It updates
+  by itself when you add, remove or rename a page. Delete one of its buttons and
+  the overview leaves it empty from then on.
+
+### Changed
+
+- **Deleting a page removes the buttons that opened it.** A button or long touch
+  that went to the deleted page is cleared, instead of being left pointing at
+  nothing; a long touch elsewhere on that button stays.
+
+- **The page's Icon color section is hidden for now.** A colour set earlier
+  still tints that page's icons. To colour a logo, add `?fg=` to it
+  (`logo:sonos?fg=white`).
+
+- **A page's right-click menu starts with Make subpage.** It now reads Make
+  subpage (or Make main page), Change device (template pages), then — set
+  apart — **Duplicate** and **Delete**, which used to read Duplicate page and
+  Delete page.
+
+- **`${_device…}` works on pages you made yourself.** There it means what the
+  button controls, so a play/pause button with the tooltip
+  `${_device.media_title}` shows the song its speaker plays. Before, it showed
+  nothing on such a page. Template pages are unchanged: there it is still the
+  page's device.
+
+- **Enter on a button takes you to its first field.** With a button on the
+  face focused, press **Enter** to open it and start typing in its first field;
+  on a button that is already open, **Enter** goes back to that field.
+
+- **Removing a button is called Delete.** Right-click (or long-press) a button
+  and choose **Delete**, which used to read **Clear**. You can also select a
+  button and press **Delete** or **Backspace**, the same keys that delete a
+  page when no button is selected.
+
+### Fixed
+
+- **A theme's icons now change the buttons on the remote.** Changing a theme's
+  on/off icons changed only the preview: every button the panel had saved kept
+  its own copy of the standard icons, and that copy won. Those copies are no
+  longer written, and an existing one that matches the standard icon is
+  ignored, so themes now reach buttons you made before this release. Icons you
+  picked yourself are untouched.
+
+- **Delete deletes a button you just opened.** Opening a button put the cursor
+  in its image field, so pressing Delete removed a letter of the image instead.
+- **A button's tooltip says what its Tooltip field says.** A button whose
+  tooltip matched its action's name could show something else: an Overview
+  button labelled "Sonos" showed "Goto Page" in the editor and "Go to page: …"
+  on the remote. Now the editor preview and the remote both print the field.
+  Only a button whose field shows `${_state}` still shows the state it switches
+  to.
+- **A long page title starts at the left in the editor.** A title picture
+  wider than its bar was centred, so its start was cut off; it now starts at
+  the left edge. A title that fits stays centred.
+- **The Overview's button for a page you just added works.** It showed the
+  page but did nothing on the remote, and the editor drew no link from it
+  until the browser was reloaded.
+- **A deleted page disappears at once.** The editor kept showing it until
+  the change had reached the remote.
+- **Make subpage / make main page shows at once.** The editor waited for the
+  change to be saved before showing it, which could take a while. Saving a page
+  change now also writes only the pages that changed, also right after Home
+  Assistant starts.
+- **A page link's arrow stops at the page.** The arrow pointing at the page a
+  button opens ran past the page's frame; its tip now ends on the frame.
+
 ## [2026.10.3] - 2026-10-23
 
 ### ⚠ Breaking changes

@@ -128,7 +128,7 @@ export const StatesMixin = {
   },
 
   /**
-   * Which states a domain can report, read from icon_defaults.yaml.
+   * Which states a domain can report, read from the default theme's icons.
    *
    * This used to be a switch listing eight domains by hand, which was a second
    * copy of `DOMAIN_STATE_ICONS` -- the executor derived its rows from the yaml
@@ -183,6 +183,21 @@ export const StatesMixin = {
     return d?.domain_service_icons?.[domain]?.[svc] || d?.service_icons?.[svc] || "";
   },
 
+  /** Whether a stored rule holds the shipped icon rather than a chosen one.
+   * Mirrors `is_seeded_icon` in services.py, and compares against the
+   * *unthemed* table so a theme's own glyph is never read as seeded. */
+  _isSeededIcon(domain, rule) {
+    const icon = rule && rule.icon;
+    if (!icon) return false;
+    const state = rule.state;
+    if (state === undefined || state === null) return false;
+    const d = this._shippedIconDefaults;
+    const table = rule.attribute
+      ? (d?.attribute_icons?.[rule.attribute] || { true: "mdi:check-circle", false: "mdi:close-circle" })
+      : (d?.domain_state_icons?.[domain] || { on: "mdi:check-circle", off: "mdi:close-circle" });
+    return icon === table[String(state)];
+  },
+
   /**
    * Drop stored state rules a narrowed service can never reach.
    *
@@ -207,9 +222,11 @@ export const StatesMixin = {
     // No service means nothing to reason from; an empty name reads as "fixed
     // icon", which would strip every rule off an entry that never named one.
     if (!svc) return rows;
+    const domain = service.includes(".") ? service.split(".")[0] : "";
+    const kept = domain ? rows.filter(s => !this._isSeededIcon(domain, s)) : rows;
     const allowed = this._serviceStateScope(svc);
-    if (!allowed) return rows;
-    return rows.filter(s => s.attribute || allowed.includes(s.state));
+    if (!allowed) return kept;
+    return kept.filter(s => s.attribute || allowed.includes(s.state));
   },
 
   /**

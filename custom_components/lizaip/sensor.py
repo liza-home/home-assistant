@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .device.sensor import async_setup_entry as _async_setup_device_sensors
-from .media_queue.sensor import async_setup_entry as _async_claim_queue_sensors
+from .config.media_queue.sensor import async_setup_entry as _async_claim_queue_sensors
 
 
 async def async_setup_entry(

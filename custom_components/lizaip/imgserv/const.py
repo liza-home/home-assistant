@@ -16,9 +16,78 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Final, NamedTuple
+from functools import cache
+from pathlib import Path
+from typing import Any, Final, NamedTuple
 
+import yaml
 from PIL import ImageFont
+
+# ── The default theme ─────────────────────────────────────────────────────
+
+#: The look a remote has when it has picked no theme: its colours, its text
+#: and its glyphs. The single place those are written down -- the colour
+#: names, the palette, the title and tooltip font below and the icon table in
+#: ``shared.icon_defaults`` are all read from it, so there is no second copy
+#: in code to drift from what the panel shows and edits.
+DEFAULT_THEME_FILE: Final = (
+    Path(__file__).parent.parent / "assets" / "themes" / "default.yaml"
+)
+
+
+@cache
+def load_default_theme_file() -> dict[str, Any]:
+    """``default.yaml`` as read, once. Fails loudly: nothing draws without it.
+
+    This is the file shipped with the integration, never a user's copy, so a
+    failure here is a broken install rather than a typo to be tolerated.
+    """
+    try:
+        with DEFAULT_THEME_FILE.open(encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError) as err:
+        raise RuntimeError(f"lizaIP: cannot read {DEFAULT_THEME_FILE}: {err}") from err
+    if not isinstance(data, dict):
+        raise RuntimeError(f"lizaIP: {DEFAULT_THEME_FILE} holds no theme")
+    return data
+
+
+def _default_rgba(value: Any, label: str) -> tuple[int, int, int, int]:
+    raw = str(value).strip().lstrip("#") if isinstance(value, str) else ""
+    if not re.fullmatch(r"[0-9a-fA-F]{6}([0-9a-fA-F]{2})?", raw):
+        raise RuntimeError(
+            f"lizaIP: {DEFAULT_THEME_FILE.name}: {label} is not a quoted hex colour: {value!r}"
+        )
+    alpha = int(raw[6:8], 16) if len(raw) == 8 else 255
+    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16), alpha)
+
+
+def _default_colors() -> tuple[dict[str, tuple], dict[str, tuple], tuple]:
+    """``(palette, states, default)`` from the default theme's ``colors:``."""
+    colors = load_default_theme_file().get("colors") or {}
+    palette = {
+        str(entry["name"]).strip().lower(): _default_rgba(entry.get("hex"), f"palette {entry['name']!r}")
+        for entry in colors.get("palette") or []
+        if isinstance(entry, dict) and entry.get("name")
+    }
+    states = {
+        name: _default_rgba((colors.get("states") or {}).get(name), f"state {name!r}")
+        for name in ("on", "off", "unavailable", "default")
+    }
+    return palette, states, states["default"]
+
+
+def _default_text(kind: str) -> dict[str, Any]:
+    given = (load_default_theme_file().get("text") or {}).get(kind) or {}
+    font, size = given.get("font"), given.get("font_size")
+    if not isinstance(font, str) or not font.strip() or not isinstance(size, int):
+        raise RuntimeError(
+            f"lizaIP: {DEFAULT_THEME_FILE.name}: text.{kind} needs a font and a font_size"
+        )
+    return {"font": font.strip().lower(), "font_size": size}
+
+
+_DEFAULT_PALETTE, _DEFAULT_STATES, _DEFAULT_FG = _default_colors()
 
 # Default image settings
 MAX_SIZE: Final = 512
@@ -35,11 +104,19 @@ class SizeSpec(NamedTuple):
 # font size from here. The page title and tooltip URLs sent to the remote carry
 # it explicitly as well (`resolve_title_url`, `resolve_tooltip_url`): the remote
 # caches images by URL, so a new value here has to change the URL to reach it.
+#
+# The canvas is the device's; the title and tooltip font sizes are the default
+# theme's, so they come from ``default.yaml``.
 SIZE_IDS: Final = {
     "tile": SizeSpec(50, 52, 52),
-    "title": SizeSpec(200, 50, 48),
-    "tooltip": SizeSpec(200, 40, 24),
+    "title": SizeSpec(200, 50, _default_text("title")["font_size"]),
+    "tooltip": SizeSpec(200, 40, _default_text("tooltip")["font_size"]),
 }
+
+# Smaller than this is unreadable on the remote's screen. It sits beside the
+# strip heights because they are the other half of the same range, and both
+# the panel's validator and the theme writer need it.
+MIN_FONT_SIZE: Final = 6
 
 # A request that says nothing about size is overwhelmingly a button face, so the
 # tile is what it gets. Asking for an image without naming a size used to yield
@@ -148,33 +225,20 @@ def _is_slug_part(part: str) -> bool:
 
 # Symbolic color names → (R, G, B, A)
 #
-# The last three are named for a *state* rather than a hue: they are what a
-# tile is tinted with when the entity behind it is on, off, or not answering.
-# Written out as their own entries, not aliases, because the hue each one
-# happens to carry today is a looks decision about that state and nothing else
-# — restyling "disabled" must not drag `?fg=inactive` along with it.
-#
-# `unavailable` is a dimmed red, not the full `red`: an entity that has gone
-# missing is not an alarm, and at alarm strength every dead tile on a page
-# shouts louder than the one thing that is actually wrong.
-#
-# `enabled` is the default foreground (`white`, see DEFAULT_FG_COLOR) rather
-# than a colour of its own: a tile that is simply on is the normal case, and
-# the page reads calmer when only the departures from normal carry a hue.
-# It is still spelled out here, because it is the one of the three most likely
-# to be restyled and must be restylable without touching `white`.
+# The hues and the four state names (`on`, `off`, `unavailable`, `default`)
+# are the default theme's and are read from ``default.yaml``, where the
+# reasons for each value are written beside it. Only the two that are not a
+# looks decision stay here: `black` is what `?mode=light` draws with, and
+# `transparent` is the empty canvas itself.
+#: State colour names from before the rename, still read in a URL so a page
+#: saved with ``?fg=disabled`` keeps its colour. Never written.
+LEGACY_COLOR_ALIASES: Final = {"enabled": "on", "disabled": "off"}
+
 COLOR_NAMES: Final = {
-    "yellow": (254, 212, 48, 255),
-    "blue": (72, 203, 245, 255),
-    "red": (234, 90, 92, 255),
-    "green": (102, 202, 179, 255),
-    "white": (255, 255, 255, 255),
+    **_DEFAULT_PALETTE,
     "black": (0, 0, 0, 255),
-    "inactive": (140, 143, 166, 255),
     "transparent": (0, 0, 0, 0),
-    "enabled": (255, 255, 255, 255),
-    "disabled": (140, 143, 166, 255),
-    "unavailable": (150, 74, 76, 255),
+    **_DEFAULT_STATES,
 }
 
 
@@ -221,8 +285,9 @@ PERCENT_FEATHER_MIN_ROWS: Final = 2
 
 # ── Fonts and colours ─────────────────────────────────────────────────────
 
-# Default font ID (used when no ?font= is specified)
-DEFAULT_FONT: Final = "filson-light"
+# The font a text render uses when no ?font= is given: the default theme's
+# title font, so a bare `text:` matches the title strip.
+DEFAULT_FONT: Final = _default_text("title")["font"]
 
 # Emoji fallback font filename (monochrome, for text tinting)
 EMOJI_FONT: Final = "NotoEmoji-Regular.ttf"
@@ -230,16 +295,18 @@ EMOJI_FONT: Final = "NotoEmoji-Regular.ttf"
 COLOR_EMOJI_FONT: Final = "NotoColorEmoji.ttf"
 EMOJI_NATIVE_SIZE: Final = 109  # only valid pixel size for NotoColorEmoji CBDT
 
-DEFAULT_FG_COLOR: Final = COLOR_NAMES["white"]
+DEFAULT_FG_COLOR: Final = _DEFAULT_FG
 # The default background is *no* background: the subject is served with its
 # alpha intact so the device composites it onto its own dark screen.
 DEFAULT_BG_COLOR: Final = TRANSPARENT
 
-# Bundled fonts directory. This one lives here rather than in render_text
-# because ``find_font`` below defaults to it — the lookup and the directory are
-# the same thought. The logos directory has no such tie and stays in
-# render_logo.py, next to the traversal check that uses it.
-FONTS_DIR: Final = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+# Bundled fonts live under the integration's shared asset directory. Keep the
+# path here because ``find_font`` below defaults to it.
+FONTS_DIR: Final = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets",
+    "fonts",
+)
 
 # System fallback paths tried when the bundled font is not found
 FALLBACK_FONT_PATHS: Final = (
@@ -303,20 +370,21 @@ MODE_DEFAULTS: Final = {
     "light": (COLOR_NAMES["black"], COLOR_NAMES["transparent"]),
 }
 
-# Names offered as icon-tint swatches in the config panel, in display order.
+# Names offered as icon-tint swatches in the config panel, in display order:
+# the default theme's palette, as `default.yaml` lists it.
 #
 # This is a *subset* of COLOR_NAMES, not all of it, because COLOR_NAMES doubles
 # as the `?fg=`/`?bg=` parser's vocabulary — it has to accept values that make no
 # sense as a foreground pick:
 #   - `transparent` is not a colour; tinting an icon with it renders nothing.
 #   - `black` is invisible against the device's permanently dark screen.
-#   - `enabled`/`disabled`/`unavailable` name a state, not a pick. Each one
+#   - `on`/`off`/`unavailable`/`default` name a state, not a pick. Each one
 #     draws the same hex as a swatch already on offer, so listing them would put
 #     the same colour in the picker twice under a name that promises it tracks
 #     a state — which a one-click tint does not.
 # All stay parseable (an explicit `?fg=black` still works), they are just not
 # offered as one-click choices.
-PALETTE_NAMES: Final = ("white", "yellow", "blue", "green", "red", "inactive")
+PALETTE_NAMES: Final = tuple(_DEFAULT_PALETTE)
 
 
 def color_hex(name: str) -> str:

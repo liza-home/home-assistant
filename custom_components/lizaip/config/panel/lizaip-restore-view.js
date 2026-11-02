@@ -7,7 +7,7 @@
  * at what is in it, watch it go in — and nothing is written until the user has
  * pressed Restore on the middle one, which they can also step back out of.
  *
- * The archive is checked by `config_restore.py` before anything is touched,
+ * The archive is checked by `config/restore.py` before anything is touched,
  * and the review step draws its pages as the faces the remote will show, from
  * the same `drawSVG` the editor draws with.
  */
@@ -106,10 +106,10 @@ export const RestoreViewMixin = {
       const said = this._restoreAnnouncement(ctx);
       if (said) setTimeout(() => { live.textContent = said; }, 50);
       if (!focus) {
-        if (keep) dlg.querySelector(`.${keep}`)?.focus?.();
+        if (keep) this._focusWhenReady(dlg.querySelector(`.${keep}`));
         return;
       }
-      dlg.querySelector(`.${this._restoreFocusClass(ctx)}`)?.focus?.();
+      this._focusWhenReady(dlg.querySelector(`.${this._restoreFocusClass(ctx)}`));
     };
 
     const take = (file) => {
@@ -159,8 +159,19 @@ export const RestoreViewMixin = {
       // arrive for one choice, which `take` makes harmless.
       input?.addEventListener("change", () => { stopPicking(); take(input.files?.[0]); });
       input?.addEventListener("input", () => { stopPicking(); take(input.files?.[0]); });
+      const pick = dlg.querySelector(".restore-pick-btn");
+      pick?.addEventListener("click", (e) => {
+        // The box below would open the chooser a second time.
+        e.stopPropagation();
+        if (!pick.disabled) input?.click();
+      });
       const drop = dlg.querySelector(".restore-drop");
       if (drop) {
+        drop.addEventListener("click", (e) => {
+          // The input's own click bubbles here on its way out.
+          if (e?.target === input || pick?.disabled) return;
+          input?.click();
+        });
         // Dropping the ZIP straight onto the window is the shortest road of
         // all, and the browser would otherwise navigate away to the file.
         ["dragenter", "dragover"].forEach((type) =>
@@ -218,7 +229,7 @@ export const RestoreViewMixin = {
     wire();
     // The corner button comes first in the window; what the user came to do
     // is pick a file, so that is what is handed the keyboard.
-    dlg.querySelector(".restore-input")?.focus?.();
+    dlg.querySelector(".restore-pick-btn")?.focus?.();
   },
 
   /** The restore window, in whichever of its steps it is in. */
@@ -232,9 +243,9 @@ export const RestoreViewMixin = {
     // Nothing to abandon while the files are being written, so the corner
     // button is not offered then.
     const corner = ctx.stage === "working" ? "" : `
-        <button type="button" class="restore-dialog-close" aria-label="${closeLabel}" title="${closeLabel}">
+        <ha-icon-button class="restore-dialog-close" label="${closeLabel}">
           <ha-icon icon="mdi:close" aria-hidden="true"></ha-icon>
-        </button>`;
+        </ha-icon-button>`;
     return `
       <div class="add-page-dialog restore-dialog" role="document">${corner}
         <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(this._t("restore_config"))}${subtitle}</h2>
@@ -252,13 +263,13 @@ export const RestoreViewMixin = {
     if (ctx.stage === "working") return "";
     if (ctx.stage === "done") {
       return `<div class="template-dialog-actions">
-          <button type="button" class="debug-btn primary restore-close-btn">${this._esc(this._t("close"))}</button>
+          <ha-button variant="brand" class="debug-btn primary restore-close-btn">${this._esc(this._t("close"))}</ha-button>
         </div>`;
     }
     if (ctx.stage !== "review" || !ctx.summary) return "";
     return `<div class="template-dialog-actions">
-        <button type="button" class="confirm-cancel-btn restore-back-btn">${this._esc(this._t("back"))}</button>
-        <button type="button" class="confirm-danger-btn restore-confirm-btn">${this._esc(this._t("restore_confirm_action"))}</button>
+        <ha-button appearance="plain" class="confirm-cancel-btn restore-back-btn">${this._esc(this._t("back"))}</ha-button>
+        <ha-button variant="danger" class="confirm-danger-btn restore-confirm-btn">${this._esc(this._t("restore_confirm_action"))}</ha-button>
       </div>`;
   },
 
@@ -273,7 +284,7 @@ export const RestoreViewMixin = {
   _restoreFocusClass(ctx) {
     if (ctx.stage === "review") return "restore-confirm-btn";
     if (ctx.stage === "done") return "restore-close-btn";
-    return "restore-input";
+    return "restore-pick-btn";
   },
 
   /** The three steps, with the one being taken marked as such. */
@@ -312,17 +323,21 @@ export const RestoreViewMixin = {
         ? `<p class="restore-status error">${this._esc(
             this._t("restore_failed", { error: ctx.error }))}</p>`
         : "";
-    // The whole box is the label, not just the button inside it: a dashed
-    // frame that says "drop a file here" and answers a click only in its
-    // middle 120 pixels is a target lying about its own size.
+    // HA's button, opening a file input that is never shown: the native one
+    // draws its own button and a file name beside it. The whole box answers a
+    // click, not just the button inside it: a dashed frame that says "drop a
+    // file here" and answers only in its middle is a target lying about its
+    // own size.
     return `
-      <label class="restore-drop">
-        <input type="file" class="restore-input" accept=".zip"
+      <div class="restore-drop">
+        <input type="file" class="restore-input" accept=".zip" hidden
                ${reading ? "disabled" : ""}>
         <ha-icon icon="mdi:folder-zip-outline" aria-hidden="true"></ha-icon>
-        <span class="restore-pick-btn">${this._esc(this._t("restore_pick_file"))}</span>
+        <ha-button variant="brand" class="restore-pick-btn" ${reading ? "disabled" : ""}>
+          ${this._esc(this._t("restore_pick_file"))}
+        </ha-button>
         <span class="restore-drop-hint">${this._esc(this._t("restore_drop_hint"))}</span>
-      </label>
+      </div>
       ${status}`;
   },
 
@@ -431,6 +446,7 @@ export const RestoreViewMixin = {
       // Named means configured, which is how the shape is drawn; the icon
       // beside the name is what the archive could resolve before the restore.
       const configured = (key) => Object.hasOwn(icons, key);
+      container.classList.toggle("face-dark", mode === "dark");
       drawSVG(container, bp, -1, configured, null, { interactive: false });
       cropFace(container.querySelector("svg"));
       this._drawRestoreTitle(container, bp, page.image, mode);

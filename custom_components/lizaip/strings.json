@@ -113,6 +113,9 @@
       "battery": {
         "name": "Battery"
       },
+      "ha_address": {
+        "name": "Home Assistant address"
+      },
       "ip_address": {
         "name": "IP address"
       }

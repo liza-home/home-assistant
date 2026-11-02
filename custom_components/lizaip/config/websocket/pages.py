@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import copy
 import logging
+from copy import deepcopy
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
+from ...action_controller.toggle import TOGGLE_KEY
 from ...runtime import _get_store, entry_connection
+from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_LONGTOUCH_KEY
 from ...shared.logs import device_id_logger
 from ..blueprint import async_get_blueprint
 from ..const import (
@@ -253,13 +257,18 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
             await store.async_set_assignments(device_id, p["id"], empty)
 
     await store.async_set_pages(device_id, pages)
+    # A page that is gone takes the links to it along: a page link left behind
+    # does nothing on the remote. The panel re-reads the pages named here.
+    cleaned = await async_drop_links_to(
+        hass, msg["entry_id"], store, device_id, set(stored_by_id) - {p["id"] for p in pages},
+    )
 
     # The list is on disk, which is all the panel asked about. Answered now,
     # before the device is touched: `set_main_pages` waits for the page-sync
     # lock -- held for the whole of any running sync -- and then for a remote
     # that may be asleep, and a deleted page used to sit on screen for all of
     # that. The same split `_reorder_pages_fast` makes.
-    connection.send_result(msg["id"], {"success": True, "pages": pages})
+    connection.send_result(msg["id"], {"success": True, "pages": pages, "cleaned": cleaned})
     # Deleted pages can remove the last binding for a push subscription. Only
     # scheduled, so it stays here rather than behind the device round trip.
     schedule_push_rescan(hass, msg["entry_id"])
@@ -269,6 +278,98 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
         device_id_logger(_LOGGER, hass, device_id).exception(
             "Pushing the page list after set_pages failed",
         )
+
+
+#: The command a page link runs.
+_GOTO_PAGE = "lizaip.goto_page"
+
+
+def _opens_removed(steps: Any, removed: set[int]) -> bool:
+    """Whether *steps* is a page link to one of the *removed* pages."""
+    if not isinstance(steps, list) or not steps or not isinstance(steps[0], dict):
+        return False
+    step = steps[0]
+    if (step.get("action") or step.get("service")) != _GOTO_PAGE:
+        return False
+    raw = (step.get("data") or {}).get("page_id")
+    try:
+        return int(raw) in removed
+    except (TypeError, ValueError):
+        return False
+
+
+def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
+    """*assign* without its links to *removed* pages, or None if it had none.
+
+    A long touch, a fixed control's override or a toggle step that opens a
+    removed page goes; a click that opens one empties the button, keeping a
+    long touch that still leads somewhere. A button filled by a dynamic source
+    (an Overview tile) is left to that source's own refresh.
+    """
+    if not isinstance(assign, dict) or isinstance(assign.get(ASSIGNMENT_DYNAMIC_KEY), dict):
+        return None
+    result = deepcopy(assign)
+    changed = False
+    if _opens_removed(result.get(ASSIGNMENT_LONGTOUCH_KEY), removed):
+        result.pop(ASSIGNMENT_LONGTOUCH_KEY)
+        changed = True
+    overrides = result.get("overrides")
+    if isinstance(overrides, dict):
+        for key in [k for k, o in overrides.items()
+                    if isinstance(o, dict) and _opens_removed(o.get("config"), removed)]:
+            overrides.pop(key)
+            changed = True
+        if not overrides:
+            result.pop("overrides")
+    toggle = result.get(TOGGLE_KEY)
+    rules = toggle.get("rules") if isinstance(toggle, dict) else None
+    if isinstance(rules, list):
+        kept = [r for r in rules if not (isinstance(r, dict) and _opens_removed(r.get("config"), removed))]
+        if len(kept) != len(rules):
+            changed = True
+            if kept:
+                toggle["rules"] = kept
+            else:
+                result.pop(TOGGLE_KEY)
+    if _opens_removed(result.get("config"), removed):
+        longtouch = result.get(ASSIGNMENT_LONGTOUCH_KEY)
+        result = dict(EMPTY_BUTTON)
+        if longtouch:
+            result[ASSIGNMENT_LONGTOUCH_KEY] = longtouch
+        changed = True
+    return result if changed else None
+
+
+async def async_drop_links_to(
+    hass: HomeAssistant, entry_id: str, store, device_id: str, removed: set[int],
+) -> list[int]:
+    """Remove every link to the *removed* pages from the pages left; return those changed.
+
+    A link to a page that is gone does nothing on the remote, and in the editor
+    it kept an options page's long touch "in use" after the page was deleted.
+    """
+    if not removed:
+        return []
+    changed_pages: list[int] = []
+    everything = await store.async_get_all_assignments(device_id) or {}
+    for page in await store.async_get_pages(device_id):
+        page_id = page.get("id") if isinstance(page, dict) else None
+        if page_id is None or page_id in removed:
+            continue
+        assignments = everything.get(page_id) or {}
+        cleaned = {}
+        for key, assign in assignments.items():
+            fixed = drop_links_to(assign, removed)
+            if fixed is not None:
+                cleaned[key] = fixed
+        if cleaned:
+            await store.async_set_assignments(device_id, page_id, {**assignments, **cleaned})
+            await store.async_recompute_page_hash(device_id, page_id)
+            changed_pages.append(page_id)
+    if changed_pages:
+        # A dropped link can be a button's last dynamic binding.
+        schedule_push_rescan(hass, entry_id)
+    return changed_pages
 
 
 async def _push_page_list(

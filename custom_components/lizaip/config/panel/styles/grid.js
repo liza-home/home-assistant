@@ -280,12 +280,6 @@ export const STYLES_GRID = `
     font-family: inherit;
     color: var(--liza-accent-text);
   }
-  .ctx-page-default {
-    background: none; border: 1px solid var(--divider-color, rgba(127,127,127,.3));
-    border-radius: 10px; padding: 1px 8px; cursor: pointer;
-    font-size: var(--liza-font-11); color: var(--liza-muted-text);
-  }
-  .ctx-page-default:hover { border-color: var(--primary-color, #03a9f4); color: var(--liza-accent-text); }
 
   /* The button card's header, which is also its Appearance editor. The plain
      .config-card-header above stays a single flex row and is still what the
@@ -321,53 +315,20 @@ export const STYLES_GRID = `
     background: var(--divider-color, rgba(127,127,127,.15));
     margin: 4px 0;
   }
-  /* Label row with reset button.
-     The border belongs to the *row*, not to the input inside it, so the
-     trailing controls sit within the field the way Home Assistant's own
-     text fields carry their trailing icons.
-     Two things were wrong with putting them beside it. The input was
-     flex: 1 next to buttons that appear only once you start typing, so the
-     field physically shrank under the caret as it was used. And the box
-     stopped ~90px short of the icon picker directly above it, which is the
-     one field on this card it most obviously should line up with. Bordering
-     the row fixes both at once: the box is always the full width, and what
-     changes inside it no longer moves its edges. */
+  /* A field with a trailing action beside it -- Sensitivity and its reset to
+     the page value. HA's field draws its own outline, so the row is layout
+     only: a border here would be a box around a box. */
   .config-label-row {
     display: flex;
-    gap: 2px;
+    gap: 4px;
     align-items: center;
-    padding-inline-end: 6px;
-    border: 1px solid var(--divider-color);
-    border-radius: 8px;
-    background: var(--card-background-color);
   }
-  /* The focus ring follows the border it belongs to. Without this, focusing
-     the input lit nothing -- its own border is gone. */
-  .config-label-row:focus-within { border-color: var(--primary-color); }
-  .config-label-row input[type="text"] {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: transparent;
-  }
-  .config-label-row input[type="text"]:focus { outline: none; }
   /* Only the reset. The confirm/cancel pair this used to list with it is
      gone: a tooltip now commits on Enter or blur, so there is nothing left
      to confirm. */
   .config-label-reset {
-    border: none;
-    background: transparent;
-    font-size: var(--liza-font-l);
-    cursor: pointer;
-    color: var(--liza-muted-text);
-    padding: 4px 6px;
-    border-radius: 4px;
-    transition: all .15s;
     flex-shrink: 0;
-    display: flex;
-    align-items: center;
   }
-  .config-label-reset:hover { background: color-mix(in srgb, var(--primary-color) 15%, transparent); color: var(--liza-accent-text); }
   .config-field { display: flex; flex-direction: column; gap: 4px; }
   /* The action list is a section wearing a field's wrapper. Its hint explains
      the list rather than captioning an input, and the add button below it is a
@@ -419,7 +380,7 @@ export const STYLES_GRID = `
      The page title's own input used to be listed here too: it lived outside a
      .config-field, in the banner, and had to name itself to be styled. It is a
      .config-field like every other now, so it inherits by position. */
-  .config-field select, .config-field input[type="text"] {
+  .config-field input[type="text"] {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--divider-color);
@@ -430,7 +391,7 @@ export const STYLES_GRID = `
     font-family: inherit;
     box-sizing: border-box;
   }
-  .config-field select:focus, .config-field input[type="text"]:focus {
+  .config-field input[type="text"]:focus {
     outline: none;
     border-color: var(--primary-color);
   }
@@ -447,6 +408,8 @@ export const STYLES_GRID = `
     overflow: hidden;
     flex-shrink: 0;
   }
+  /* The preview is a tile, so it wants the same screen the face gives one. */
+  :host(.liza-dark) .config-field .icon-picker-row .icon-preview { background: #000; }
   .config-field .icon-picker-row .icon-preview img { border-radius: 4px; }
   /* The page title is the one image in this panel that is not square. Widening
      the box to the title's own 4:1 keeps the picture at the shape the device
@@ -772,20 +735,6 @@ export const STYLES_GRID = `
   .title-icon-field { flex: 1 1 190px; max-width: 300px; }
   .title-icon-field .config-field { margin: 0; }
 
-  .btn-test-config,
-  .slider-reset-control {
-    padding: 6px 14px;
-    border: 1px solid var(--primary-color);
-    background: transparent;
-    color: var(--liza-accent-text);
-    border-radius: 8px;
-    font-size: var(--liza-font-s);
-    font-weight: 500;
-    cursor: pointer;
-    transition: background .15s;
-  }
-  .btn-test-config:hover,
-  .slider-reset-control:hover { background: color-mix(in srgb, var(--primary-color) 10%, transparent); }
   /* The only control that adds an action -- Home Assistant's own is hidden in
      every state, so this one owns the wording and the position.
      Aligned to the content start, and padded only on the inside edge it does

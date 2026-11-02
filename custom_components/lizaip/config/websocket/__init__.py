@@ -7,6 +7,7 @@ One module per area of the panel:
 - ``pages``            -- the page list: reorder, edit, duplicate
 - ``settings``         -- text style, icon options and the editors' lookups
 - ``templates``          -- pages generated from a template, and retargeting them
+- ``page_device``      -- a device for a page no template made; saving a page as a template
 - ``dynamic``          -- buttons filled from a dynamic source
 - ``assignment_entry`` -- validating a button assignment the panel sent
 - ``common``           -- helpers the handler modules share
@@ -20,7 +21,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import debug_available
-from . import assignments, devices, dynamic, templates, pages, settings
+from . import assignments, devices, dynamic, page_device, templates, pages, settings
 
 
 def register_commands(hass: HomeAssistant) -> None:
@@ -50,6 +51,11 @@ def register_commands(hass: HomeAssistant) -> None:
         settings.ws_set_icon_options,
         settings.ws_get_icon_defaults,
         settings.ws_get_palette,
+        settings.ws_get_themes,
+        settings.ws_save_theme,
+        settings.ws_delete_theme,
+        settings.ws_export_theme,
+        settings.ws_import_theme,
         settings.ws_get_action_labels,
         settings.ws_get_slider_controls,
         settings.ws_get_internal_commands,
@@ -58,6 +64,9 @@ def register_commands(hass: HomeAssistant) -> None:
         templates.ws_list_template_config_entries,
         templates.ws_add_template_page,
         templates.ws_retarget_template_page,
+        page_device.ws_list_all_devices,
+        page_device.ws_assign_page_device,
+        page_device.ws_save_page_as_template,
         dynamic.ws_browse_media,
         dynamic.ws_list_dynamic_sources,
         dynamic.ws_preview_dynamic_source,

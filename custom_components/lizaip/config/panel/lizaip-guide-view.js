@@ -1,7 +1,7 @@
 /**
  * lizaIP Panel — User Guide
  *
- * The guide the repository ships as `docs/USER_GUIDE.md`, shown inside Home
+ * The guide the repository ships as `config/docs/USER_GUIDE.md`, shown inside Home
  * Assistant so a user setting up a remote does not have to leave the page they
  * are setting it up on.
  *
@@ -163,11 +163,11 @@ export const GuideViewMixin = {
    */
   _htmlGuideButton(cls = "") {
     const label = this._esc(this._t("user_guide"));
-    return `<button type="button" class="guide-btn ${cls}"
+    return `<ha-icon-button class="guide-btn ${cls}"
                     aria-pressed="${this._guideOpen() ? "true" : "false"}"
-                    aria-label="${label}" title="${label}">
+                    label="${label}">
               <ha-icon icon="mdi:help-circle-outline" aria-hidden="true"></ha-icon>
-            </button>`;
+            </ha-icon-button>`;
   },
 
   /** Wire every help button in the current render. */
@@ -283,37 +283,34 @@ export const GuideViewMixin = {
              aria-label="${this._esc(this._t("guide_open_github"))}">
             <ha-icon icon="mdi:open-in-new" aria-hidden="true"></ha-icon>
           </a>
-          <button type="button" class="guide-close" aria-label="${this._esc(this._t("close"))}">
+          <ha-icon-button class="guide-close" label="${this._esc(this._t("close"))}">
             <ha-icon icon="mdi:close" aria-hidden="true"></ha-icon>
-          </button>
+          </ha-icon-button>
         </div>
       </div>
       <div class="guide-body">
         <div class="guide-nav">
           <div class="guide-rail-head">
             <span class="guide-rail-title">${this._esc(this._t("guide_contents"))}</span>
-            <button type="button" class="guide-rail-toggle" aria-expanded="true"
+            <ha-icon-button class="guide-rail-toggle" aria-expanded="true"
                     aria-controls="liza-guide-toc"
-                    title="${this._esc(this._t("guide_rail_hide"))}"
-                    aria-label="${this._esc(this._t("guide_rail_hide"))}">
+                    label="${this._esc(this._t("guide_rail_hide"))}">
               <ha-icon icon="mdi:chevron-double-left" aria-hidden="true"></ha-icon>
-            </button>
+            </ha-icon-button>
           </div>
-          <button type="button" class="guide-toc-toggle" aria-expanded="false"
+          <ha-button appearance="outlined" class="guide-toc-toggle" aria-expanded="false"
                   aria-controls="liza-guide-toc">
-            <ha-icon icon="mdi:format-list-bulleted" aria-hidden="true"></ha-icon>
+            <ha-icon slot="start" icon="mdi:format-list-bulleted" aria-hidden="true"></ha-icon>
             <span class="liza-sr-only">${this._esc(this._t("guide_contents"))}</span>
             <span class="guide-toc-current"></span>
-            <ha-icon class="guide-toc-caret" icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
-          </button>
+            <ha-icon slot="end" class="guide-toc-caret" icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
+          </ha-button>
           <nav class="guide-toc" id="liza-guide-toc"
                aria-label="${this._esc(this._t("guide_contents"))}" hidden>
             <div class="guide-filter">
-              <ha-icon icon="mdi:magnify" aria-hidden="true"></ha-icon>
-              <input type="search" class="guide-filter-input" autocomplete="off"
+              <ha-input-search appearance="outlined" class="guide-filter-input" autocomplete="off"
                      placeholder="${this._esc(this._t("guide_filter"))}"
-                     aria-label="${this._esc(this._t("guide_filter"))}"
-                     aria-controls="liza-guide-toc">
+                     accessible-label="${this._esc(this._t("guide_filter"))}"></ha-input-search>
               <!-- The counter and its arrows appear only while there is
                    something to count: empty, they are three dead controls
                    taking a third of a narrow row. aria-live so a reader who
@@ -321,16 +318,14 @@ export const GuideViewMixin = {
                    box. -->
               <span class="guide-hits" hidden>
                 <output class="guide-hits-count" aria-live="polite"></output>
-                <button type="button" class="guide-hit-step" data-step="-1"
-                        aria-label="${this._esc(this._t("guide_hit_prev"))}"
-                        title="${this._esc(this._t("guide_hit_prev"))}">
+                <ha-icon-button class="guide-hit-step" data-step="-1"
+                        label="${this._esc(this._t("guide_hit_prev"))}">
                   <ha-icon icon="mdi:chevron-up" aria-hidden="true"></ha-icon>
-                </button>
-                <button type="button" class="guide-hit-step" data-step="1"
-                        aria-label="${this._esc(this._t("guide_hit_next"))}"
-                        title="${this._esc(this._t("guide_hit_next"))}">
+                </ha-icon-button>
+                <ha-icon-button class="guide-hit-step" data-step="1"
+                        label="${this._esc(this._t("guide_hit_next"))}">
                   <ha-icon icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
-                </button>
+                </ha-icon-button>
               </span>
             </div>
             <!-- A toolbar, which is what twenty buttons navigated with the
@@ -850,8 +845,7 @@ export const GuideViewMixin = {
       body.classList.toggle("rail-collapsed", !shown);
       rail.setAttribute("aria-expanded", shown ? "true" : "false");
       const text = this._t(shown ? "guide_rail_hide" : "guide_rail_show");
-      rail.setAttribute("aria-label", text);
-      rail.setAttribute("title", text);
+      rail.setAttribute("label", text);
       // Folded, the control is the only thing left of the rail, so it has to
       // say what it is as well as what it does: a list, not a bare chevron
       // pointing at nothing.

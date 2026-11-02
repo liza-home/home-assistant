@@ -42,51 +42,16 @@ export const STYLES_ACTIONS = `
     padding: 10px 16px;
     border-bottom: 1px solid var(--divider-color);
   }
-  .scope-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .scope-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font: inherit;
-    font-size: var(--liza-font-s);
-    padding: 5px 12px;
-    border-radius: 16px;
-    border: 1px solid var(--divider-color);
-    background: transparent;
-    color: var(--primary-text-color);
-    cursor: pointer;
-    transition: background .15s, border-color .15s;
-  }
-  .scope-chip:hover:not([disabled]) { background: var(--secondary-background-color); }
-  .scope-chip.active {
-    background: var(--liza-accent-fill);
-    border-color: var(--primary-color);
-    color: var(--text-primary-color, #fff);
-  }
-  /* Dimmed rather than hidden: a chip that disappears when it empties moves
-     the ones beside it, so the next press lands on the wrong scope. */
-  .scope-chip[disabled] { opacity: .45; cursor: default; }
+  /* ha-chip-set and ha-filter-chip draw the chips, their selected fill and
+     their disabled dimming. A scope is still shown when it is empty, disabled
+     rather than removed: a chip that disappears moves the ones beside it, so
+     the next press lands on the wrong scope. */
   .scope-chip-count {
-    font-size: var(--liza-font-11);
+    margin-inline-start: 6px;
     opacity: .75;
     font-variant-numeric: tabular-nums;
   }
-  .actions-sort {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--liza-font-s);
-    color: var(--liza-muted-text);
-  }
-  .action-sort-select {
-    font: inherit;
-    font-size: var(--liza-font-s);
-    padding: 5px 8px;
-    border-radius: 8px;
-    border: 1px solid var(--divider-color);
-    background: var(--card-background-color);
-    color: var(--primary-text-color);
-  }
+  .action-sort-select { min-width: 160px; }
 
   /* --- Actions cleanup bar --- */
   .actions-cleanup-bar {
@@ -101,24 +66,8 @@ export const STYLES_ACTIONS = `
     border-bottom: 1px solid var(--divider-color);
   }
   .actions-cleanup-bar.warning { color: var(--warning-color, #ff9800); }
-  .cleanup-btn {
-    font: inherit;
-    font-size: var(--liza-font-s);
-    padding: 6px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--primary-color);
-    background: var(--liza-accent-fill);
-    color: var(--text-primary-color, #fff);
-    cursor: pointer;
-    transition: filter .15s;
-  }
-  .cleanup-btn:hover { filter: brightness(0.88); }
-  .cleanup-btn.danger {
-    background: transparent;
-    border-color: var(--error-color, #db4437);
-    color: var(--error-color, #db4437);
-  }
-  .cleanup-btn.danger:hover { background: rgba(219,68,55,.1); filter: none; }
+/* ha-button carries the fill and the red outline; the bar only places it. */
+  .cleanup-btn { flex: 0 0 auto; }
 
   /* --- Actions domain groups --- */
   .action-group { display: flex; flex-direction: column; gap: 2px; }
@@ -280,24 +229,6 @@ export const STYLES_ACTIONS = `
   .action-info { flex: 1; min-width: 0; }
   .action-name { font-size: var(--liza-font-m); font-weight: 500; }
   .action-subtitle { font-size: var(--liza-font-s); color: var(--liza-muted-text); }
-  .action-edit-btn, .action-delete-btn {
-    background: none; border: none; cursor: pointer;
-    color: var(--liza-muted-text); padding: 4px;
-    border-radius: 4px; transition: background .15s;
-  }
-  .action-edit-btn:hover, .action-delete-btn:hover { background: rgba(0,0,0,.05); }
-
-  .meta-input {
-    flex: 1;
-    padding: 8px 12px;
-    border: 1px solid var(--divider-color);
-    border-radius: 4px;
-    background: var(--card-background-color);
-    color: var(--primary-text-color);
-    font-size: var(--liza-font-m);
-    font-family: inherit;
-  }
-  .meta-input:focus { outline: none; border-color: var(--primary-color); }
   .icon-picker-slot { flex: 1; }
   .section-title {
     margin: 0 0 8px 0;

@@ -140,6 +140,35 @@ def _parse_rgb(raw: object) -> tuple[float, float, float] | None:
     return (out[0], out[1], out[2])
 
 
+#: States that carry no information about the thing itself.
+ABSENT_STATES: Final = frozenset({"unavailable", "unknown"})
+
+#: What "not doing anything" looks like across domains, the deny-list HA's own
+#: `stateActive` reduces to. Anything else counts as active. Mirrors
+#: `INACTIVE_STATES` in the panel's `lizaip-helpers.js`.
+INACTIVE_STATES: Final = ABSENT_STATES | {
+    "off", "closed", "locked", "standby", "idle", "docked", "paused",
+    "not_home", "disarmed",
+}
+
+
+def entity_state_color(
+    state: State | None, assume_state: str | None = None,
+) -> str:
+    """Which of the theme's state colours *state* asks for, or ``""`` for none.
+
+    A name rather than a hex, so the remote's theme decides what each state
+    looks like. A button bound to nothing yields ``""`` and keeps the theme's
+    ``default`` colour -- "Default" on the Colours tab.
+    """
+    if state is None:
+        return ""
+    effective = assume_state if assume_state is not None else state.state
+    if effective in ABSENT_STATES:
+        return "unavailable"
+    return "off" if effective in INACTIVE_STATES else "on"
+
+
 def is_tintable(entity_id: str) -> bool:
     """Whether *entity_id* is in the one domain that can carry a tint.
 

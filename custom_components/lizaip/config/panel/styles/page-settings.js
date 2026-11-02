@@ -69,6 +69,9 @@ export const STYLES_PAGE_SETTINGS = `
      a tick/cross pair, each sized against the other -- is gone with the design
      it served. */
   .ps-title-editor .config-field { margin: 0; }
+  /* A banner with nothing under it closes the card: the rule would draw a
+     line between the page row and the card's own edge. */
+  .ps-title-banner:last-child { border-bottom: none; }
   .ps-body { gap: 12px !important; }
   .ps-section {
     margin-top: 10px;
@@ -84,39 +87,11 @@ export const STYLES_PAGE_SETTINGS = `
     align-items: center;
     gap: 8px;
   }
-  .ps-reorder-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--divider-color, #e0e0e0);
-    border-radius: 8px;
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color);
-    cursor: pointer;
-    transition: background .15s;
-  }
-  .ps-reorder-btn:hover:not(:disabled) { background: var(--secondary-background-color); }
-  .ps-reorder-btn:disabled { opacity: .3; cursor: default; }
   .ps-template-target-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
     width: 100%;
-    padding: 8px 12px;
-    border: 1px solid var(--divider-color, #e0e0e0);
-    border-radius: 8px;
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: background .15s;
   }
-  .ps-template-target-btn:hover { background: var(--secondary-background-color); }
   .ps-template-target-name {
-    flex: 1;
+    display: block;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -203,29 +178,7 @@ export const STYLES_PAGE_SETTINGS = `
   .ps-color-native::-webkit-color-swatch { border: none; border-radius: 4px; }
   .ps-color-native::-moz-color-swatch { border: none; border-radius: 4px; }
   .ps-color-input {
-    width: 90px;
-    font-size: var(--liza-font-s);
-    padding: 5px 8px;
-    border: 1px solid var(--divider-color, #e0e0e0);
-    border-radius: 6px;
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color);
+    width: 120px;
     font-family: monospace;
   }
-  .ps-color-input:focus { outline: none; border-color: var(--primary-color); }
-  .ps-color-clear {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: none;
-    background: transparent;
-    color: var(--liza-muted-text);
-    cursor: pointer;
-    border-radius: 50%;
-    opacity: .5;
-    transition: opacity .15s, background .15s;
-  }
-  .ps-color-clear:hover { opacity: 1; background: var(--secondary-background-color); }
 `;

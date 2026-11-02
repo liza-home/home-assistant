@@ -88,8 +88,12 @@ def service_state_scope(svc: str) -> tuple[str, ...] | None:
     return _TWO_WAY_STATE_SCOPE.get(svc)
 
 
-def service_fixed_icon(domain: str, svc: str) -> str | None:
+def service_fixed_icon(domain: str, svc: str, icons=None) -> str | None:
     """Our override for a fixed-icon service, or None to defer to HA.
+
+    *icons* is the asking remote's table -- the shipped one with its theme laid
+    over it -- and defaults to the shipped table for a caller that speaks for
+    no remote.
 
     Two layers, most specific first. ``domain_service_icons`` exists because
     ``service_icons`` is keyed by service name alone, and a few services need a
@@ -98,8 +102,9 @@ def service_fixed_icon(domain: str, svc: str) -> str | None:
     while `light.turn_off` wants HA's mdi:lightbulb-off rather than a generic
     power glyph.
     """
-    by_domain = icon_defaults.domain_service_icons.get(domain, {})
-    return by_domain.get(svc) or icon_defaults.service_icons.get(svc)
+    table = icons or icon_defaults
+    by_domain = table.domain_service_icons.get(domain, {})
+    return by_domain.get(svc) or table.service_icons.get(svc)
 
 
 def scoped_icon_state(svc: str, domain: str, live_state: str) -> str | None:
@@ -189,6 +194,29 @@ def catchall_state_icon(
     return state_icons.get(fallback) or None
 
 
+def is_seeded_icon(domain: str, rule: dict) -> bool:
+    """Whether *rule* carries the shipped icon rather than a chosen one.
+
+    The panel used to write the shipped table into a new action's ``states``,
+    so a button was born holding the very glyphs it should have been falling
+    back to. Those rules outrank the theme, which left a theme's icons unable
+    to reach any button that existed.
+
+    A rule matching the shipped table is therefore read as "nobody chose this"
+    and dropped, so the lookup falls through to the asking remote's theme. The
+    cost is that picking the shipped glyph by hand is indistinguishable from
+    never having picked -- and that costs nothing, because both resolve to the
+    same icon until a theme re-points it, which is the outcome either way.
+    """
+    icon = rule.get("icon")
+    if not icon:
+        return False
+    state = rule.get("state")
+    if state is None:
+        return False
+    return icon == icon_defaults.for_state(domain, rule.get("attribute"), str(state))
+
+
 def scope_action_states(service: str, states: Any) -> list[dict]:
     """Drop stored state rules a narrowed service can never reach.
 
@@ -204,6 +232,9 @@ def scope_action_states(service: str, states: Any) -> list[dict]:
 
     Attribute-keyed rules are kept — they match an attribute value, not a domain
     state, so the service's state scope has nothing to say about them.
+
+    A rule holding the shipped icon is dropped too, by `is_seeded_icon`: it was
+    written by the panel, not chosen, and keeping it would shadow the theme.
 
     An action with no service at all is left alone. There is nothing to reason
     from, and the empty service name reads as "fixed icon", which would strip
@@ -225,6 +256,9 @@ def scope_action_states(service: str, states: Any) -> list[dict]:
     svc = service_name(service)
     if not svc:
         return rows
+    domain = split_service(service)[0] if "." in service else ""
+    if domain:
+        rows = [s for s in rows if not is_seeded_icon(domain, s)]
     allowed = service_state_scope(svc)
     if allowed is None:
         return rows
@@ -286,7 +320,7 @@ ATTR_VALUE_ACTION_MAP: dict[str, dict[str, str]] = {
 # Maps attribute → its *current* value → the action key a press produces next:
 # the cycle read one step ahead, wrapping at the end. The attribute counterpart
 # of ``NEXT_STATE_MAP``, and the same "show the NEXT value" rule
-# ``attribute_icons:`` in ``icon_defaults.yaml`` already follows — a muted
+# ``attribute_icons:`` in the default theme already follows — a muted
 # speaker draws ``mdi:volume-high`` because pressing unmutes it.
 ATTR_ACTION_MAP: dict[str, dict[str, str]] = {
     attribute: {
@@ -328,7 +362,7 @@ def attr_str(value: Any) -> str:
     """Stringify an attribute value for icon-map lookups.
 
     Home Assistant stores boolean attributes (``is_volume_muted``, ``shuffle``,
-    ``oscillating``) as Python bools, but the icon maps in ``icon_defaults.yaml``
+    ``oscillating``) as Python bools, but the icon maps in ``default.yaml``
     are keyed by the lowercase YAML forms ``"true"`` / ``"false"``. Without this
     normalisation ``str(True)`` yields ``"True"`` and never matches.
     """
@@ -358,6 +392,24 @@ def is_stateless_service(svc: str) -> bool:
     if svc in STATELESS_SERVICES:
         return True
     return bool(re.match(r"^(browse|send|clear)_", svc))
+
+
+# Media transport commands: they say what a press does, not what the player is
+# doing, so a paused player must not draw its Play button as "off". Play/pause
+# and mute still swap their glyph with the state; only the colour stays default.
+_TRANSPORT_MEDIA_SERVICES: frozenset[str] = frozenset({
+    "media_play", "media_pause", "media_stop", "media_play_pause", "volume_mute",
+})
+
+
+def shows_state_color(svc: str) -> bool:
+    """Whether a button running *svc* is drawn in its entity's state colour.
+
+    Stateless services and the media transport commands keep the theme's
+    ``default`` colour: the entity's state says nothing about them.
+    """
+    name = service_name(svc) if svc else ""
+    return not (is_stateless_service(name) or name in _TRANSPORT_MEDIA_SERVICES)
 
 
 def is_state_toggle_service(svc: str) -> bool:

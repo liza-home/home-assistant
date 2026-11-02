@@ -34,16 +34,20 @@ export const STYLES_GUIDE = `
   }
   .guide-head .add-page-dialog-title { flex: 1 1 auto; margin: 0; }
   .guide-head-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
-  .guide-ext,
-  .guide-close {
+  /* The GitHub link is an anchor, so HA's icon button cannot be it; it is
+     drawn in that button's shape so the pair beside the title match. */
+  .guide-ext {
     display: flex; align-items: center; justify-content: center;
-    width: 32px; height: 32px; padding: 0;
-    border: none; border-radius: 50%;
-    background: transparent; cursor: pointer;
-    color: var(--ha-color-on-neutral-normal, var(--liza-muted-text));
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    color: inherit;
+    --mdc-icon-size: 24px;
   }
-  .guide-ext:hover, .guide-close:hover { background: var(--secondary-background-color); }
-  .guide-ext ha-icon, .guide-close ha-icon { --mdc-icon-size: 20px; }
+  .guide-ext:hover { background: var(--secondary-background-color); }
+  .guide-ext:focus-visible {
+    outline: 2px solid var(--primary-color, #03a9f4);
+    outline-offset: -2px;
+  }
   .guide-body {
     display: flex; flex-direction: column; gap: 8px;
     flex: 1 1 auto;
@@ -61,27 +65,13 @@ export const STYLES_GUIDE = `
      a labelled disclosure. */
   .guide-rail-head { display: none; }
   .guide-toc-toggle {
-    display: flex; align-items: center; gap: 8px;
+    display: block;
     width: 100%;
-    border: 1px solid var(--divider-color, #333);
-    border-radius: 8px;
-    background: var(--secondary-background-color);
-    color: var(--primary-text-color, #fff);
-    font-size: var(--liza-font-13);
-    padding: 6px 10px;
-    cursor: pointer;
-    text-align: left;
   }
-  .guide-toc-toggle:hover { border-color: var(--primary-color, #03a9f4); }
-  .guide-toc-toggle:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 2px;
-  }
-  .guide-toc-toggle ha-icon { --mdc-icon-size: 18px; flex: 0 0 auto; }
   /* The section being read. It is the button's whole point when collapsed,
      so it takes the room and the long ones are cut rather than wrapped. */
   .guide-toc-current {
-    flex: 1 1 auto; min-width: 0;
+    display: block; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-weight: 600;
   }
@@ -111,20 +101,8 @@ export const STYLES_GUIDE = `
     padding: 2px 6px 6px;
     background: var(--card-background-color, #1e1e1e);
   }
-  .guide-filter ha-icon { --mdc-icon-size: 18px; flex: 0 0 auto; color: var(--liza-muted-text); }
   .guide-filter-input {
     flex: 1 1 auto; min-width: 0;
-    border: 1px solid var(--divider-color, #333);
-    border-radius: 6px;
-    background: var(--secondary-background-color);
-    color: var(--primary-text-color, #fff);
-    font: inherit;
-    font-size: var(--liza-font-13);
-    padding: 4px 8px;
-  }
-  .guide-filter-input:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 1px;
   }
   .guide-toc-none {
     margin: 4px 8px;
@@ -146,23 +124,7 @@ export const STYLES_GUIDE = `
     padding: 0 2px;
   }
   .guide-hit-step {
-    display: inline-flex; align-items: center; justify-content: center;
-    /* 24px is under the 24x24 target minimum on its own, so the row's own
-       padding is the rest of it; these two sit inside a 32px-tall bar. */
-    width: 24px; height: 24px;
     flex: 0 0 auto;
-    border: none; border-radius: 4px;
-    background: transparent; cursor: pointer;
-    color: var(--liza-muted-text);
-  }
-  .guide-hit-step ha-icon { --mdc-icon-size: 16px; }
-  .guide-hit-step:hover {
-    background: var(--secondary-background-color);
-    color: var(--primary-text-color, #fff);
-  }
-  .guide-hit-step:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 1px;
   }
   .guide-toc-item[hidden] { display: none; }
   .guide-toc-item {
@@ -502,19 +464,7 @@ export const STYLES_GUIDE = `
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .guide-rail-toggle {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 28px; flex: 0 0 auto;
-      border: none; border-radius: 6px;
-      background: none; cursor: pointer;
-      color: var(--liza-muted-text, #9e9e9e);
-      --mdc-icon-size: 18px;
-    }
-    .guide-rail-toggle:hover {
-      background: var(--secondary-background-color, #2a2a2a);
-      color: var(--primary-text-color, #fff);
-    }
-    .guide-rail-toggle:focus-visible {
-      outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px;
+      flex: 0 0 auto;
     }
     /* Folded, the rail keeps only its button: no caption, no column, no
        divider, and the 220px goes back to the screenshots. */
@@ -572,7 +522,7 @@ export const STYLES_GUIDE = `
     z-index: 9;
     background: var(--card-background-color, #1e1e1e);
     border-left: 1px solid var(--divider-color, #333);
-    box-shadow: -4px 0 16px rgba(0,0,0,.25);
+    /* The border alone sets it off, the way HA's own side panes are drawn. */
   }
   /* The squeeze, on the host rather than on the two columns.
      A margin on .view does nothing useful: it is width:100% and border-box,

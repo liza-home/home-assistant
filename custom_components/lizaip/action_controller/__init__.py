@@ -56,6 +56,7 @@ from .helpers import (
     resolve_step_entity,
     subject_for_assign,
     resolve_target_entities,
+    resolve_group_state,
 )
 from .sliders import (
     SLIDER_CONTROLS,
@@ -149,6 +150,7 @@ __all__ = [
     "resolve_step_entity",
     "subject_for_assign",
     "resolve_target_entities",
+    "resolve_group_state",
     "serialized_controls",
     "setup",
     "setup_state_listener",

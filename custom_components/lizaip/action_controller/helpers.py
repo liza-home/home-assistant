@@ -18,6 +18,7 @@ from homeassistant.helpers.target import (
 
 from ..const import DOMAIN
 from ..runtime import _get_store, _resolve_device_id  # noqa: F401
+from ..state_color import ABSENT_STATES, INACTIVE_STATES
 from ._state import _DEFAULT_PAGE_ID, get_current_page
 
 _LOGGER = logging.getLogger(__name__)
@@ -212,16 +213,11 @@ def target_subject_name(step: dict, hass: HomeAssistant) -> str:
     return ""
 
 
-#: States that carry no information about the thing itself.
-_ABSENT_STATES = frozenset({"unavailable", "unknown"})
-
-#: What "not doing anything" looks like across domains, the deny-list HA's own
-#: `stateActive` reduces to. Anything else counts as active, so one member in
-#: it speaks for the group the way a light group is on if any lamp is.
-_INACTIVE_STATES = _ABSENT_STATES | {
-    "off", "closed", "locked", "standby", "idle", "docked", "paused",
-    "not_home", "disarmed",
-}
+#: Shared with the theme's state colours, so a tile drawn "off" and a group
+#: read as off agree on what off is. One member outside the deny-list speaks
+#: for the group, the way a light group is on if any lamp is.
+_ABSENT_STATES = ABSENT_STATES
+_INACTIVE_STATES = INACTIVE_STATES
 
 
 def resolve_group_state(

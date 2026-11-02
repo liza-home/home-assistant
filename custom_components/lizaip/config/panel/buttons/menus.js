@@ -47,14 +47,22 @@ export const ButtonsMenusMixin = {
     // second gesture, and an item that looks like it acts on click is how a
     // user ends up clicking it twice.
     this._openMenu(ev, [
+      // First, as the thing this menu adds; only while long touch is on -- the
+      // remote ignores long-touch actions otherwise -- and only for a button
+      // whose long touch is free.
+      ...(this._longtouchEnabled?.() && this._longtouchFree(this._assignments?.[btn.key]) ? [{
+        cls: "face-menu-add-options",
+        label: this._t("add_options"),
+        run: () => this._addButtonOptions(btn.key),
+      }] : []),
       {
         cls: "face-menu-move",
         label: `${this._commonLabel("move", "Move")}…`,
         run: () => this._beginMove(btn.key),
       },
       {
-        cls: "face-menu-clear",
-        label: this._commonLabel("clear", "Clear"),
+        cls: "face-menu-delete",
+        label: this._commonLabel("delete", "Delete"),
         run: () => {
           // `_selectButton` toggles: called on the button that is already open
           // it *deselects*, and the clear that follows would then find nothing
@@ -84,27 +92,42 @@ export const ButtonsMenusMixin = {
     const page = this._pages?.[idx];
     if (!page) return;
     const isSub = !!page.subpage;
-    // Most used first, the destructive one last and set apart. An ellipsis
+    // The page's kind and its device first; the separator then sets apart
+    // what makes or removes a page, the destructive one last. An ellipsis
     // only where the item asks for a choice before acting; a confirmation
     // does not count.
     this._openMenu(ev, [{
-      cls: "face-menu-duplicate",
-      label: this._t("duplicate_page"),
-      run: () => this._duplicatePage(page),
-    },
-    // Only a page made from a template has a device to change; a blank page's
-    // buttons each name their own.
-    ...(page.template?.type ? [{
-      cls: "face-menu-retarget",
-      label: this._t(page.template.target?.config_entry ? "change_hub" : "change_device"),
-      run: () => this._changeTemplateTarget(page),
-    }] : []), {
       cls: "face-menu-subpage",
       label: isSub ? this._t("make_mainpage") : this._t("make_subpage"),
       run: () => this._setPageSubpage(page, !isSub),
-    }, { separator: true }, {
+    },
+    // A page with a device -- made from a template, or given one -- offers to
+    // change it; a page without one offers to assign one.
+    page.template?.type || page.template?.target?.device ? {
+      cls: "face-menu-retarget",
+      label: this._t(page.template.target?.config_entry ? "change_hub" : "change_device"),
+      run: () => this._changeTemplateTarget(page),
+    } : {
+      cls: "face-menu-assign-device",
+      label: this._t("assign_device"),
+      run: () => this._assignPageDevice(page),
+    },
+    // Save as template, for a page with a device. Commented out for now; the
+    // backend (`save_page_as_template`) and `_savePageAsTemplate` are in place.
+    // ...(page.template?.target?.device ? [{
+    //   cls: "face-menu-save-template",
+    //   label: this._t("save_as_template"),
+    //   run: () => this._savePageAsTemplate(page),
+    // }] : []),
+    { separator: true }, {
+      cls: "face-menu-duplicate",
+      label: this._t("duplicate_page"),
+      run: () => this._duplicatePage(page),
+    }, {
       cls: "face-menu-delete-page",
-      label: this._t("delete_page"),
+      // Home Assistant's own word, as the button menu's Delete uses; the
+      // menu is already about the page.
+      label: this._commonLabel("delete", "Delete"),
       // Looked up when chosen, not when opened: the list can be replaced in
       // between, and a stale index would delete a neighbour.
       run: () => {
@@ -126,7 +149,7 @@ export const ButtonsMenusMixin = {
       const now = this._pageTitleImage(page);
       if (now) parts.push(this._t("label_now_reads", { text: this._esc(now) }));
     }
-    if (page?.template?.type) parts.push(this._t("title_device_hint"));
+    if (page?.template?.type || page?.template?.target?.device) parts.push(this._t("title_device_hint"));
     // `${_device.attr}` reads like an entity variable but is explained above.
     if (this._hasEntityToken((raw || "").replace(/\$\{\s*_device\.\w+\s*\}/g, ""))) {
       parts.push(this._t("variable_hint"));
@@ -155,6 +178,8 @@ export const ButtonsMenusMixin = {
    * same devices are on offer and the same ones are refused.
    */
   async _changeTemplateTarget(page) {
+    // A page no template made was given its device here, and is moved here.
+    if (!page.template?.type) return this._assignPageDevice(page);
     const templateId = page.template.type;
     const meta = (await this._loadTemplates()).find(l => l.id === templateId);
     if (!meta) {
@@ -179,6 +204,149 @@ export const ButtonsMenusMixin = {
       console.warn("[LIZA] Change device failed:", e);
       this._toast(this._t("template_picker_failed"));
     }
+  },
+
+  /** Whether a button's long touch is free for an options page.
+   *
+   * Free when it has none, and also when all it does is open a page that no
+   * longer exists -- what is left of an options page that was deleted. The
+   * remote ignores such a press, and Add options… replaces it.
+   */
+  _longtouchFree(assign) {
+    const steps = assign?.longtouch;
+    if (!Array.isArray(steps) || !steps.length) return true;
+    if (steps.length !== 1) return false;
+    const service = steps[0]?.action || steps[0]?.service || "";
+    if (service !== "lizaip.goto_page") return false;
+    const raw = steps[0]?.data?.page_id;
+    const id = typeof raw === "string" ? parseInt(raw, 10) : raw;
+    if (!Number.isInteger(id)) return false;
+    return !(this._pages || []).some((p) => p.id === id);
+  },
+
+  /** Give a button an options page: a new subpage its long touch opens.
+   *
+   * The subpage is empty for now (later it may come from an options folder,
+   * like a template) and sits right after the page the button is on. That
+   * page stays open: the link arrow shows where the long touch now goes.
+   */
+  async _addButtonOptions(key) {
+    await this._flushAutoSave();
+    const source = this._pages[this._currentPageIdx];
+    if (!source) return;
+    const name = this._buttonSpokenLabel?.(this._assignments?.[key])
+      || this._humaniseButtonKey?.(key) || key;
+    const known = new Set(this._pages.map((p) => p.id));
+    const pages = this._pages.slice();
+    pages.splice(this._currentPageIdx + 1, 0, {
+      image: this._t("options_page_title", { name }), subpage: true,
+    });
+    this._pageOpInFlight = true;
+    try {
+      let result;
+      try {
+        result = await this._hass.callWS({
+          type: "lizaip_config/set_pages", entry_id: this._currentEntry, pages,
+        });
+      } catch (e) {
+        this._toast(this._t("add_page_failed"));
+        return;
+      }
+      const created = (result?.pages || []).find((p) => !known.has(p.id));
+      if (!created) return;
+      this._pages = result.pages;
+      this._currentPageIdx = Math.max(0, this._pages.findIndex((p) => p.id === source.id));
+      this._pageCache[created.id] = {};
+      const record = this._assignments[key] || (this._assignments[key] = {});
+      record.longtouch = [{ action: "lizaip.goto_page", data: { page_id: created.id } }];
+      this._scheduleAutoSave();
+      await this._flushAutoSave();
+      this._render();
+      this._toast(this._t("options_added", { name }));
+    } finally {
+      this._endPageOp();
+    }
+  },
+
+  /** Give a page no template made a device, or move it to another one.
+   *
+   * The same dialog a template page's device is picked in, offering every
+   * device and proposing the one most of the page's buttons act on.
+   */
+  async _assignPageDevice(page) {
+    const moving = !!page.template?.target?.device;
+    const meta = {
+      name: this._pageDisplayLine(page),
+      icon: "mdi:devices",
+      description: this._t("assign_device_desc"),
+      target_selector: { device: {} },
+    };
+    try {
+      await this._showTemplateEntityPicker(null, meta, {
+        confirmLabel: this._t(moving ? "change_device_confirm" : "assign_device_confirm"),
+        busyLabel: this._t("changing"),
+        loadDevices: () => this._loadAllDevices(page.id),
+        onConfirm: async (target) => {
+          const result = await this._bindPageDevice(page, target);
+          return this._t(moving ? "device_changed" : "device_assigned", {
+            name: this._pageDisplayLine(page),
+            n: result?.buttons_changed ?? 0,
+          });
+        },
+      });
+    } catch (e) {
+      console.warn("[LIZA] Assign device failed:", e);
+      this._toast(this._t("template_picker_failed"));
+    }
+  },
+
+  /** Save a page with a device as a template of the user's own.
+   *
+   * Asks for its name, then writes it into `<config>/lizaip/templates`, where
+   * Add page → Template offers it under My Templates; the device is asked for
+   * when a page is made from it.
+   */
+  async _savePageAsTemplate(page) {
+    const { dlg, close } = this._openModal(`
+      <div class="add-page-dialog template-dialog">
+        <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(this._t("save_as_template"))}</h2>
+        <p class="template-dialog-desc">${this._esc(this._t("save_as_template_desc"))}</p>
+        <ha-input appearance="outlined" id="liza-template-name" class="template-name-input" maxlength="80"
+               label="${this._esc(this._t("template_name"))}" autocomplete="off"
+               value="${this._esc(this._pageDisplayLine(page))}"></ha-input>
+        <div class="template-dialog-actions">
+          <ha-button appearance="plain" class="add-page-cancel">${this._esc(this._t("cancel"))}</ha-button>
+          <ha-button variant="brand" class="template-confirm-btn">${this._esc(this._t("save"))}</ha-button>
+        </div>
+      </div>`, { labelledBy: "liza-dlg-title" });
+    const input = dlg.querySelector("#liza-template-name");
+    const confirm = dlg.querySelector(".template-confirm-btn");
+    dlg.querySelector(".add-page-cancel").addEventListener("click", close);
+    const save = async () => {
+      const name = (input.value || "").trim();
+      if (!name) return;
+      confirm.disabled = true;
+      try {
+        const r = await this._hass.callWS({
+          type: "lizaip_config/save_page_as_template",
+          entry_id: this._currentEntry,
+          page_id: page.id,
+          name,
+        });
+        close();
+        this._toast(this._t("template_saved", { name, n: r?.buttons ?? 0 }));
+      } catch (e) {
+        confirm.disabled = false;
+        this._toast(this._t("failed", { error: e?.message || e }));
+      }
+    };
+    confirm.addEventListener("click", save);
+    input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") save(); });
+    // HA's field draws its <input> a microtask after it is created.
+    Promise.resolve(input.updateComplete).then(() => {
+      input.focus?.();
+      input.select?.();
+    });
   },
 
   /** Copy a page, buttons and all, and open the copy.
@@ -215,17 +383,23 @@ export const ButtonsMenusMixin = {
       type: "lizaip_config/update_page", entry_id: this._currentEntry,
       page_id: page.id, subpage: !!makeSub,
     };
+    // Shown at once: the write rewrites every page file before it answers, and
+    // waiting for that left the strip unchanged for a noticeable while.
+    page.subpage = !!makeSub;
+    this._render();
     try {
       const result = await this._hass.callWS(msg);
-      if (result?.pages) this._pages = result.pages;
-      else page.subpage = !!makeSub;
+      // Redrawn again only if the server's list differs from what is shown --
+      // a full render redraws every face, which is the cost avoided above.
+      if (result?.pages && JSON.stringify(result.pages) !== JSON.stringify(this._pages)) {
+        this._pages = result.pages;
+        this._render();
+      }
     } catch (e) {
       // Same stance as the title and colour writes: keep what the user asked
       // for on screen rather than silently snapping back, and let the next
       // load reconcile.
-      page.subpage = !!makeSub;
     }
-    this._render();
   },
 
   /** Build, place and wire a context menu. Shared by the tile and page menus.

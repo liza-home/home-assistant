@@ -38,8 +38,8 @@ from .const import (
 )
 from .config.panel import async_setup_panel, async_setup_config_entry, async_unload_config_entry
 from .config.store import LizaRemoteStore
-from .config_restore import async_setup_config_restore
-from .diagnostics_bundle import async_setup_diagnostics_bundle
+from .config.restore import async_setup_config_restore
+from .config.diagnostics_bundle import async_setup_diagnostics_bundle
 from .imgserv import async_setup_imgserv
 from .shared.logs import device_logger
 from .shared.numbers import to_float
@@ -82,6 +82,26 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
 
+    # The user's own templates, beside the remotes' configuration rather than
+    # inside the integration, so an update leaves them alone.
+    from .config.page_templates import set_user_templates_dir
+    set_user_templates_dir(hass.config.path("lizaip", "templates"))
+
+    # Themes, read the same way and from the same two places fonts are: the
+    # ones shipped with the integration and the user's own. Module state,
+    # because imgserv resolves a `theme=` while drawing and has no `hass`.
+    from .shared.theme import load_themes, set_themes, user_themes_dir
+    themes_dir = user_themes_dir(hass)
+    set_themes(await hass.async_add_executor_job(load_themes, themes_dir))
+
+    # Tools for AI assistants: offered to conversation agents and, through
+    # Home Assistant's MCP Server, to MCP clients. Once per run, like the panel.
+    from .llm_api import async_register_llm_api
+    try:
+        async_register_llm_api(hass)
+    except Exception:  # noqa: BLE001 - assistants are optional; the remote is not
+        _LOGGER.exception("Could not offer lizaIP's tools to AI assistants")
+
     return True
 
 
@@ -118,9 +138,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
     # only this one hook on the device page, so the destination has to be the
     # one that suits arriving without a stated intent, and that is the remote's
     # configuration rather than a troubleshooting tool.
+    #
+    # The entry id is a path segment rather than a query parameter: the panel
+    # routes on its path now, so `?entry_id=` would be rewritten into this form
+    # the moment it rendered. The query form is still understood.
+    #
+    # The short device id is preferred because it is the hex the panel shows in
+    # its toolbar, so a user reading this link can tell which remote it opens
+    # where a 26 character ULID tells them nothing. Either spelling resolves.
     try:
         ha_base = get_url(hass, prefer_external=False)
-        config_url = f"{ha_base}/lizaip?entry_id={entry.entry_id}"
+        slug = entry.unique_id or entry.data.get("device_id") or entry.entry_id
+        config_url = f"{ha_base}/lizaip/{slug}"
         dr.async_get(hass).async_update_device(
             device.id, configuration_url=config_url
         )
@@ -225,7 +254,7 @@ def _watch_queue_targets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     them, and nothing can be added until it is set up.
     """
     from .config.const import CONFIG_CHANGED_EVENT
-    from .media_queue import async_sync_sensors
+    from .config.media_queue import async_sync_sensors
 
     async def _sync(_event=None) -> None:
         await async_sync_sensors(hass)
@@ -280,8 +309,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> b
     """Unload a lizaIP config entry."""
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
-        from .media_queue import async_sync_sensors
-        from .media_queue.sensor import async_release
+        from .config.media_queue import async_sync_sensors
+        from .config.media_queue.sensor import async_release
 
         # The queue sensors this entry added went with its platform; another
         # loaded entry adds them back.

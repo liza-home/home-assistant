@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final
 
-from ..variables_calc import (
+from .variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
     function_token_value,
@@ -16,7 +16,7 @@ from ..variables_calc import (
 from .history import versioned_history_image
 from .icon_urls import is_media_source
 from .i18n import get_ui_language
-from ..media_queue.alias import device_attribute, expand_queue_alias
+from ..config.media_queue.alias import device_attribute, expand_queue_alias
 from .labels import DANGLING_SEPARATOR_RE, LABEL_TOKEN_RE
 
 if TYPE_CHECKING:
@@ -262,7 +262,7 @@ def expand_device_alias(text: Any, template: Any) -> Any:
     ``${_device.volume_level}`` becomes ``${media_player.tv.volume_level}``, an
     ordinary entity variable from then on (``${_device.media_title_prev}`` and
     its three siblings read the player's queue sensor instead, see
-    ``media_queue.alias``) -- read, formatted and watched like
+    ``config.media_queue.alias``) -- read, formatted and watched like
     one; inside a calculation (``${_device.volume_level * 100}``) likewise.
 
     A page bound to a hub has no entity of its own: a bridge is a config entry,
@@ -303,9 +303,58 @@ def page_scope(template: Any) -> Iterator[None]:
         _PAGE_TEMPLATE.reset(token)
 
 
+#: The button being drawn, standing in as the page's binding on a page that has
+#: none: on a plain page ``${_device.media_title}`` on a play/pause button reads
+#: the player that button drives. None outside any :func:`button_scope`.
+_BUTTON_TEMPLATE: ContextVar[Any] = ContextVar("lizaip_button_template", default=None)
+
+
+def _entity_device(hass: HomeAssistant | None, entity_id: str) -> str:
+    if hass is None:
+        return ""
+    try:
+        from homeassistant.helpers import entity_registry as er
+        entry = er.async_get(hass).async_get(entity_id)
+    except Exception:  # noqa: BLE001 - a registry-less caller simply has no device
+        return ""
+    device_id = getattr(entry, "device_id", None)
+    return device_id if isinstance(device_id, str) else ""
+
+
+@contextmanager
+def button_scope(entity_id: str | None, hass: HomeAssistant | None = None) -> Iterator[None]:
+    """Read ``${_device…}`` as the button's own entity where the page has no binding.
+
+    A template page's binding still wins, so its buttons keep reading the
+    page's device. The entity's device comes along, so ``${_device}`` and the
+    device facts read as they would on a page bound to that player.
+    """
+    template = None
+    if isinstance(entity_id, str) and entity_id:
+        target = {"entity_id": entity_id}
+        device_id = _entity_device(hass, entity_id)
+        if device_id:
+            target["device"] = device_id
+        template = {"target": target}
+    token = _BUTTON_TEMPLATE.set(template)
+    try:
+        yield
+    finally:
+        _BUTTON_TEMPLATE.reset(token)
+
+
+def _scoped_template() -> Any:
+    """The binding ``${_device…}`` reads: the page's, else the button's."""
+    page = _PAGE_TEMPLATE.get()
+    if isinstance(page, dict) and _template_target(page):
+        return page
+    button = _BUTTON_TEMPLATE.get()
+    return button if button is not None else page
+
+
 def current_page_template() -> Any:
-    """The template :func:`page_scope` set, None for a plain page or no scope."""
-    template = _PAGE_TEMPLATE.get()
+    """The binding in scope (page, else button), None for a plain page or no scope."""
+    template = _scoped_template()
     return None if template is _NO_PAGE else template
 
 
@@ -531,7 +580,7 @@ def _with_page_device(text: Any, hass: HomeAssistant | None) -> Any:
     """*text* with ``${_device…}`` filled in for the page in scope, if any."""
     if not isinstance(text, str) or "_device" not in text:
         return text
-    template = _PAGE_TEMPLATE.get()
+    template = _scoped_template()
     if template is _NO_PAGE:
         return text
     return substitute_device_token(text, hass, template)

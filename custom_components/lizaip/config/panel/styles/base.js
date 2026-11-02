@@ -14,7 +14,11 @@ export const STYLES_BASE = `
   :host {
     display: block;
     font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
-    --primary-color: var(--primary-color, #03a9f4);
+    /* No --primary-color here. It used to be set to var(--primary-color,
+       #03a9f4), which names itself: CSS treats that cycle as invalid, so the
+       panel's whole subtree lost the theme's accent. Our own rules survived on
+       their per-use fallbacks; HA's elements, which read the token bare,
+       went without it -- a tab group drew no active marker at all. */
 
     /* Text-safe accents for WCAG 1.4.3 (4.5:1). No flat accent passes on both
        HA themes -- the required luminance ranges do not overlap -- so each is
@@ -97,12 +101,17 @@ export const STYLES_BASE = `
        tabs drop a row instead of squeezing the title; both are inert at normal
        text size. Guarded by "the toolbar must not set a fixed height". */
     flex-wrap: wrap;
-    min-height: 56px;
+    /* HA's own measure, border included, so the line under this bar runs on
+       from the sidebar's instead of sitting a pixel below it. */
+    box-sizing: border-box;
+    min-height: var(--header-height, 56px);
     padding: 0 16px;
     background: var(--app-header-background-color, var(--liza-accent-fill));
     color: var(--app-header-text-color, #fff);
     font-size: var(--liza-font-xl);
-    box-shadow: 0 2px 4px rgba(0,0,0,.15);
+    /* No shadow: HA's own header has none, only the border the theme asks
+       for, and a shadow here set the panel apart from the rest of the app. */
+    border-bottom: var(--app-header-border-bottom, none);
     position: sticky;
     top: 0;
     z-index: 10;
@@ -150,10 +159,12 @@ export const STYLES_BASE = `
   .mem-bar.warn .mem-fill { background: #ffb300; }
   .mem-bar.crit .mem-fill { background: #ff5252; }
   .mem-item:has(.mem-bar.unknown) { opacity: 0.6; }
+  /* ha-tab-group draws the tabs and the active marker. Its track is the
+     toolbar's own bottom edge, so it draws none of its own. */
   .toolbar-tabs {
-    display: flex;
-    gap: 4px;
     margin-left: auto;
+    min-width: 0;
+    --track-color: transparent;
   }
   /* Online/offline. The word carries the state, not the dot: colour alone
      fails 1.4.1, announces nothing (1.1.1), and neither hue reaches 3:1 on
@@ -174,6 +185,37 @@ export const STYLES_BASE = `
     border-radius: 999px;
     padding: 3px 10px;
     border: 1px solid transparent;
+    /* The fill is an element rather than a background gradient so the pill
+       keeps its own tint underneath and the width can be animated. */
+    position: relative;
+    overflow: hidden;
+  }
+  /* The charge, drawn left to right. Decoration only -- the percentage beside
+     the word is the reading (1.4.1), and this merely makes it glanceable. */
+  .toolbar-status-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    transition: width .4s ease;
+  }
+  .toolbar-status.has-battery .toolbar-status-fill {
+    width: var(--liza-battery, 0%);
+  }
+  .toolbar-status.online .toolbar-status-fill {
+    background: color-mix(in srgb, #2e7d32 22%, transparent);
+  }
+  .toolbar-status.offline .toolbar-status-fill {
+    background: color-mix(in srgb, #c62828 22%, transparent);
+  }
+  .toolbar-status.unknown .toolbar-status-fill {
+    background: color-mix(in srgb, var(--app-header-text-color, #fff) 18%, transparent);
+  }
+  /* Above the fill, which is painted over the pill's own background. */
+  .toolbar-status-dot, .toolbar-status-text { position: relative; }
+  .toolbar-status-charge {
+    font-variant-numeric: tabular-nums;
   }
   .toolbar-status.online {
     background: color-mix(in srgb, #2e7d32 12%, transparent);
@@ -208,52 +250,12 @@ export const STYLES_BASE = `
     box-sizing: border-box;
   }
 
-  .toolbar-tab {
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    /* Full opacity, not a fade: 70% composited to 3.21:1 on the accent fill,
-       under 1.4.3's 4.5:1, and nothing short of 95% clears it. The active tab
-       is told apart by font-weight and border-bottom-color instead. */
-    color: var(--app-header-text-color, #fff);
-    border-radius: 0;
-    padding: 6px 14px;
-    font-size: var(--liza-font-13);
-    cursor: pointer;
-    transition: color .15s, border-color .15s;
-  }
-  .toolbar-tab:hover { color: var(--app-header-text-color, #fff); border-bottom-color: color-mix(in srgb, var(--app-header-text-color, #fff) 40%, transparent); }
-  .toolbar-tab.active {
-    color: var(--app-header-text-color, #fff);
-    border-bottom-color: var(--app-header-text-color, #fff);
-    font-weight: 500;
-  }
-  /* The gear: no text to pad around, so it is squared up to the same 44px
-     target as the labelled tabs' height on a tablet. */
-  .toolbar-tab-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    padding: 6px 10px;
-    --mdc-icon-size: 20px;
-  }
+  .toolbar-tab ha-icon { --mdc-icon-size: 20px; margin-inline-end: 6px; }
+  /* The gear has no word to sit beside. */
+  .toolbar-tab-icon ha-icon { margin-inline-end: 0; }
 
-  .actions-search {
-    display: flex;
-    align-items: center;
-    background: var(--secondary-background-color, #f5f5f5);
-    border-radius: 16px;
-    padding: 4px 10px;
-    gap: 4px;
-  }
-  .actions-search ha-icon { color: var(--liza-muted-text); }
-  .actions-search .search-input {
-    background: none; border: none; outline: none;
-    color: var(--primary-text-color);
-    font-size: var(--liza-font-13); width: 110px;
-  }
-  .actions-search .search-input::placeholder { color: var(--liza-muted-text); opacity: 1; }
+  /* ha-input-search draws the field, its icon and its clear button. */
+  .actions-search { width: 220px; max-width: 100%; }
 
   .view {
     padding: 16px;
@@ -296,4 +298,9 @@ export const STYLES_BASE = `
   .status-badge.online { color: var(--liza-success-text); }
   .status-badge.offline .dot { background: #f44336; box-shadow: 0 0 4px #f44336; }
   .status-badge.offline { color: var(--liza-danger-text); }
+
+  /* Every picture the remote is sent, wherever the panel shows one. The panel
+     asks imgserv to keep the alpha, so the backdrop is the panel's to supply:
+     on a dark page that is the black screen the remote itself draws on. */
+  :host(.liza-dark) .liza-dev-img { background: #000; }
 `;
