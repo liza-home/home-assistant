@@ -70,7 +70,7 @@ PAGE_ID_SCHEMA = vol.All(int, vol.Range(min=MIN_PAGE_ID, max=MAX_PAGE_ID))
 #: clearing, which the handlers already read as "no assignment".
 ASSIGNMENTS_SCHEMA = vol.Schema({str: vol.Any(dict, None)})
 
-#: ``[{id?, image, hash, ...}]``. An id, when sent, must be a real page id;
+#: ``[{id?, title, hash, ...}]``. An id, when sent, must be a real page id;
 #: a page without one is new and is given one.
 PAGES_SCHEMA = vol.All(
     list, [vol.Schema({vol.Optional("id"): vol.Any(PAGE_ID_SCHEMA, None)}, extra=vol.ALLOW_EXTRA)],
@@ -175,6 +175,11 @@ def media_id_title(media_content_id) -> str:
 #: stay five buttons rather than one shared action.
 PAYLOAD_IDENTITY_KEYS = ("media_content_id", "source", "command", "ir_code", "button")
 
+#: Identity keys added later, appended only when present so that every identity
+#: written before them reads the same. ``payload`` is what an ``mqtt.publish``
+#: sends, which is how a Hisense TV's keys are pressed.
+PAYLOAD_IDENTITY_EXTRA_KEYS = ("payload",)
+
 
 def drop_redundant_subject(step: Any) -> bool:
     """Remove ``data.entity_id`` when ``target`` already names the same entity.
@@ -210,6 +215,7 @@ def payload_identity(data) -> str:
     """
     flat = normalise_payload(data)
     parts = [str(flat.get(key) or "") for key in PAYLOAD_IDENTITY_KEYS]
+    parts += [str(flat[key]) for key in PAYLOAD_IDENTITY_EXTRA_KEYS if flat.get(key)]
     return "|".join(parts) if any(parts) else ""
 
 
@@ -217,7 +223,7 @@ def payload_identity(data) -> str:
 #: action-library entry is behaviour-only — its icon/name belong to whichever
 #: button happened to create it, so no other button may borrow them.
 PAYLOAD_SERVICES = frozenset(
-    {"play_media", "select_source", "select_sound_mode", "send_command", "button"}
+    {"play_media", "select_source", "select_sound_mode", "send_command", "button", "publish"}
 )
 
 #: Shown when we genuinely do not know what a button does — never a real default.

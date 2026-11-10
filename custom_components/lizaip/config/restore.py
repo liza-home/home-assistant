@@ -54,6 +54,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from ..const import DOMAIN
+from .access import holds_any_entry, is_admin_user
 from .store import YAML_DIR
 from ..shared.theme import USER_THEMES_SUBDIR
 
@@ -290,7 +291,7 @@ def _loadable_pages(files: dict[str, bytes]) -> list[dict[str, Any]]:
     configuration and leave the remote without it. Refusing here is the only
     place that can still say no.
 
-    Each page is returned as its id, its title-image spec -- the only name a
+    Each page is returned as its id, its title -- the only name a
     page has, which the panel turns into the title it shows everywhere -- how
     many of its buttons are configured, and the icon each of those buttons
     carries, which is what the panel draws the page's face from.
@@ -309,11 +310,12 @@ def _loadable_pages(files: dict[str, bytes]) -> list[dict[str, Any]]:
                 raise RestoreError("bad_page", f"{rel} is not a page file")
             if not isinstance(doc, dict):
                 raise RestoreError("bad_page", f"{rel} does not hold a page")
-            image = doc.get("image")
+            # An archive from before the title was called that names it `image`.
+            title = doc.get("title", doc.get("image"))
             buttons = doc.get("buttons")
             pages.append({
                 "id": page_id,
-                "image": image if isinstance(image, str) else "",
+                "title": title if isinstance(title, str) else "",
                 # What the preview says about a page beyond its name: a page
                 # with nothing on it looks exactly like a full one in a list.
                 "buttons": sum(
@@ -368,7 +370,7 @@ def _page_icons(buttons: Any, library: dict[Any, str]) -> dict[str, str]:
     for key, value in buttons.items():
         if not isinstance(value, dict) or not value:
             continue
-        image = value.get("image")
+        image = value.get("icon", value.get("image"))
         icon = image if isinstance(image, str) and image.strip() else library.get(
             value.get("action_id"), ""
         )
@@ -472,6 +474,16 @@ def _add_themes(base_dir: str, themes: dict[str, bytes]) -> None:
             continue
         with open(path, "wb") as handle:
             handle.write(raw)
+
+
+def archive_carries_themes(files: dict[str, bytes]) -> bool:
+    """Whether *files* would add to the shared theme library.
+
+    A theme is installation-wide: it is written beside the device folders, and
+    one named ``default.yaml`` stands in for the shipped default everywhere —
+    outside the one remote an assigned user was given.
+    """
+    return bool(_split_themes(files)[1])
 
 
 def _apply(base_dir: str, device_id: str, files: dict[str, bytes]) -> None:
@@ -586,9 +598,11 @@ def async_take_upload(hass: HomeAssistant, token: str) -> dict[str, Any] | None:
 class LizaIPConfigRestoreView(HomeAssistantView):
     """Take an uploaded configuration archive and say what is in it.
 
-    Admin-only, like the download it undoes. Nothing is written here: the view
-    parses and parks, and the WebSocket command the panel sends after the user
-    confirms is what touches the configuration.
+    Nothing is written here: the view parses and parks, and the WebSocket
+    command the panel sends after the user confirms is what touches the
+    configuration. So this asks only for the floor -- that the caller holds a
+    remote at all -- and ``ws_restore_config`` makes the real check against the
+    remote the user picked to restore onto.
     """
 
     url = RESTORE_URL
@@ -597,10 +611,11 @@ class LizaIPConfigRestoreView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Parse the posted ZIP and answer with its summary and a token."""
-        if not request["hass_user"].is_admin:
+        hass = request.app["hass"]
+        user = request["hass_user"]
+        if not holds_any_entry(hass, user):
             return web.Response(status=401)
 
-        hass = request.app["hass"]
         # Chunked, because aiohttp's `read(n)` returns what has arrived rather
         # than n bytes, and a ZIP cut short reads as "not a ZIP". The cap is
         # measured here, not taken from the uploader's Content-Length.
@@ -631,6 +646,18 @@ class LizaIPConfigRestoreView(HomeAssistantView):
             return self.json(
                 {"code": "unreadable", "message": f"{err.__class__.__name__}: {err}"},
                 status_code=400,
+            )
+
+        if not is_admin_user(user) and archive_carries_themes(parsed["files"]):
+            return self.json(
+                {
+                    "code": "themes_admin_only",
+                    "message": (
+                        "This archive carries a theme, which every remote "
+                        "shares. Ask an administrator to restore it."
+                    ),
+                },
+                status_code=403,
             )
 
         token = async_store_upload(hass, parsed)

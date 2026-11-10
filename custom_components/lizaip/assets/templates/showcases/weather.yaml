@@ -24,54 +24,56 @@
 # not an attribute any more -- Home Assistant hands it out on request -- so a
 # tile showing tomorrow needs a template helper that asks for it.
 
+version: 2
 name: "Weather"
 icon: mdi:weather-partly-snowy-rainy
-page_image: "mdi:weather-partly-cloudy text:Weather"
 description: The weather outside as icons, words, sums and fill levels — no helpers
-unbound: true
 
 placeholders:
   weather:
     source: entities
     spec: {domain: weather}
 
-buttons:
-  button_1:
-    label: "${{@weather[1].entity_id}}"
-    image: "${{@weather[1].entity_id}}"
-  button_2:
-    label: "${{@weather[1].entity_id}.friendly_name}: ${{@weather[1].entity_id}}"
-    image: "text:${{@weather[1].entity_id}}"
-  button_3:
-    label: "Now ${{@weather[1].entity_id}.temperature} ${{@weather[1].entity_id}.temperature_unit}"
-    image: "text:${round({@weather[1].entity_id}.temperature)}°"
-  button_4:
-    label: "${round({@weather[1].entity_id}.temperature * 9 / 5 + 32, 1)} °F"
-    image: "text:${round({@weather[1].entity_id}.temperature * 9 / 5 + 32)}°F?font_size=24"
+pages:
+  weather:
+    title: "mdi:weather-partly-cloudy text:Weather"
+    buttons:
+      button_1:
+        icon: "${{@weather[1].entity_id}}"
+        tooltip: "${{@weather[1].entity_id}}"
+      button_2:
+        icon: "text:${{@weather[1].entity_id}}"
+        tooltip: "${{@weather[1].entity_id}.friendly_name}: ${{@weather[1].entity_id}}"
+      button_3:
+        icon: "text:${round({@weather[1].entity_id}.temperature)}°"
+        tooltip: "Now ${{@weather[1].entity_id}.temperature} ${{@weather[1].entity_id}.temperature_unit}"
+      button_4:
+        icon: "text:${round({@weather[1].entity_id}.temperature * 9 / 5 + 32)}°F?font_size=24"
+        tooltip: "${round({@weather[1].entity_id}.temperature * 9 / 5 + 32, 1)} °F"
 
-  button_5:
-    label: "Humidity ${{@weather[1].entity_id}.humidity}%"
-    image: "mdi:water-percent ${{@weather[1].entity_id}.humidity}%"
-  button_6:
-    label: "Humidity ${{@weather[1].entity_id}.humidity}%"
-    image: "mdi:water?percent=${round({@weather[1].entity_id}.humidity)}"
+      button_5:
+        icon: "mdi:water-percent ${{@weather[1].entity_id}.humidity}%"
+        tooltip: "Humidity ${{@weather[1].entity_id}.humidity}%"
+      button_6:
+        icon: "mdi:water?percent=${round({@weather[1].entity_id}.humidity)}"
+        tooltip: "Humidity ${{@weather[1].entity_id}.humidity}%"
 
-  button_7:
-    label: "Wind ${{@weather[1].entity_id}.wind_speed} ${{@weather[1].entity_id}.wind_speed_unit}"
-    image: "mdi:weather-windy ${round({@weather[1].entity_id}.wind_speed)}"
-  button_8:
-    label: "Wind from ${round({@weather[1].entity_id}.wind_bearing)}°"
-    image: "mdi:compass-outline ${round({@weather[1].entity_id}.wind_bearing)}°"
-  button_9:
-    label: "Pressure ${{@weather[1].entity_id}.pressure} ${{@weather[1].entity_id}.pressure_unit}"
-    image: "mdi:gauge ${round({@weather[1].entity_id}.pressure)}"
-  button_10:
-    label: "Cloud cover ${{@weather[1].entity_id}.cloud_coverage}%"
-    image: "mdi:cloud?percent=${round({@weather[1].entity_id}.cloud_coverage)}"
+      button_7:
+        icon: "mdi:weather-windy ${round({@weather[1].entity_id}.wind_speed)}"
+        tooltip: "Wind ${{@weather[1].entity_id}.wind_speed} ${{@weather[1].entity_id}.wind_speed_unit}"
+      button_8:
+        icon: "mdi:compass-outline ${round({@weather[1].entity_id}.wind_bearing)}°"
+        tooltip: "Wind from ${round({@weather[1].entity_id}.wind_bearing)}°"
+      button_9:
+        icon: "mdi:gauge ${round({@weather[1].entity_id}.pressure)}"
+        tooltip: "Pressure ${{@weather[1].entity_id}.pressure} ${{@weather[1].entity_id}.pressure_unit}"
+      button_10:
+        icon: "mdi:cloud?percent=${round({@weather[1].entity_id}.cloud_coverage)}"
+        tooltip: "Cloud cover ${{@weather[1].entity_id}.cloud_coverage}%"
 
-  button_11:
-    label: "${round(abs({@weather[1].entity_id}.temperature - 21), 1)}° from a comfortable 21°"
-    image: "mdi:sofa ${round(abs({@weather[1].entity_id}.temperature - 21))}°"
-  button_12:
-    label: "Dew point ${{@weather[1].entity_id}.dew_point}°"
-    image: "mdi:water-thermometer ${round({@weather[1].entity_id}.dew_point)}°"
+      button_11:
+        icon: "mdi:sofa ${round(abs({@weather[1].entity_id}.temperature - 21))}°"
+        tooltip: "${round(abs({@weather[1].entity_id}.temperature - 21), 1)}° from a comfortable 21°"
+      button_12:
+        icon: "mdi:water-thermometer ${round({@weather[1].entity_id}.dew_point)}°"
+        tooltip: "Dew point ${{@weather[1].entity_id}.dew_point}°"

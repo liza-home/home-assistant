@@ -60,7 +60,7 @@
           },
           "sliders": {
             "name": "Opciones de los deslizadores",
-            "description": "Un deslizador informa continuamente mientras se toca y no se puede pedir al dispositivo que envíe menos. Estos límites reducen ese flujo. El toque y la soltura se procesan siempre de inmediato, de modo que el inicio y la posición final nunca se retrasan. Ponga ambos a 0 para procesar cada cambio.",
+            "description": "Un deslizador informa continuamente mientras se toca y no se puede pedir al dispositivo que envíe menos. Estos límites reducen ese flujo. El toque y la soltura se procesan siempre de inmediato, de modo que el inicio y la posición final nunca se retrasan. Pon ambos a 0 para procesar cada cambio.",
             "data": {
               "slider_min_interval_ms": "Intervalo de actualización del deslizador"
             },
@@ -153,6 +153,20 @@
         }
       }
     },
+    "launch_app": {
+      "name": "Abrir app",
+      "description": "Abre una app en un televisor. Un televisor Samsung se controla con su propia API, porque ignora la orden de abrir que envía la integración Samsung de Home Assistant; cualquier otro reproductor recibe media_player.play_media.",
+      "fields": {
+        "entity_id": {
+          "name": "Televisor",
+          "description": "Los reproductores multimedia en los que abrir la app."
+        },
+        "app_id": {
+          "name": "App",
+          "description": "El id de la app en ese televisor, p. ej. 3201907018807 para Netflix en un televisor Samsung."
+        }
+      }
+    },
     "refresh_dynamic_sources": {
       "name": "Actualizar fuentes dinámicas",
       "description": "Vuelve a resolver los enlaces dinámicos de plantilla y envía los cambios a los mandos afectados. Las páginas cuyo contenido no ha cambiado no generan tráfico hacia el dispositivo.",
@@ -180,6 +194,16 @@
         "config_entry_id": {
           "name": "Dispositivo",
           "description": "Dispositivo que se va a reconstruir. Si se omite, se reconstruyen todos los dispositivos lizaIP."
+        }
+      }
+    },
+    "send_ir": {
+      "name": "Enviar IR",
+      "description": "Hace que un mando transmita un código infrarrojo. Sin destino, lo envían todos los mandos lizaIP.",
+      "fields": {
+        "ir_blob": {
+          "name": "Código IR",
+          "description": "El código infrarrojo que se transmite, codificado en base64."
         }
       }
     }
@@ -250,22 +274,45 @@
     },
     "log_reset_no_modules": {
       "message": "El dispositivo no informó de ningún módulo que restablecer."
+    },
+    "app_not_started": {
+      "message": "{entity_id} no ha abierto la app {app_id}."
+    },
+    "invalid_ir_blob": {
+      "message": "El código IR no es base64 válido."
     }
   },
-  "action_labels": {
+  "button_tooltips": {
+    "albums": "Álbumes",
+    "apps": "Aplicaciones",
+    "audiobooks": "Audiolibros",
     "back": "Atrás",
     "back_menu": "Atrás / Menú",
+    "brighter": "Más brillo",
+    "brightness": "Brillo",
+    "candle": "Vela",
     "close": "Cerrar",
+    "colour_temperature": "Temperatura de color",
+    "cool_white": "Blanco frío",
+    "daylight": "Luz diurna",
+    "digits": "Dígitos",
+    "dimmer": "Menos brillo",
     "down": "Abajo",
+    "exit": "Salir",
     "forward": "Adelante",
     "home": "Inicio",
     "input": "Entrada",
+    "inputs": "Entradas",
     "instant_replay": "Repetición",
     "left": "Izquierda",
     "lock": "Bloquear",
     "menu": "Menú",
+    "more": "Más",
     "mute": "Silenciar",
+    "neutral_white": "Blanco neutro",
     "next": "Siguiente",
+    "night_light": "Luz nocturna",
+    "now_playing": "Reproduciendo",
     "off": "Apagado",
     "ok": "OK",
     "on": "Encendido",
@@ -276,8 +323,12 @@
     "pause": "Pausa",
     "play": "Reproducir",
     "play_pause": "Reproducir / Pausa",
+    "playlists": "Listas de reproducción",
+    "podcasts": "Pódcasts",
     "power": "Encendido",
     "previous": "Anterior",
+    "radio": "Radio",
+    "remote": "Mando",
     "repeat_all": "Repetir todo",
     "repeat_off": "Repetir desactivado",
     "repeat_one": "Repetir una",
@@ -285,19 +336,27 @@
     "right": "Derecha",
     "search": "Buscar",
     "select": "Seleccionar",
+    "shuffle": "Aleatorio",
     "shuffle_off": "Aleatorio desactivado",
     "shuffle_on": "Aleatorio activado",
+    "sleep_in": "Apagar en",
+    "sleep_timer_off": "Temporizador apagado",
     "source": "Fuente",
     "stop": "Stop",
     "toggle": "Alternar",
     "tools_more": "Herramientas / Más",
     "top_menu": "Menú principal",
+    "tracks": "Canciones",
     "unlock": "Desbloquear",
     "unmute": "Activar sonido",
     "up": "Arriba",
     "voice_assistant": "Asistente de voz",
     "volume": "Volumen",
     "volume_down": "Bajar volumen",
-    "volume_up": "Subir volumen"
+    "volume_up": "Subir volumen",
+    "warm_white": "Blanco cálido"
+  },
+  "page_titles": {
+    "welcome": "¡bienvenido!"
   }
 }

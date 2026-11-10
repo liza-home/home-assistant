@@ -1,16 +1,13 @@
 # Blank page — a page with nothing on it, offered like any other template.
 #
 # It sits at the root rather than in a folder, which is what puts it in front
-# of them on the add-page dialog's first screen. `unbound: true` means there is
-# no device to ask for, so a click adds it straight away; no buttons means the
-# page arrives empty. The `_key` names point at the panel's translation table
+# of them on the add-page dialog's first screen. No `target_selector` means there
+# is no device to ask for, so a click adds it straight away; no `pages:` means
+# one empty page with no title. The `translate:` keys point at the panel's translation table
 # (`config/panel/lizaip-i18n.js`), so it keeps the five translations the
 # hard-coded card already had.
 
-name_key: blank_page
-description_key: configure_manually
+version: 2
+name: {translate: blank_page}
+description: {translate: configure_manually}
 icon: mdi:file-plus-outline
-# The card's mark only, not the page's: a blank page reaches the remote with
-# nothing on it, the way the hard-coded option left it.
-page_image: ""
-unbound: true

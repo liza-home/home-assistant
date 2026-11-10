@@ -18,6 +18,7 @@ from ..const import SIGNAL_ICON_UPDATE, SIGNAL_PREDICTED_UPDATE
 from ..config.const import step_service
 from ..shared.services import catchall_state_icon
 from ..shared.logs import device_logger
+from ..shared.i18n import get_ui_language, language_scope
 from ..shared.tokens import button_scope, page_scope, resolve_image_tokens
 from ..shared.icon_urls import resolve_icon_url
 from ..state_icon import (
@@ -239,7 +240,7 @@ async def setup_state_listener(
                 # on a plain page the button's own entity.
                 with page_scope(template), button_scope(
                     targets[0] if targets else None, hass,
-                ):
+                ), language_scope(get_ui_language(hass, entry)):
                     # A toggle rule outranks every other source: it is
                     # the only one that knows the button is about to do
                     # something other than its declared action, so letting
@@ -253,7 +254,7 @@ async def setup_state_listener(
                     # A label with a placeholder reads the entity, so
                     # it must be recomputed whenever that entity moves,
                     # even when the glyph never changes.
-                    dynamic_label = "${" in str(assign.get("label") or "")
+                    dynamic_tooltip = "${" in str(assign.get("tooltip") or "")
                     if rule_glyph or action_icon:
                         state_icons = assign.get("state_icons") or {}
                         override = state_icons.get(state.state) or catchall_state_icon(
@@ -278,7 +279,7 @@ async def setup_state_listener(
                             assign, state, hass, entry,
                             names.get(assign.get("action_id")),
                         )
-                    elif is_styleable(eid) or dynamic_label:
+                    elif is_styleable(eid) or dynamic_tooltip:
                         # Colour-only: resolve the glyph through the *same*
                         # function the sync used, so a recolour cannot
                         # become a redraw.
@@ -295,7 +296,7 @@ async def setup_state_listener(
                         tooltip = _compute_next_state_tooltip(
                             assign, state, hass, entry,
                             names.get(assign.get("action_id")),
-                        ) if dynamic_label else None
+                        ) if dynamic_tooltip else None
                     else:
                         # Nothing to say: no rule, no state glyph, no
                         # tint this entity could carry, and a label that

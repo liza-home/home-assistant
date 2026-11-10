@@ -6,7 +6,8 @@
 # without them hides the card and never counts it. The `_key` names point at
 # the panel's translation table (`config/panel/lizaip-i18n.js`).
 
-name_key: random_pages
-description_key: random_pages_desc
+version: 2
+name: {translate: random_pages}
+description: {translate: random_pages_desc}
 icon: mdi:dice-multiple
 action: random_pages

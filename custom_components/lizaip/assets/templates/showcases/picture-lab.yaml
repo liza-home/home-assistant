@@ -20,52 +20,54 @@
 #
 #
 
+version: 2
 name: "Picture lab"
 icon: mdi:palette-swatch-variant
-page_image: "logo:hue mdi:palette text:Picture lab"
 description: Logos, tints, backgrounds, state colours and fill levels side by side
 
 # Bound to nothing: every tile here is a fixed picture, so the page is added
 # straight away, without asking for a device.
-unbound: true
 
-buttons:
-  button_1:
-    label: Logo in brand colours
-    image: logo:spotify
-  button_2:
-    label: Logo tinted with fg=yellow
-    image: logo:spotify?fg=yellow
-  button_3:
-    label: Words on bg=blue
-    image: text:Hi?bg=blue
-  button_4:
-    label: Words at font_size=40
-    image: text:Big?font_size=40
+pages:
+  picture-lab:
+    title: "logo:hue mdi:palette text:Picture lab"
+    buttons:
+      button_1:
+        icon: logo:spotify
+        tooltip: Logo in brand colours
+      button_2:
+        icon: logo:spotify?fg=yellow
+        tooltip: Logo tinted with fg=yellow
+      button_3:
+        icon: text:Hi?bg=blue
+        tooltip: Words on bg=blue
+      button_4:
+        icon: text:Big?font_size=40
+        tooltip: Words at font_size=40
 
-  button_5:
-    label: State colour fg=on
-    image: mdi:power?fg=on
-  button_6:
-    label: State colour fg=off
-    image: mdi:power?fg=off
-  button_7:
-    label: State colour fg=unavailable
-    image: mdi:power?fg=unavailable
-  button_8:
-    label: Fill level percent=30
-    image: mdi:battery?percent=30
+      button_5:
+        icon: mdi:power?fg=on
+        tooltip: State colour fg=on
+      button_6:
+        icon: mdi:power?fg=off
+        tooltip: State colour fg=off
+      button_7:
+        icon: mdi:power?fg=unavailable
+        tooltip: State colour fg=unavailable
+      button_8:
+        icon: mdi:battery?percent=30
+        tooltip: Fill level percent=30
 
-  button_9:
-    label: Two icons sharing a tile
-    image: mdi:play mdi:pause
-  button_10:
-    label: An icon with words under it
-    image: mdi:sofa Lounge
-  button_11:
-    label: Half-transparent tint fg=FF2D5580
-    image: mdi:heart?fg=FF2D5580
+      button_9:
+        icon: mdi:play mdi:pause
+        tooltip: Two icons sharing a tile
+      button_10:
+        icon: mdi:sofa Lounge
+        tooltip: An icon with words under it
+      button_11:
+        icon: mdi:heart?fg=FF2D5580
+        tooltip: Half-transparent tint fg=FF2D5580
 
-  button_12:
-    label: "Sun ${round(sun.sun.elevation)}° above the horizon"
-    image: "mdi:white-balance-sunny ${round(sun.sun.elevation)}°"
+      button_12:
+        icon: "mdi:white-balance-sunny ${round(sun.sun.elevation)}°"
+        tooltip: "Sun ${round(sun.sun.elevation)}° above the horizon"

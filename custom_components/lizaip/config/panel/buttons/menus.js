@@ -47,10 +47,10 @@ export const ButtonsMenusMixin = {
     // second gesture, and an item that looks like it acts on click is how a
     // user ends up clicking it twice.
     this._openMenu(ev, [
-      // First, as the thing this menu adds; only while long touch is on -- the
-      // remote ignores long-touch actions otherwise -- and only for a button
-      // whose long touch is free.
-      ...(this._longtouchEnabled?.() && this._longtouchFree(this._assignments?.[btn.key]) ? [{
+      // First, as the thing this menu adds; only while the feature is on, for
+      // a button whose long touch is free and whose device an options
+      // template fits.
+      ...(this._canAddOptions(this._assignments?.[btn.key]) ? [{
         cls: "face-menu-add-options",
         label: this._t("add_options"),
         run: () => this._addButtonOptions(btn.key),
@@ -112,13 +112,6 @@ export const ButtonsMenusMixin = {
       label: this._t("assign_device"),
       run: () => this._assignPageDevice(page),
     },
-    // Save as template, for a page with a device. Commented out for now; the
-    // backend (`save_page_as_template`) and `_savePageAsTemplate` are in place.
-    // ...(page.template?.target?.device ? [{
-    //   cls: "face-menu-save-template",
-    //   label: this._t("save_as_template"),
-    //   run: () => this._savePageAsTemplate(page),
-    // }] : []),
     { separator: true }, {
       cls: "face-menu-duplicate",
       label: this._t("duplicate_page"),
@@ -146,7 +139,7 @@ export const ButtonsMenusMixin = {
     const usesDevice = /\$\{[^{}]*(?<![\w.])_device\b/.test(raw || "");
     const parts = [];
     if (usesDevice || this._hasEntityToken(raw)) {
-      const now = this._pageTitleImage(page);
+      const now = this._resolvedPageTitle(page);
       if (now) parts.push(this._t("label_now_reads", { text: this._esc(now) }));
     }
     if (page?.template?.type || page?.template?.target?.device) parts.push(this._t("title_device_hint"));
@@ -201,7 +194,7 @@ export const ButtonsMenusMixin = {
         },
       });
     } catch (e) {
-      console.warn("[LIZA] Change device failed:", e);
+      console.warn("[lizaIP] Change device failed:", e);
       this._toast(this._t("template_picker_failed"));
     }
   },
@@ -224,45 +217,104 @@ export const ButtonsMenusMixin = {
     return !(this._pages || []).some((p) => p.id === id);
   },
 
+  /** The entity a button acts on, or "" for none. */
+  _buttonEntity(assign) {
+    return this._getTargetEntityFromConfig?.(assign?.config) || "";
+  },
+
+  /** Whether the menu offers Add options… for *assign*. Read from the answers
+   *  `_prefetchOptionsFit` keeps, since a menu opens at once: a button not
+   *  asked about yet goes without until it has been. */
+  _canAddOptions(assign) {
+    const entity = this._buttonEntity(assign);
+    return Boolean(this._optionsFeatureEnabled?.() && entity
+      && this._longtouchFree(assign) && this._optionsFit?.get(entity) === true);
+  },
+
+  /** Ask once per entity whether an options template fits it, for every
+   *  button on the open page, so the menu can answer without waiting. */
+  _prefetchOptionsFit() {
+    if (!this._optionsFeatureEnabled?.() || !this._hass?.callWS) return;
+    const known = (this._optionsFit ||= new Map());
+    const wanted = [...new Set(Object.values(this._assignments || {})
+      .map((a) => this._buttonEntity(a)))].filter((e) => e && !known.has(e));
+    if (!wanted.length) return;
+    // Marked as asked now, so a redraw while the reply is out does not ask again.
+    wanted.forEach((e) => known.set(e, null));
+    this._hass.callWS({ type: "lizaip_config/options_fit", entity_ids: wanted })
+      .then((r) => wanted.forEach((e) => known.set(e, r?.fits?.[e] === true)))
+      .catch((e) => {
+        console.debug("[lizaIP] options_fit:", e);
+        wanted.forEach((x) => known.set(x, false));
+      });
+  },
+
   /** Give a button an options page: a new subpage its long touch opens.
    *
-   * The subpage is empty for now (later it may come from an options folder,
-   * like a template) and sits right after the page the button is on. That
-   * page stays open: the link arrow shows where the long touch now goes.
+   * The page is made from an options template the button's own device
+   * answers. It sits right after the page the button is on, which stays open:
+   * the link arrow shows where the long touch now goes.
    */
   async _addButtonOptions(key) {
     await this._flushAutoSave();
     const source = this._pages[this._currentPageIdx];
     if (!source) return;
-    const name = this._buttonSpokenLabel?.(this._assignments?.[key])
-      || this._humaniseButtonKey?.(key) || key;
-    const known = new Set(this._pages.map((p) => p.id));
-    const pages = this._pages.slice();
-    pages.splice(this._currentPageIdx + 1, 0, {
-      image: this._t("options_page_title", { name }), subpage: true,
+    const assign = this._assignments?.[key];
+    await this._showAddPageDialog({
+      key,
+      pageId: source.id,
+      name: this._buttonSpokenLabel?.(assign) || this._humaniseButtonKey?.(key) || key,
+      // What the button already acts on, so a template that fits it can be
+      // bound without asking which device all over again.
+      entity: this._buttonEntity(assign),
     });
+  },
+
+  /** Write the subpage the walk chose, and point the long touch at it.
+   *
+   * `create` already carries the subpage flag, the way back and the place
+   * beside the button's own page, so all that is left is the long touch.
+   */
+  async _addOptionsPage({ key, pageId, name }, create) {
     this._pageOpInFlight = true;
     try {
+      // The map of the button's own page. Switching pages while the page is
+      // being made replaces `this._assignments`, and saving that under this
+      // page's id would put another page's buttons on it.
+      const assignments = this._assignments;
       let result;
       try {
-        result = await this._hass.callWS({
-          type: "lizaip_config/set_pages", entry_id: this._currentEntry, pages,
-        });
+        result = await create();
       } catch (e) {
+        console.warn("[lizaIP] Add options page failed:", e);
         this._toast(this._t("add_page_failed"));
-        return;
+        return null;
       }
-      const created = (result?.pages || []).find((p) => !known.has(p.id));
-      if (!created) return;
+      const created = result?.page_id;
+      if (created == null || !result?.pages) return null;
+      const here = this._assignments === assignments;
+      // Where the strip stays: the button's page, or whichever one was
+      // switched to while the page was being made.
+      const open = here ? pageId : this._currentPageId;
       this._pages = result.pages;
-      this._currentPageIdx = Math.max(0, this._pages.findIndex((p) => p.id === source.id));
-      this._pageCache[created.id] = {};
-      const record = this._assignments[key] || (this._assignments[key] = {});
-      record.longtouch = [{ action: "lizaip.goto_page", data: { page_id: created.id } }];
-      this._scheduleAutoSave();
-      await this._flushAutoSave();
+      const at = this._pages.findIndex((p) => p.id === open);
+      if (at >= 0) this._currentPageIdx = at;
+      const record = assignments[key] || (assignments[key] = {});
+      record.longtouch = [{ action: "lizaip.goto_page", data: { page_id: created } }];
+      // The page is no longer the open one: what it is read from next must
+      // hold the long touch too.
+      if (!here) this._pageCache[pageId] = JSON.parse(JSON.stringify(assignments));
+      // Only this page's buttons: a global save would post the action library
+      // as it was read before the template wrote to it, and the backend
+      // replaces that library wholesale.
+      await this._saveAssignments(assignments, pageId);
+      // The template wrote action-library entries and a page the strip has no
+      // thumbnail for yet; both are read before the first draw.
+      await this._loadActions();
+      await this._loadGlobalUsage();
       this._render();
       this._toast(this._t("options_added", { name }));
+      return created;
     } finally {
       this._endPageOp();
     }
@@ -295,59 +347,11 @@ export const ButtonsMenusMixin = {
         },
       });
     } catch (e) {
-      console.warn("[LIZA] Assign device failed:", e);
+      console.warn("[lizaIP] Assign device failed:", e);
       this._toast(this._t("template_picker_failed"));
     }
   },
 
-  /** Save a page with a device as a template of the user's own.
-   *
-   * Asks for its name, then writes it into `<config>/lizaip/templates`, where
-   * Add page → Template offers it under My Templates; the device is asked for
-   * when a page is made from it.
-   */
-  async _savePageAsTemplate(page) {
-    const { dlg, close } = this._openModal(`
-      <div class="add-page-dialog template-dialog">
-        <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(this._t("save_as_template"))}</h2>
-        <p class="template-dialog-desc">${this._esc(this._t("save_as_template_desc"))}</p>
-        <ha-input appearance="outlined" id="liza-template-name" class="template-name-input" maxlength="80"
-               label="${this._esc(this._t("template_name"))}" autocomplete="off"
-               value="${this._esc(this._pageDisplayLine(page))}"></ha-input>
-        <div class="template-dialog-actions">
-          <ha-button appearance="plain" class="add-page-cancel">${this._esc(this._t("cancel"))}</ha-button>
-          <ha-button variant="brand" class="template-confirm-btn">${this._esc(this._t("save"))}</ha-button>
-        </div>
-      </div>`, { labelledBy: "liza-dlg-title" });
-    const input = dlg.querySelector("#liza-template-name");
-    const confirm = dlg.querySelector(".template-confirm-btn");
-    dlg.querySelector(".add-page-cancel").addEventListener("click", close);
-    const save = async () => {
-      const name = (input.value || "").trim();
-      if (!name) return;
-      confirm.disabled = true;
-      try {
-        const r = await this._hass.callWS({
-          type: "lizaip_config/save_page_as_template",
-          entry_id: this._currentEntry,
-          page_id: page.id,
-          name,
-        });
-        close();
-        this._toast(this._t("template_saved", { name, n: r?.buttons ?? 0 }));
-      } catch (e) {
-        confirm.disabled = false;
-        this._toast(this._t("failed", { error: e?.message || e }));
-      }
-    };
-    confirm.addEventListener("click", save);
-    input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") save(); });
-    // HA's field draws its <input> a microtask after it is created.
-    Promise.resolve(input.updateComplete).then(() => {
-      input.focus?.();
-      input.select?.();
-    });
-  },
 
   /** Copy a page, buttons and all, and open the copy.
    *
@@ -367,7 +371,7 @@ export const ButtonsMenusMixin = {
       // only sign anything happened is one more thumbnail.
       if (result?.pages) this._toast(this._t("page_duplicated", { name: this._pageDisplayLine(page) }));
     } catch (e) {
-      console.error("[LIZA] duplicate page failed:", e);
+      console.error("[lizaIP] duplicate page failed:", e);
       this._toast(this._t("duplicate_page_failed", { error: e?.message || e }));
     }
   },
@@ -429,6 +433,11 @@ export const ButtonsMenusMixin = {
     // pointer user who never focused the tile -- and restoring null is a
     // no-op, which is the right answer for them.
     this._faceMenuReturn = this._a11yCaptureFocus?.() || null;
+
+    if (globalThis.customElements?.get?.("ha-dropdown") && customElements.get("ha-dropdown-item")) {
+      this._openHaMenu(ev, items, { keepCase, anchor });
+      return;
+    }
 
     const menu = document.createElement("div");
     menu.className = "face-menu";
@@ -517,6 +526,57 @@ export const ButtonsMenusMixin = {
     menu.querySelector(".face-menu-item:not([disabled])")?.focus?.();
   },
 
+  /** The menu as Home Assistant draws one: `ha-dropdown`, which brings the
+   *  look, the arrow keys, Escape and the click outside that closes it. It
+   *  opens where it was asked for -- at the pointer, or under the ⋮ that
+   *  asked -- by hanging off an empty element placed there. */
+  _openHaMenu(ev, items, { keepCase = false, anchor = null } = {}) {
+    const root = this.shadowRoot;
+    const lang = this._lang?.() || undefined;
+    const spot = document.createElement("span");
+    spot.className = "face-menu-anchor";
+    const rect = anchor?.getBoundingClientRect?.();
+    const x = rect ? rect.right : Number(ev?.clientX) || 0;
+    const y = rect ? rect.bottom : Number(ev?.clientY) || 0;
+    spot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:0;height:0;`;
+
+    const menu = document.createElement("ha-dropdown");
+    menu.className = "face-menu";
+    menu.setAttribute("placement", rect ? "bottom-end" : "bottom-start");
+    menu.innerHTML = items.map(it => it.separator
+      ? "<wa-divider></wa-divider>"
+      // `cls` is the item's value: what the choice below is looked up by, and
+      // the hook the tests and the stylesheet use.
+      : `<ha-dropdown-item class="face-menu-item ${it.cls}" value="${it.cls}"`
+        + `${it.danger ? ' variant="danger"' : ""}${it.disabled ? " disabled" : ""}>`
+        + (it.icon ? `<ha-icon slot="icon" icon="${it.icon}" aria-hidden="true"></ha-icon>` : "")
+        + `${keepCase ? String(it.label) : String(it.label).toLocaleLowerCase(lang)}</ha-dropdown-item>`).join("");
+    root.appendChild(spot);
+    root.appendChild(menu);
+    menu._lizaAnchor = spot;
+    this._faceMenuEl = menu;
+
+    menu.addEventListener("wa-select", (e) => {
+      const it = items.find(i => i.cls === e.detail?.item?.value);
+      this._closeFaceMenu();
+      if (it && !it.disabled) it.run();
+    });
+    // Escape, a click outside, a choice: every way it closes ends here.
+    menu.addEventListener("wa-after-hide", () => {
+      if (this._faceMenuEl === menu) this._closeFaceMenu();
+    });
+    // Opened from the keyboard (the menu key, Shift+F10) the first item takes
+    // the focus, as a menu's does.
+    menu.addEventListener("wa-after-show", () => {
+      menu.querySelector("ha-dropdown-item:not([disabled])")?.focus?.();
+    }, { once: true });
+    Promise.resolve(menu.updateComplete).then(() => {
+      if (this._faceMenuEl !== menu) return;
+      menu.anchorElement = spot;
+      menu.open = true;
+    });
+  },
+
   /** Put the tile menu away, if one is open. Safe to call when none is. */
 
   _closeFaceMenu() {
@@ -526,6 +586,7 @@ export const ButtonsMenusMixin = {
     }
     const el = this._faceMenuEl;
     this._faceMenuEl = null;
+    el?._lizaAnchor?.remove?.();
     if (el?.parentNode) el.parentNode.removeChild(el);
     else if (el && this.shadowRoot) this.shadowRoot.removeChild?.(el);
     // Focus was moved into the menu when it opened, so removing the node

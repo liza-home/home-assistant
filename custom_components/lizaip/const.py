@@ -5,9 +5,9 @@ Only plain values live here. Shared *helpers* live in the ``shared`` package:
 - ``shared.icon_urls``  -- icon/tooltip/title URLs
 - ``shared.icon_defaults`` -- default icons per domain, state and service
 - ``shared.services``   -- what Home Assistant services do (state maps, scopes)
-- ``shared.i18n``       -- languages and translated action labels
+- ``shared.i18n``       -- languages and translated button tooltips
 - ``shared.assignment`` -- keys and helpers for a stored button assignment
-- ``shared.labels``     -- ``${_state}`` / ``${_name}`` label placeholders
+- ``shared.tooltips``   -- ``${_state}`` / ``${_name}`` tooltip placeholders
 - ``shared.tokens``     -- ``${sensor.x}`` / ``${_device}`` variables
 - ``shared.preludes``   -- wake prelude and launch verification steps
 
@@ -29,6 +29,16 @@ CONF_DEMO_MODE: Final = "demo_mode"
 CONF_DEMO_MODE_DWELL_TIME: Final = "demo_mode_dwell_time"
 CONF_DEMO_MODE_SWIPE_TIME: Final = "demo_mode_swipe_time"
 
+# The sidebar path the config panel is registered under. Declared here as well
+# as in ``config/panel.py`` because ``config/access.py`` hides the item per user
+# and importing the panel would close an import cycle; a test pins the two equal.
+PANEL_URL_PATH: Final = "lizaip"
+
+# Config entry option key holding the Home Assistant user ids this remote is
+# assigned to. Anyone listed here configures it in the panel without being an
+# administrator; see ``config/access.py``.
+CONF_ASSIGNED_USERS: Final = "assigned_users"
+
 # Config entry option key for the language the *device* renders its labels in.
 # Per entry rather than global: a household can have a remote in the kitchen
 # labelled in Italian and one in the study labelled in English, and the panel's
@@ -36,7 +46,7 @@ CONF_DEMO_MODE_SWIPE_TIME: Final = "demo_mode_swipe_time"
 CONF_LANGUAGE: Final = "language"
 
 # The languages this integration ships button wordings for, i.e. the files in
-# ``translations/`` that carry an ``action_labels`` section. Adding one here
+# ``translations/`` that carry an ``button_tooltips`` section. Adding one here
 # without adding the file leaves its buttons in English — `test_translations.py`
 # fails on that.
 SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("en", "de", "fr", "it", "es")

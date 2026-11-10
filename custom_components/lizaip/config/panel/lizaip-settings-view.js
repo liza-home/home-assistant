@@ -22,6 +22,41 @@ import { INACTIVE_STATES } from "./lizaip-helpers.js";
 
 const TEXT_KINDS = ["title", "tooltip"];
 
+// The font picker draws every name in the font it names. The @font-face rules
+// that makes possible live in one document-level <style>: a shadow root's are
+// ignored by the browser, so they cannot join the panel's own stylesheet.
+const FONT_FACE_STYLE_ID = "liza-font-faces";
+
+// The emoji picker's two choices that are no font: imgserv's own pick (stored
+// as no setting at all) and none, emoji drawn in the text font.
+const EMOJI_AUTO = "auto";
+const EMOJI_NONE = "none";
+
+const FONT_FORMATS = { woff2: "woff2", woff: "woff", ttf: "truetype", otf: "opentype" };
+
+// ha-select renders its options into its own shadow root; older frontends used
+// list items for the same job.
+const FONT_OPTION_SELECTOR = "ha-dropdown-item, ha-list-item, mwc-list-item";
+
+// The font a name is drawn in when it has no preview of its own. It cannot be
+// `inherit`: an option inherits from the picker, which wears the picked font.
+const UI_FONT = "var(--ha-font-family-body, sans-serif)";
+
+
+const raf = (fn) => (typeof requestAnimationFrame === "function"
+  ? requestAnimationFrame(fn)
+  : setTimeout(fn, 0));
+
+/**
+ * The family an installed font is drawn under. Anything CSS will not take in
+ * a bare identifier is escaped as `_<hex>_`, which never collides: a literal
+ * underscore is escaped too, so an underscore only ever opens an escape.
+ */
+function fontFaceFamily(id) {
+  const safe = String(id).replace(
+    /[^A-Za-z0-9-]/g, (c) => `_${c.codePointAt(0).toString(16)}_`);
+  return `liza-font-${safe}`;
+}
 
 /**
  * The tab's pages, one chip each. Only the chosen group is rendered, so a
@@ -46,6 +81,12 @@ const SETTINGS_GROUPS = [
     label: "settings_device",
   },
 ];
+// Fontbook (its own integration, a panel of its own) manages the fonts this
+// tab picks from. While it is installed it is a group here, beside Appearance,
+// showing Fontbook's own panel.
+const FONTBOOK_PANEL = "fontbook";
+const FONTBOOK_ICON = "mdi:format-font";
+
 // The group shown before one has been chosen: the remote's own look, not the
 // editor's switches, which only change this browser.
 const SETTINGS_DEFAULT_GROUP = "appearance";
@@ -119,8 +160,6 @@ export const SettingsViewMixin = {
   /** Load what the tab shows. Also the source of the title previews' style. */
   async _loadTextSettings() {
     if (!this._currentEntry) return;
-    // An unsaved pick belongs to the remote it was made on, not to the next.
-    this._themeDraft = null;
     this._setThemeDraft(null);
     this._themeEditOpen = null;
     this._themeEditEnter = false;
@@ -133,6 +172,7 @@ export const SettingsViewMixin = {
       this._textSettings = null;
       this._textSettingsError = String(e?.message || e);
     }
+    this._ensureFontFaces(this._textSettings?.fonts);
   },
 
   _enterSettingsTab() {
@@ -151,14 +191,14 @@ export const SettingsViewMixin = {
     if (this._settingsGroupId === undefined) {
       let stored = null;
       try { stored = window.localStorage?.getItem(this.SETTINGS_GROUP_PREF); } catch (e) { stored = null; }
-      this._settingsGroupId = SETTINGS_GROUPS.some((g) => g.id === stored) ? stored : SETTINGS_DEFAULT_GROUP;
+      this._settingsGroupId = this._settingsGroups().some((g) => g.id === stored) ? stored : SETTINGS_DEFAULT_GROUP;
     }
     return this._settingsGroupId;
   },
 
   /** The section the route named, if the panel has one by that name. */
   _applySettingsSection(id) {
-    if (!SETTINGS_GROUPS.some((g) => g.id === id)) return;
+    if (!this._settingsGroups().some((g) => g.id === id)) return;
     this._settingsGroupId = id;
   },
 
@@ -167,9 +207,8 @@ export const SettingsViewMixin = {
    * to no chip. The render writes the new section into the address bar.
    */
   _setSettingsGroup(id) {
-    if (!SETTINGS_GROUPS.some((g) => g.id === id)) return;
+    if (!this._settingsGroups().some((g) => g.id === id)) return;
     if (id === this._settingsGroup() && !this._settingsQuery) return;
-    if (id !== "appearance") this._discardThemePick();
     this._settingsGroupId = id;
     this._settingsQuery = "";
     try {
@@ -178,19 +217,92 @@ export const SettingsViewMixin = {
     this._render();
   },
 
-  /** The fonts to offer, as ha-select options. */
-  _htmlSettingsFontOptions(current) {
-    const fonts = this._textSettings?.fonts || [];
+  /** The emoji fonts to offer: imgserv's own choice, none, or a font. */
+  _htmlEmojiFontOptions(current) {
+    const fonts = this._htmlSettingsFontOptions(
+      current && current !== EMOJI_NONE ? current : "", { emoji: true });
+    return [
+      { value: EMOJI_AUTO, label: this._t("settings_emoji_auto") },
+      { value: EMOJI_NONE, label: this._t("settings_emoji_none") },
+      ...fonts,
+    ];
+  },
+
+  /** The fonts to offer, as ha-select options: the emoji fonts for emoji,
+   * the others for words -- an emoji font has no letters to draw a title in. */
+  _htmlSettingsFontOptions(current, { emoji = false } = {}) {
+    const installed = this._textSettings?.fonts || [];
+    const fonts = installed.filter((f) => !!f.emoji === emoji || f.id === current);
     const options = fonts.map((f) => ({
       value: f.id,
-      label: f.source === "user" ? this._t("settings_font_user", { name: f.name }) : f.name,
+      label: f.name,
     }));
     // A font named in settings.yaml but no longer installed is still the
     // setting: listing it keeps the select from silently showing another one.
-    if (current && !fonts.some((f) => f.id === current)) {
+    if (current && !installed.some((f) => f.id === current)) {
       options.unshift({ value: current, label: this._t("settings_font_missing", { name: current }) });
     }
     return options;
+  },
+
+  /**
+   * Teach the document the installed fonts, so the picker can draw each name
+   * in its own. Rebuilt from the current list: a font that is gone takes its
+   * rule with it, and the <style> goes too once nothing is loadable.
+   */
+  _ensureFontFaces(fonts) {
+    const css = (fonts || [])
+      .filter((f) => f?.id && f?.url)
+      .map((f) => {
+        const url = String(f.url).replace(/["'()\s]/g, encodeURIComponent);
+        const format = FONT_FORMATS[url.split(".").pop().toLowerCase()];
+        return `@font-face{font-family:"${fontFaceFamily(f.id)}";`
+          + `src:url("${url}")${format ? ` format("${format}")` : ""};`
+          + "font-display:swap}";
+      })
+      .join("\n");
+    const doc = this.ownerDocument || globalThis.document;
+    let style = doc?.getElementById?.(FONT_FACE_STYLE_ID);
+    if (!css) {
+      style?.remove();
+      return;
+    }
+    if (!style) {
+      style = doc.createElement("style");
+      style.id = FONT_FACE_STYLE_ID;
+      doc.head.appendChild(style);
+    }
+    if (style.textContent !== css) style.textContent = css;
+  },
+
+  /** What to set `font-family` to for a font id, or "" when it cannot load. */
+  _fontFamilyCss(id) {
+    if (!id) return "";
+    const font = (this._textSettings?.fonts || []).find((f) => f?.id === id);
+    if (!font?.url) return "";
+    return `"${fontFaceFamily(id)}", ${UI_FONT}`;
+  },
+
+  /**
+   * Draw a font picker in the fonts it offers: the closed field in the one
+   * picked, each option in its own. ha-select keeps its options in its own
+   * shadow root, so a frontend that moves them leaves the picker plain.
+   */
+  _applyFontPreview(el) {
+    if (!el) return;
+    el.style.fontFamily = this._fontFamilyCss(el.value);
+    const options = el.shadowRoot?.querySelectorAll(FONT_OPTION_SELECTOR) || [];
+    options.forEach((opt) => {
+      opt.style.fontFamily = this._fontFamilyCss(opt.value) || UI_FONT;
+    });
+  },
+
+  /** Keep `_applyFontPreview` true across the picker's own repaints. */
+  _wireFontPreview(el) {
+    const apply = () => this._applyFontPreview(el);
+    Promise.resolve(el.updateComplete).then(apply, apply);
+    ["click", "wa-show", "opened", "selected"].forEach((name) =>
+      el.addEventListener(name, () => raf(apply)));
   },
 
   /**
@@ -228,7 +340,7 @@ export const SettingsViewMixin = {
     const opts = { keepMode: true, theme: theme.id };
     const tile = (icon, color, label) => {
       if (!icon) return "";
-      const { src, key } = this._deviceImg(icon, "tile", color, null, opts);
+      const { src, key } = this._deviceImg(icon, "tile", color, opts);
       return `<img class="theme-tile" ${src ? `src="${this._esc(src)}"` : ""}
         data-dev-key="${this._esc(key)}" data-keep-mode alt=""
         title="${this._esc(label)}">`;
@@ -238,7 +350,7 @@ export const SettingsViewMixin = {
     // previewed is the size it is seen at, not a stretched copy.
     const strip = (kind) => {
       const sample = this._t(kind === "title" ? "settings_sample_title" : "settings_sample_tooltip");
-      const { src, key } = this._deviceImg(`text:${sample}`, kind, "", null, opts);
+      const { src, key } = this._deviceImg(`text:${sample}`, kind, "", opts);
       return `<span class="theme-strip-frame"><img class="theme-strip theme-strip-${kind}" ${src ? `src="${this._esc(src)}"` : ""}
         data-dev-key="${this._esc(key)}" data-keep-mode alt=""></span>`;
     };
@@ -278,15 +390,6 @@ export const SettingsViewMixin = {
     return this._storedThemeId().includes(THEME_SEPARATOR);
   },
 
-  /** The theme on screen: the unsaved pick if there is one, else the stored. */
-  _draftThemeId() {
-    return this._themeDraft || this._storedThemeId();
-  },
-
-  _themeDirty() {
-    return this._draftThemeId() !== this._storedThemeId();
-  },
-
   _themeById(id) {
     const themes = this._textSettings?.themes || [];
     return themes.find((t) => t.id === id);
@@ -294,8 +397,8 @@ export const SettingsViewMixin = {
 
   /** The theme on screen, read as one. An id naming parts rather than a file
    * is a leftover mix, resolved part by part the way the backend reads it. */
-  _draftTheme() {
-    const id = this._draftThemeId();
+  _storedTheme() {
+    const id = this._storedThemeId();
     if (!this._themeById(THEME_DEFAULT)) return null;
     return this._themeById(id) || this._themeOfParts(id);
   },
@@ -340,7 +443,9 @@ export const SettingsViewMixin = {
     const id = theme.id;
     const download = this._htmlPresetIcon("data-download", id, "mdi:download",
       "settings_theme_download");
-    if (theme.source !== "user") return download;
+    // Downloading a theme is open to anyone; the shared library itself is an
+    // administrator's to change.
+    if (theme.source !== "user" || !this._isAdmin?.()) return download;
     return download + this._htmlPresetIcon("data-delete", id, "mdi:trash-can-outline",
       "settings_theme_delete", " theme-preset-delete");
   },
@@ -350,10 +455,9 @@ export const SettingsViewMixin = {
    * tells the truth, and dragging it onto Create… lifts it into a theme of
    * its own. */
   _htmlMixTile() {
-    const mix = this._draftTheme();
+    const mix = this._storedTheme();
     if (!mix) return "";
-    const creating = Boolean(this._themeEdit) && !this._themeEdit.id;
-    const on = !creating && this._draftThemeId() === this._storedThemeId();
+    const on = !(this._themeEdit && !this._themeEdit.id);
     return `
       <div class="theme-preset theme-preset-mix${on ? " selected" : ""}"
         data-mix aria-current="${on}">
@@ -370,9 +474,9 @@ export const SettingsViewMixin = {
    * building blocks, offered inside the editor rather than here. */
   _htmlPresetButtons() {
     // A theme being created is no tile yet: Create… stands for it, so the
-    // pick the remote would be given stays put but is not shown as chosen.
+    // theme the remote is on stays put but is not shown as chosen.
     const creating = Boolean(this._themeEdit) && !this._themeEdit.id;
-    const chosen = creating ? null : this._draftThemeId();
+    const chosen = creating ? null : this._storedThemeId();
     const buttons = (this._textSettings?.themes || [])
       .filter((theme) => theme.preset !== false)
       .sort((a, b) => Number(a.source === "user") - Number(b.source === "user"))
@@ -390,6 +494,7 @@ export const SettingsViewMixin = {
           </span>
         </button>`;
       }).join("");
+    if (!this._isAdmin?.()) return `${this._storedIsMix() ? this._htmlMixTile() : ""}${buttons}`;
     return `${this._storedIsMix() ? this._htmlMixTile() : ""}${buttons}
       <button type="button" class="theme-preset theme-preset-add${creating ? " selected" : ""}"
         data-theme-new aria-pressed="${creating}" aria-describedby="liza-theme-drop-hint">
@@ -404,11 +509,11 @@ export const SettingsViewMixin = {
       </button>`;
   },
 
-  /** The Theme card: pick one look and see what it draws. A pick is only
-   * shown until Apply sends it. Mixing parts is what the custom editor
-   * is for. The tile row opens the card under its own title, so it carries
-   * no heading or rule of its own. Every tile is drawn as the screen it
-   * gives, so there is no separate result to look at. */
+  /** The Theme card: pick one look and the remote draws with it at once.
+   * Mixing parts is what the custom editor is for. The tile row opens the
+   * card under its own title, so it carries no heading or rule of its own.
+   * Every tile is drawn as the screen it gives, so there is no separate
+   * result to look at. */
   _htmlSettingsThemeCard() {
     const themes = this._textSettings?.themes || [];
     if (!themes.length) return "";
@@ -419,22 +524,8 @@ export const SettingsViewMixin = {
           <div class="theme-presets">
             <div class="theme-preset-row">${this._htmlPresetButtons()}</div>
           </div>
-          ${this._htmlThemeApplyActions()}
         </div>
       </ha-card>`;
-  },
-
-  /** Apply writes the picked theme to the remote. It stays available so it
-   * can also reaffirm the current theme. */
-  _htmlThemeApplyActions() {
-    const busy = this._textSettingsBusy;
-    return `
-          <div class="settings-actions settings-actions-end">
-            <ha-button variant="brand" class="debug-btn theme-apply"
-              ${busy ? "disabled" : ""}>
-              ${this._esc(this._t("settings_theme_apply"))}
-            </ha-button>
-          </div>`;
   },
 
   // ── The custom theme editor ──────────────────────────────────────────
@@ -476,8 +567,12 @@ export const SettingsViewMixin = {
       palette: (seed.colors?.palette || []).map((swatch) => ({ ...swatch })),
       states: Object.fromEntries(
         THEME_STATE_COLORS.map((s) => [s, seed.colors?.states?.[s] || ""])),
-      text: Object.fromEntries(
-        TEXT_KINDS.map((kind) => [kind, { ...(seed.text?.[kind] || {}) }])),
+      text: {
+        ...Object.fromEntries(
+          TEXT_KINDS.map((kind) => [kind, { ...(seed.text?.[kind] || {}) }])),
+        // "" lets imgserv find one; "none" draws emoji in the text font.
+        emoji: { font: seed.text?.emoji?.font || "" },
+      },
       glyphs: this._glyphsOfTheme(seed),
       // Every icon change the editor has no field for, kept as the file holds
       // it so a save -- or a copy -- does not quietly drop them.
@@ -572,7 +667,7 @@ export const SettingsViewMixin = {
   },
 
   /** What a folded section is set to, so the row can be read without opening
-   * it: the font and its sizes. */
+   * it. The fonts section shows none: its row is just "Fonts". */
   _themeEditSummary(facet, draft) {
     // Temporarily disabled: the palette dots, with the palette block itself.
     if (facet === "colors") return "";
@@ -583,14 +678,6 @@ export const SettingsViewMixin = {
       return dots ? `<span class="theme-edit-dots">${dots}</span>` : "";
     }
     */
-    if (facet === "text") {
-      const fonts = this._textSettings?.fonts || [];
-      const fontId = draft.text?.title?.font;
-      const font = fonts.find((f) => f.id === fontId)?.name || fontId || "";
-      const sizes = TEXT_KINDS
-        .map((kind) => draft.text?.[kind]?.font_size).filter(Boolean).join(" / ");
-      return this._esc([font, sizes && `${sizes} px`].filter(Boolean).join(" · "));
-    }
     return "";
   },
 
@@ -600,18 +687,15 @@ export const SettingsViewMixin = {
   _htmlThemeEditGroup(facet, labelKey, body, icon) {
     const open = this._themeEditOpen === facet;
     return `
-      <details class="theme-edit-group" data-group="${this._esc(facet)}"${open ? " open" : ""}>
-        <summary class="theme-edit-summary">
-          <ha-icon class="theme-edit-lead" icon="${this._esc(icon)}" aria-hidden="true"></ha-icon>
-          <span class="theme-edit-head">
-            <span class="theme-facet-label">${this._esc(this._t(labelKey))}</span>
-            <span class="theme-edit-value">${this._themeEditSummary(facet, this._themeEdit || {})}</span>
-          </span>
-          <ha-icon class="theme-edit-chev" icon="mdi:chevron-right" aria-hidden="true"></ha-icon>
-        </summary>
+      <ha-expansion-panel class="theme-edit-group" data-group="${this._esc(facet)}" outlined${open ? " expanded" : ""}>
+        <ha-icon slot="leading-icon" class="theme-edit-lead" icon="${this._esc(icon)}" aria-hidden="true"></ha-icon>
+        <span slot="header" class="theme-edit-head">
+          <span class="theme-facet-label">${this._esc(this._t(labelKey))}</span>
+          <span class="theme-edit-value">${this._themeEditSummary(facet, this._themeEdit || {})}</span>
+        </span>
         <div class="theme-edit-body"><div class="theme-edit-slot"${
   this._themeEdit?.readonly ? " inert" : ""}>${body}</div></div>
-      </details>`;
+      </ha-expansion-panel>`;
   },
 
   _htmlThemeEditColor(label, scope, key, value) {
@@ -740,8 +824,20 @@ export const SettingsViewMixin = {
           </div>
         </div>`;
     }).join("");
-    const fontsPath = { path: "/config/lizaip/fonts" };
-    const body = `${rows}
+    const fontsPath = { path: "/config/www/fonts" };
+    // Only while there is an emoji font to pick, or the theme names one:
+    // Automatic and None alone are no choice worth a field.
+    const hasEmojiFont = (this._textSettings?.fonts || []).some((f) => f.emoji)
+      || !!draft.text?.emoji?.font;
+    const emojiRow = !hasEmojiFont ? "" : `
+        <div class="settings-field-row">
+          <div class="config-field">
+            <!-- Options and value are handed over by the wiring. -->
+            <ha-select id="liza-theme-emoji" class="theme-edit-emoji"
+              label="${this._esc(this._t("settings_emoji_font"))}"></ha-select>
+          </div>
+        </div>`;
+    const body = `${rows}${emojiRow}
       <span class="config-field-hint">${this._esc(this._t("settings_fonts_hint", fontsPath))} ${this._esc(this._t("settings_emoji_hint", fontsPath))}</span>`;
     return this._htmlThemeEditGroup(
       "text", "settings_theme_text", body,
@@ -859,8 +955,8 @@ export const SettingsViewMixin = {
   /**
    * The Buttons card: the remote's press-behaviour switches.
    *
-   * Both are off until asked for, and for the same reason -- a remote set up
-   * before either existed must keep behaving exactly as it did. That makes the
+   * All are off until asked for, and for the same reason -- a remote set up
+   * before any existed must keep behaving exactly as it did. That makes the
    * row shape shared rather than coincidental, so it is written once.
    */
   _htmlSettingsButtonsCard() {
@@ -871,6 +967,7 @@ export const SettingsViewMixin = {
           <div class="settings-switch-list">
             ${this._htmlFeatureSwitch("longtouch", "settings_longtouch", "settings_longtouch_hint")}
             ${this._htmlFeatureSwitch("toggle", "settings_toggle", "settings_toggle_hint")}
+            ${this._htmlFeatureSwitch("options", "settings_options", "settings_options_hint")}
           </div>
           ${this._htmlKeyRepeatFields()}
         </div>
@@ -1119,19 +1216,99 @@ export const SettingsViewMixin = {
         <ha-tab-group-tab slot="nav" panel="${group.id}" class="settings-chip" data-group="${group.id}"
                           id="liza-settings-chip-${group.id}"${!searching && group.id === current ? " active" : ""}>
           <ha-icon icon="${group.icon}" aria-hidden="true"></ha-icon>
-          ${this._esc(this._t(group.label))}
+          ${this._esc(group.title || this._t(group.label))}
         </ha-tab-group-tab>`;
     const placeholder = this._t("settings_search_placeholder");
     return `
       <div class="settings-bar">
         <ha-tab-group class="settings-nav" ${searching ? "" : `active="${current}"`}
                       aria-label="${this._esc(this._t("settings_groups"))}">
-          ${SETTINGS_GROUPS.map(tab).join("")}
+          ${this._settingsGroups().map(tab).join("")}
         </ha-tab-group>
         <ha-input-search appearance="outlined" class="settings-search settings-search-input"
                          value="${this._esc(this._settingsQuery || "")}"
                          placeholder="${this._esc(placeholder)}" accessible-label="${this._esc(placeholder)}"></ha-input-search>
       </div>`;
+  },
+
+  /** The groups to offer: Fontbook's, beside Appearance, while it is installed. */
+  _settingsGroups() {
+    const panel = this._fontbookPanel();
+    if (!panel) return SETTINGS_GROUPS;
+    const fontbook = {
+      id: FONTBOOK_PANEL, icon: panel.icon || FONTBOOK_ICON, title: panel.title || "Fontbook",
+    };
+    return SETTINGS_GROUPS.flatMap((g) => (g.id === "appearance" ? [g, fontbook] : [g]));
+  },
+
+  /** Home Assistant's entry for Fontbook's panel, when it has one to load. */
+  _fontbookPanel() {
+    const panel = this._hass?.panels?.[FONTBOOK_PANEL];
+    return panel?.config?._panel_custom?.name ? panel : null;
+  },
+
+  /**
+   * `{name, url}`: the element Fontbook's panel is and where its module is.
+   * Fontbook says so itself (`fontbook/info`); one from before that command
+   * is read off the panel Home Assistant registered for it.
+   */
+  async _fontbookElementInfo(panel) {
+    if (!this._fontbookInfo) {
+      try {
+        const info = await this._hass.callWS({ type: "fontbook/info" });
+        if (info?.element && info?.module_url) {
+          this._fontbookInfo = { name: info.element, url: info.module_url };
+        }
+      } catch (e) { /* an older Fontbook: its panel's own entry says */ }
+    }
+    if (this._fontbookInfo) return this._fontbookInfo;
+    const custom = panel.config._panel_custom;
+    return { name: custom.name, url: custom.module_url || custom.js_url };
+  },
+
+  /** The Fontbook group: a place for Fontbook's own panel. */
+  _htmlFontbookSection() {
+    const panel = this._fontbookPanel();
+    const title = this._esc(panel?.title || "Fontbook");
+    const failed = this._fontbookError
+      ? `<p class="hint-text">${this._esc(this._t("settings_fontbook_failed"))}
+           <a href="/${this._esc(panel?.url_path || FONTBOOK_PANEL)}">${title}</a></p>`
+      : "";
+    return `
+      <section class="settings-section settings-fontbook" id="liza-settings-panel-${FONTBOOK_PANEL}"
+               role="region" aria-label="${title}" tabindex="-1">
+        ${failed}<div class="fontbook-host"></div>
+      </section>`;
+  },
+
+  /**
+   * Put Fontbook's panel into *host*. One element for the life of the view:
+   * every render rebuilds the markup around it, and a new one each time would
+   * forget what the user was doing in it. Its module is loaded the first time.
+   */
+  async _mountFontbook(host) {
+    const panel = this._fontbookPanel();
+    if (!panel) return;
+    let custom;
+    try {
+      custom = await this._fontbookElementInfo(panel);
+      if (!customElements.get(custom.name)) {
+        await import(custom.url);
+        await customElements.whenDefined(custom.name);
+      }
+    } catch (e) {
+      console.warn("[lizaIP] Fontbook could not be loaded:", e);
+      if (!this._fontbookError) { this._fontbookError = true; this._render(); }
+      return;
+    }
+    if (!host.isConnected) return;
+    if (!this._fontbookEl) this._fontbookEl = document.createElement(custom.name);
+    const el = this._fontbookEl;
+    el.hass = this._hass;
+    el.narrow = !!this.narrow;
+    // The library alone: no toolbar, tabs or menu button of its own.
+    el.embedded = true;
+    if (el.parentNode !== host) host.appendChild(el);
   },
 
   /** The chosen group's cards. The pressed chip names it, so no heading
@@ -1238,10 +1415,12 @@ export const SettingsViewMixin = {
       return `<div class="settings-view">${msg}</div>`;
     }
     const needle = this._settingsSearch();
-    const group = SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup());
-    const body = needle
-      ? this._htmlSettingsResults(needle)
-      : this._htmlSettingsSection(group, this._htmlSettingsGroupCards(group.id));
+    const group = this._settingsGroups().find((g) => g.id === this._settingsGroup())
+      || SETTINGS_GROUPS.find((g) => g.id === SETTINGS_DEFAULT_GROUP);
+    let body;
+    if (needle) body = this._htmlSettingsResults(needle);
+    else if (group.id === FONTBOOK_PANEL) body = this._htmlFontbookSection();
+    else body = this._htmlSettingsSection(group, this._htmlSettingsGroupCards(group.id));
     return `
       <div class="settings-view">
         ${this._htmlSettingsNav()}
@@ -1289,12 +1468,13 @@ export const SettingsViewMixin = {
       this._textSettings = await this._hass.callWS({
         type: "lizaip_config/set_settings", entry_id: this._currentEntry, settings,
       });
+      this._ensureFontFaces(this._textSettings?.fonts);
       this._toast(this._t("settings_saved"));
     });
   },
 
   /**
-   * Save one or more icon options and redraw the previews in them.
+   * Save one or more icon options and redraw the card around them.
    *
    * Like the text settings, a refused save puts the stored values back.
    */
@@ -1308,15 +1488,12 @@ export const SettingsViewMixin = {
     });
   },
 
-  /** Pick the theme to look at. Nothing reaches the remote until Apply is
-   * pressed, so themes can be browsed freely. The pick opens beneath the
-   * list -- to edit when it is the user's own, else only to read -- and
-   * replaces whatever was there, unsaved changes included. */
-  _pickTheme(themeId) {
+  /** Pick a theme: the remote is given it at once. The pick also opens
+   * beneath the list -- to edit when it is the user's own, else only to
+   * read -- and replaces whatever was there, unsaved changes included. */
+  async _pickTheme(themeId) {
     const edit = this._themeEdit;
     const shown = Boolean(edit?.id) && edit.id === themeId;
-    if (themeId === this._draftThemeId() && shown) return;
-    this._themeDraft = themeId === this._storedThemeId() ? null : themeId;
     if (!shown && this._themeById(themeId)) {
       // The slide plays when the details first appear, not on every switch.
       this._themeEditEnter = !edit;
@@ -1324,18 +1501,7 @@ export const SettingsViewMixin = {
       this._themeEditOpen = null;
     }
     this._render();
-  },
-
-  /** A pick never applied is dropped when its page is left, not sent. */
-  /** The details below the list follow the pick, so they go with it -- unless
-   * they hold unsaved edits, which are kept, and the pick with them so the
-   * selected tile and the details still name the same theme. */
-  _discardThemePick() {
-    const edit = this._themeEdit;
-    const pinned = Boolean(edit?.id) && edit.id !== this._storedThemeId();
-    if (pinned && this._themeEditDirty()) return;
-    if (pinned) this._setThemeDraft(null);
-    this._themeDraft = null;
+    if (themeId !== this._storedThemeId()) await this._applyTheme(themeId);
   },
 
   // ── Saving and removing a custom theme ───────────────────────────────
@@ -1391,38 +1557,16 @@ export const SettingsViewMixin = {
   },
 
   /** One section at a time: three open at once is the wall of fields the
-   * folding was meant to avoid. */
-  _toggleThemeGroup(root, el) {
-    const open = !el.open;
+   * folding was meant to avoid. The expansion panel animates itself. */
+  _themeGroupToggled(root, el, open) {
     if (open) {
-      root.querySelectorAll("details[data-group][open]").forEach((other) => {
-        if (other !== el) this._slideThemeGroup(other, false);
+      root.querySelectorAll("ha-expansion-panel[data-group]").forEach((other) => {
+        if (other !== el && other.expanded) other.expanded = false;
       });
+      this._themeEditOpen = el.dataset.group;
+    } else if (this._themeEditOpen === el.dataset.group) {
+      this._themeEditOpen = null;
     }
-    this._themeEditOpen = open ? el.dataset.group : null;
-    this._slideThemeGroup(el, open);
-  },
-
-  /** `<details>` snaps, which reads as the page jumping. The body is given a
-   * height to travel instead, and only told it is shut once it has got there. */
-  _slideThemeGroup(el, open) {
-    const body = el.querySelector(".theme-edit-body");
-    const still = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-    if (!body || still || typeof body.animate !== "function") {
-      el.open = open;
-      return;
-    }
-    el._slide?.cancel();
-    el.open = true;
-    const tall = `${body.scrollHeight}px`;
-    const anim = body.animate(
-      { height: open ? ["0px", tall] : [tall, "0px"], opacity: open ? [0, 1] : [1, 0] },
-      { duration: 180, easing: "ease-out" });
-    el._slide = anim;
-    anim.onfinish = () => {
-      el.open = open;
-      el._slide = null;
-    };
   },
 
   _closeThemeEditor() {
@@ -1461,26 +1605,45 @@ export const SettingsViewMixin = {
     };
   },
 
-  /** Save the draft, then select it for preview. Applying it to the remote is
-   * a separate choice on the theme picker. */
+  /** Save the draft and give the remote the theme it just wrote. */
   async _saveThemeEdit() {
     if (this._themeEdit?.readonly || this._themeNameProblem()) return;
     // The picker stays live while the save is out: another tile or Create…
     // may have replaced the details by the time it lands, and those are not
-    // the user's to lose.
+    // the user's to lose. The remote may have been swapped too, and the theme
+    // belongs to the one it was saved from.
     const saving = this._themeEdit;
+    const entry = this._currentEntry;
+    let savedId = null;
     await this._runBusy("_themeEditBusy", "settings_theme_save_failed", async () => {
       const r = await this._hass.callWS({
         type: "lizaip_config/save_theme", theme: this._themeEditPayload(),
       });
       if (this._textSettings) this._textSettings.themes = r.themes;
-      if (this._themeEdit === saving) {
-        this._setThemeDraft(null);
-        this._themeDraft = r.id === this._storedThemeId() ? null : r.id;
-      }
+      if (this._themeEdit === saving) this._setThemeDraft(null);
+      savedId = r.id;
       this._forgetDeviceUrls();
       this._toast(this._t("settings_saved"));
     });
+    if (!savedId || this._currentEntry !== entry) return;
+    if (savedId !== this._storedThemeId()) await this._applyTheme(savedId);
+    else await this._rereadSettings();
+  },
+
+  /** The remote's resolved settings again, editor state untouched. The theme
+   * supplies the title and tooltip text and the default glyphs and colours,
+   * so rewriting the theme the remote is already on changes all three. */
+  async _rereadSettings() {
+    try {
+      this._textSettings = await this._hass.callWS({
+        type: "lizaip_config/get_settings", entry_id: this._currentEntry,
+      });
+      this._ensureFontFaces(this._textSettings?.fonts);
+    } catch {
+      return;
+    }
+    await Promise.all([this._loadIconDefaults(false), this._loadPalette()]);
+    this._render();
   },
 
   /** Confirm in the same modal used for page and action deletion. */
@@ -1501,42 +1664,53 @@ export const SettingsViewMixin = {
     await this._deleteTheme(themeId);
   },
 
-  /** Removes a theme of the user's own. A remote still naming a deleted theme
-   * falls back to the default look, and the picker follows. */
+  /** Removes a theme of the user's own. A remote still on the deleted theme
+   * is written back to the default look, which is what it now draws with. */
   async _deleteTheme(themeId) {
     if (!themeId) return;
-    const wasOnScreen = this._draftThemeId() === themeId;
+    const entry = this._currentEntry;
+    let gone = false;
     await this._runBusy("_themeEditBusy", "settings_theme_save_failed", async () => {
       const r = await this._hass.callWS({
         type: "lizaip_config/delete_theme", theme_id: themeId,
       });
       if (this._textSettings) this._textSettings.themes = r.themes;
       this._setThemeDraft(null);
-      const gone = !(r.themes || []).some((t) => t.id === themeId);
-      const fallback = wasOnScreen && gone ? THEME_DEFAULT : null;
-      this._themeDraft = fallback === this._storedThemeId() ? null : fallback;
+      gone = !(r.themes || []).some((t) => t.id === themeId);
       this._forgetDeviceUrls();
       this._render();
       this._toast(this._t("settings_saved"));
     });
+    // Asked again now the reply is in: the remote may have been given another
+    // theme, or swapped altogether, while the deletion was out.
+    if (!gone || this._currentEntry !== entry) return;
+    if (this._storedThemeId() === themeId) await this._applyTheme(THEME_DEFAULT);
   },
 
-  /** Save the picked theme and redraw everything that reads one. A remote's
-   * own title and tooltip blocks are dropped with the pick: they would hide
-   * the new theme's text under cards that are folded away. */
-  async _applyTheme() {
-    const current = this._textSettings?.settings;
-    if (!current) return;
-    const next = structuredClone(current);
-    next.theme = this._draftThemeId();
-    for (const kind of TEXT_KINDS) delete next[kind];
-    const saved = await this._saveTextSettings(next);
-    if (!saved) return;
-    this._themeDraft = null;
-    // The shipped glyph table never follows a theme, so only the themed one
-    // is read again.
-    await Promise.all([this._loadIconDefaults(false), this._loadPalette()]);
-    this._render();
+  /** Give the remote a theme and redraw everything that reads one. The title
+   * and tooltip text is the theme's, so the save carries nothing about it.
+   * A pick made while an earlier one is still out is kept and sent after it,
+   * because the tiles stay live and a click must not vanish. */
+  async _applyTheme(themeId) {
+    if (!themeId || !this._textSettings?.settings) return;
+    if (this._textSettingsBusy) { this._themeWanted = themeId; return; }
+    for (let wanted = themeId; wanted; ) {
+      this._themeWanted = null;
+      const current = this._textSettings?.settings;
+      if (!current) return;
+      const next = structuredClone(current);
+      next.theme = wanted;
+      for (const kind of TEXT_KINDS) delete next[kind];
+      const saved = await this._saveTextSettings(next);
+      if (!saved) return;
+      // The shipped glyph table never follows a theme, so only the themed one
+      // is read again.
+      await Promise.all([this._loadIconDefaults(false), this._loadPalette()]);
+      this._render();
+      // A pick that arrived meanwhile is sent too, unless the remote has it.
+      wanted = this._themeWanted;
+      if (wanted === this._storedThemeId()) wanted = null;
+    }
   },
 
   _changeTextSetting(kind, key, value) {
@@ -1668,6 +1842,18 @@ export const SettingsViewMixin = {
         run: () => (running ? this._openDiagnosticsDialog() : this._downloadDiagnostics(entryId)),
       },
     ];
+    // Last, and set apart: who may configure this remote is an
+    // administrator's decision. Greyed out until somebody other than an
+    // administrator could be given it.
+    if (this._isAdmin?.()) {
+      items.push({ separator: true }, {
+        cls: "diag-menu-people",
+        icon: "mdi:account-multiple",
+        label: this._t("assign_user_menu"),
+        disabled: !this._hasAssignablePeople,
+        run: () => this._openAssignedPeopleDialog(entryId),
+      });
+    }
     this._openMenu(ev, items, { keepCase: true, anchor: anchor || ev?.currentTarget });
   },
 
@@ -1972,7 +2158,7 @@ export const SettingsViewMixin = {
   _refreshThemeSummaries(root) {
     const draft = this._themeEdit;
     if (!draft) return;
-    root.querySelectorAll("details[data-group]").forEach((el) => {
+    root.querySelectorAll("ha-expansion-panel[data-group]").forEach((el) => {
       const slot = el.querySelector(".theme-edit-value");
       if (slot) slot.innerHTML = this._themeEditSummary(el.dataset.group, draft);
     });
@@ -2033,12 +2219,27 @@ export const SettingsViewMixin = {
       const kind = el.dataset.kind;
       el.options = this._htmlSettingsFontOptions(draft.text[kind]?.font);
       el.value = draft.text[kind]?.font;
+      this._wireFontPreview(el);
       el.addEventListener("selected", (ev) => {
         const value = ev.detail?.value;
         if (!value) return;
         // ha-select reports the pick and leaves showing it to its owner.
         el.value = value;
         draft.text[kind] = { ...draft.text[kind], font: value };
+        this._refreshThemeSummaries(root);
+      });
+    });
+    root.querySelectorAll(".theme-edit-emoji").forEach((el) => {
+      const chosen = draft.text.emoji?.font || "";
+      el.options = this._htmlEmojiFontOptions(chosen);
+      // ha-select shows nothing for an empty value, so "find one" has a name.
+      el.value = chosen || EMOJI_AUTO;
+      this._wireFontPreview(el);
+      el.addEventListener("selected", (ev) => {
+        const value = ev.detail?.value;
+        if (!value) return;
+        el.value = value;
+        draft.text.emoji = { font: value === EMOJI_AUTO ? "" : value };
         this._refreshThemeSummaries(root);
       });
     });
@@ -2095,11 +2296,9 @@ export const SettingsViewMixin = {
     root.querySelectorAll(".settings-feature-switch").forEach((el) =>
       el.addEventListener("change", (ev) =>
         this._changeTextSetting(el.dataset.section, "enabled", ev.target.checked)));
-    root.querySelectorAll("details[data-group] > summary").forEach((el) =>
-      el.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        this._toggleThemeGroup(root, el.parentElement);
-      }));
+    root.querySelectorAll("ha-expansion-panel[data-group]").forEach((el) =>
+      el.addEventListener("expanded-changed", (ev) =>
+        this._themeGroupToggled(root, el, !!ev.detail?.expanded)));
     root.querySelectorAll(".theme-preset[data-preset], .theme-preset-add, .theme-preset-mix")
       .forEach((el) => {
         // The icon sits inside the tile so the pair reads as one control;
@@ -2122,7 +2321,6 @@ export const SettingsViewMixin = {
         act(ev);
       });
     });
-    root.querySelector(".theme-apply")?.addEventListener("click", () => this._applyTheme());
     // The Add tile is also where a theme file is dropped to be added.
     root.querySelectorAll(".theme-preset-add").forEach((el) => this._wireThemeDrop(el));
     // Any theme tile, the leftover mix included, can be dragged there to copy it.
@@ -2223,6 +2421,8 @@ export const SettingsViewMixin = {
       this._setSettingsGroup(ev.detail?.name));
     root.querySelectorAll(".settings-chip").forEach((el) =>
       el.addEventListener("click", () => this._setSettingsGroup(el.dataset.group)));
+    const fontbook = root.querySelector(".fontbook-host");
+    if (fontbook) this._mountFontbook(fontbook);
     this._wireSettingsSearch(root);
   },
 

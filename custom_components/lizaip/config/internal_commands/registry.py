@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ...shared.tokens import substitute_label_tokens
+from ...shared.tokens import substitute_tooltip_tokens
 from ...device.protocol import is_valid_page_id
 from .base import InternalCommand, InternalCommandError
 from .goto_page import GOTO_PAGE, coerce_page_id
@@ -61,7 +61,7 @@ def panel_descriptors() -> list[dict]:
             "service": cmd.full_service,
             "name": cmd.name,
             "icon": cmd.icon,
-            "label_template": cmd.label_template,
+            "tooltip_template": cmd.tooltip_template,
             "target_params": [dict(p) for p in cmd.target_params],
         }
         for cmd in enabled_commands()
@@ -148,7 +148,7 @@ def command_target_name(
     buttons say what they tried to open. Resolvable targets follow renames.
     """
     cmd = get_internal_command(service)
-    if cmd is None or cmd.build_label is None:
+    if cmd is None or cmd.build_tooltip is None:
         return ""
     ctx = context or {}
     try:
@@ -159,11 +159,11 @@ def command_target_name(
         # hand-edited afterwards.
         return _stored_target_name(cmd, data) or fallback
     if cmd.is_available is not None and not cmd.is_available(params, ctx):
-        return fallback or cmd.build_label(params, ctx)
-    return cmd.build_label(params, ctx)
+        return fallback or cmd.build_tooltip(params, ctx)
+    return cmd.build_tooltip(params, ctx)
 
 
-def command_label(
+def command_tooltip(
     service: str | None,
     data: Any,
     context: dict | None = None,
@@ -171,12 +171,12 @@ def command_label(
 ) -> str:
     """Auto label for a button carrying an internal command, ``""`` if none.
 
-    Reads as the command's ``label_template`` says — "Go to page: Living Room"
+    Reads as the command's ``tooltip_template`` says — "Go to page: Living Room"
     by default. Only a step naming no target at all falls back to the bare
     command name, where the template would just repeat it.
     """
     cmd = get_internal_command(service)
-    if cmd is None or cmd.build_label is None:
+    if cmd is None or cmd.build_tooltip is None:
         return ""
     target = command_target_name(service, data, context, fallback)
     return _prefixed(cmd, target) or cmd.name
@@ -191,8 +191,8 @@ def _prefixed(cmd: InternalCommand, target: str) -> str:
     """
     if not target:
         return ""
-    return substitute_label_tokens(
-        cmd.label_template, {"_cmd": cmd.name, "_name": target}
+    return substitute_tooltip_tokens(
+        cmd.tooltip_template, {"_cmd": cmd.name, "_name": target}
     )
 
 

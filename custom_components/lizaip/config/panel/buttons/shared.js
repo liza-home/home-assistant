@@ -287,7 +287,7 @@ export const configFieldHtml = ({ label, control, hint = "", action = "" }) => {
   return `
         <div class="config-field">
           ${label && !named.ha ? `<label${named.id ? ` for="${named.id}"` : ""}>${label}</label>` : ""}
-          ${action ? `<div class="config-label-row">${named.control}${action}</div>` : named.control}
+          ${action ? `<div class="config-tooltip-row">${named.control}${action}</div>` : named.control}
           ${hint ? `<span class="config-field-hint" id="${hintId}">${hint}</span>` : ""}
         </div>`;
 };
@@ -629,15 +629,15 @@ export const pageSliderFollowsIn = (assigns) => {
 // this reads like a missing feature, see `a slider icon does not return to the
 // derived glyph` in tests/js/context-config.test.mjs before adding one.
 //
-// Storing the third *in* `image` was tried and was a real bug --
-// `isConfigured` reads `image`, so clearing the icon on an untouched slider
+// Storing the third *in* `icon` was tried and was a real bug --
+// `isConfigured` reads `icon`, so clearing the icon on an untouched slider
 // made it paint as configured, which is the regression 44a7bc6 fixed. The
 // argument for safety was that a derived icon implies `slider_actions.mode`,
 // which `isConfigured` already accepts; true, but clearing is offered on
 // sliders with no mode, so the precondition did not hold where it mattered.
 //
 // The general rule, which this file has now paid for twice: never dress a
-// statement about a field up as a value of that field. `image` is read by
+// statement about a field up as a value of that field. `icon` is read by
 // `isConfigured`, by `device_sync`'s `resolve_icon_url`, and by the face; a
 // magic string there is a string every one of them must be taught.
 export const SLIDER_ICON_HIDDEN_KEY = "slider_hide_icon";
@@ -689,7 +689,7 @@ export const sliderIconFor = (controls, assign) => {
 // That is not this gate's business — it reports what the strip stores, and a
 // following slider stores nothing. The remote face asks a narrower question;
 // see `storesConfig` below.
-export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_actions?.mode || assign?.image
+export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_actions?.mode || assign?.icon
   || assign?.longtouch?.length);
 
 // `isConfigured` minus the one shape that stores the *absence* of a
@@ -702,7 +702,7 @@ export const isConfigured = (assign) => !!(assign?.action_id || assign?.slider_a
 export const storesConfig = (assign) => {
   const sa = assign?.slider_actions;
   if (sa?.mode && targetsLastTouched(sa)) {
-    return !!(assign.action_id || assign.image || assign.longtouch?.length);
+    return !!(assign.action_id || assign.icon || assign.longtouch?.length);
   }
   return isConfigured(assign);
 };

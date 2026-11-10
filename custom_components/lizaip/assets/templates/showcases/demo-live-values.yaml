@@ -5,7 +5,7 @@
 #
 # What each tile demonstrates:
 #
-#   1  a state read straight into the label, and an icon name read out of a
+#   1  a state read straight into the tooltip, and an icon name read out of a
 #      template helper (`mdi:${…}` — the helper returns the bare slug)
 #   2  a `history:` graph as the picture, with a longer period as the tooltip
 #   3  the same value as big text, sized with `?font_size=`
@@ -21,7 +21,7 @@
 # under Settings > Devices & services > Helpers > Template > Sensor, replacing
 # `sensor.lizaip_XXXX_battery` with this remote's battery sensor, and leave the
 # unit of measurement empty on both — a unit would print as "85 %" where the
-# label already adds its own "%".
+# tooltip already adds its own "%".
 #
 #   sensor.lizaip_battery_level — state template:
 #     {{ states('sensor.lizaip_XXXX_battery') }}
@@ -42,9 +42,9 @@
 # A variable that is empty, unknown or unavailable collapses away, and an image
 # whose variable is empty falls back to the derived icon.
 
+version: 2
 name: Demo — live values
 icon: mdi:battery-heart-variant
-page_image: live demo
 description: Every way a tile shows a live value — state, attribute, graph, text
 
 target_selector:
@@ -52,44 +52,47 @@ target_selector:
     integration: hue
     primary_domain: light
 
-buttons:
-  # A state in the label, and an icon chosen by a template helper.
-  button_1:
-    label: "Battery ${sensor.lizaip_battery_level}%"
-    image: "mdi:${sensor.lizaip_battery_icon}"
+pages:
+  live-values:
+    title: live demo
+    buttons:
+      # A state in the tooltip, and an icon chosen by a template helper.
+      button_1:
+        icon: "mdi:${sensor.lizaip_battery_icon}"
+        tooltip: "Battery ${sensor.lizaip_battery_level}%"
 
-  # The picture is a graph. The tooltip covers a week, the tile a day, so
-  # hovering widens the window rather than repeating it.
-  button_2:
-    label: "history:sensor.lizaip_battery_level?hours=168"
-    image: "history:sensor.lizaip_battery_level?hours=24"
+      # The picture is a graph. The tooltip covers a week, the tile a day, so
+      # hovering widens the window rather than repeating it.
+      button_2:
+        icon: "history:sensor.lizaip_battery_level?hours=24"
+        tooltip: "history:sensor.lizaip_battery_level?hours=168"
 
-  # The same number as text, big enough to read across a room.
-  button_3:
-    label: "history:sensor.lizaip_battery_level?hours=168"
-    image: "text:${sensor.lizaip_battery_level}?font_size=24"
+      # The same number as text, big enough to read across a room.
+      button_3:
+        icon: "text:${sensor.lizaip_battery_level}?font_size=24"
+        tooltip: "history:sensor.lizaip_battery_level?hours=168"
 
-  # An attribute of the bound lamp, turned from 0-255 into a percentage.
-  button_5:
-    label: "Brightness ${round(_device.brightness * 100 / 255)}%"
-    image: "text:${round(_device.brightness * 100 / 255)}%"
+      # An attribute of the bound lamp, turned from 0-255 into a percentage.
+      button_5:
+        icon: "text:${round(_device.brightness * 100 / 255)}%"
+        tooltip: "Brightness ${round(_device.brightness * 100 / 255)}%"
 
-  # The same reading on a button that acts: toggling the lamp changes the
-  # value the tile prints, which is the point of the pair.
-  button_6:
-    label: "Brightness ${round(_device.brightness * 100 / 255)}%"
-    image: mdi:lightbulb
-    config:
-      - action: light.toggle
+      # The same reading on a button that acts: toggling the lamp changes the
+      # value the tile prints, which is the point of the pair.
+      button_6:
+        icon: mdi:lightbulb
+        tooltip: "Brightness ${round(_device.brightness * 100 / 255)}%"
+        config:
+          - action: light.toggle
 
-  # Nothing to do with the bound device: any entity can be read.
-  button_11:
-    label: "${weather.forecast_home}, ${weather.forecast_home.temperature}°C"
-    image: "${weather.forecast_home}"
+      # Nothing to do with the bound device: any entity can be read.
+      button_11:
+        icon: "${weather.forecast_home}"
+        tooltip: "${weather.forecast_home}, ${weather.forecast_home.temperature}°C"
 
-  # An icon from a registered extra set, in the tooltip rather than on the
-  # tile: the tile keeps a plain mdi: one, so the two render side by side and
-  # an extra set that did not install is obvious instead of just blank.
-  button_12:
-    label: "hue:pendant-devote"
-    image: mdi:account
+      # An icon from a registered extra set, in the tooltip rather than on the
+      # tile: the tile keeps a plain mdi: one, so the two render side by side and
+      # an extra set that did not install is obvious instead of just blank.
+      button_12:
+        icon: mdi:account
+        tooltip: "hue:pendant-devote"

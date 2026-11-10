@@ -22,8 +22,8 @@ colors:
 
 # Smaller, lighter text to match the hairline glyphs.
 text:
-  title: { font: filsonsoft-light, font_size: 44 }
-  tooltip: { font: filsonsoft-light, font_size: 22 }
+  title: { font: roboto-light, font_size: 44 }
+  tooltip: { font: roboto-light, font_size: 22 }
 
 # Outline glyphs read better without colour to separate them. Merged over
 # the default theme's icons one entry at a time; every row left out is kept.

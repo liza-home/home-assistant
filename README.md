@@ -1,7 +1,6 @@
 # lizaIP for Home Assistant
 
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.8.0%2B-41BDF5.svg)](https://www.home-assistant.io/)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.11.0%2B-41BDF5.svg)](https://www.home-assistant.io/)
 [![GitHub release](https://img.shields.io/github/v/release/liza-home/home-assistant?include_prereleases)](https://github.com/liza-home/home-assistant/releases)
 [![Integration type](https://img.shields.io/badge/integration-device-blue.svg)](https://developers.home-assistant.io/docs/creating_integration_manifest#integration-type)
 [![IoT class](https://img.shields.io/badge/IoT%20class-local%20push-brightgreen.svg)](https://developers.home-assistant.io/docs/creating_integration_manifest#iot-class)
@@ -13,27 +12,21 @@ you decide what every button depicts and what it controls, all from a panel insi
 
 📸 **New here?** The user guide is a screenshot-illustrated walkthrough: installing,
 adding a device, defining pages, assigning button actions, the
-`mdi:`/`phu:`/`logo:`/`text:`/`media:` image schemes, and live entity variables.
+`mdi:`/`logo:`/`text:`/`media:` image schemes, and live entity variables.
 Read it [here on GitHub](custom_components/lizaip/config/docs/USER_GUIDE.md), or inside
-Home Assistant — open the **lizaIP** panel and press the **?** button in its
-toolbar, which needs no second window and works offline.
+Home Assistant — open a remote in the **lizaIP** panel and press the **?** button
+in its toolbar, which needs no second window and works offline.
 
 ## Installation
 
-**Requires Home Assistant 2026.8.0 or newer, with [HACS](https://hacs.xyz) installed.**
+**Requires Home Assistant 2026.11.0 or newer.**
 
-Click the button — it opens HACS with this repository pre-filled:
+Click the button — it opens the Marketplace with this repository pre-filled:
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=liza-home&repository=home-assistant&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=liza-home&repository=home-assistant&category=integration)
 
-Or add it by manually:
-
-1. Open **HACS** in the Home Assistant sidebar
-2. Click the **⋮** menu (top right) → **Custom repositories**
-3. Paste `https://github.com/liza-home/home-assistant`, choose category
-   **Integration**, click **Add**
-4. Find **lizaIP** in the list and click **Download**
-5. **Restart Home Assistant**
+No restart is needed to install. Updating a version Home Assistant is already
+running does need one, and Home Assistant asks for it with a repair notice.
 
 After installation, connected **lizaIP** devices will be discovered automatically —
 confirm the **lizaIP** card under **Settings → Devices & Services**. 
@@ -141,7 +134,9 @@ override in this mode, not the page default underneath it.
 
 Some template pages stay **live**: a Sonos page follows the speaker's favourites, and
 refills itself when you change them. **Sonos Radio** and **Sonos Playlists** do the same
-with only your favourite radio stations or only your favourite playlists, twelve to a page. Editing such a button by hand detaches it from the
+with only your favourite radio stations or only your favourite playlists, twelve to a page,
+and so do Sonos Albums, Tracks, Podcasts and Audiobooks for
+those kinds of favourite — each offered once your speakers have favourites of its kind. Editing such a button by hand detaches it from the
 source.
 
 A new Sonos page is titled with the Sonos logo and the speaker's name, and its
@@ -379,6 +374,32 @@ create them. Open a row to:
 
 Each row shows how many buttons use it, or **unused** if none do. **Filter** by name,
 and delete entries you no longer need.
+
+### Who can configure a remote
+
+Only a Home Assistant administrator sees the lizaIP panel by default. To let the person
+who actually uses a remote set up its pages and buttons, assign the remote to them:
+open the **⋮** of the remote and pick **Assign user…**. The window lists the active
+users without administrator rights; switch on who should configure this remote and
+press **Save**. Administrators always have access and are not listed. Somebody with no
+Home Assistant login of their own cannot be assigned, so give them a user account
+first; until there is such a user, **Assign user…** is greyed out.
+
+An assigned user gets the **lizaIP** item in their sidebar and sees only their own
+remotes, with everything those need — pages, buttons, actions, images, the remote's
+settings and its theme. They can also download a configuration or a diagnostics bundle
+for their own remote and restore one onto it; a bundle they build is narrowed to that
+remote and says so in its README, so it is not a copy of your installation. Adding or
+removing a remote, the debug tab, the shared theme library and seeing who else holds a
+remote stay with administrators. Somebody assigned no remote at all does not get the
+sidebar item. Taking a remote away takes effect at once: an open panel drops it
+without a reload.
+
+This decides which remotes somebody can *configure*, not what those buttons may do. An
+assigned user can put an action on a button targeting any entity their own Home
+Assistant account may call a service on, exactly as they could from a dashboard. Home
+Assistant's own user and entity permissions are unchanged by this and are still what
+decides what anyone can actually switch on.
 
 ## Keyboard and accessibility
 

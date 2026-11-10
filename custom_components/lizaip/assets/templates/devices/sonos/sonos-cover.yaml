@@ -1,19 +1,18 @@
 # Sonos Cover Template — the album art across nine buttons
 #
-# Like `sonos.yaml`, but buttons 1–3, 5–7 and 9–11 show the cover of what is
+# Like `sonos-single.yaml`, but buttons 1–3, 5–7 and 9–11 show the cover of what is
 # playing instead of favourites: the picture is scaled to 180×186 and each
 # button cuts its 60×62 piece out of it (imgserv `size=` + `box=`), so the nine
 # together read as one picture. The fourth column is transport — previous,
-# play/pause, next — with the track each press lands on as its label.
+# play/pause, next — with the track each press lands on as its tooltip.
 #
 # The tiles are pictures, not buttons: pressing one does nothing.
 #
 # Reference: https://www.home-assistant.io/integrations/sonos
 
+version: 2
 name: Sonos Cover
 icon: mdi:album
-# The page title: the Sonos mark and the speaker's name.
-page_image: "logo:sonos + ${_device.friendly_name}"
 description: The album art across the buttons, with previous, play and next
 
 target_selector:
@@ -21,81 +20,82 @@ target_selector:
     integration: sonos
     primary_domain: media_player
 
-buttons:
-  # Row by row: `box=x,y,w,h` in the 180×186 picture.
-  button_1:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=0,0,60,62"
-  button_2:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=60,0,60,62"
-  button_3:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=120,0,60,62"
-  button_5:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=0,62,60,62"
-  button_6:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=60,62,60,62"
-  button_7:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=120,62,60,62"
-  button_9:
-    label: "${_device.media_title}"
-    image: "${_device.entity_picture}?size=180x186&box=0,124,60,62"
-  button_10:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=60,124,60,62"
-  button_11:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=180x186&box=120,124,60,62"
+pages:
+  cover:
+    # The page title: the Sonos mark and the speaker's name.
+    title: "logo:sonos + ${_device.friendly_name}"
+    buttons:
+      # Row by row: `box=x,y,w,h` in the 180×186 picture.
+      button_1:
+        icon: "${_device.entity_picture}?size=180x186&box=0,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_2:
+        icon: "${_device.entity_picture}?size=180x186&box=60,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_3:
+        icon: "${_device.entity_picture}?size=180x186&box=120,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_5:
+        icon: "${_device.entity_picture}?size=180x186&box=0,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_6:
+        icon: "${_device.entity_picture}?size=180x186&box=60,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_7:
+        icon: "${_device.entity_picture}?size=180x186&box=120,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_9:
+        icon: "${_device.entity_picture}?size=180x186&box=0,124,60,62"
+        tooltip: "${_device.media_title}"
+      button_10:
+        icon: "${_device.entity_picture}?size=180x186&box=60,124,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_11:
+        icon: "${_device.entity_picture}?size=180x186&box=120,124,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
 
-  button_4:
-    # The track the press lands on, not the one playing; empty where there is
-    # none -- shuffle, radio, the start of the queue.
-    label: "${_device.media_title_prev}"
-    action_name: Previous
-    image: mdi:skip-previous
-    config:
-      - action: media_player.media_previous_track
+      button_4:
+        icon: mdi:skip-previous
+        # The track the press lands on, not the one playing; empty where there is
+        # none -- shuffle, radio, the start of the queue.
+        tooltip: "${_device.media_title_prev}"
+        config:
+          - action: media_player.media_previous_track
 
-  button_8:
-    label: "${_device.media_title}"
-    action_name: Play/Pause
-    image: mdi:play-pause
-    config:
-      - action: media_player.media_play_pause
+      button_8:
+        icon: mdi:play-pause
+        tooltip: "${_device.media_title}"
+        config:
+          - action: media_player.media_play_pause
 
-  button_12:
-    label: "${_device.media_title_next}"
-    action_name: Next
-    image: mdi:skip-next
-    config:
-      - action: media_player.media_next_track
+      button_12:
+        icon: mdi:skip-next
+        tooltip: "${_device.media_title_next}"
+        config:
+          - action: media_player.media_next_track
 
-  button_volume_up:
-    label: Volume Up
-    repeat: true
-    image: mdi:volume-plus
-    config:
-      - action: media_player.volume_up
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
 
-  button_volume_down:
-    label: Volume Down
-    repeat: true
-    image: mdi:volume-minus
-    config:
-      - action: media_player.volume_down
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
 
-  slider_vertical:
-    label: Volume
-    image: mdi:volume-high
-    slider_actions:
-      mode: proportional
-      attribute: volume_level
-      service: media_player.volume_set
-      data_key: volume_level
-      factor: 1.0
-      min: 0.0
-      max: 1.0
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0

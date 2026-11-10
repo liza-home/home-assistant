@@ -1,18 +1,35 @@
 {
-  "action_labels": {
+  "button_tooltips": {
+    "albums": "Albums",
+    "apps": "Applications",
+    "audiobooks": "Livres audio",
     "back": "Retour",
     "back_menu": "Retour / Menu",
+    "brighter": "Plus clair",
+    "brightness": "Luminosité",
+    "candle": "Bougie",
     "close": "Fermer",
+    "colour_temperature": "Température de couleur",
+    "cool_white": "Blanc froid",
+    "daylight": "Lumière du jour",
+    "digits": "Chiffres",
+    "dimmer": "Plus sombre",
     "down": "Bas",
+    "exit": "Quitter",
     "forward": "Avance",
     "home": "Accueil",
     "input": "Entrée",
+    "inputs": "Entrées",
     "instant_replay": "Replay",
     "left": "Gauche",
     "lock": "Verrouiller",
     "menu": "Menu",
+    "more": "Plus",
     "mute": "Muet",
+    "neutral_white": "Blanc neutre",
     "next": "Suivant",
+    "night_light": "Veilleuse",
+    "now_playing": "Lecture en cours",
     "off": "Arrêt",
     "ok": "OK",
     "on": "Marche",
@@ -23,8 +40,12 @@
     "pause": "Pause",
     "play": "Lecture",
     "play_pause": "Lecture / Pause",
+    "playlists": "Playlists",
+    "podcasts": "Podcasts",
     "power": "Marche/Arrêt",
     "previous": "Précédent",
+    "radio": "Radio",
+    "remote": "Télécommande",
     "repeat_all": "Répéter tout",
     "repeat_off": "Répétition désactivée",
     "repeat_one": "Répéter un",
@@ -32,20 +53,25 @@
     "right": "Droite",
     "search": "Rechercher",
     "select": "Sélectionner",
+    "shuffle": "Aléatoire",
     "shuffle_off": "Aléatoire désactivé",
     "shuffle_on": "Aléatoire activé",
+    "sleep_in": "Veille dans",
+    "sleep_timer_off": "Minuterie arrêtée",
     "source": "Source",
     "stop": "Stop",
     "toggle": "Basculer",
     "tools_more": "Outils / Plus",
     "top_menu": "Menu principal",
+    "tracks": "Titres",
     "unlock": "Déverrouiller",
     "unmute": "Son activé",
     "up": "Haut",
     "voice_assistant": "Assistant vocal",
     "volume": "Volume",
     "volume_down": "Baisser le volume",
-    "volume_up": "Monter le volume"
+    "volume_up": "Monter le volume",
+    "warm_white": "Blanc chaud"
   },
   "config": {
     "step": {
@@ -201,6 +227,20 @@
         }
       }
     },
+    "launch_app": {
+      "name": "Lancer une app",
+      "description": "Lance une app sur un téléviseur. Un téléviseur Samsung est piloté par sa propre API, car il ignore le lancement qu'envoie l'intégration Samsung de Home Assistant ; tout autre lecteur reçoit media_player.play_media.",
+      "fields": {
+        "entity_id": {
+          "name": "Téléviseur",
+          "description": "Les lecteurs multimédias sur lesquels lancer l'app."
+        },
+        "app_id": {
+          "name": "App",
+          "description": "L'identifiant de l'app sur ce téléviseur, par ex. 3201907018807 pour Netflix sur un téléviseur Samsung."
+        }
+      }
+    },
     "refresh_dynamic_sources": {
       "name": "Refresh dynamic sources",
       "description": "Réévalue les liaisons dynamiques de modèle et envoie les modifications aux télécommandes concernées. Les pages dont le contenu n'a pas changé ne génèrent aucun trafic vers l'appareil.",
@@ -228,6 +268,16 @@
         "config_entry_id": {
           "name": "Appareil",
           "description": "Appareil à reconstruire. Si omis, tous les appareils lizaIP sont reconstruits."
+        }
+      }
+    },
+    "send_ir": {
+      "name": "Envoyer IR",
+      "description": "Fait émettre un code infrarouge par une télécommande. Sans cible, toutes les télécommandes lizaIP l'envoient.",
+      "fields": {
+        "ir_blob": {
+          "name": "Code IR",
+          "description": "Le code infrarouge à émettre, encodé en base64."
         }
       }
     }
@@ -298,6 +348,15 @@
     },
     "log_reset_no_modules": {
       "message": "L'appareil n'a signalé aucun module à réinitialiser."
+    },
+    "app_not_started": {
+      "message": "{entity_id} n'a pas lancé l'app {app_id}."
+    },
+    "invalid_ir_blob": {
+      "message": "Le code IR n'est pas du base64 valide."
     }
+  },
+  "page_titles": {
+    "welcome": "bienvenue !"
   }
 }

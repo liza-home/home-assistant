@@ -46,15 +46,15 @@ class InternalCommand:
         schema: Voluptuous schema for the HA service call. Deliberately
             permissive: range and shape checks belong to ``build_params``, which
             reports them translated rather than as a raw ``vol.Invalid``.
-        build_label: ``(params, context) -> str`` — names the command's *target*
+        build_tooltip: ``(params, context) -> str`` — names the command's *target*
             so an entity-less command still reads as something. Returns the
-            target alone; ``label_template`` decides the wording.
-        label_template: Token string auto-labelling a button carrying this
-            command. ``${_name}`` is what ``build_label`` returned, ``${_cmd}``
+            target alone; ``tooltip_template`` decides the wording.
+        tooltip_template: Token string auto-labelling a button carrying this
+            command. ``${_name}`` is what ``build_tooltip`` returned, ``${_cmd}``
             is this entry's ``name``, so renaming the command renames its
             buttons. Declared here so the wording belongs to the command.
             ``${_name}`` is offered in the user's own label field too, and only
-            for commands that have a ``build_label`` to fill it.
+            for commands that have a ``build_tooltip`` to fill it.
         is_available: ``(params, context) -> bool`` — False when the target no
             longer exists, disarming the button instead of sending the remote
             somewhere wrong. Unset for commands with no referenced target.
@@ -72,8 +72,8 @@ class InternalCommand:
     build_params: Callable[[Any, dict], dict]
     run: Callable[[Any, dict], Awaitable[Any]]
     schema: Any
-    build_label: Callable[[dict, dict], str] | None = None
-    label_template: str = "${_cmd}: ${_name}"
+    build_tooltip: Callable[[dict, dict], str] | None = None
+    tooltip_template: str = "${_cmd}: ${_name}"
     is_available: Callable[[dict, dict], bool] | None = None
     target_params: tuple[dict, ...] = ()
     enabled: bool = True

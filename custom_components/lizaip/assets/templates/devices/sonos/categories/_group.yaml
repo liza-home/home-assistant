@@ -1,0 +1,9 @@
+# Sonos categories — the card the per-kind Sonos templates hide behind.
+#
+# One template per kind of Sonos favourite: radio, playlists, albums, tracks,
+# podcasts and audiobooks. Each is offered only
+# for a speaker that has favourites of its kind.
+
+name: {translate: sonos_categories}
+icon: mdi:star
+description: {translate: sonos_categories_desc}

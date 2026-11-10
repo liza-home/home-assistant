@@ -181,17 +181,17 @@ export const ButtonsWiringMixin = {
     const saveTitle = async (raw) => {
       const page = this._pages[this._currentPageIdx];
       if (!page) return;
-      const newImgTitle = normalizeTitle(raw);
-      if (newImgTitle === (page.image || "")) return;
+      const newTitle = normalizeTitle(raw);
+      if (newTitle === (page.title || "")) return;
       const updateMsg = {
         type: "lizaip_config/update_page", entry_id: this._currentEntry,
-        page_id: page.id, image: newImgTitle,
+        page_id: page.id, title: newTitle,
       };
       try {
         const result = await this._hass.callWS(updateMsg);
         if (result?.pages) this._pages = result.pages;
       } catch (e) {
-        page.image = newImgTitle;
+        page.title = newTitle;
       }
       this._render();
     };
@@ -201,7 +201,7 @@ export const ButtonsWiringMixin = {
     const titlePage = this._pages[this._currentPageIdx];
     this._mountIconPicker(
       this.shadowRoot.querySelector("#ps-icon-picker-slot"),
-      titlePage?.image || "",
+      titlePage?.title || "",
       (picked) => saveTitle(picked),
       this._pageDeviceOption(titlePage),
     );
@@ -308,7 +308,7 @@ export const ButtonsWiringMixin = {
               <label id="${id}-label" for="${id}">${this._esc(this._t("button_repeat"))}</label>
               <span class="config-field-hint" id="${id}-hint">${this._esc(this._t("button_repeat_hint"))}</span>
             </div>
-            <ha-switch id="${id}" class="button-repeat-switch" ${selAssign.repeat === true ? "checked" : ""}
+            <ha-switch id="${id}" class="button-repeat-switch" ${selAssign.key_repeat === true ? "checked" : ""}
                        aria-labelledby="${id}-label" aria-describedby="${id}-hint"></ha-switch>
           </div>`;
   },
@@ -327,16 +327,16 @@ export const ButtonsWiringMixin = {
     // A flag, stored only when on: absence keeps meaning "runs once".
     this.shadowRoot.querySelector(".button-repeat-switch")?.addEventListener("change", (e) => {
       const assign = this._editAssignEnsure(selBtn.key);
-      if (e.target.checked) assign.repeat = true;
-      else delete assign.repeat;
+      if (e.target.checked) assign.key_repeat = true;
+      else delete assign.key_repeat;
       this._scheduleAutoSave();
     });
 
     // Tooltip input -- the same field as the Image above it, committed the
     // same way: on Enter or on leaving the field, never per keystroke, so a
     // half-typed name is not drawn on the remote. Escape puts it back.
-    const labelInput = this.shadowRoot.querySelector(".config-label-input");
-    if (labelInput && !labelInput.disabled) {
+    const tooltipInput = this.shadowRoot.querySelector(".config-tooltip-input");
+    if (tooltipInput && !tooltipInput.disabled) {
       const commit = (typed) => {
         const appr = this._sliderAppearanceTarget(selBtn.key);
         if (appr?.scoped) {
@@ -355,45 +355,45 @@ export const ButtonsWiringMixin = {
         // `typed` arrives trimmed: the box's surrounding whitespace is not part
         // of any name, and storing it left the field re-rendering as the
         // derived label with the stray spaces still on the end.
-        assign.label = typed;
+        assign.tooltip = typed;
         // The field holds the stored text, so its value is exactly what the
-        // remote should print. `label_edited` is what makes the ladders print it
-        // verbatim; `_labelEdited` is the session-only twin the render path uses
+        // remote should print. `tooltip_edited` is what makes the ladders print it
+        // verbatim; `_tooltipEdited` is the session-only twin the render path uses
         // and `_saveAssignments` strips.
         //
         // Emptying the field is the exception: it names nothing, so it asks for
         // the derived label back rather than claiming a blank one, and releases
         // the claim the way ↺ does.
-        if (typed) assign.label_edited = true;
-        else delete assign.label_edited;
-        assign._labelEdited = true;
+        if (typed) assign.tooltip_edited = true;
+        else delete assign.tooltip_edited;
+        assign._tooltipEdited = true;
         this._scheduleAutoSave();
         this._render();
       };
       this._wireMediaInput(
-        labelInput,
-        labelInput.parentElement?.querySelector?.(".liza-media-suggest") || null,
+        tooltipInput,
+        tooltipInput.parentElement?.querySelector?.(".liza-media-suggest") || null,
         commit,
         {
           ...this._pageDeviceOption(),
-          ...this._labelTokenOptions(
+          ...this._tooltipTokenOptions(
             this._editAssign(selBtn.key)?.config,
             this._actions.find(a => a.id === this._editAssign(selBtn.key)?.action_id)?.service || "",
           ),
         },
       );
     }
-    this.shadowRoot.querySelector(".config-label-reset")?.addEventListener("click", () => {
+    this.shadowRoot.querySelector(".config-tooltip-reset")?.addEventListener("click", () => {
       const assign = this._editAssign(selBtn.key);
       if (!assign) return;
       const action = assign.action_id ? this._actions.find(a => a.id === assign.action_id) : null;
       const entity = assign.config ? this._getTargetEntityFromConfig(assign.config) : null;
-      assign.label = this._computeLabel(action, entity, assign.config) || "";
-      delete assign._labelEdited;
+      assign.tooltip = this._computeTooltip(action, entity, assign.config) || "";
+      delete assign._tooltipEdited;
       // Reset hands the label back to the ladders, which is the way back to a
       // live, derived label after an edit froze one. Leaving the flag
       // set would pin the derived text as if it had been typed.
-      delete assign.label_edited;
+      delete assign.tooltip_edited;
       this._scheduleAutoSave();
       this._render();
     });
@@ -751,7 +751,7 @@ export const ButtonsWiringMixin = {
   //
   // So rebuild only that subtree. The HTML comes from `_htmlButtonConfigPanel`
   // itself rather than a second builder: every gate those sections have —
-  // `pageSliderFollows`, `isSliderBtn`, an empty `available`, `showImage`,
+  // `pageSliderFollows`, `isSliderBtn`, an empty `available`, `showButtonIcon`,
   // `actionStates.length` — is therefore evaluated by the same code that
   // evaluates it on a full render, and cannot drift into resurrecting a section
   // that should stay hidden. The rest of the produced markup is discarded; it

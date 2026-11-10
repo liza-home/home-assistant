@@ -3,7 +3,7 @@
     "step": {
       "confirm": {
         "title": "lizaIP",
-        "description": "Möchten Sie {name} hinzufügen?"
+        "description": "Möchtest du {name} hinzufügen?"
       },
       "reconfigure": {
         "title": "lizaIP neu konfigurieren",
@@ -153,6 +153,20 @@
         }
       }
     },
+    "launch_app": {
+      "name": "App starten",
+      "description": "Startet eine App auf einem Fernseher. Ein Samsung-Fernseher wird über seine eigene Schnittstelle gestartet, weil er den Start ignoriert, den die Samsung-Integration von Home Assistant sendet; jeder andere Player bekommt media_player.play_media.",
+      "fields": {
+        "entity_id": {
+          "name": "Fernseher",
+          "description": "Die Mediaplayer, auf denen die App gestartet wird."
+        },
+        "app_id": {
+          "name": "App",
+          "description": "Die ID der App auf diesem Fernseher, z. B. 3201907018807 für Netflix auf einem Samsung-Fernseher."
+        }
+      }
+    },
     "refresh_dynamic_sources": {
       "name": "Dynamische Quellen aktualisieren",
       "description": "Löst dynamische Vorlagen-Bindungen neu auf und überträgt Änderungen an die betroffenen Fernbedienungen. Seiten ohne inhaltliche Änderung erzeugen keinen Gerätedatenverkehr.",
@@ -180,6 +194,16 @@
         "config_entry_id": {
           "name": "Gerät",
           "description": "Gerät, das neu aufgebaut werden soll. Ohne Angabe werden alle lizaIP-Geräte neu aufgebaut."
+        }
+      }
+    },
+    "send_ir": {
+      "name": "IR senden",
+      "description": "Lässt eine Fernbedienung einen Infrarotcode senden. Ohne Ziel senden ihn alle lizaIP-Fernbedienungen.",
+      "fields": {
+        "ir_blob": {
+          "name": "IR-Code",
+          "description": "Der zu sendende Infrarotcode, base64-codiert."
         }
       }
     }
@@ -222,16 +246,16 @@
       "message": "Das lizaIP-Gerät hat noch keine Seitenkonfiguration."
     },
     "no_page_target": {
-      "message": "Keine Seite angegeben. Wählen Sie Seite, oder geben Sie einen Namen unter Seitenname an."
+      "message": "Keine Seite angegeben. Wähle Seite, oder gib einen Namen unter Seitenname an."
     },
     "unknown_page_name": {
       "message": "Auf diesem Gerät gibt es keine Seite namens \"{page}\"."
     },
     "ambiguous_page_name": {
-      "message": "Auf diesem Gerät heißen {count} Seiten \"{page}\". Wählen Sie Seite, um eine auszuwählen."
+      "message": "Auf diesem Gerät heißen {count} Seiten \"{page}\". Wähle Seite, um eine auszuwählen."
     },
     "conflicting_page_target": {
-      "message": "Der Name \"{page}\" gehört zu Seite {resolved}, nicht zu Seite {page_id}. Geben Sie eines von beiden an, nicht beides."
+      "message": "Der Name \"{page}\" gehört zu Seite {resolved}, nicht zu Seite {page_id}. Gib eines von beiden an, nicht beides."
     },
     "log_level_unknown": {
       "message": "{level} ist keine Protokollstufe, die dieses Gerät annimmt."
@@ -250,22 +274,45 @@
     },
     "log_reset_no_modules": {
       "message": "Das Gerät hat keine Module gemeldet, die zurückgesetzt werden könnten."
+    },
+    "app_not_started": {
+      "message": "{entity_id} hat die App {app_id} nicht gestartet."
+    },
+    "invalid_ir_blob": {
+      "message": "Der IR-Code ist kein gültiges Base64."
     }
   },
-  "action_labels": {
+  "button_tooltips": {
+    "albums": "Alben",
+    "apps": "Apps",
+    "audiobooks": "Hörbücher",
     "back": "Zurück",
     "back_menu": "Zurück / Menü",
+    "brighter": "Heller",
+    "brightness": "Helligkeit",
+    "candle": "Kerze",
     "close": "Zu",
+    "colour_temperature": "Farbtemperatur",
+    "cool_white": "Kaltweiß",
+    "daylight": "Tageslicht",
+    "digits": "Ziffern",
+    "dimmer": "Dunkler",
     "down": "Ab",
+    "exit": "Beenden",
     "forward": "Vorwärts",
     "home": "Startseite",
     "input": "Eingang",
+    "inputs": "Eingänge",
     "instant_replay": "Wiederholung",
     "left": "Links",
     "lock": "Sperren",
     "menu": "Menü",
+    "more": "Mehr",
     "mute": "Stumm",
+    "neutral_white": "Neutralweiß",
     "next": "Nächster",
+    "night_light": "Nachtlicht",
+    "now_playing": "Aktuelle Wiedergabe",
     "off": "Aus",
     "ok": "OK",
     "on": "Ein",
@@ -276,8 +323,12 @@
     "pause": "Pause",
     "play": "Wiedergabe",
     "play_pause": "Wiedergabe / Pause",
+    "playlists": "Playlists",
+    "podcasts": "Podcasts",
     "power": "Ein/Aus",
     "previous": "Vorheriger",
+    "radio": "Radio",
+    "remote": "Fernbedienung",
     "repeat_all": "Alle wiederholen",
     "repeat_off": "Wiederholen aus",
     "repeat_one": "Eines wiederholen",
@@ -285,19 +336,27 @@
     "right": "Rechts",
     "search": "Suche",
     "select": "Auswählen",
+    "shuffle": "Zufall",
     "shuffle_off": "Zufall aus",
     "shuffle_on": "Zufall ein",
+    "sleep_in": "Schlafen in",
+    "sleep_timer_off": "Sleeptimer aus",
     "source": "Quelle",
     "stop": "Stop",
     "toggle": "Umschalten",
     "tools_more": "Extras / Mehr",
     "top_menu": "Hauptmenü",
+    "tracks": "Titel",
     "unlock": "Entsperren",
     "unmute": "Ton ein",
     "up": "Auf",
     "voice_assistant": "Sprachassistent",
     "volume": "Lautstärke",
     "volume_down": "Leiser",
-    "volume_up": "Lauter"
+    "volume_up": "Lauter",
+    "warm_white": "Warmweiß"
+  },
+  "page_titles": {
+    "welcome": "willkommen!"
   }
 }

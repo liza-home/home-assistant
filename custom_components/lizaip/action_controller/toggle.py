@@ -39,20 +39,20 @@ The shape, on a stored button::
         rules:
           - config: [{action: remote.send_command, ...}]
             icon: mdi:stop                 # optional
-            label: Stop                    # optional
+            tooltip: Stop                  # optional
 
 ``config`` keeps its job, and that is the load-bearing decision in the whole
 feature. Six separate places read ``config[0]`` as "the step that represents
 this button" — `icons._match_state_icon`, `helpers.resolve_step_entity`, the
-`state_listener` watch set, `device_sync`'s label ladder,
+`state_listener` watch set, `device_sync`'s tooltip ladder,
 `buttons._fire_optimistic_update`, and the panel's `_findMatchingAction`. A
 design that made ``config[0]`` a ``choose:`` block would run correctly and
 silently break every one of them: no icon, no tooltip, no state watching, no
 library match. So the rules live in a *sibling* key, exactly as ``before``,
 ``after`` and ``overrides`` already do, and ``config`` goes on naming the
-button's subject, its label and its fallback behaviour.
+button's subject, its tooltip and its fallback behaviour.
 
-A rule is spelled ``{config, icon?, label?, action_id?}``. Order is the whole
+A rule is spelled ``{config, icon?, tooltip?, action_id?}``. Order is the whole
 condition: there is nothing to match against, so position *is* the rule, which
 is why every reader preserves it and why the editor offers both arrows and a
 drag handle.
@@ -68,10 +68,10 @@ import logging
 from typing import Any
 
 from ..shared.icon_defaults import icon_defaults
-from ..shared.tokens import clean_label_text, substitute_label_tokens
+from ..shared.tokens import clean_tooltip_text, substitute_tooltip_tokens
 from ..shared.i18n import get_ui_language
 from ..shared.services import service_fixed_icon, service_name
-from ..shared.labels import state_token_label
+from ..shared.tooltips import state_token_tooltip
 from .helpers import subject_for_assign
 
 _LOGGER = logging.getLogger(__name__)
@@ -279,7 +279,7 @@ def rule_action_id(rule: Any) -> str | None:
     return value.strip() or None
 
 
-def rule_label(rule: Any) -> str | None:
+def rule_tooltip(rule: Any) -> str | None:
     """The tooltip text *rule* asks for, or ``None`` to derive one as usual.
 
     Earns its place for the same reason :func:`rule_icon` does. A cycle step has
@@ -287,26 +287,26 @@ def rule_label(rule: Any) -> str | None:
     at all -- an IR ``send_command`` step is a key code, not a sentence -- so
     the only honest source is the user.
 
-    Whitespace is not a label, matching the panel's Label trimming and the
-    ``label``/``label_edited`` rule one level up: a cleared field asks for
+    Whitespace is not a tooltip, matching the panel's Tooltip trimming and the
+    ``tooltip``/``tooltip_edited`` rule one level up: a cleared field asks for
     derivation again rather than storing a blank that would paint an empty
     tooltip.
     """
     if not isinstance(rule, dict):
         return None
-    label = rule.get("label")
-    if not isinstance(label, str):
+    tooltip = rule.get("tooltip")
+    if not isinstance(tooltip, str):
         return None
-    label = label.strip()
-    return label or None
+    tooltip = tooltip.strip()
+    return tooltip or None
 
 
-def resolve_rule_label(rule: Any, hass, entry=None) -> str:
+def resolve_rule_tooltip(rule: Any, hass, entry=None) -> str:
     """The words a press prints, with its ``${...}`` placeholders filled in.
 
     A press's Tooltip field offers the same syntax press 1's does, so it has to
     mean the same thing. It did not: the two producers of a cycle tooltip
-    handed this text to ``substitute_label_tokens`` with an *empty* value map
+    handed this text to ``substitute_tooltip_tokens`` with an *empty* value map
     (``buttons.py``) or did not substitute at all (:func:`toggle_tooltip`), so
     ``${_state}`` and ``${_name}`` collapsed to nothing on a press while reading
     "Off" on the button above it -- one field, one syntax, two
@@ -316,15 +316,15 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
     The subject is the *press's own* target, not the button's. A cycle exists
     precisely because its steps do different things, and often to different
     entities; reading every press's ``${_state}`` off the button's declared
-    action would phrase step three in terms of step one. ``state_token_label``
+    action would phrase step three in terms of step one. ``state_token_tooltip``
     is then asked about this press's service, which is what makes a
     ``turn_on`` press read "On" and the ``turn_off`` press under it "Off"
     rather than both reading the lamp's current state.
 
-    Returns "" when the press stores no label, which is the caller's signal to
-    fall back -- same as :func:`rule_label` returning ``None``.
+    Returns "" when the press stores no tooltip, which is the caller's signal to
+    fall back -- same as :func:`rule_tooltip` returning ``None``.
     """
-    text = rule_label(rule) or ""
+    text = rule_tooltip(rule) or ""
     if not text:
         return ""
 
@@ -341,7 +341,7 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
     attrs = dict(state_obj.attributes or {}) if state_obj else None
 
     values = {
-        "_state": state_token_label(
+        "_state": state_token_tooltip(
             svc,
             state_obj.state if state_obj else "",
             get_ui_language(hass, entry) if hass else "en",
@@ -349,8 +349,8 @@ def resolve_rule_label(rule: Any, hass, entry=None) -> str:
             step.get("data") or {},
         ),
     }
-    return clean_label_text(
-        substitute_label_tokens(
+    return clean_tooltip_text(
+        substitute_tooltip_tokens(
             text, values, hass, getattr(state_obj, "entity_id", None),
         )
     )
@@ -397,9 +397,9 @@ def sanitize_toggle(value: Any) -> dict:
         icon = rule_icon(raw)
         if icon:
             rule["icon"] = icon
-        label = rule_label(raw)
-        if label:
-            rule["label"] = label
+        tooltip = rule_tooltip(raw)
+        if tooltip:
+            rule["tooltip"] = tooltip
         action_id = rule_action_id(raw)
         if action_id:
             rule["action_id"] = action_id

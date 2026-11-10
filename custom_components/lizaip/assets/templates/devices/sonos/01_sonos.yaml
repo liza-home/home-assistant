@@ -1,0 +1,156 @@
+# Sonos — three pages for one speaker. `01_` puts it first behind the Sonos
+# card; the id is `sonos`.
+#
+# The page the remote lands on shows what is playing: the album art across
+# buttons 1, 2, 5 and 6 (imgserv scales it to 120×124 and each button cuts its
+# 60×62 quarter out of it, `size=` + `box=`), Previous, Play/Pause, Next and
+# Mute on 9–12, and two buttons that lead to the pages behind it: Playlists (3)
+# and Radio (4).
+#
+# Those two are subpages: they are not in the remote's page order, only these
+# buttons lead to them, and on each the remote's Back button leads to Now
+# Playing. Each is the shipped template of the same name, named rather than
+# copied, so they stay described in one place: `sonos-playlists` and
+# `sonos-radio`.
+#
+# Reference: https://www.home-assistant.io/integrations/sonos
+
+version: 2
+name: Sonos
+icon: mdi:music-circle
+description: The album art and transport, with your playlists and radio stations a press away
+
+target_selector:
+  device:
+    integration: sonos
+    primary_domain: media_player
+
+pages:
+  now-playing:
+    # The title of the page the remote lands on: the Sonos mark and the speaker's name.
+    title: "logo:sonos + ${_device}"
+    buttons:
+      # The 2×2 picture, row by row: `box=x,y,w,h` in the 120×124 picture.
+      # Pictures, not buttons: pressing one does nothing.
+      button_1:
+        icon: "${_device.entity_picture}?size=120x124&box=0,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_2:
+        icon: "${_device.entity_picture}?size=120x124&box=60,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_5:
+        icon: "${_device.entity_picture}?size=120x124&box=0,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_6:
+        icon: "${_device.entity_picture}?size=120x124&box=60,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+
+      # `goto_page:` names a page of this template; adding it turns the link into
+      # the remote's own go-to-page command.
+      button_3:
+        icon: mdi:playlist-music
+        tooltip: {translate: playlists}
+        goto_page: playlists
+      button_4:
+        icon: mdi:radio
+        tooltip: {translate: radio}
+        goto_page: radio
+
+      button_9:
+        icon: mdi:skip-previous
+        # The track the press lands on, not the one playing; empty where there
+        # is none -- shuffle, radio, the start of the queue.
+        tooltip: "${_device.media_title_prev}"
+        config:
+          - action: media_player.media_previous_track
+
+      button_10:
+        icon: mdi:play-pause
+        tooltip: "${_device.media_title}"
+        config:
+          - action: media_player.media_play_pause
+
+      button_11:
+        icon: mdi:skip-next
+        tooltip: "${_device.media_title_next}"
+        config:
+          - action: media_player.media_next_track
+
+      button_12:
+        icon: mdi:volume-mute
+        tooltip: "${_state}"
+        config:
+          - action: media_player.volume_mute
+            data:
+              # volume_mute is a setter, not a toggle: reading the target's
+              # current state and inverting it is what makes it behave like one.
+              is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+  # Each is the shipped template of that name, with one button laid over it:
+  # the remote's Back button leads to the page above, not to wherever the
+  # remote's own history would go.
+  playlists:
+    subpage: true
+    template: sonos-playlists
+    # Eleven a page here, twelve on the last: button 12 leads on to the next page (up to
+    # `max_parts`), Back to the one before and from the first to Now Playing.
+    paginate: playlist
+    max_parts: 3
+    buttons:
+      # The twelfth on the last page; while another follows, the way there.
+      button_12:
+        placeholder: "@playlist[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, now-playing]
+
+  radio:
+    subpage: true
+    template: sonos-radio
+    # Eleven a page here, twelve on the last: button 12 leads on to the next page (up to
+    # `max_parts`), Back to the one before and from the first to Now Playing.
+    paginate: station
+    max_parts: 3
+    buttons:
+      # The twelfth on the last page; while another follows, the way there.
+      button_12:
+        placeholder: "@station[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, now-playing]

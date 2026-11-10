@@ -1,7 +1,12 @@
 """Sensor entities for lizaIP — diagnostic readings."""
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfRatio
 from homeassistant.core import HomeAssistant
@@ -29,8 +34,14 @@ async def async_setup_entry(
     )
 
 
-class LizaIPBatterySensor(LizaIPEntity, SensorEntity):
-    """Battery level sensor for a lizaIP device."""
+class LizaIPBatterySensor(LizaIPEntity, RestoreSensor):
+    """Battery level sensor for a lizaIP device.
+
+    The remote reports its level only when it changes -- about one percent an
+    hour -- and cannot be asked for it. So the last reading is restored when
+    Home Assistant starts; otherwise the level read "unknown" for up to an
+    hour after every restart, and so did every tile showing it.
+    """
 
     _attr_translation_key = "battery"
     _attr_device_class = SensorDeviceClass.BATTERY
@@ -47,6 +58,8 @@ class LizaIPBatterySensor(LizaIPEntity, SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        if self._attr_native_value is None and (last := await self.async_get_last_sensor_data()):
+            self._attr_native_value = last.native_value
         self._connection.register_sensor("battery", self._handle_update)
 
     async def async_will_remove_from_hass(self) -> None:

@@ -6,7 +6,7 @@ spec S; the source owns how to get it.
 
 Item shape is normalized across sources:
 
-    title      — display label, becomes the button's ``name``
+    title      — display name, becomes the button's ``tooltip``
     thumbnail  — artwork URL or an ``mdi:`` icon (``""`` when absent)
     action     — HA service to call, e.g. ``media_player.play_media``
     data       — service payload
@@ -15,19 +15,22 @@ Item shape is normalized across sources:
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import json
 import logging
+import unicodedata
 import re
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Final
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
+from .webos_tv import in_device_order, is_input, source_artwork, source_ids
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,7 +45,7 @@ DEFAULT_MAX_ITEMS = 24
 #:
 #: ``action`` is excluded here and added back per source: most sources use one
 #: service for every item, while entity-backed sources may vary by domain.
-DEFAULT_TRACKED_FIELDS = ("label", "icon", "data")
+DEFAULT_TRACKED_FIELDS = ("tooltip", "icon", "data")
 
 _WARNED_EMPTY: set[str] = set()
 
@@ -76,12 +79,12 @@ class DynamicItem:
     action: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     identity: str = ""
-    #: What the button's label stores, when it is not the title itself.
-    label: str = ""
+    #: What the button's tooltip stores, when it is not the title itself.
+    tooltip: str = ""
 
     @property
-    def button_label(self) -> str:
-        return self.label or self.title
+    def button_tooltip(self) -> str:
+        return self.tooltip or self.title
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -135,7 +138,20 @@ FAVORITE_TYPES = [
 FAVORITE_CATEGORIES: dict[str, tuple[str, ...]] = {
     "radio": ("object.item.audioItem.audioBroadcast",),
     "playlists": ("object.container.playlistContainer",),
+    "albums": ("object.container.album.musicAlbum",),
+    "tracks": ("object.item.audioItem.musicTrack",),
+    "podcasts": ("object.container.podcast",),
+    "audiobooks": ("object.item.audioItem.audioBook",),
 }
+
+#: The category asking for a TV's or player's apps rather than its favourites.
+APPS_CATEGORY: Final = "apps"
+
+#: The category asking for a TV's inputs (HDMI and the like) rather than apps.
+INPUTS_CATEGORY: Final = "inputs"
+
+#: What integrations call the browse folder holding their apps.
+_APP_FOLDERS: Final = ("apps", "app_list", "applications")
 
 
 # ── entity lookup ─────────────────────────────────────────────────────
@@ -252,7 +268,7 @@ def _extract_playable_items(result, max_items: int) -> list[dict]:
                 "title": child.title or "",
                 "thumbnail": child.thumbnail or "",
                 "media_content_id": child.media_content_id or "",
-                "media_content_type": child.media_content_type or "",
+                "media_content_type": str(child.media_content_type or ""),
             })
             if len(items) >= max_items:
                 break
@@ -364,6 +380,64 @@ async def browse_favorite_category(
     return items
 
 
+async def favorite_kinds(hass: HomeAssistant, entity_id: str) -> set[str] | None:
+    """The :data:`FAVORITE_CATEGORIES` kinds *entity_id* has favourites of.
+
+    Sonos lists a favourites folder only for a kind it has one of. ``None``
+    when the player cannot be asked.
+    """
+    entity = await find_media_entity(hass, entity_id)
+    if entity is None:
+        _LOGGER.debug("favorite_kinds: %s not found", entity_id)
+        return None
+    try:
+        result = await _browse(entity, "favorites", "", 10)
+    except Exception as exc:  # noqa: BLE001 - an unreachable speaker
+        _LOGGER.debug("favorite_kinds: %s cannot be browsed: %s", entity_id, exc)
+        return None
+    folders = {str(c.media_content_id) for c in (getattr(result, "children", None) or [])}
+    kinds = {kind for kind, ids in FAVORITE_CATEGORIES.items() if folders & set(ids)}
+    _LOGGER.debug("favorite_kinds: %s has %s", entity_id, sorted(kinds))
+    return kinds
+
+
+async def browse_apps(entity, entity_id: str, max_items: int) -> list[dict]:
+    """The apps a player lists in its apps browse folder, or ``[]``.
+
+    Apple TV, Roku, Sony Bravia and Android TV Remote answer
+    ``("apps", "apps")``; the Hisense TV integration calls its folder
+    ``app_list``. Each has one entry per app, which ``play_media`` opens.
+    Android TV Remote marks them unplayable, so an app is taken by its type
+    rather than by ``can_play``.
+    """
+    if entity is None or not hasattr(entity, "async_browse_media"):
+        return []
+    result = None
+    for folder in _APP_FOLDERS:
+        try:
+            result = await _browse(entity, "apps", folder, 15)
+        except Exception as exc:  # noqa: BLE001 - another folder name may answer
+            _LOGGER.debug("browse_media(apps, %s) failed for %s: %s", folder, entity_id, exc)
+            continue
+        if getattr(result, "children", None):
+            break
+    return [
+        {
+            "title": child.title or "",
+            "thumbnail": child.thumbnail or "",
+            "media_content_id": child.media_content_id or "",
+            "media_content_type": str(child.media_content_type or ""),
+        }
+        for child in (getattr(result, "children", None) or [])
+        if child.media_content_type == "app" or getattr(child, "can_play", False)
+    ][:max_items]
+
+
+def _platform(entity: Any) -> str:
+    """The integration an entity belongs to, or ``""``."""
+    return getattr(getattr(entity, "platform", None), "platform_name", "") or ""
+
+
 async def get_browse_thumbnails(entity, entity_id: str) -> dict[str, str]:
     thumbnails: dict[str, str] = {}
     try:
@@ -396,8 +470,32 @@ async def get_browse_thumbnails(entity, entity_id: str) -> dict[str, str]:
     return thumbnails
 
 
+def _excluded(names: tuple[str, ...], patterns: list[str]) -> bool:
+    """Whether any of *names* matches one of *patterns* (``*`` wildcards, any case)."""
+    return any(
+        fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
+        for name in names for pattern in patterns
+    )
+
+
+def _alphabetical(title: str) -> tuple[str, str]:
+    """A name's place in an alphabetical list, ignoring case and accents:
+    "ARTE" after "Amazon", "Ö3" among the O's."""
+    plain = unicodedata.normalize("NFKD", title)
+    plain = "".join(c for c in plain if not unicodedata.combining(c))
+    return (plain.casefold(), title)
+
+
+def _patterns(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    return [str(v).strip() for v in (value or []) if str(v).strip()]
+
+
 async def read_source_list(
     hass: HomeAssistant, entity_id: str, max_items: int, entity=None,
+    *, keep: Callable[[str], bool] | None = None,
+    sort_key: Callable[[str], Any] | None = None,
 ) -> list[DynamicItem]:
     """Build items from a media_player's ``source_list`` attribute.
 
@@ -415,6 +513,10 @@ async def read_source_list(
     if not source_list:
         _LOGGER.debug("read_source_list: no source_list for %s", entity_id)
         return []
+    if keep is not None:
+        source_list = [title for title in source_list if keep(title)]
+    if sort_key is not None:
+        source_list = sorted(source_list, key=sort_key)
 
     thumbnails: dict[str, str] = {}
     if entity is not None and hasattr(entity, "async_browse_media"):
@@ -423,7 +525,7 @@ async def read_source_list(
     return [
         DynamicItem(
             title=source,
-            thumbnail=thumbnails.get(source, ""),
+            thumbnail=thumbnails.get(source) or source_artwork(entity, source),
             action="media_player.select_source",
             data={"source": source},
             identity=f"source:{source}",
@@ -464,6 +566,21 @@ def _items_from_browse(raw: list[dict]) -> list[DynamicItem]:
 
 
 _ENTITY_PARAM = {
+    "exclude": {
+        "type": "list",
+        "required": False,
+        "description": (
+            "Apps or inputs to leave out, by name or app id; * matches anything"
+        ),
+    },
+    "include": {
+        "type": "list",
+        "required": False,
+        "description": (
+            "inputs: which sources are inputs, by name; * matches anything."
+            " For a TV that does not say so itself (only LG webOS does)"
+        ),
+    },
     "entity": {
         "type": "entity",
         "domain": "media_player",
@@ -476,7 +593,8 @@ _ENTITY_PARAM = {
         "description": (
             "Only favourites of this kind: "
             + ", ".join(sorted(FAVORITE_CATEGORIES))
-            + " (Sonos)"
+            + " (Sonos), apps: the apps a TV or player can open, or inputs: its"
+            + " inputs (HDMI and the like)"
         ),
     },
 }
@@ -517,6 +635,75 @@ def _ensure_reachable(
         raise SourceUnavailable(f"{entity_id} is {value}", refused)
 
 
+async def _read_tv_sources(
+    hass: HomeAssistant, entity, entity_id: str, spec: dict[str, Any],
+    exclude: list, max_items: int, *, inputs: bool,
+) -> list[DynamicItem]:
+    """A TV's apps or its inputs, from its ``source_list``.
+
+    Not browsable: TVs such as webOS, Fire TV and Samsung list their apps (and
+    inputs) as sources instead. Apps alphabetically; inputs in the order the
+    TV keeps them. Only webOS says which source is an input; for another TV
+    the template names them under `include`.
+    """
+    include = _patterns(spec.get("include")) if inputs else []
+
+    def wanted_input(title: str) -> bool:
+        if include:
+            return _excluded(source_ids(entity, title), include)
+        return is_input(entity, title)
+
+    items = await read_source_list(
+        hass, entity_id, max_items, entity,
+        keep=lambda title: wanted_input(title) == inputs
+        and not _excluded(source_ids(entity, title), exclude),
+        sort_key=None if inputs else _alphabetical,
+    )
+    if inputs and items:
+        order = in_device_order(entity, [i.title for i in items])
+        items.sort(key=lambda i: order.index(i.title))
+    return items
+
+
+async def _resolve_apps(
+    hass: HomeAssistant, entity, entity_id: str, spec: dict[str, Any], max_items: int,
+) -> list[DynamicItem]:
+    """A TV's apps: browsed, else from its sources, else the ones it listed last.
+
+    A TV that is off lists none -- or cannot be read at all -- and its Apps
+    page would empty with it; the list it gave last stands in (see
+    :mod:`.app_cache`).
+    """
+    from .app_cache import async_get, async_put, cache_key
+
+    exclude = _patterns(spec.get("exclude"))
+    key = cache_key(entity_id, exclude)
+    every = DEFAULT_MAX_ITEMS * 4
+    raw = await browse_apps(entity, entity_id, every)
+    raw = [r for r in raw if not _excluded((r.get("title", ""), r.get("media_content_id", "")), exclude)]
+    if raw and _platform(entity) == "apple_tv":
+        from .apple_tv import add_app_icons
+
+        await add_app_icons(hass, raw)
+    if not raw and _platform(entity) == "samsungtv":
+        from .samsung_tv import entity_apps
+
+        raw = [r for r in await entity_apps(hass, entity) if not _excluded((r["title"], r["media_content_id"]), exclude)]
+    if raw:
+        items = _items_from_browse(sorted(raw, key=lambda r: _alphabetical(r.get("title", ""))))
+    else:
+        items = await _read_tv_sources(hass, entity, entity_id, spec, exclude, every, inputs=False)
+    if items:
+        await async_put(hass, key, [asdict(i) for i in items])
+        return items[:max_items]
+    known = {f.name for f in fields(DynamicItem)}
+    kept = [DynamicItem(**{k: v for k, v in d.items() if k in known}) for d in await async_get(hass, key)]
+    if kept:
+        return kept[:max_items]
+    _ensure_reachable(hass, entity_id)
+    return []
+
+
 async def resolve_favorites(
     hass: HomeAssistant,
     spec: dict[str, Any],
@@ -535,13 +722,24 @@ async def resolve_favorites(
     if not entity_id:
         raise ValueError("favorites source requires an 'entity'")
     category = str(spec.get("category") or "").strip()
-    if category and category not in FAVORITE_CATEGORIES:
+    known = (*FAVORITE_CATEGORIES, APPS_CATEGORY, INPUTS_CATEGORY)
+    if category and category not in known:
         raise ValueError(
-            f"unknown favorites category {category!r}; "
-            f"expected one of {', '.join(sorted(FAVORITE_CATEGORIES))}"
+            f"unknown favorites category {category!r}; expected one of "
+            f"{', '.join(sorted(known))}"
         )
 
     entity = await find_media_entity(hass, entity_id)
+
+    if category == APPS_CATEGORY:
+        return await _resolve_apps(hass, entity, entity_id, spec, max_items)
+
+    if category == INPUTS_CATEGORY:
+        exclude = _patterns(spec.get("exclude"))
+        items = await _read_tv_sources(hass, entity, entity_id, spec, exclude, max_items, inputs=True)
+        if not items:
+            _ensure_reachable(hass, entity_id)
+        return items
 
     if category:
         # No fallback: `source_list` and the unfiltered browse mix every kind
@@ -795,9 +993,9 @@ def _entity_item(hass: HomeAssistant, entity_id: str, entry) -> DynamicItem:
         data={"entity_id": entity_id},
         identity=entity_id,
         # A variable, not the name as it is now: the button follows a rename
-        # the moment it happens, and is a label like any other -- never the
+        # the moment it happens, and is a tooltip like any other -- never the
         # library entry's name, which twelve lamps on a Hue page share.
-        label=f"${{{entity_id}.friendly_name}}",
+        tooltip=f"${{{entity_id}.friendly_name}}",
     )
 
 
@@ -1081,7 +1279,7 @@ def _short_text(name: str) -> str:
     return first if len(first) <= _SHORT_TEXT + 2 else name[:_SHORT_TEXT]
 
 
-def page_name(image: str, page_id: Any = None) -> str:
+def page_name(title: str, page_id: Any = None) -> str:
     """A page's name, read off its title: its words, else its first picture.
 
     Variables are left out -- they would be read against the overview, not the
@@ -1092,7 +1290,7 @@ def page_name(image: str, page_id: Any = None) -> str:
 
     words: list[str] = []
     picture = ""
-    for part in split_source_parts(_TOKEN_RE.sub("", image or "").strip()):
+    for part in split_source_parts(_TOKEN_RE.sub("", title or "").strip()):
         part = part.split("?", 1)[0].strip()
         if not part or part in ("+", "-"):
             continue
@@ -1109,8 +1307,8 @@ def page_name(image: str, page_id: Any = None) -> str:
     return name or (f"Page {page_id}" if page_id is not None else "")
 
 
-def page_tile(image: str, name: str) -> str:
-    """The tile for a button that opens a page whose title is *image*.
+def page_tile(title: str, name: str) -> str:
+    """The tile for a button that opens a page whose title is *title*.
 
     The first picture in the title -- a logo, an icon, a cover -- or, for a
     title of words alone, a short text of the page's name. A part holding a
@@ -1119,7 +1317,7 @@ def page_tile(image: str, name: str) -> str:
     """
     from ...imgserv.const import split_source_parts
 
-    for part in split_source_parts((image or "").strip()):
+    for part in split_source_parts((title or "").strip()):
         if "${" not in part and _is_graphic_part(part):
             return part
     return f"text:{_short_text(name)}" if name else ""
@@ -1173,7 +1371,7 @@ async def _remote_pages(hass: HomeAssistant, entry_id: str) -> tuple[list, set]:
 
 
 def _exclude(spec: dict[str, Any]) -> str:
-    return str(spec.get("exclude_template") or "overview")
+    return str(spec.get("exclude_template") or "toc")
 
 
 async def resolve_pages(
@@ -1183,7 +1381,7 @@ async def resolve_pages(
 
     ``spec["remote"]`` is the remote's config entry (``@remote_entry`` in a
     template). Subpages are not main pages, and a page made from the template
-    named by ``exclude_template`` (``overview`` by default) is the overview
+    named by ``exclude_template`` (``toc`` by default) is the table of contents
     itself, which must not link to itself or to another overview.
     """
     entry_id = str(spec.get("remote") or "").strip()
@@ -1194,10 +1392,10 @@ async def resolve_pages(
     items: list[DynamicItem] = []
     for page in _listed_pages(pages, _exclude(spec), overviews):
         page_id = page["id"]
-        name = page_name(str(page.get("image") or ""), page_id)
+        name = page_name(str(page.get("title") or ""), page_id)
         items.append(DynamicItem(
             title=name,
-            thumbnail=page_tile(str(page.get("image") or ""), name),
+            thumbnail=page_tile(str(page.get("title") or ""), name),
             action="lizaip.goto_page",
             data={"page_id": page_id},
             identity=f"page:{page_id}",
@@ -1208,7 +1406,7 @@ async def resolve_pages(
 
 
 def pages_fingerprint(
-    pages: list, exclude: str = "overview", overviews: set | frozenset = frozenset(),
+    pages: list, exclude: str = "toc", overviews: set | frozenset = frozenset(),
 ) -> frozenset:
     """What an overview depends on: which main pages there are, and their titles.
 
@@ -1216,7 +1414,7 @@ def pages_fingerprint(
     for a refresh, and neither does any edit to a page's buttons.
     """
     return frozenset(
-        (page["id"], str(page.get("image") or ""))
+        (page["id"], str(page.get("title") or ""))
         for page in _listed_pages(pages, exclude, overviews)
     )
 
@@ -1380,7 +1578,7 @@ SOURCES: dict[str, Source] = {
             "exclude_template": {
                 "type": "string",
                 "required": False,
-                "description": "Pages made from this template are left out (default: overview)",
+                "description": "Pages made from this template are left out (default: toc)",
             },
         },
         resolve=resolve_pages,

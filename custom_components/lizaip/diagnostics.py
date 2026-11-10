@@ -392,9 +392,9 @@ def _page_summary(page: dict[str, Any], assignments: dict[str, Any]) -> dict[str
         "fixed_controls": sorted(fixed),
         "overrides": overrides,
         "dynamic_buttons": dynamic,
-        # The page's title glyph and its icon tint. Present or not is the whole
+        # The page's title and its icon tint. Present or not is the whole
         # question — a page that lost its colour is a report we have had.
-        "has_image": bool(page.get("image")),
+        "has_title": bool(page.get("title")),
         "has_default_color": bool(page.get("default_color")),
     }
 

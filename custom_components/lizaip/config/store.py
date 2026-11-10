@@ -18,7 +18,7 @@ import shutil
 import tempfile
 from contextlib import suppress
 from copy import deepcopy
-from typing import Any
+from typing import Any, Final
 
 import yaml
 
@@ -36,11 +36,21 @@ from ..shared.logs import device_id_logger
 from ..shared.assignment import (
     longtouch_steps,
     ASSIGNMENT_DYNAMIC_KEY,
-    ASSIGNMENT_LABEL_EDITED_KEY,
+    ASSIGNMENT_TOOLTIP_EDITED_KEY,
+    ASSIGNMENT_REPEAT_KEY,
 )
 from .const import PAGE_SUBPAGE_KEY, is_subpage
 from ..config.page_templates import async_load_template, template_bindings, load_template
-from .text_style import normalize_settings
+from ..config.page_templates.generate import (
+    TEMPLATE_PAGES_KEY,
+    TEMPLATE_VERSION_KEY,
+    template_version,
+    page_definition,
+    page_source,
+    paginated_placeholder,
+    part_buttons,
+)
+from .text_style import TEXT_KINDS, normalize_settings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,15 +70,148 @@ class StoreWriteError(HomeAssistantError):
 YAML_DIR = "lizaip"
 
 
-def _migrate_page_file(raw: dict) -> None:
-    """Read a page file written before templates were called templates.
+#: Template format 1 -> 2 (see ``TEMPLATE_VERSION`` in
+#: ``page_templates/generate.py``). The page each shipped template made
+#: before templates named their pages: ``old id -> (id now, page name)``. ``sonos`` is now the three-page Sonos;
+#: the one page it used to make is ``sonos-single``'s. Templates bound to
+#: nothing stored no ``template:`` and need nothing here.
+_UNNAMED_TEMPLATE_PAGES: Final[dict[str, tuple[str, str]]] = {
+    "sonos": ("sonos-single", "favourites"),
+    "sonos-cover": ("sonos-cover", "cover"),
+    "sonos-playlists": ("sonos-playlists", "playlists"),
+    "sonos-radio": ("sonos-radio", "radio"),
+    "hue": ("hue", "lamps"),
+    "android-tv": ("android-tv", "remote"),
+    "apple-tv": ("apple-tv", "remote"),
+    "fire-tv": ("fire-tv", "remote"),
+    "roku": ("roku", "remote"),
+    "samsung-tv": ("samsung-tv", "remote"),
+    "webos-tv": ("webos-tv", "remote"),
+    "demo-live-values": ("demo-live-values", "live-values"),
+    "light-studio": ("light-studio", "light-studio"),
+    "media-wall": ("media-wall", "media-wall"),
+    "sonos-example": ("sonos-example", "sonos"),
+}
 
-    Such a file spells its template as ``layout:``, and without the rename
-    nothing knows the page's device, so every ``${_device.…}`` on it reads
-    empty. The next write stores the new spelling.
+#: A button's key repeat, as it was stored before it was called that.
+_OLD_REPEAT_KEY: Final = "repeat"
+
+#: A page's title, as it was stored before it was called that.
+_OLD_TITLE_KEY: Final = "image"
+
+#: A button's tooltip, and the mark that the user typed it, as they were
+#: stored before they were called that. A toggle rule's tooltip too.
+_OLD_TOOLTIP_KEY: Final = "label"
+_OLD_TOOLTIP_EDITED_KEY: Final = "label_edited"
+
+#: A button's picture, and the mark that the user chose it, as they were
+#: stored before they were called that.
+_OLD_ICON_KEY: Final = "image"
+_OLD_ICON_PINNED_KEY: Final = "image_pinned"
+
+#: The name a dynamic binding gave a button's tooltip, in its ``fields`` and on
+#: either side of its ``field_map``, before it was called that.
+_OLD_BINDING_FIELDS: Final[dict[str, str]] = {
+    "label": "tooltip",
+}
+
+
+def _rename_key(holder: dict, old: str, new: str) -> None:
+    """Move *old* to *new* on *holder*, unless *new* is already there."""
+    if old in holder:
+        value = holder.pop(old)
+        holder.setdefault(new, value)
+
+
+def _migrate_binding(binding: dict) -> None:
+    """A dynamic binding's field names, as they are spelt now."""
+    fields = binding.get("fields")
+    if isinstance(fields, list):
+        renamed: list = []
+        for field in fields:
+            field = _OLD_BINDING_FIELDS.get(field, field) if isinstance(field, str) else field
+            if field not in renamed:
+                renamed.append(field)
+        binding["fields"] = sorted(renamed, key=str)
+    field_map = binding.get("field_map")
+    if isinstance(field_map, dict):
+        renamed_map = {}
+        for key, value in field_map.items():
+            key = _OLD_BINDING_FIELDS.get(key, key)
+            value = _OLD_BINDING_FIELDS.get(value, value) if isinstance(value, str) else value
+            # A field read under its own name is not mapped, as `_binding` writes it.
+            if value and value != key:
+                renamed_map.setdefault(key, value)
+        if renamed_map:
+            binding["field_map"] = renamed_map
+        else:
+            binding.pop("field_map")
+
+
+def _migrate_button(button: dict) -> None:
+    """A stored button's keys, as this release spells them."""
+    if _OLD_REPEAT_KEY in button:
+        if button.pop(_OLD_REPEAT_KEY) is True:
+            button.setdefault(ASSIGNMENT_REPEAT_KEY, True)
+    _rename_key(button, _OLD_TOOLTIP_KEY, "tooltip")
+    _rename_key(button, _OLD_TOOLTIP_EDITED_KEY, ASSIGNMENT_TOOLTIP_EDITED_KEY)
+    _rename_key(button, _OLD_ICON_KEY, "icon")
+    _rename_key(button, _OLD_ICON_PINNED_KEY, "icon_pinned")
+    toggle = button.get(TOGGLE_KEY)
+    rules = toggle.get("rules") if isinstance(toggle, dict) else None
+    for rule in rules if isinstance(rules, list) else ():
+        if isinstance(rule, dict):
+            _rename_key(rule, _OLD_TOOLTIP_KEY, "tooltip")
+    binding = button.get(ASSIGNMENT_DYNAMIC_KEY)
+    if isinstance(binding, dict):
+        _migrate_binding(binding)
+    overrides = button.get("overrides")
+    if isinstance(overrides, dict):
+        for override in overrides.values():
+            if isinstance(override, dict):
+                _rename_key(override, _OLD_TOOLTIP_KEY, "tooltip")
+                _rename_key(override, _OLD_TOOLTIP_EDITED_KEY, ASSIGNMENT_TOOLTIP_EDITED_KEY)
+                _rename_key(override, _OLD_ICON_KEY, "icon")
+                _rename_key(override, _OLD_ICON_PINNED_KEY, "icon_pinned")
+
+
+def _migrate_page_file(raw: dict) -> None:
+    """Bring a page file written by an earlier release up to date, in memory.
+
+    Nothing is written here; the next save of the page stores the new form.
+    Every step is safe to run on a page that is already up to date.
+
+    - ``layout:`` is the old spelling of ``template:``; without the rename
+      nothing knows the page's device, so every ``${_device.…}`` reads empty.
+    - A page made under template format 1 (it states no ``version``) does not
+      say which page of its template it is, so nothing it is bound to could be
+      found again: it is given the one its template made then
+      (:data:`_UNNAMED_TEMPLATE_PAGES`), and format 2. Dropping format 1 is
+      deleting this step.
+    - The page's ``image`` is its ``title``; a button's ``label`` is its
+      ``tooltip`` and ``label_edited`` its ``tooltip_edited``, a toggle rule's
+      ``label`` its ``tooltip``; a dynamic binding's ``label`` field is
+      ``tooltip``; a button's ``image`` is its ``icon`` and ``image_pinned``
+      its ``icon_pinned``, on a fixed button's override too.
+    - ``repeat: true`` on a button is ``key_repeat: true`` now.
     """
     if "template" not in raw and isinstance(raw.get("layout"), dict):
         raw["template"] = raw.pop("layout")
+
+    template = raw.get("template")
+    if isinstance(template, dict) and template_version(template) == 1 and not template.get("page"):
+        named = _UNNAMED_TEMPLATE_PAGES.get(str(template.get("type") or ""))
+        if named is not None:
+            template["type"], template["page"] = named
+            template[TEMPLATE_VERSION_KEY] = 2
+
+    _rename_key(raw, _OLD_TITLE_KEY, "title")
+
+    buttons = raw.get("buttons")
+    if isinstance(buttons, dict):
+        for button in buttons.values():
+            if isinstance(button, dict):
+                _migrate_button(button)
 
 
 class LizaRemoteStore:
@@ -187,6 +330,14 @@ class LizaRemoteStore:
         truncates first, so a crash or a full disk mid-dump leaves a valid-looking
         but half-written page behind. ``os.replace`` is atomic on the same
         filesystem, so a reader sees either the old file or the new one.
+
+        Not ``fsync``ed. On the SD card or eMMC most Home Assistant boxes run
+        from, one fsync waits for everything else the system has queued for
+        the card -- up to half a minute while Home Assistant starts or the
+        recorder commits -- and adding a template writes a dozen files in a
+        row: the panel sat for minutes. ext4 already writes a file replaced by
+        rename before the rename itself, so a power cut leaves the old page or
+        the new one, as the rename promises.
         """
         tmp_path: str | None = None
         try:
@@ -203,8 +354,6 @@ class LizaRemoteStore:
                     sort_keys=False,
                     width=120,
                 )
-                f.flush()
-                os.fsync(f.fileno())
             os.replace(tmp_path, path)
             tmp_path = None
         except OSError as exc:
@@ -275,18 +424,18 @@ class LizaRemoteStore:
             return True
         if btn_data.get("action_id"):
             return False
-        if btn_data.get("image"):
+        if btn_data.get("icon"):
             return False
         if btn_data.get("config"):
             return False
         if longtouch_steps(btn_data):
             return False
-        if btn_data.get("label"):
+        if btn_data.get("tooltip"):
             return False
         if btn_data.get("state_icons"):
             return False
         # Sliders configured through the panel have no action_id and default
-        # label/image/config; slider_actions is the only durable behavior.
+        # tooltip/icon/config; slider_actions is the only durable behavior.
         if btn_data.get("slider_actions"):
             return False
         # Dynamic placeholders must keep their binding while the source item is
@@ -307,7 +456,7 @@ class LizaRemoteStore:
     def _strip_empty_fields(btn_data: dict) -> dict:
         """Remove unset fields before writing user-editable YAML.
 
-        Presence is meaningful for several booleans/containers: ``label_edited``
+        Presence is meaningful for several booleans/containers: ``tooltip_edited``
         exists only when true, empty override tables mean inherit, and empty
         dicts/lists should not become visible YAML noise unless another reader
         treats their presence as a distinct state.
@@ -316,10 +465,10 @@ class LizaRemoteStore:
         for key, val in btn_data.items():
             if val is None:
                 continue
-            if key == "image_pinned" and not val:
+            if key == "icon_pinned" and not val:
                 continue
             # Presence means user-edited; false must remain absence.
-            if key == ASSIGNMENT_LABEL_EDITED_KEY and not val:
+            if key == ASSIGNMENT_TOOLTIP_EDITED_KEY and not val:
                 continue
             if isinstance(val, dict) and not val:
                 continue
@@ -373,19 +522,19 @@ class LizaRemoteStore:
         return result
 
     # Page YAML contract:
-    #   image: <string>
+    #   title: <string>
     #   hash: <int>
     #   default_color: <hex color>       (optional)
     #   template: {...}                    (optional template provenance)
     #   buttons:
-    #     <button_key>: { action_id, config, label, image, state_icons, ... }
+    #     <button_key>: { action_id, config, tooltip, icon, state_icons, ... }
     #       toggle: optional sibling of config, giving one button several
-    #               faces. { mode: "cycle", rules: [{icon?, label?, config:
+    #               faces. { mode: "cycle", rules: [{icon?, tooltip?, config:
     #               [...]}, ...] }. Each press runs the next rule; config
     #               mirrors rule 1 and is the fallback if the block is inert.
 
-    @staticmethod
-    def _template_bindings(page_meta: dict) -> dict[str, dict]:
+    @classmethod
+    def _template_bindings(cls, page_meta: dict) -> dict[str, dict]:
         """What the page's template says each of its bound buttons is bound to.
 
         Empty for a page with no template provenance, and for one whose template has
@@ -400,6 +549,7 @@ class LizaRemoteStore:
         template = load_template(template_id)
         if not isinstance(template, dict):
             return {}
+        template = cls._template_page_def(template, template_meta)
         target = template_meta.get("target")
         target = target if isinstance(target, dict) else {}
         return template_bindings(
@@ -407,6 +557,31 @@ class LizaRemoteStore:
             str(target.get("entity_id") or ""),
             str(target.get("config_entry") or ""),
         )
+
+    @staticmethod
+    def _template_page_def(template: dict, template_meta: dict) -> dict:
+        """The part of a template that describes *this* page.
+
+        A template names its pages, and the page says which of them it is.
+        Everything else in the file -- the placeholders, the selector -- still
+        applies to all of them.
+        """
+        template_id = str(template_meta.get("type") or "")
+        page = page_definition(template_id, template, str(template_meta.get("page") or ""))
+        if page is None:
+            shared = {k: v for k, v in template.items() if k != TEMPLATE_PAGES_KEY}
+            return {**shared, "buttons": {}}
+        include = str(page.get("template") or "")
+        shared, buttons = page_source(
+            template_id, template, page, load_template(include) if include else None,
+        )
+        part = template_meta.get("part")
+        # Read as the last part shows it: a binding is only filled in on a
+        # button that already holds one, which a `more_parts:` link does not.
+        buttons = part_buttons(
+            buttons, paginated_placeholder(page), part if isinstance(part, int) else 1,
+        )
+        return {**shared, "buttons": buttons}
 
     @classmethod
     def _strip_template_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
@@ -501,9 +676,9 @@ class LizaRemoteStore:
         template = page_meta.get("template")
         if template and isinstance(template, dict):
             data["template"] = template
-        img_title = page_meta.get("image", "")
-        if img_title:
-            data["image"] = img_title
+        title = page_meta.get("title", "")
+        if title:
+            data["title"] = title
         default_color = page_meta.get("default_color", "")
         if default_color:
             data["default_color"] = default_color
@@ -521,12 +696,12 @@ class LizaRemoteStore:
 
         Blocking: consults the page's template. Call via ``async_add_executor_job``.
         """
-        img_title = raw.get("image", "")
+        title = raw.get("title", "")
         page_hash = raw.get("hash", 0)
         default_color = raw.get("default_color", "")
         template = raw.get("template")
         buttons = raw.get("buttons", {})
-        meta: dict[str, Any] = {"image": img_title, "hash": page_hash}
+        meta: dict[str, Any] = {"title": title, "hash": page_hash}
         if default_color:
             meta["default_color"] = default_color
         if is_subpage(raw):
@@ -916,7 +1091,7 @@ class LizaRemoteStore:
             self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
 
     @staticmethod
-    def compute_page_hash(image: str, assignments: dict[str, dict]) -> int:
+    def compute_page_hash(title: str, assignments: dict[str, dict]) -> int:
         """Digest of fields the device renders for cache validation.
 
         PROTOCOL.md describes page hashes as "for cache validation" and says a
@@ -931,14 +1106,13 @@ class LizaRemoteStore:
         invalidate the device's cached copy. Rule order is part of the digest
         because it decides which glyph comes next.
         """
-        parts = [image or ""]
+        parts = [title or ""]
         for btn_key in sorted(assignments.keys()):
             assign = assignments[btn_key]
             if not isinstance(assign, dict):
                 continue
-            for field in sorted(assign.keys()):
-                if field.startswith("img_") or field == "image":
-                    parts.append(f"{btn_key}.{field}={assign[field] or ''}")
+            for field in sorted(f for f in assign if f.startswith("img_") or f == "icon"):
+                parts.append(f"{btn_key}.{field}={assign[field] or ''}")
             state_icons = assign.get("state_icons")
             if isinstance(state_icons, dict) and state_icons:
                 for state_key in sorted(state_icons.keys()):
@@ -951,8 +1125,8 @@ class LizaRemoteStore:
                     if not isinstance(rule, dict):
                         continue
                     # Position and icon only: a step's position is what selects
-                    # it, and its icon is what the device draws. Its action,
-                    # label and tooltip are resolved on press and on render, so
+                    # it, and its icon is what the device draws. Its action
+                    # and tooltip are resolved on press and on render, so
                     # changing them must not resync every page that has a
                     # toggle.
                     parts.append(f"{btn_key}.tg.{pos}={rule.get('icon') or ''}")
@@ -969,7 +1143,7 @@ class LizaRemoteStore:
             page = next((p for p in pages if p.get("id") == page_id), None)
             if not page:
                 return 0
-            new_hash = self.compute_page_hash(page.get("image", ""), assignments)
+            new_hash = self.compute_page_hash(page.get("title", ""), assignments)
             if page.get("hash") != new_hash:
                 page["hash"] = new_hash
                 page_path = self._page_path(device_id, page_id)
@@ -1004,7 +1178,15 @@ class LizaRemoteStore:
             entry = self._ensure_device(device_id)
             entry.setdefault("assignments", {})[page_id] = assignments
             pages = entry.get("pages", [])
-            page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), {"id": page_id})
+            page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
+            if page_meta is None:
+                page_meta = {"id": page_id}
+            else:
+                # In the same write: every caller wants the hash to follow, and
+                # a second write of the page just for it doubled what a save
+                # cost on a slow card. `async_recompute_page_hash` then finds
+                # nothing to change.
+                page_meta["hash"] = self.compute_page_hash(page_meta.get("title", ""), assignments)
             path = self._page_path(device_id, page_id)
             if not await self._async_write_page(path, page_meta, assignments):
                 raise StoreWriteError(path)
@@ -1039,12 +1221,24 @@ class LizaRemoteStore:
         return deepcopy(kept) if kept is not None else normalize_settings(None)
 
     async def async_set_settings(self, device_id: str, settings: dict) -> dict[str, dict[str, Any]]:
-        """Save the text settings; returns them as stored."""
+        """Save the text settings; returns them as stored.
+
+        The text block is left out of the file: it is the theme's, and a copy
+        on disk is what used to keep a remote on the font its theme had when
+        the file was written.
+        """
         clean = normalize_settings(settings)
+        on_disk = {k: v for k, v in clean.items() if k not in TEXT_KINDS}
         async with self.device_lock(device_id):
             # Written before the cache is updated: caching settings the disk
             # refused would have the panel read back values that vanish on the
             # next restart.
-            await self._async_write_yaml(self._settings_path(device_id), clean)
+            await self._async_write_yaml(self._settings_path(device_id), on_disk)
             self._settings[device_id] = clean
         return deepcopy(clean)
+
+    def forget_settings(self) -> None:
+        """Drop the kept settings of every remote, so the next read resolves
+        the theme again. Called when a theme file has been written: the kept
+        copy holds the text that theme supplied, which has just changed."""
+        self._settings.clear()

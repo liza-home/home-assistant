@@ -24,8 +24,8 @@ colors:
 # The top of both ranges: a theme for reading the remote from across the room
 # cannot have smaller text than the default one.
 text:
-  title: { font: filsonsoft-light, font_size: 50 }
-  tooltip: { font: filsonsoft-light, font_size: 40 }
+  title: { font: roboto-light, font_size: 50 }
+  tooltip: { font: roboto-light, font_size: 40 }
 
 # Filled, circled and boxed glyphs carry more ink than the stock set, which is
 # what makes them readable at a distance. Like every icons: block these show

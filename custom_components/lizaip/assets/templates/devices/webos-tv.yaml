@@ -11,11 +11,29 @@
 # your own (see the integration's documentation), since webOS cannot be woken
 # over the network the integration talks to.
 #
+# More pages follow the remote page: Apps (button 4 leads there), Inputs
+# (button 12) and Digits (button 8). They are subpages: not in the remote's
+# page order, only reached from those buttons; on each, the remote's Back
+# button leads back.
+#   - Apps: the TV's installed apps, alphabetically, from the media player's
+#     `source_list`; a press opens it (`media_player.select_source`). Buttons
+#     1–11 hold eleven apps, and button 12 a twelfth on the last page; a TV
+#     with more gets another Apps page for every eleven more (`paginate: app`, up to `max_parts` pages), button 12 leading
+#     to the next and Back to the one before. The pages come and go as apps are
+#     installed and removed. The TV's own tools (app store, browser, camera, …) are
+#     left out: they are listed under `exclude:` below, by name -- as the TV
+#     shows it, in its language -- or by webOS app id; `*` matches anything.
+#     The list is live: an app installed or removed on the TV refreshes the
+#     buttons.
+#   - Inputs: the TV's inputs (HDMI, and what is plugged in there if you named
+#     it on the TV), in the TV's order.
+#   - Digits: 1–9 and 0 as on a phone keypad, with Channel up and down.
+#
 # Reference: https://www.home-assistant.io/integrations/webostv
 
+version: 2
 name: LG webOS TV
-icon: mdi:television
-page_image: "mdi:television ${_device}"
+icon: logo:lg
 description: Remote-control keys for an LG TV (LG webOS TV integration)
 
 target_selector:
@@ -23,95 +41,411 @@ target_selector:
     integration: webostv
     primary_domain: media_player
 
-buttons:
-  button_power:
-    label: Power
-    image: mdi:power
-    config:
-      - action: media_player.toggle
+placeholders:
+  # The `apps` kind of the favourites source reads the apps the player lists:
+  # its `apps` browse folder where it has one, else its `source_list`, which
+  # is where webOS lists its apps and, apart from them, its inputs.
+  app:
+    source: favorites
+    spec:
+      category: apps
+      exclude:
+        - Apps
+        - Copilot
+        - Amazon Alexa
+        - Alexa
+        - Kamera
+        - Camera
+        - LG Gallery*
+        - LG Link
+        - LG Sports Playbook
+        - Sport
+        - Sports
+        - Media Player
+        - Multi View
+        - RemotePC
+        - Speicherpflege
+        - Storage Care
+        - Startseiten-Hub
+        - Home Hub
+        - Home Dashboard
+        - Teletext
+        - Webbrowser
+        - Web Browser
+        - com.webos.app.browser
+        - com.webos.app.camera
+        - com.webos.app.multiview
+  input:
+    source: favorites
+    spec:
+      category: inputs
 
-  button_2:
-    label: Up
-    repeat: true
-    image: mdi:arrow-up-bold
-    config:
-      - action: webostv.button
-        data:
-          button: UP
+pages:
+  remote:
+    title: "logo:lg ${_device.area_name}"
+    buttons:
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
 
-  button_5:
-    label: Left
-    repeat: true
-    image: mdi:arrow-left-bold
-    config:
-      - action: webostv.button
-        data:
-          button: LEFT
+      button_2:
+        icon: mdi:arrow-up-bold-outline
+        tooltip: {translate: up}
+        key_repeat: true
+        config:
+          - action: webostv.button
+            data:
+              button: UP
 
-  button_6:
-    label: OK
-    image: mdi:circle
-    config:
-      - action: webostv.button
-        data:
-          button: ENTER
+      button_5:
+        icon: mdi:arrow-left-bold-outline
+        tooltip: {translate: left}
+        key_repeat: true
+        config:
+          - action: webostv.button
+            data:
+              button: LEFT
 
-  button_7:
-    label: Right
-    repeat: true
-    image: mdi:arrow-right-bold
-    config:
-      - action: webostv.button
-        data:
-          button: RIGHT
+      button_6:
+        icon: mdi:circle-outline
+        tooltip: {translate: ok}
+        config:
+          - action: webostv.button
+            data:
+              button: ENTER
 
-  button_10:
-    label: Down
-    repeat: true
-    image: mdi:arrow-down-bold
-    config:
-      - action: webostv.button
-        data:
-          button: DOWN
+      button_7:
+        icon: mdi:arrow-right-bold-outline
+        tooltip: {translate: right}
+        key_repeat: true
+        config:
+          - action: webostv.button
+            data:
+              button: RIGHT
 
-  button_11:
-    label: Home
-    image: mdi:home-outline
-    config:
-      - action: webostv.button
-        data:
-          button: HOME
+      button_10:
+        icon: mdi:arrow-down-bold-outline
+        tooltip: {translate: down}
+        key_repeat: true
+        config:
+          - action: webostv.button
+            data:
+              button: DOWN
 
-  button_volume_up:
-    label: Volume Up
-    repeat: true
-    image: mdi:volume-plus
-    config:
-      - action: media_player.volume_up
+      button_4:
+        icon: mdi:apps
+        tooltip: {translate: apps}
+        goto_page: apps
 
-  button_volume_down:
-    label: Volume Down
-    repeat: true
-    image: mdi:volume-minus
-    config:
-      - action: media_player.volume_down
+      button_8:
+        icon: mdi:dialpad
+        tooltip: {translate: digits}
+        goto_page: digits
 
-  slider_vertical:
-    label: Volume
-    image: mdi:volume-high
-    slider_actions:
-      mode: proportional
-      attribute: volume_level
-      service: media_player.volume_set
-      data_key: volume_level
-      factor: 1.0
-      min: 0.0
-      max: 1.0
+      button_12:
+        icon: mdi:video-input-hdmi
+        tooltip: {translate: inputs}
+        goto_page: inputs
 
-  button_back:
-    label: Back
-    image: mdi:keyboard-return
-    config:
-      - action: webostv.button
-        data:
-          button: BACK
+      button_11:
+        icon: mdi:home-outline
+        tooltip: {translate: home}
+        config:
+          - action: webostv.button
+            data:
+              button: HOME
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:keyboard-return
+        tooltip: {translate: back}
+        config:
+          - action: webostv.button
+            data:
+              button: BACK
+
+  apps:
+    subpage: true
+    paginate: app
+    max_parts: 3
+    title: "mdi:apps ${_device.area_name}"
+    buttons:
+      button_1: "@app[1]"
+      button_2: "@app[2]"
+      button_3: "@app[3]"
+      button_4: "@app[4]"
+      button_5: "@app[5]"
+      button_6: "@app[6]"
+      button_7: "@app[7]"
+      button_8: "@app[8]"
+      button_9: "@app[9]"
+      button_10: "@app[10]"
+      button_11: "@app[11]"
+
+      # The twelfth app on the last Apps page; while another follows, the
+      # way there.
+      button_12:
+        placeholder: "@app[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        # Back a page, and from the first one to the remote.
+        goto_page: [previous, remote]
+
+  inputs:
+    subpage: true
+    title: "mdi:video-input-hdmi ${_device.area_name}"
+    buttons:
+      button_1: "@input[1]"
+      button_2: "@input[2]"
+      button_3: "@input[3]"
+      button_4: "@input[4]"
+      button_5: "@input[5]"
+      button_6: "@input[6]"
+      button_7: "@input[7]"
+      button_8: "@input[8]"
+      button_9: "@input[9]"
+      button_10: "@input[10]"
+      button_11: "@input[11]"
+      button_12: "@input[12]"
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote
+
+  digits:
+    subpage: true
+    title: "mdi:dialpad ${_device.area_name}"
+    buttons:
+      # A phone keypad: 1–9 in the first three columns, 0 below Channel down.
+      button_1:
+        icon: 1
+        tooltip: 1
+        config:
+          - action: webostv.button
+            data:
+              button: "1"
+
+      button_2:
+        icon: 2
+        tooltip: 2
+        config:
+          - action: webostv.button
+            data:
+              button: "2"
+
+      button_3:
+        icon: 3
+        tooltip: 3
+        config:
+          - action: webostv.button
+            data:
+              button: "3"
+
+      button_5:
+        icon: 4
+        tooltip: 4
+        config:
+          - action: webostv.button
+            data:
+              button: "4"
+
+      button_6:
+        icon: 5
+        tooltip: 5
+        config:
+          - action: webostv.button
+            data:
+              button: "5"
+
+      button_7:
+        icon: 6
+        tooltip: 6
+        config:
+          - action: webostv.button
+            data:
+              button: "6"
+
+      button_9:
+        icon: 7
+        tooltip: 7
+        config:
+          - action: webostv.button
+            data:
+              button: "7"
+
+      button_10:
+        icon: 8
+        tooltip: 8
+        config:
+          - action: webostv.button
+            data:
+              button: "8"
+
+      button_11:
+        icon: 9
+        tooltip: 9
+        config:
+          - action: webostv.button
+            data:
+              button: "9"
+
+      button_12:
+        icon: 0
+        tooltip: 0
+        config:
+          - action: webostv.button
+            data:
+              button: "0"
+
+      button_4:
+        icon: mdi:chevron-up
+        tooltip: CH+
+        key_repeat: true
+        config:
+          - action: webostv.button
+            data:
+              button: CHANNELUP
+
+      button_8:
+        icon: mdi:chevron-down
+        tooltip: CH-
+        key_repeat: true
+        config:
+          - action: webostv.button
+            data:
+              button: CHANNELDOWN
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote

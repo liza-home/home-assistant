@@ -76,6 +76,11 @@ export const STYLES_SETTINGS = `
     .settings-section-cards { grid-template-columns: 1fr; }
   }
   .settings-card { margin: 0; }
+  /* Fontbook's own panel, shown as a group: as wide as the section, and tall
+     enough to work in -- it was made to fill a page of its own. */
+  .settings-fontbook { display: block; width: 100%; }
+  .fontbook-host { display: block; min-height: 70vh; }
+  .fontbook-host > * { display: block; width: 100%; min-height: 70vh; }
   /* Cards that belong together in one grid cell, one under the other. */
   .settings-card-stack { display: grid; gap: 16px; min-width: 0; }
   /* .actions-card-header spaces its children apart, which pushes a title that
@@ -401,39 +406,11 @@ export const STYLES_SETTINGS = `
   /* The editor's own fields. A swatch is an input, not a painted box, so the
      colour on screen is the one being edited and nothing has to be measured
      by the contrast suite. */
-  .theme-edit-group {
-    display: grid;
-    gap: 0;
-    border: 1px solid var(--divider-color, rgba(127,127,127,.22));
-    border-radius: 10px;
-    background: rgba(127,127,127,.04);
-  }
-  .theme-edit-group:hover { border-color: rgba(127,127,127,.4); }
-  .theme-edit-group[open] {
-    border-color: var(--primary-color);
-    background: rgba(127,127,127,.08);
-  }
-  .theme-edit-summary {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 13px;
-    cursor: pointer;
-    list-style: none;
-  }
-  .theme-edit-summary::-webkit-details-marker { display: none; }
-  .theme-edit-lead, .theme-edit-chev {
-    flex: none;
-    color: var(--liza-muted-text);
-    --mdc-icon-size: 20px;
-  }
-  .theme-edit-chev {
-    --mdc-icon-size: 18px;
-    transition: transform .15s;
-  }
-  .theme-edit-group[open] .theme-edit-lead,
-  .theme-edit-group[open] .theme-edit-chev { color: var(--primary-color); }
-  .theme-edit-group[open] .theme-edit-chev { transform: rotate(90deg); }
+  /* Home Assistant's expansion panel: frame, heading row, chevron and the
+     slide are its. The lead icon takes the accent while its group is open. */
+  .theme-edit-group { display: block; }
+  .theme-edit-lead { color: var(--liza-muted-text); }
+  .theme-edit-group[expanded] .theme-edit-lead { color: var(--primary-color); }
   .theme-edit-head {
     flex: 1;
     min-width: 0;
@@ -465,9 +442,9 @@ export const STYLES_SETTINGS = `
   .theme-edit-slot {
     display: grid;
     gap: 8px;
-    padding: 0 13px 13px;
+    padding: 0 0 8px;
   }
-  .theme-edit-summary .theme-facet-label { display: block; margin: 0; }
+  .theme-edit-head .theme-facet-label { display: block; margin: 0; }
   /* One column per state, each the same width, so the labels do not pull the
      swatches into uneven gaps. Capped, so a wide card leaves them a group
      rather than spreading them edge to edge. */

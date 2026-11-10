@@ -1,0 +1,73 @@
+# Sonos Tracks Template — tracks on buttons 1–12
+#
+# As `sonos-radio.yaml`, for the speaker's favourite tracks: the `track`
+# placeholder narrows the favorites source to the Sonos "Tracks" favourites
+# folder. Offered only for a speaker that has favourite tracks.
+#
+# Reference: https://www.home-assistant.io/integrations/sonos
+
+version: 2
+name: Sonos Tracks
+icon: mdi:music-note
+description: Your favourite Sonos tracks, one per button
+
+target_selector:
+  device:
+    integration: sonos
+    primary_domain: media_player
+
+placeholders:
+  track:
+    source: favorites
+    spec:
+      category: tracks
+
+pages:
+  tracks:
+    # More pages, swiped to, when there are more than twelve (up to
+    # `max_parts`); they come and go as favourites are added and removed.
+    paginate: track
+    max_parts: 3
+    # The page title: the Sonos mark and what the page holds.
+    title: "logo:sonos + tracks"
+    buttons:
+      button_1: "@track[1]"
+      button_2: "@track[2]"
+      button_3: "@track[3]"
+      button_4: "@track[4]"
+      button_5: "@track[5]"
+      button_6: "@track[6]"
+      button_7: "@track[7]"
+      button_8: "@track[8]"
+      button_9: "@track[9]"
+      button_10: "@track[10]"
+      button_11: "@track[11]"
+      button_12: "@track[12]"
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      # The mechanics live in `slider_actions`, as a page stores them; the subject
+      # is left out because the page's own target supplies it.
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0

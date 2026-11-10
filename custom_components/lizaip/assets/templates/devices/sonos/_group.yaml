@@ -1,4 +1,4 @@
-# Sonos group — the card the four Sonos templates hide behind.
+# Sonos group — the card the Sonos templates hide behind.
 #
 # A directory under `presets/` is a group: its templates are offered behind one
 # card in the add-page picker instead of four side by side. This file names

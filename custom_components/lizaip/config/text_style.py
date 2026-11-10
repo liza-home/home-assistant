@@ -1,23 +1,26 @@
-"""The per-remote settings: which theme supplies its defaults, which font and
-size titles and tooltips use, whether buttons react to a long touch, and
-whether they may toggle.
+"""The per-remote settings: which theme the remote draws with, whether its
+buttons react to a long touch, whether they may toggle, and whether they may
+be given an options page.
 
 Stored as ``settings.yaml`` in the remote's folder::
 
     theme: high-contrast
-    title:
-      font: filsonsoft-light
-      font_size: 48
-    tooltip:
-      font: filsonsoft-light
-      font_size: 24
     longtouch:
       enabled: false
     toggle:
       enabled: false
+    options:
+      enabled: false
     key_repeat:
       delay_ms: 500
       rate: 30
+
+The font and size titles and tooltips are drawn in belong to the theme and
+are edited there, so they are neither read from this file nor written to it:
+a copy here would be a second answer to the same question, and the copy is
+what a remote used to be stuck on after its theme was edited. A ``title:`` or
+``tooltip:`` block an older version left behind is ignored and dropped the
+next time the settings are saved.
 
 A remote without the file, or with a value that makes no sense, gets the
 defaults -- the same text the remote showed before the settings existed.
@@ -60,10 +63,14 @@ TOGGLE_SECTION: Final = "toggle"
 #: refresh, which is not worth paying for a screen nobody asked to see.
 MEMORY_SECTION: Final = "memory"
 
+#: Off by default: **Add options…** on a button, which makes a subpage its
+#: long touch opens. Only the panel reads it; pages already made stay.
+OPTIONS_SECTION: Final = "options"
+
 #: The feature switches, which share one shape: a section holding only
 #: ``enabled``. Listed once so the three places that must agree on the set --
 #: defaults, the file reader and the editor's validator -- cannot drift apart.
-FEATURE_SECTIONS: Final = (LONGTOUCH_SECTION, TOGGLE_SECTION, MEMORY_SECTION)
+FEATURE_SECTIONS: Final = (LONGTOUCH_SECTION, TOGGLE_SECTION, MEMORY_SECTION, OPTIONS_SECTION)
 
 #: How a button with key repeat repeats while it is held: the pause
 #: after the press before the first repeat, and then how many presses a second.
@@ -90,9 +97,8 @@ def default_settings(theme: Theme | None = None) -> dict[str, Any]:
         kind: dict(theme.text_style(kind)) for kind in TEXT_KINDS
     }
     settings[THEME_KEY] = theme_setting(split_id(theme.theme_id))
-    settings[LONGTOUCH_SECTION] = {"enabled": False}
-    settings[TOGGLE_SECTION] = {"enabled": False}
-    settings[MEMORY_SECTION] = {"enabled": False}
+    for section in FEATURE_SECTIONS:
+        settings[section] = {"enabled": False}
     settings[KEY_REPEAT_SECTION] = {
         "delay_ms": DEFAULT_KEY_REPEAT_DELAY_MS, "rate": DEFAULT_KEY_REPEAT_RATE,
     }
@@ -199,39 +205,20 @@ def font_size_limits(kind: str) -> tuple[int, int]:
     return MIN_FONT_SIZE, SIZE_IDS[kind].height
 
 
-def _font_size_ok(kind: str, value: Any) -> bool:
-    low, high = font_size_limits(kind)
-    return isinstance(value, int) and low <= value <= high
-
-
 def normalize_settings(raw: Any) -> dict[str, Any]:
     """Settings read from disk, with every missing or unusable value defaulted.
 
-    The defaults are the ones the remote's theme supplies, so a key the file
-    leaves out follows the theme rather than a constant.
-
-    A font that is not installed is kept: the text falls back to the default
-    font while it is missing, and comes back once the file is put back.
+    The text block is the theme's, always: a remote's own copy is what used to
+    outlive the theme it was taken from, so a ``title:`` or ``tooltip:`` block
+    an older version wrote is read past rather than applied.
     """
     settings = default_settings(settings_theme(raw))
     if not isinstance(raw, dict):
         return settings
     settings[THEME_KEY] = theme_setting(theme_facets(raw))
-    for kind in TEXT_KINDS:
-        given = raw.get(kind)
-        if not isinstance(given, dict):
-            continue
-        font = given.get("font")
-        if isinstance(font, str) and font.strip():
-            settings[kind]["font"] = font.strip().lower()
-        if _font_size_ok(kind, given.get("font_size")):
-            settings[kind]["font_size"] = given["font_size"]
-    if longtouch_enabled(raw):
-        settings[LONGTOUCH_SECTION]["enabled"] = True
-    if toggle_enabled(raw):
-        settings[TOGGLE_SECTION]["enabled"] = True
-    if _feature_enabled(raw, MEMORY_SECTION):
-        settings[MEMORY_SECTION]["enabled"] = True
+    for section in FEATURE_SECTIONS:
+        if _feature_enabled(raw, section):
+            settings[section]["enabled"] = True
     given = raw.get(KEY_REPEAT_SECTION)
     if isinstance(given, dict):
         for key in ("delay_ms", "rate"):
@@ -240,24 +227,19 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
     return settings
 
 
-def validate_settings(
-    raw: Any, font_ids: set[str], current: Any = None,
-) -> dict[str, Any]:
+def validate_settings(raw: Any, current: Any = None) -> dict[str, Any]:
     """Settings sent by the editor, checked strictly; raises ``ValueError``.
 
     Unlike a file on disk, a save can say what is wrong, so nothing is
     silently replaced. A kind left out keeps its default.
 
-    *current* is what the remote has stored, and it exists for one case: a font
-    that was installed when it was chosen and is not any more. ``normalize_settings``
-    keeps such a font on the way *in* -- the text falls back to the default
-    while the file is missing and comes back when it is restored -- so the
-    editor is handed it, and sends it back untouched with every save. Refusing
-    it there froze the whole card: the remote's two feature switches, which
-    have nothing to do with fonts, could not be changed again until the font
-    file came back. An unchanged font is therefore kept, exactly as the file
-    reader keeps it, while *picking* one that is not installed is still an
-    error. A theme file that has been taken away is kept for the same reason.
+    *current* is what the remote has stored, and it exists for one case: a
+    theme file that has been taken away. It is kept rather than refused, so a
+    remote whose theme is missing can still have its other settings changed.
+
+    A ``title:`` or ``tooltip:`` block is read past: the editor hands the
+    settings back whole, text block included, and that text belongs to the
+    theme.
     """
     if not isinstance(raw, dict):
         raise ValueError("settings must be a mapping")
@@ -309,26 +291,4 @@ def validate_settings(
             if not isinstance(given["enabled"], bool):
                 raise ValueError(f"{section}: enabled must be true or false")
             settings[section]["enabled"] = given["enabled"]
-    for kind, given in raw.items():
-        if kind in FEATURE_SECTIONS or kind in (KEY_REPEAT_SECTION, THEME_KEY):
-            continue
-        if not isinstance(given, dict):
-            raise ValueError(f"{kind} must be a mapping")
-        unknown = set(given) - {"font", "font_size"}
-        if unknown:
-            raise ValueError(f"unknown {kind} setting: {', '.join(sorted(unknown))}")
-        if "font" in given:
-            font = given["font"]
-            if not isinstance(font, str):
-                raise ValueError(f"{kind}: font {font!r} is not installed")
-            font = font.strip().lower()
-            kept = current.get(kind, {}).get("font") if isinstance(current, dict) else None
-            if font not in font_ids and font != kept:
-                raise ValueError(f"{kind}: font {given['font']!r} is not installed")
-            settings[kind]["font"] = font
-        if "font_size" in given:
-            if not _font_size_ok(kind, given["font_size"]):
-                low, high = font_size_limits(kind)
-                raise ValueError(f"{kind}: font size must be a whole number from {low} to {high}")
-            settings[kind]["font_size"] = given["font_size"]
     return settings

@@ -21,6 +21,8 @@
   },
   "services": {
     "reload": "mdi:refresh",
-    "goto_page": "mdi:page-next"
+    "goto_page": "mdi:page-next",
+    "launch_app": "mdi:application-export",
+    "send_ir": "mdi:remote"
   }
 }

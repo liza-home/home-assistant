@@ -1,47 +1,50 @@
 """Which fonts text can be drawn in, and where a font id's file is.
 
-Three places hold fonts: the ones shipped in ``assets/fonts/``, a directory
-the user drops their own into (``<ha_config>/lizaip/fonts``), and the web fonts
-Home Assistant's own frontend ships (Roboto). A font's id is its file name
+Two places hold fonts: the directory the user drops their own into
+(``<ha_config>/www/fonts``), and the web fonts
+Home Assistant's own frontend ships (Roboto). Nothing is shipped with the
+integration; the default font is Roboto Light from Home Assistant. A font's id is its file name
 without the extension, lowercased -- the name the font picker stores and
 ``?font=`` carries.
 
-Pillow cannot read ``.woff``/``.woff2``, so those are decoded once into plain
-``.ttf`` files in a cache folder and used from there; the cache follows the
-source (a removed or newer web font is dropped or redone).
+Pillow cannot read ``.woff``/``.woff2``. Listing one reads only its name; it is
+decoded in memory the first time text is drawn in it (see ``const.open_font``),
+and nothing is written to disk.
 """
 from __future__ import annotations
 
 import logging
 import os
-import tempfile
+from functools import lru_cache
 from typing import Final
+from urllib.parse import quote
 
 from PIL import ImageFont
 
-from .const import COLOR_EMOJI_FONT, DEFAULT_FONT, EMOJI_FONT, FONTS_DIR, find_font
+from .const import (
+    DEFAULT_FONT,
+    FONT_EXTENSIONS,
+    WEBFONT_EXTENSIONS,
+    find_font,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-FONT_EXTENSIONS: Final = (".ttf", ".otf", ".ttc")
-WEBFONT_EXTENSIONS: Final = (".woff", ".woff2")
 
-# Where decoded web fonts go, inside the user's font folder (dot-named, so it is
-# never mistaken for a font file) or the system temp dir without one.
-_CACHE_DIRNAME: Final = ".webfont-cache"
+# Below HA's config directory; served as ``/local/fonts``.
+WWW_FONTS_SUBDIR: Final = ("www", "fonts")
 
-# Below HA's config directory, next to the per-remote folders.
-USER_FONTS_SUBDIR: Final = ("lizaip", "fonts")
-
-# The emoji fonts are fallbacks for glyphs the chosen font lacks, not a choice.
-_FALLBACK_ONLY: Final = frozenset(
-    os.path.splitext(f)[0].lower() for f in (EMOJI_FONT, COLOR_EMOJI_FONT)
-)
+def www_fonts_dir(hass) -> str:
+    """Where the user's own fonts go: ``<ha_config>/www/fonts``."""
+    return hass.config.path(*WWW_FONTS_SUBDIR)
 
 
-def user_fonts_dir(hass) -> str:
-    """Where the user's own fonts go: ``<ha_config>/lizaip/fonts``."""
-    return hass.config.path(*USER_FONTS_SUBDIR)
+def _www_fonts_dir(user_dir: str | None) -> str | None:
+    """``<ha_config>/www/fonts`` (served as ``/local/fonts``), next to ``lizaip/``."""
+    if not user_dir:
+        return None
+    config_dir = os.path.dirname(os.path.dirname(os.path.normpath(user_dir)))
+    return os.path.join(config_dir, "www", "fonts")
 
 
 def font_id(path: str) -> str:
@@ -50,15 +53,18 @@ def font_id(path: str) -> str:
 
 
 def _font_files(directory: str | None) -> list[str]:
+    """Font and web-font files in *directory* and its sub-folders."""
     if not directory or not os.path.isdir(directory):
         return []
-    return sorted(
-        os.path.join(directory, f)
-        for f in os.listdir(directory)
-        if f.lower().endswith(FONT_EXTENSIONS)
-        and not f.startswith(".")
-        and os.path.splitext(f)[0].lower() not in _FALLBACK_ONLY
-    )
+    found: list[str] = []
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        found.extend(
+            os.path.join(root, f) for f in files
+            if f.lower().endswith(FONT_EXTENSIONS + WEBFONT_EXTENSIONS)
+            and not f.startswith(".")
+        )
+    return sorted(found)
 
 
 def _frontend_fonts_dir() -> str | None:
@@ -71,68 +77,76 @@ def _frontend_fonts_dir() -> str | None:
     return path if os.path.isdir(path) else None
 
 
-def _webfont_files(directory: str | None, recursive: bool = False) -> list[str]:
-    if not directory or not os.path.isdir(directory):
-        return []
-    found: list[str] = []
-    for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if not d.startswith(".")] if recursive else []
-        found.extend(
-            os.path.join(root, f) for f in files
-            if f.lower().endswith(WEBFONT_EXTENSIONS) and not f.startswith(".")
-        )
-    return sorted(found)
-
-
-def _decode_webfont(src: str, dst: str) -> bool:
-    try:
-        from fontTools.ttLib import TTFont  # noqa: PLC0415 - optional until needed
-        font = TTFont(src)
-        font.flavor = None
-        font.save(dst)
-    except Exception as err:  # noqa: BLE001 - a bad file must not hide the rest
-        _LOGGER.warning("Web font %s cannot be converted (%s); it is not offered", src, err)
-        return False
-    return True
-
-
-def _converted_dir(sources: list[str], cache_dir: str) -> str | None:
-    """Decode *sources* into *cache_dir* and return it, dropping stale files."""
-    wanted = {os.path.splitext(os.path.basename(p))[0] + ".ttf": p for p in sources}
-    if os.path.isdir(cache_dir):
-        for name in os.listdir(cache_dir):
-            if name.endswith(".ttf") and name not in wanted:
-                try:
-                    os.remove(os.path.join(cache_dir, name))
-                except OSError:
-                    pass
-    if not wanted:
-        return None
-    os.makedirs(cache_dir, exist_ok=True)
-    for name, src in wanted.items():
-        dst = os.path.join(cache_dir, name)
-        if os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(src):
-            continue
-        _decode_webfont(src, dst)
-    return cache_dir
-
-
-def _font_sources(user_dir: str | None) -> list[tuple[str, str | None]]:
+def _font_sources(fonts_dir: str | None) -> list[tuple[str, str | None]]:
     """``(source, directory)`` pairs, in the order a font id is looked up."""
-    base = os.path.join(user_dir, _CACHE_DIRNAME) if user_dir else os.path.join(
-        tempfile.gettempdir(), "lizaip" + _CACHE_DIRNAME)
-    return [
-        ("bundled", FONTS_DIR),
-        ("user", user_dir),
-        ("user", _converted_dir(_webfont_files(user_dir), os.path.join(base, "user"))),
-        ("ha", _converted_dir(
-            _webfont_files(_frontend_fonts_dir(), recursive=True), os.path.join(base, "ha"))),
-    ]
+    return [("user", fonts_dir), ("ha", _frontend_fonts_dir())]
+
+
+# A browser draws from a downloaded file, so only the formats it reads get a
+# URL; ``.ttc`` collections are Pillow-only.
+_WEB_EXTENSIONS: Final = (".ttf", ".otf") + WEBFONT_EXTENSIONS
+
+# Where each source's font directory is reachable from a browser: ``www/`` is
+# served as ``/local``, and Home Assistant's frontend package as ``/static``.
+_URL_BASES: Final = {"user": "/local/fonts", "ha": "/static/fonts"}
+
+
+def _font_url(source: str, directory: str, path: str) -> str:
+    """The URL a browser can load *path* from, or ``""`` when it cannot."""
+    base = _URL_BASES.get(source)
+    if not base or not path.lower().endswith(_WEB_EXTENSIONS):
+        return ""
+    rel = os.path.relpath(path, directory)
+    if rel.startswith(os.pardir):
+        return ""
+    return "/".join([base, *(quote(part) for part in rel.split(os.sep))])
+
+
+def _names(path: str) -> tuple[str, str]:
+    """A font's family and style; a web font's are read without decoding it.
+
+    A colour bitmap font (Noto Color Emoji) opens in Pillow at its own sizes
+    only, so its names are read from the file as a web font's are.
+    """
+    if not path.lower().endswith(WEBFONT_EXTENSIONS):
+        try:
+            return ImageFont.truetype(path, 12).getname()
+        except OSError:
+            pass
+    from fontTools.ttLib import TTFont  # noqa: PLC0415 - not needed for most fonts
+    with TTFont(path, lazy=True) as font:
+        name = font["name"]
+        return (str(name.getBestFamilyName() or ""), str(name.getBestSubFamilyName() or ""))
+
+
+#: What a font must hold to be offered for emoji: a face and a house, from the
+#: two blocks every emoji font covers and no text font does.
+_EMOJI_PROBES = (0x1F600, 0x1F3E0)
+
+
+@lru_cache(maxsize=256)
+def _has_emoji(path: str, _mtime: float) -> bool:
+    """Whether the font at *path* draws emoji (read from its character map)."""
+    from fontTools.ttLib import TTFont  # noqa: PLC0415 - read once per file
+
+    try:
+        with TTFont(path, lazy=True, fontNumber=0) as font:
+            cmap = font.getBestCmap() or {}
+    except Exception:  # noqa: BLE001 - an unreadable file is simply no emoji font
+        return False
+    return all(code in cmap for code in _EMOJI_PROBES)
+
+
+def is_emoji_font(path: str) -> bool:
+    try:
+        return _has_emoji(path, os.path.getmtime(path))
+    except OSError:
+        return False
 
 
 def _display_name(path: str) -> str:
     try:
-        family, style = ImageFont.truetype(path, 12).getname()
+        family, style = _names(path)
     except Exception:  # noqa: BLE001 - an unreadable file must not hide the rest
         return ""
     family = (family or "").strip()
@@ -142,18 +156,21 @@ def _display_name(path: str) -> str:
     return family if not style or style.lower() == "regular" else f"{family} {style}"
 
 
-def list_fonts(user_dir: str | None = None) -> list[dict[str, str]]:
-    """Every font text can be drawn in: ``[{"id", "name", "source"}]``.
+def list_fonts(fonts_dir: str | None = None) -> list[dict[str, str]]:
+    """Every font text can be drawn in: ``[{"id", "name", "source", "url", "emoji"}]``.
 
-    Shipped fonts come first, then the user's, then Home Assistant's, each sorted by file name. A user
-    font whose id a shipped font already has is left out: ``?font=`` resolves
-    that id to the shipped one, so listing both would offer a choice that does
+    Sorted by name, the user's and Home Assistant's mixed. A Home Assistant font
+    whose id a user font already has is left out: ``?font=`` resolves
+    that id to the earlier one, so listing both would offer a choice that does
     nothing. A file Pillow cannot open is left out as well -- picking it would
     silently draw in the default font.
+
+    ``url`` is where a browser can load the file from, so the font picker can
+    draw each name in its own font. It is ``""`` for a format no browser reads.
     """
     fonts: list[dict[str, str]] = []
     seen: set[str] = set()
-    for source, directory in _font_sources(user_dir):
+    for source, directory in _font_sources(fonts_dir):
         for path in _font_files(directory):
             fid = font_id(path)
             if fid in seen:
@@ -163,14 +180,21 @@ def list_fonts(user_dir: str | None = None) -> list[dict[str, str]]:
                 _LOGGER.warning("Font file %s cannot be read; it is not offered", path)
                 continue
             seen.add(fid)
-            fonts.append({"id": fid, "name": name, "source": source})
-    return fonts
+            fonts.append({
+                "id": fid,
+                "name": name,
+                "source": source,
+                "url": _font_url(source, directory, path),
+                # Offered for the theme's emoji font; the text fonts are not.
+                "emoji": is_emoji_font(path),
+            })
+    return sorted(fonts, key=lambda f: (f["name"].casefold(), f["id"]))
 
 
-def resolve_font_path(name: str | None, user_dir: str | None = None) -> str | None:
+def resolve_font_path(name: str | None, fonts_dir: str | None = None) -> str | None:
     """The file a font id names, or ``None`` when no font matches.
 
-    An exact id wins over a fuzzy match, and a shipped font over a user font:
+    An exact id wins over a fuzzy match, and a user font over a Home Assistant one:
     the fuzzy lookup alone takes the first file that merely contains the name,
     so with ``Inter.ttf`` and ``Inter-Bold.ttf`` side by side ``inter`` could
     draw in bold.
@@ -178,15 +202,16 @@ def resolve_font_path(name: str | None, user_dir: str | None = None) -> str | No
     if not name:
         return None
     wanted = name.lower().replace(" ", "")
-    directories = [d for _, d in _font_sources(user_dir)]
+    directories = [d for _, d in _font_sources(fonts_dir)]
     for directory in directories:
         for path in _font_files(directory):
             if font_id(path) == wanted:
                 return path
     for directory in directories:
-        if (directory and (path := find_font(name, directory))
-                and path.lower().endswith(FONT_EXTENSIONS)):
-            return path
+        for folder in sorted({os.path.dirname(p) for p in _font_files(directory)}):
+            if ((path := find_font(name, folder))
+                    and path.lower().endswith(FONT_EXTENSIONS + WEBFONT_EXTENSIONS)):
+                return path
     return None
 
 

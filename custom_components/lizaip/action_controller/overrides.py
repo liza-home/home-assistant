@@ -119,7 +119,7 @@ def may_be_context(button_key: Any, assign: Any) -> bool:
     slider_actions = assign.get("slider_actions")
     return bool(
         assign.get("action_id")
-        or assign.get("image")
+        or assign.get("icon")
         or (isinstance(slider_actions, dict) and slider_actions.get("mode"))
     )
 

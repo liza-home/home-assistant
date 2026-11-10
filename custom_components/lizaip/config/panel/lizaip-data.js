@@ -142,9 +142,9 @@ export const DataMixin = {
    * The action wordings the panel prints, from the integration's translations.
    *
    * Loaded rather than hardcoded so the panel and the device cannot disagree:
-   * `get_action_label` in `const.py` reads the same `action_labels` section of
-   * the same `translations/<lang>.json`. On failure `_actionLabels` stays empty
-   * and `_getActionLabel` title-cases the key, which is readable English rather
+   * `get_button_tooltip` in `const.py` reads the same `button_tooltips` section of
+   * the same `translations/<lang>.json`. On failure `_buttonTooltips` stays empty
+   * and `_getButtonTooltip` title-cases the key, which is readable English rather
    * than a blank button.
    *
    * `entry_id` is what makes the preview honest: the language is a per-device
@@ -152,18 +152,18 @@ export const DataMixin = {
    * too*. Reloaded whenever the selected device changes, since the answer is
    * different per device.
    */
-  async _loadActionLabels() {
+  async _loadButtonTooltips() {
     try {
       const r = await this._hass.callWS({
-        type: "lizaip_config/get_action_labels",
+        type: "lizaip_config/get_button_tooltips",
         ...(this._currentEntry ? { entry_id: this._currentEntry } : {}),
         language: this._uiLanguage(),
       });
-      this._actionLabels = r?.labels || {};
+      this._buttonTooltips = r?.tooltips || {};
       // The language the backend resolved -- the device's, which may outrank
       // this browser.
-      this._actionLabelsLang = r?.language || "";
-    } catch (e) { this._actionLabels = this._actionLabels || {}; }
+      this._buttonTooltipsLang = r?.language || "";
+    } catch (e) { this._buttonTooltips = this._buttonTooltips || {}; }
   },
 
   /**
@@ -193,16 +193,16 @@ export const DataMixin = {
   },
 
   async _loadAll() {
-    // `_loadActionLabels` belongs here and not only in `_init`: the language is
+    // `_loadButtonTooltips` belongs here and not only in `_init`: the language is
     // a *per-device* option, so the answer changes with `_currentEntry`. `_init`
     // loads it before any device is selected (the picker screen still prints
     // labels), and this reloads it once one is — and again on every switch.
-    // `_loadBlueprint` is here for the same reason as `_loadActionLabels`: the
+    // `_loadBlueprint` is here for the same reason as `_loadButtonTooltips`: the
     // face belongs to the device, so switching remotes must redraw it. `_init`
     // loads the default one before any device is selected; this replaces it
     // with the selected remote's own.
     await Promise.all([
-      this._loadPages(), this._loadActions(), this._loadActionLabels(), this._loadBlueprint(),
+      this._loadPages(), this._loadActions(), this._loadButtonTooltips(), this._loadBlueprint(),
       // The title previews are drawn in the remote's text settings.
       this._loadTextSettings(),
       this._loadIconOptions(),
@@ -216,13 +216,9 @@ export const DataMixin = {
   },
 
   /**
-   * How finely this entry fills a brightness icon.
-   *
-   * Loaded per entry, alongside the pages, because the panel renders its own
-   * preview of every tile instead of fetching the device's images: a stale
-   * step here means the preview shows a fill the hardware never draws. A
-   * failure leaves the helper on its default, which is the right answer for
-   * every entry that has not changed the setting.
+   * How this entry styles its tiles: the fill step and the two feature
+   * switches. Loaded per entry because the Settings tab shows them, not
+   * because the page preview draws them -- it does not read them at all.
    */
   async _loadIconOptions() {
     try {
@@ -233,12 +229,9 @@ export const DataMixin = {
     } catch (e) { this._applyIconOptions(null); }
   },
 
-  /** Put one `icon_options` reply into the fields the preview reads. */
+  /** Put one `icon_options` reply where the Settings tab reads it. */
   _applyIconOptions(r) {
     this._iconOptions = r;
-    this._iconFillStep = r?.icon_fill_step ?? null;
-    this._iconFillEnabled = r?.icon_fill_enabled === true;
-    this._iconColorEnabled = r?.icon_color_enabled === true;
   },
 
   async _loadPages() {
@@ -358,7 +351,7 @@ export const DataMixin = {
             page: page.name || page.id,
             pageIdx: pi,
             button: key,
-            buttonName: assign.label || "",
+            buttonName: assign.tooltip || "",
             interaction: interaction || "",
           });
         };
@@ -427,12 +420,10 @@ export const DataMixin = {
   /**
    * Flush any pending debounced save immediately (call before page/tab switch).
    *
-   * Returns the save so a caller that is about to move `_currentPageIdx` can
-   * await it. That await is required, not tidiness: `_globalSave` saves actions
-   * first, and `_saveAssignments` only resolves `_currentPageId` after those
-   * round-trips. Starting the flush without waiting leaves the page switch free
-   * to land in between, so the edits get written to the page being switched
-   * *to*, clobbering it and losing the ones they belonged to.
+   * Returns the save so a caller can wait for it to reach the backend before
+   * sending something that depends on it. `_globalSave` takes the page and its
+   * buttons when it starts, so the edits land on the page they were made on
+   * even if the selection moves while it runs.
    *
    * A save already running counts as pending. Several callers flush without
    * awaiting, which clears the timer; returning only on the timer would hand a
@@ -450,9 +441,14 @@ export const DataMixin = {
   },
 
     async _globalSave(silent = false) {
+    // The page and its buttons as they are now, before the first round trip:
+    // a page switch or delete may move `_currentPageId` while the actions
+    // save, and the edits belong to the page they were made on.
+    const pageId = this._currentPageId;
+    const assignments = this._assignments;
     try {
       await this._saveActionsToBackend();
-      await this._saveAssignments();
+      await this._saveAssignments(assignments, pageId);
       if (!silent) this._toast(this._t("saved"));
     } catch (e) { this._toast(this._t("save_failed", { error: e.message || e })); }
   },
@@ -488,15 +484,15 @@ export const DataMixin = {
     const cleaned = {};
     for (const [btnKey, assign] of Object.entries(source)) {
       if (!assign || typeof assign !== "object") {
-        cleaned[btnKey] = { action_id: null, config: [], label: null, image: null, image_pinned: false, state_icons: {} };
+        cleaned[btnKey] = { action_id: null, config: [], tooltip: null, icon: null, icon_pinned: false, state_icons: {} };
         continue;
       }
       const copy = { ...assign };
-      // Session-only, and deliberately not `label_edited`: that one is the
+      // Session-only, and deliberately not `tooltip_edited`: that one is the
       // stored record of a typed label and has to reach the backend, or the
       // ladders go back to guessing and re-derive a typed label that happens
       // to equal its library name.
-      delete copy._labelEdited;
+      delete copy._tooltipEdited;
       if (!copy.action_id) {
         copy.action_id = null;
         copy.config = copy.config || [];
@@ -506,11 +502,11 @@ export const DataMixin = {
         delete copy.before;
         delete copy.after;
       }
-      if (!("label" in copy)) copy.label = null;
-      if (!("image" in copy)) copy.image = null;
-      // image_pinned is a real user decision, not a transient UI flag: it must
+      if (!("tooltip" in copy)) copy.tooltip = null;
+      if (!("icon" in copy)) copy.icon = null;
+      // icon_pinned is a real user decision, not a transient UI flag: it must
       // survive a reload or the stale-image invalidation misfires on the next edit.
-      copy.image_pinned = !!copy.image_pinned;
+      copy.icon_pinned = !!copy.icon_pinned;
       if (!("state_icons" in copy)) copy.state_icons = {};
       cleaned[btnKey] = copy;
     }
@@ -518,7 +514,7 @@ export const DataMixin = {
     // page_id must be a 32-bit unsigned integer ≥ 1 (PROTOCOL.md §3). Bail out
     // instead of sending a request the backend will reject.
     if (!Number.isInteger(targetPageId) || targetPageId < 1) {
-      console.warn("[LIZA] save_assignments skipped — no valid page_id:", targetPageId);
+      console.warn("[lizaIP] save_assignments skipped — no valid page_id:", targetPageId);
       return;
     }
     // Same echo as save_actions — ws_save_assignments fires config_changed too.
@@ -553,14 +549,14 @@ export const DataMixin = {
       if (assign.action_id === deletedId) {
         delete assign.action_id;
         delete assign.config;
-        delete assign.label;
+        delete assign.tooltip;
         delete assign.trigger_on;
-        delete assign._labelEdited;
+        delete assign._tooltipEdited;
         // The label it claimed went with it, so the claim goes too — a slot
         // reassigned later must not print a label that no longer exists.
-        delete assign.label_edited;
+        delete assign.tooltip_edited;
         delete assign.state_icons;
-        if (!assign.image_pinned) { delete assign.image; delete assign.image_pinned; }
+        if (!assign.icon_pinned) { delete assign.icon; delete assign.icon_pinned; }
         // Same reasoning as _unassignButton: the action this button tracked is
         // gone, so tracking has to stop or the next refresh rebuilds a button
         // pointing at a deleted action. Explicit null so the backend unbinds
@@ -608,7 +604,7 @@ export const DataMixin = {
       // to destroy.
       const hasUnbind = Object.hasOwn(assign, "dynamic");
       const hasOverrides = assign.overrides && Object.keys(assign.overrides).length > 0;
-      if (!assign.action_id && !assign.image && !hasInteractions && !hasSlider
+      if (!assign.action_id && !assign.icon && !hasInteractions && !hasSlider
           && !hasUnbind && !hasOverrides && !hasToggle) {
         delete assigns[btnKey];
       }
@@ -728,7 +724,7 @@ export const DataMixin = {
   async _loadHaTranslations() {
     try {
       await this._hass?.loadFragmentTranslation?.("config");
-    } catch (e) { console.debug("[LIZA] fragment translations:", e); }
+    } catch (e) { console.debug("[lizaIP] fragment translations:", e); }
   },
 
   async _loadHaComponents() {
@@ -746,12 +742,17 @@ export const DataMixin = {
       const cr = document.createElement("ha-panel-config");
       await cr.routerOptions.routes.automation.load();
       this._haComponentsLoaded = true;
-    } catch (e) { console.debug("[LIZA] preload:", e); }
+    } catch (e) { console.debug("[lizaIP] preload:", e); }
   },
 
-  async _loadTemplates() {
+  async _loadTemplates(entityId = "") {
     try {
-      const r = await this._hass.callWS({ type: "lizaip_config/list_templates" });
+      const r = await this._hass.callWS({
+        type: "lizaip_config/list_templates",
+        // What the button already controls, so the backend can mark the
+        // templates that device answers.
+        ...(entityId ? { entity_id: entityId } : {}),
+      });
       // A shipped template names its words in the panel's translation table
       // rather than spelling one language, the way a folder's card does.
       // Settled here so everything downstream reads a plain name.
@@ -761,39 +762,41 @@ export const DataMixin = {
         description: this._groupLabel(t, { desc: true }),
       }));
     } catch (e) {
-      console.warn("[LIZA] Failed to load templates:", e);
+      console.warn("[lizaIP] Failed to load templates:", e);
       return [];
     }
   },
 
-  async _loadTemplateDevices(templateId) {
-    // Returns {devices, error}. An empty list and a failed request need very
-    // different messages: "set up the integration" is actively misleading when
-    // the integration is fine and the request itself broke.
+  async _loadTemplateDevices(templateId, entityId = "") {
+    // Returns {devices, suggested, error}. An empty list and a failed request
+    // need very different messages: "set up the integration" is actively
+    // misleading when the integration is fine and the request itself broke.
     try {
       const r = await this._hass.callWS({
         type: "lizaip_config/list_template_devices",
         template_id: templateId,
+        ...(entityId ? { entity_id: entityId } : {}),
       });
-      return { devices: r?.devices || [], error: null };
+      return { devices: r?.devices || [], suggested: r?.suggested || "", error: null };
     } catch (e) {
-      console.warn("[LIZA] Failed to load template devices:", e);
-      return { devices: [], error: this._wsErrorText(e) };
+      console.warn("[lizaIP] Failed to load template devices:", e);
+      return { devices: [], suggested: "", error: this._wsErrorText(e) };
     }
   },
 
-  async _loadTemplateConfigEntries(templateId) {
+  async _loadTemplateConfigEntries(templateId, entityId = "") {
     // The config-entry flavour of the above: a template bound to one instance of
     // an integration (a Hue bridge) rather than to one of its devices.
     try {
       const r = await this._hass.callWS({
         type: "lizaip_config/list_template_config_entries",
         template_id: templateId,
+        ...(entityId ? { entity_id: entityId } : {}),
       });
-      return { entries: r?.entries || [], error: null };
+      return { entries: r?.entries || [], suggested: r?.suggested || "", error: null };
     } catch (e) {
-      console.warn("[LIZA] Failed to load template config entries:", e);
-      return { entries: [], error: this._wsErrorText(e) };
+      console.warn("[lizaIP] Failed to load template config entries:", e);
+      return { entries: [], suggested: "", error: this._wsErrorText(e) };
     }
   },
 
@@ -811,7 +814,7 @@ export const DataMixin = {
       type: "lizaip_config/goto_page",
       entry_id: this._currentEntry,
       page_id: pageId,
-    }).catch((e) => console.warn("[LIZA] goto_page failed:", e?.message || e));
+    }).catch((e) => console.warn("[lizaIP] goto_page failed:", e?.message || e));
   },
 
   /**
@@ -836,10 +839,8 @@ export const DataMixin = {
   async _createPage(create, { reloadActions = false } = {}) {
     this._pageOpInFlight = true;
     try {
-      // A pending save resolves _currentPageId, which is about to point at the
-      // new page. Awaited so the save finishes while that still means the page
-      // being left — otherwise it lands on the page being created, losing the
-      // edits from both.
+      // Awaited: the save writes the whole action library, and so may adding
+      // a template; run side by side, one would overwrite the other's actions.
       await this._flushAutoSave();
       // Cache current page assignments before switching away
       if (this._pages.length > 0) {
@@ -915,28 +916,47 @@ export const DataMixin = {
           : { target_device: target }),
       });
       if (result?.pages) this._pages = result.pages;
-      delete this._pageCache[page.id];
-      if (page.id === this._currentPageId) await this._loadAssignments();
+      // A template's subpages move with the page that brought them.
+      const moved = Array.isArray(result?.page_ids) ? result.page_ids : [page.id];
+      for (const id of moved) delete this._pageCache[id];
+      if (moved.includes(this._currentPageId)) await this._loadAssignments();
       return result;
     } finally {
       this._endPageOp();
     }
   },
 
-  async _addTemplatePage(templateId, target, targetKind = "device") {
+  /**
+   * Add a page from a template. With *options* it is a button's options
+   * subpage instead, written by `_addOptionsPage`: same walk, but the page
+   * lands beside the button's own and the panel stays where it is.
+   */
+  async _addTemplatePage(templateId, target, targetKind = "device", options = null) {
+    const msg = {
+      type: "lizaip_config/add_template_page",
+      entry_id: this._currentEntry,
+      template_id: templateId,
+      // No target at all for an unbound template: the backend takes a string
+      // or nothing, never null.
+      ...(!target ? {} : targetKind === "config_entry"
+        ? { target_config_entry: target }
+        : { target_device: target }),
+    };
+    if (options) {
+      return this._addOptionsPage(options, () => this._hass.callWS({
+        ...msg,
+        subpage: true,
+        back_to_page: options.pageId,
+        // Seated and named where it is made: the panel posting the page list
+        // it was answered with would undo whatever a refresh wrote meanwhile.
+        insert_after: options.pageId,
+        title: this._t("options_page_title", { name: options.name }),
+      }));
+    }
     try {
-      return await this._createPage(() => this._hass.callWS({
-        type: "lizaip_config/add_template_page",
-        entry_id: this._currentEntry,
-        template_id: templateId,
-        // No target at all for an unbound template: the backend takes a string
-        // or nothing, never null.
-        ...(!target ? {} : targetKind === "config_entry"
-          ? { target_config_entry: target }
-          : { target_device: target }),
-      }), { reloadActions: true });
+      return await this._createPage(() => this._hass.callWS(msg), { reloadActions: true });
     } catch (e) {
-      console.error("[LIZA] Add template page failed:", e);
+      console.error("[lizaIP] Add template page failed:", e);
       throw e;
     }
   },
@@ -955,7 +975,7 @@ export const DataMixin = {
       });
       return { devices: r?.devices || [], suggested: r?.suggested || "", error: null };
     } catch (e) {
-      console.warn("[LIZA] Failed to load devices:", e);
+      console.warn("[lizaIP] Failed to load devices:", e);
       return { devices: [], suggested: "", error: this._wsErrorText(e) };
     }
   },
@@ -977,8 +997,10 @@ export const DataMixin = {
         target_device: target,
       });
       if (result?.pages) this._pages = result.pages;
-      delete this._pageCache[page.id];
-      if (page.id === this._currentPageId) await this._loadAssignments();
+      // A template's subpages move with the page that brought them.
+      const moved = Array.isArray(result?.page_ids) ? result.page_ids : [page.id];
+      for (const id of moved) delete this._pageCache[id];
+      if (moved.includes(this._currentPageId)) await this._loadAssignments();
       return result;
     } finally {
       this._endPageOp();

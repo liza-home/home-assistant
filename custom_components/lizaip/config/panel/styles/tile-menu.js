@@ -17,7 +17,9 @@ export const STYLES_TILE_MENU = `
      happens to be positioned and then scroll away from the tile it belongs to.
      The coordinates handed in are viewport coordinates, which is what fixed
      takes. */
-  .face-menu {
+  /* The menu the panel draws until Home Assistant's ha-dropdown is loaded;
+     ha-dropdown draws itself. */
+  div.face-menu {
     position: fixed;
     z-index: 20;
     min-width: 168px;
@@ -34,7 +36,7 @@ export const STYLES_TILE_MENU = `
     border-radius: 10px;
     box-shadow: 0 6px 20px rgba(0,0,0,.24);
   }
-  .face-menu-item {
+  button.face-menu-item {
     /* Flex rather than block: an item may carry an icon, and one that does
        must line its label up with the labels of the items that do not. */
     display: flex;
@@ -53,32 +55,32 @@ export const STYLES_TILE_MENU = `
     cursor: pointer;
     color: var(--primary-text-color);
   }
-  .face-menu-item ha-icon {
+  button.face-menu-item ha-icon {
     --mdc-icon-size: 24px;
     flex: 0 0 auto;
     color: var(--ha-color-on-neutral-normal, var(--liza-muted-text));
   }
-  .face-menu-item[disabled] {
+  button.face-menu-item[disabled] {
     cursor: default;
     opacity: .5;
   }
-  .face-menu-item[disabled]:hover { background: transparent; }
-  .face-menu-item:hover, .face-menu-item:focus-visible {
+  button.face-menu-item[disabled]:hover { background: transparent; }
+  button.face-menu-item:hover, button.face-menu-item:focus-visible {
     background: var(--secondary-background-color);
-    outline: none;
   }
-  .face-menu-sep {
+
+  div.face-menu-sep {
     height: 1px;
     margin: 4px 8px;
     background: var(--divider-color);
   }
   /* An item that cannot be taken back, kept legible rather than alarming: the
      colour is a warning to read the row, not a reason to avoid it. */
-  .face-menu-item-danger, .face-menu-item-danger ha-icon {
+  button.face-menu-item-danger, button.face-menu-item-danger ha-icon {
     color: var(--ha-color-on-danger-quiet, var(--liza-danger-text));
   }
-  .face-menu-item-danger:not([disabled]):hover,
-  .face-menu-item-danger:focus-visible {
+  button.face-menu-item-danger:not([disabled]):hover,
+  button.face-menu-item-danger:focus-visible {
     background: color-mix(in srgb, var(--liza-danger-text) 12%, transparent);
   }
 

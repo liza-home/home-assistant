@@ -1,5 +1,28 @@
+# Roku Template — pre-configured remote control
+#
+# Keys go through the Roku integration's `remote.send_command`, whose names
+# are its library's (home, up, select, play, reverse, forward, info, search,
+# volume_up, input_hdmi1, …); any other name is refused.
+#
+# The remote page follows the LG webOS TV template: the arrow keys around OK,
+# Home below them, and the TV's further pages on the right-hand column --
+# Apps (button 4), Digits (button 8) and Inputs (button 12) where the TV has
+# them. They are subpages: not in the remote's page order, only reached from
+# those buttons; on each, the remote's Back button leads back.
+#   - Apps: the Roku's apps and channels, each opening with
+#     `media_player.play_media`; more than twelve get more Apps pages, button
+#     12 leading on. A Roku TV's inputs are left out here: they have a page.
+#   - Inputs: a Roku TV's own input keys -- Antenna TV, HDMI 1–4 and AV. A
+#     streaming stick has no inputs and ignores them, as it ignores the volume
+#     keys.
+#   A Roku has no digit keys, so there is no Digits page; button 8 holds Fast
+#   forward instead.
+#
+# Reference: https://www.home-assistant.io/integrations/roku
+
+version: 2
 name: Roku
-icon: mdi:television-play
+icon: logo:roku
 description: Control your Roku player or Roku TV
 
 # Device selector — the picker offers devices of this integration that
@@ -9,130 +32,291 @@ target_selector:
     integration: roku
     primary_domain: remote
 
-# Button mappings (Liza button_key → HA action), written the way a stored
-# page writes a button. Leave one out for a slot that should do nothing.
-buttons:
-  button_power:
-    label: Power
-    image: mdi:power
-    config:
-      - action: remote.send_command
-        data:
-          command: Power
+# The `apps` kind of the favourites source reads the apps the player lists:
+# its `apps` browse folder where it has one, else its `source_list`.
+placeholders:
+  app:
+    source: favorites
+    spec:
+      category: apps
+      # A Roku TV lists its inputs among its apps; they have a page of their own.
+      exclude: tvinput.*
 
-  button_1:
-    label: Home
-    image: mdi:home
-    config:
-      - action: remote.send_command
-        data:
-          command: Home
+pages:
+  remote:
+    title: "logo:roku ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: mdi:asterisk
+        tooltip: {translate: options}
+        config:
+          - action: remote.send_command
+            data:
+              command: info
 
-  button_2:
-    label: Up
-    repeat: true
-    image: mdi:arrow-up
-    config:
-      - action: remote.send_command
-        data:
-          command: Up
+      button_2:
+        icon: mdi:arrow-up-bold-outline
+        tooltip: {translate: up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: up
 
-  button_3:
-    label: Back
-    image: mdi:keyboard-return
-    config:
-      - action: remote.send_command
-        data:
-          command: Back
+      button_3:
+        icon: mdi:play-pause
+        tooltip: {translate: play_pause}
+        config:
+          - action: remote.send_command
+            data:
+              command: play
 
-  button_4:
-    label: Options
-    image: mdi:asterisk
-    config:
-      - action: remote.send_command
-        data:
-          command: Info
+      button_4:
+        icon: mdi:apps
+        tooltip: {translate: apps}
+        goto_page: apps
 
-  button_5:
-    label: Left
-    repeat: true
-    image: mdi:arrow-left
-    config:
-      - action: remote.send_command
-        data:
-          command: Left
+      button_5:
+        icon: mdi:arrow-left-bold-outline
+        tooltip: {translate: left}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: left
 
-  button_6:
-    label: Select
-    image: mdi:checkbox-marked-circle
-    config:
-      - action: remote.send_command
-        data:
-          command: Select
+      button_6:
+        icon: mdi:circle-outline
+        tooltip: {translate: select}
+        config:
+          - action: remote.send_command
+            data:
+              command: select
 
-  button_7:
-    label: Right
-    repeat: true
-    image: mdi:arrow-right
-    config:
-      - action: remote.send_command
-        data:
-          command: Right
+      button_7:
+        icon: mdi:arrow-right-bold-outline
+        tooltip: {translate: right}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: right
 
-  button_8:
-    label: Instant Replay
-    image: mdi:replay
-    config:
-      - action: remote.send_command
-        data:
-          command: InstantReplay
+      button_8:
+        icon: mdi:fast-forward
+        tooltip: {translate: next}
+        config:
+          - action: remote.send_command
+            data:
+              command: forward
 
-  button_9:
-    label: Previous
-    image: mdi:skip-previous
-    config:
-      - action: remote.send_command
-        data:
-          command: Rev
+      button_9:
+        icon: mdi:rewind
+        tooltip: {translate: previous}
+        config:
+          - action: remote.send_command
+            data:
+              command: reverse
 
-  button_10:
-    label: Down
-    repeat: true
-    image: mdi:arrow-down
-    config:
-      - action: remote.send_command
-        data:
-          command: Down
+      button_10:
+        icon: mdi:arrow-down-bold-outline
+        tooltip: {translate: down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: down
 
-  button_11:
-    label: Next
-    image: mdi:skip-next
-    config:
-      - action: remote.send_command
-        data:
-          command: Fwd
+      button_11:
+        icon: mdi:home-outline
+        tooltip: {translate: home}
+        config:
+          - action: remote.send_command
+            data:
+              command: home
 
-  button_12:
-    label: Play / Pause
-    image: mdi:play-pause
-    config:
-      - action: remote.send_command
-        data:
-          command: Play
+      button_12:
+        icon: mdi:video-input-hdmi
+        tooltip: {translate: inputs}
+        goto_page: inputs
 
-  # --- back & voice ---
-  button_back:
-    label: Back
-    image: mdi:arrow-left-circle
-    config:
-      - action: remote.send_command
-        data:
-          command: Back
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: power
 
-  button_voice:
-    label: Search
-    image: mdi:magnify
-    config:
-      - action: remote.send_command
-        data:
-          command: Search
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_down
+
+      button_voice:
+        icon: mdi:magnify
+        tooltip: {translate: search}
+        config:
+          - action: remote.send_command
+            data:
+              command: search
+
+      button_back:
+        icon: mdi:keyboard-return
+        tooltip: {translate: back}
+        config:
+          - action: remote.send_command
+            data:
+              command: back
+
+  apps:
+    subpage: true
+    paginate: app
+    max_parts: 3
+    title: "mdi:apps ${_device.area_name}"
+    buttons:
+      button_1: "@app[1]"
+      button_2: "@app[2]"
+      button_3: "@app[3]"
+      button_4: "@app[4]"
+      button_5: "@app[5]"
+      button_6: "@app[6]"
+      button_7: "@app[7]"
+      button_8: "@app[8]"
+      button_9: "@app[9]"
+      button_10: "@app[10]"
+      button_11: "@app[11]"
+
+      button_12:
+        placeholder: "@app[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: power
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_down
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, remote]
+
+  inputs:
+    subpage: true
+    title: "mdi:video-input-hdmi ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: mdi:antenna
+        tooltip: Antenna TV
+        config:
+          - action: remote.send_command
+            data:
+              command: input_tuner
+
+      button_2:
+        icon: mdi:video-input-hdmi
+        tooltip: HDMI 1
+        config:
+          - action: remote.send_command
+            data:
+              command: input_hdmi1
+
+      button_3:
+        icon: mdi:video-input-hdmi
+        tooltip: HDMI 2
+        config:
+          - action: remote.send_command
+            data:
+              command: input_hdmi2
+
+      button_4:
+        icon: mdi:video-input-hdmi
+        tooltip: HDMI 3
+        config:
+          - action: remote.send_command
+            data:
+              command: input_hdmi3
+
+      button_5:
+        icon: mdi:video-input-hdmi
+        tooltip: HDMI 4
+        config:
+          - action: remote.send_command
+            data:
+              command: input_hdmi4
+
+      button_6:
+        icon: mdi:video-input-component
+        tooltip: AV
+        config:
+          - action: remote.send_command
+            data:
+              command: input_av1
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: power
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_down
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote

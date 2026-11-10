@@ -70,7 +70,8 @@ def _render_fitted_text(
     fg_color: tuple,
     font_size: int,
     font_id: str | None,
-    user_fonts_dir: str | None,
+    fonts_dir: str | None,
+    emoji: str | None = None,
     min_size: int = _MIN_FONT_SIZE,
 ) -> Image.Image:
     """The words, shrunk until they fit *budget* pixels, then cut short.
@@ -78,17 +79,17 @@ def _render_fitted_text(
     ``render_text`` sizes its canvas to the words, so the fitting is done here.
     """
     size = max(min_size, min(font_size, height))
-    img = render_text(text, budget, height, fg_color, size, font_id, user_fonts_dir)
+    img = render_text(text, budget, height, fg_color, size, font_id, fonts_dir, emoji)
     while img.width > budget > 0 and size > min_size:
         shrunk = max(min_size, int(size * budget / img.width))
         size = shrunk if shrunk < size else size - 1
-        img = render_text(text, budget, height, fg_color, size, font_id, user_fonts_dir)
+        img = render_text(text, budget, height, fg_color, size, font_id, fonts_dir, emoji)
 
     shortened = text
     while img.width > budget > 0 and len(shortened) > 1:
         shortened = shortened[:-1].rstrip()
         img = render_text(
-            shortened + _ELLIPSIS, budget, height, fg_color, size, font_id, user_fonts_dir,
+            shortened + _ELLIPSIS, budget, height, fg_color, size, font_id, fonts_dir, emoji,
         )
     return img
 
@@ -110,10 +111,11 @@ def _text_at(
     height: int,
     fg_color: tuple,
     font_id: str | None,
-    user_fonts_dir: str | None,
+    fonts_dir: str | None,
+    emoji: str | None = None,
 ) -> Image.Image:
     """*text* drawn at exactly *size*, however wide that turns out to be."""
-    return render_text(text, MAX_SIZE, height, fg_color, size, font_id, user_fonts_dir)
+    return render_text(text, MAX_SIZE, height, fg_color, size, font_id, fonts_dir, emoji)
 
 
 def _row_width(items: list[Image.Image], gap: int) -> int:
@@ -172,7 +174,8 @@ def compose_parts(
     fg_color: tuple,
     font_size: int | None = None,
     font_id: str | None = None,
-    user_fonts_dir: str | None = None,
+    fonts_dir: str | None = None,
+    emoji: str | None = None,
 ) -> Image.Image:
     """The parts of a composite source drawn as one picture, in order.
 
@@ -202,7 +205,7 @@ def compose_parts(
     if len(items) == 2 and texts == [1] and width < height * _SIDE_BY_SIDE_RATIO:
         return _stacked(
             items[0], items[1], width, height, gap, fg_color,
-            font_size, font_id, user_fonts_dir,
+            font_size, font_id, fonts_dir, emoji,
         )
 
     if not texts:
@@ -217,7 +220,7 @@ def compose_parts(
         size = min(size, _BESIDE_A_MARK_FONT_SIZE)
     while True:
         rendered = _render_row(items, texts, size, height, fg_color, font_id,
-                               user_fonts_dir)
+                               fonts_dir, emoji)
         row_w = _row_width(rendered, gap)
         if beside_a_mark or row_w <= width or size <= _MIN_TITLE_FONT_SIZE:
             break
@@ -226,14 +229,14 @@ def compose_parts(
 
     if _row_width(rendered, gap) > MAX_SIZE:
         rendered = _render_row(
-            items, texts, size, height, fg_color, font_id, user_fonts_dir,
+            items, texts, size, height, fg_color, font_id, fonts_dir, emoji,
             budget=MAX_SIZE - gap * (len(items) - 1),
         )
     band = next(
         (r.info[TEXT_BAND_INFO] for r in rendered if TEXT_BAND_INFO in r.info), None,
     )
     baseline = band[1] if band else text_baseline(
-        items[texts[0]], height, size, font_id, user_fonts_dir,
+        items[texts[0]], height, size, font_id, fonts_dir,
     )
     return _row(rendered, height, gap, baseline, centre=False)
 
@@ -245,7 +248,8 @@ def _render_row(
     height: int,
     fg_color: tuple,
     font_id: str | None,
-    user_fonts_dir: str | None,
+    fonts_dir: str | None,
+    emoji: str | None = None,
     budget: int | None = None,
 ) -> list[Image.Image]:
     """Every part as an image: the words at *size*, the marks to match.
@@ -270,7 +274,7 @@ def _render_row(
         }
 
     words = {
-        i: _text_at(items[i], size, height, fg_color, font_id, user_fonts_dir)
+        i: _text_at(items[i], size, height, fg_color, font_id, fonts_dir, emoji)
         for i in texts
     }
     marks = fit_marks(letter_height(words))
@@ -278,7 +282,7 @@ def _render_row(
         share = max(1, (budget - sum(m.width for m in marks.values())) // len(texts))
         words = {
             i: _render_fitted_text(
-                items[i], share, height, fg_color, size, font_id, user_fonts_dir,
+                items[i], share, height, fg_color, size, font_id, fonts_dir, emoji,
             )
             for i in texts
         }
@@ -295,7 +299,8 @@ def _stacked(
     fg_color: tuple,
     font_size: int | None,
     font_id: str | None,
-    user_fonts_dir: str | None,
+    fonts_dir: str | None,
+    emoji: str | None = None,
 ) -> Image.Image:
     """A mark above its words, both fitted -- the arrangement a tile gets."""
     subject_h = max(1, int(height * _SUBJECT_HEIGHT_SHARE))
@@ -303,7 +308,7 @@ def _stacked(
     text_h = max(1, height - subject_h - gap)
     text = _render_fitted_text(
         caption, width, text_h, fg_color,
-        min(font_size or text_h, text_h), font_id, user_fonts_dir,
+        min(font_size or text_h, text_h), font_id, fonts_dir, emoji,
     )
     canvas_w = min(width, max(subject.width, text.width))
     canvas = Image.new("RGBA", (max(1, canvas_w), height), TRANSPARENT)

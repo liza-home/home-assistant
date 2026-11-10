@@ -9,6 +9,7 @@ support), see [`README.md`](https://github.com/liza-home/home-assistant/blob/mai
 
 - [Getting started](#getting-started)
   - [Install](#install)
+  - [Provisioning a new device](#provisioning-a-new-device)
   - [Scanning / adding devices](#scanning--adding-devices)
   - [Devices and services](#devices-and-services)
   - [Config](#config)
@@ -22,7 +23,8 @@ support), see [`README.md`](https://github.com/liza-home/home-assistant/blob/mai
   - [Debug (bug tab)](#debug-bug-tab)
   - [Reporting a problem](#reporting-a-problem)
   - [Restoring a configuration](#restoring-a-configuration)
-- [How to use mdi, phu, text, media](#how-to-use-mdi-phu-text-media)
+  - [Letting somebody else configure a remote](#letting-somebody-else-configure-a-remote)
+- [How to use mdi, text, media](#how-to-use-mdi-text-media)
   - [Options for a `media:` picture](#options-for-a-media-picture)
   - [Spreading one picture over several buttons](#spreading-one-picture-over-several-buttons)
   - [Combining several things in one picture](#combining-several-things-in-one-picture)
@@ -37,19 +39,56 @@ support), see [`README.md`](https://github.com/liza-home/home-assistant/blob/mai
 
 ### Install
 
-Requires Home Assistant 2026.8.0+ with [HACS](https://hacs.xyz). Add the
-`liza-home/home-assistant` repository as a custom integration repository, download
-**lizaIP**, and restart Home Assistant. Full step-by-step instructions (including the
-one-click HACS button) are in the
-[Installation section of `README.md`](https://github.com/liza-home/home-assistant/blob/main/README.md#installation).
+Requires Home Assistant 2026.11.0+. The
+[Installation section of `README.md`](https://github.com/liza-home/home-assistant/blob/main/README.md#installation)
+has a button that opens the Marketplace with this repository filled in. Installing
+needs no restart; updating a version Home Assistant already runs does, and it asks
+for one with a repair notice.
+
+### Provisioning a new device
+
+A brand-new remote is not on your network yet, so there is nothing for Home Assistant
+to discover. The remote opens its own Wi-Fi network instead, and you hand it your home
+network from a page it serves itself. The panel links to a step-by-step guide for
+iPhone and Android while no device has been added; the same three steps are below.
+
+1. **Find the lizaIP Wi-Fi.** Open the Wi-Fi settings on your phone or computer and
+   look for an open network named `lizaIP-xxxxxx`, where the suffix is the remote's
+   own.
+2. **Connect to it.** The network is open, so no Wi-Fi password is needed for this
+   step. Your phone may warn that the network has no internet access; that is expected.
+3. **Open the setup page.** Scan the QR code on the remote, or go to `172.16.10.1` in
+   a browser. Then pick your home Wi-Fi, enter its password and confirm the IP
+   settings.
+
+The remote then leaves its own network and joins yours, at which point it announces
+itself and the next section takes over.
+
+The per-platform walkthrough — iPhone, Android, anything else — lives at
+[lizaip.api.ruwido.com/setup](https://lizaip.api.ruwido.com/setup/).
 
 ### Scanning / adding devices
 
-Once the integration is installed and Home Assistant has restarted, a **lizaIP** device
-on your network announces itself and Home Assistant discovers it automatically — no
-manual IP entry needed. A discovered device shows up as a notification/card under
-**Settings → Devices & Services**, the same place any other auto-discovered integration
-appears; confirming it adds the device.
+Once the integration is installed, a **lizaIP** device on your network announces
+itself and Home Assistant discovers it automatically — no manual IP entry needed.
+
+You do not have to leave the panel to add it, and you do not have to go looking
+either. When a remote turns up on the network, a row for it appears under
+**Discovered** at the top of the panel's device list, above the remotes you have
+already set up. The row carries **Add**, which sets it up in one click. There is
+nothing to start, and nothing is there when nothing has been found.
+
+If you have ignored a remote from **Settings → Devices & Services**, it stops being
+offered here too. To bring it back, switch on **Show ignored integrations** in the
+filter menu beside the search box and select **Stop ignoring**.
+
+If you are inside a remote when one turns up, the back arrow appears in the toolbar
+to take you to the list — including when that remote is your only one, which the
+panel otherwise opens straight onto.
+
+A discovered device also still shows up as a card under **Settings → Devices &
+Services**, the same place any other auto-discovered integration appears; confirming
+it there does exactly the same thing.
 
 ![Settings → Devices & Services, where a discovered lizaIP turns up](images/scanning-devices.png)
 
@@ -137,6 +176,14 @@ takes you to its pages, cleared of whatever you had selected.
 
 ### Define pages
 
+A remote with no pages configured does not sit blank. It shows a stand-in page
+instead, headed by the Home Assistant logo and **welcome!** in your language, with
+the remote's own IP address, its firmware version, the address of your Home Assistant
+and its battery on its buttons. It is a placeholder, not a page — the panel still
+shows an empty page strip with nothing but the **+** tile, and there is nothing there
+to edit or delete. Add your first page and it is gone; delete your last one and it
+comes back. Its buttons do nothing, as they only show values.
+
 Click the **+** tile at the end of the page strip to add a page: start **blank**, or
 pick a **template** — a ready-made page for a device you already have in Home Assistant
 (for example, a Sonos speaker with its favourites already laid out). A Sonos page is
@@ -152,39 +199,58 @@ Next buttons show the previous, current and next track as their tooltips (see
 
 The templates on offer, and the Home Assistant integration each one needs — a template
 only lists devices of its integration. Templates for the same device family share one
-card: the four Sonos templates are behind a single **Sonos** card, which opens them.
+card: the Sonos templates are behind a single **Sonos** card, which opens them, with
+the three-page **Sonos** first.
 Those cards come from folders under `assets/templates/`, and they nest as
 deeply as the folders do.
 
 | Template | For | What the page holds |
 |---|---|---|
-| **Sonos** | Sonos | Your favourites on buttons 1–8; Previous, Play/Pause, Next and Mute on 9–12; volume |
-| **Sonos Radio** | Sonos | Only your favourite radio stations, on buttons 1–12; volume |
-| **Sonos Playlists** | Sonos | Only your favourite playlists, on buttons 1–12; volume |
+| **Table of contents** | — (needs no device) | A button for each of this remote's pages, on buttons 1–12 |
+| **Sonos** | Sonos | Three pages: the album art on buttons 1, 2, 5 and 6, Playlists and Radio on 3 and 4, Previous, Play/Pause, Next and Mute on 9–12; behind it a Playlists and a Radio page, eleven favourites to a page with button 12 leading to the next (twelve on the last) (more pages come and go with your favourites, up to three); Back goes back a page, and from the first to Now Playing |
+| **Sonos Control** | Sonos | One page: your favourites on buttons 1–8; Previous, Play/Pause, Next and Mute on 9–12; volume |
+| **Sonos Radio** | Sonos | Only your favourite radio stations, on buttons 1–12; volume. More stations get more pages, swiped to (up to three) |
+| **Sonos Playlists** | Sonos | Only your favourite playlists, on buttons 1–12; volume. More playlists get more pages, swiped to (up to three) |
+| **Sonos Albums**, **Tracks**, **Podcasts**, **Audiobooks** | Sonos | Only your favourites of that kind, on buttons 1–12; volume. More get more pages, swiped to (up to three). Each is offered only for a speaker that has favourites of its kind |
 | **Sonos Cover** | Sonos | The album art of what is playing across buttons 1–3, 5–7 and 9–11; Previous, Play/Pause and Next on 4, 8 and 12; volume |
-| **Philips Hue** | Hue | Every lamp on a bridge, one per button |
-| **Android TV** | Android TV Remote | Remote-control buttons for the TV |
-| **Apple TV** | Apple TV | Remote-control buttons for the Apple TV |
-| **Amazon Fire TV** | Android Debug Bridge | Remote-control buttons for a Fire TV or Fire TV Stick |
-| **Roku** | Roku | Remote-control buttons for a Roku player or Roku TV |
-| **Samsung TV** | Samsung Smart TV | Remote-control buttons for the TV |
-| **LG webOS TV** | LG webOS TV | The TV's remote keys, transport and volume; Power toggles it (turning it on needs a Wake-on-LAN automation) |
-| **Overview** | — (needs no device) | A button for each of this remote's pages, on buttons 1–12 |
+| **Sonos Options** | Sonos | Mute, shuffle, repeat, volume presets and a sleep timer for one speaker (**Add options…** only) |
+| **Philips Hue** | Hue | Every lamp on a bridge, one per button; a bridge with more than twelve gets more pages, swiped to (up to three) |
+| **Hue Lamp Options** | Hue | Brightness and colour-temperature presets for one lamp (**Add options…** only) |
+| **Android TV** | Android TV Remote | Laid out as the LG webOS TV template: remote keys and volume, with an **Apps** subpage (the apps configured in the integration's options) on button 4 and a **Digits** keypad with Channel up and down on button 8. The integration lists no inputs, so button 12 opens the TV's own input menu. Back returns to the remote keys |
+| **Apple TV** | Apple TV | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (its apps, with their App Store icons — App Store and Arcade show their own logos; Computers, Settings and Search, which the store does not list, get a lookalike in their home-screen colours) on button 4. An Apple TV has no digit keys and no inputs. Back returns to the remote keys |
+| **Amazon Fire TV** | Android Debug Bridge | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (the apps it lists as sources) on button 4 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
+| **Roku** | Roku | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (its apps and channels) on button 4 and, for a Roku TV, an **Inputs** subpage (Antenna TV, HDMI 1–4, AV) on button 12. A Roku has no digit keys. Back returns to the remote keys |
+| **Samsung TV** | Samsung Smart TV | Laid out as the LG webOS TV template: remote keys and volume, with an **Apps** subpage on button 4 (its apps, with the icons from Samsung's TV app store — a newer Samsung TV does not list its apps, so it is asked about every app of the store; the first look takes about half a minute, and an app built into the TV, such as Samsung TV Plus, does not show), an **Inputs** subpage (TV and HDMI) on button 12 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
+| **Sony Bravia TV** | Sony Bravia TV | Laid out as the LG webOS TV template: the TV's remote keys and volume, with an **Apps** subpage (its apps) on button 4, an **Inputs** subpage (its inputs, as named on the TV) on button 12 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
+| **Hisense TV (Vidaa)** | Hisense TV ([HACS](https://github.com/sehaas/ha_hisense_tv)) | Laid out as the LG webOS TV template: the TV's remote keys and volume, with an **Apps** subpage (the apps in the integration's media browser) on button 4, an **Inputs** subpage (its sources) on button 12 and a **Digits** keypad with Channel up and down on button 8. The keys are MQTT messages on the integration's default prefix `hisense`; a TV set up with another prefix needs it changed in a copy of the template |
+| **LG webOS TV** | LG webOS TV | The TV's remote keys and volume, Power toggling it (turning it on needs a Wake-on-LAN automation); then subpages reached from the remote: **Apps** (button 4) with the TV's installed apps alphabetically on buttons 1–11 (and a twelfth on button 12) — a TV with more gets another Apps page for every eleven more (up to three), button 12 leading on to the next and Back to the one before; the pages come and go as apps are installed and removed — **Inputs** (button 12) with the TV's HDMI and other inputs, and a **Digits** keypad (button 8) with Channel up and down. The TV's own tools (app store, browser, camera, Multi View, Teletext, …) are left off the Apps pages; the list is the template's `exclude:`. Back returns to the page you came from |
+
+Every TV's **Apps** page holds eleven apps, and the last one a twelfth on button 12; a TV with more gets more Apps pages (up to
+three), button 12 leading on to the next and Back going back a page, and from the first
+to the remote keys. Pages like these come and go as their items do: they are counted
+whenever the remote refreshes, and while the device cannot be reached, nothing changes. A TV
+that is off keeps the apps, and their icons, it showed last.
 
 A template is only offered while Home Assistant has a device it can be bound to — without
 a Sonos speaker, the Sonos templates are simply not in the list.
 
-**Overview** is a table of contents for the remote: each of buttons 1–12 goes to one of
+A template may bring **several pages at once** — the dialog shows how many after its
+name, as in **Sonos (3 pages)**: the page you land on plus subpages, already linked, for the same device. They belong together — **Change device…** on the
+page you land on moves the whole set, and deleting it deletes its subpages, which nothing
+else would lead to, and the dialog says so before you confirm. Each page is ordinary otherwise: change any
+button, or delete a subpage on its own.
+
+**Table of contents** lists the remote's pages: each of buttons 1–12 goes to one of
 its pages, in the order the pages have, and shows the picture from that page's title (its
 logo or icon) — or, for a title of words alone, a short text of the page's name. Subpages
-are not listed. It keeps up by itself: add, remove or rename a page and the overview
-follows; moving pages around does not reorder it until the next page is added, removed
-or renamed. Delete one of its buttons and it stays empty — the overview leaves that
-button alone from then on.
+are not listed. It keeps up by itself: add, remove or rename a page and the table of
+contents follows; moving pages around does not reorder it until the next page is added,
+removed or renamed. Delete one of its buttons and it stays empty — the table of contents
+leaves that button alone from then on.
 
 **Showcase** sits beside Template in the same dialog: pages that show off what a tile can
 do with [variables](#how-to-use-variables-with-examples) and
-[pictures](#how-to-use-mdi-phu-text-media). Add one, then open any button to see how it
+[pictures](#how-to-use-mdi-text-media). Add one, then open any button to see how it
 is written, and copy what you like.
 
 | Showcase | For | What it shows |
@@ -198,7 +264,7 @@ is written, and copy what you like.
 A showcase that needs no device looks up what it shows when you add it — this remote's
 own sensors, the first weather service — and writes those into its tiles; something your
 home does not have leaves its tile empty.
-After that the tiles are ordinary values — point one at another sensor in its Image field.
+After that the tiles are ordinary values — point one at another sensor in its Icon field.
 
 The favourites on the Sonos pages stay live: rename or reorder one in the Sonos app and
 the buttons follow. On **Sonos Cover** the nine tiles are a picture, not buttons —
@@ -221,20 +287,20 @@ new device's, everything else stays as it is.
 With no button selected, the card for that page shows **Page settings** — its
 **title**, and the page's device if it has one. Click the title to open its own editor: plain text, an
 `mdi:` icon, a `logo:` name, or an image URL (see
-[How to use mdi, phu, text, media](#how-to-use-mdi-phu-text-media) below).
+[How to use mdi, text, media](#how-to-use-mdi-text-media) below).
 
 ![Editing a page title — here set to `logo:sonos ${_device}`](images/page-title-editor.png)
 
 ### Assigning actions to buttons
 
 Click any button on the remote face to select it. The card below shows that button's
-**Image** and **Tooltip** fields, and the action it performs.
+**Icon** and **Tooltip** fields, and the action it performs.
 
 ![A button selected, with its image, tooltip and action](images/assign-action.png)
 
 Before you click anything, you can also just **point at a button** — rest the mouse on
 a shape on the open page (or tab to it with the keyboard) and a small card appears
-beside it summarising that button: its label and icon, every press it runs (a toggle
+beside it summarising that button: its tooltip and icon, every press it runs (a toggle
 cycle is listed in the order it cycles — the first four, then a count of the rest),
 its long touch, what entity it acts on, and
 which page it opens. A button that opens a page that no longer exists says so, which
@@ -245,10 +311,10 @@ Sliders get the same card, worded for what they are: it says whether the slider
 follows the selected button or is fixed to one device, and names that device and
 the property it moves.
 
-- **Image** — what the button shows: an `mdi:` icon, a `logo:`, static `text:`, or a
-  live `media:` thumbnail. See [the image schemes section](#how-to-use-mdi-phu-text-media).
+- **Icon** — what the button shows: an `mdi:` icon, a `logo:`, static `text:`, or a
+  live `media:` thumbnail. See [the image schemes section](#how-to-use-mdi-text-media).
 - **Tooltip** — what is shown on long-press / hover, and what screen readers announce.
-  Usually words, but it takes every image scheme the Image field does (an `mdi:`
+  Usually words, but it takes every image scheme the Icon field does (an `mdi:`
   icon, a `logo:`, …).
   It can reference a live entity value, as this screenshot's hint line shows
   (`Now reads **goto page: subpage**`) — see
@@ -267,11 +333,18 @@ the property it moves.
   than falling behind. The TV templates switch it on for their arrow and volume keys.
   A button with a long touch does not repeat: holding it is its long touch.
 - **Add options…** — right-click (or long-press) a button on the face to give it an
-  options page: a new, empty subpage right after the current page, which the
-  button's **long touch** opens. Fill it like any page. Offered while long touch
-  is switched on for the remote (gear tab) and the button has no long touch yet.
-  Delete the options page and the long touch goes with it, so the button can be
-  given a new one.
+  options page: a subpage right after the current page, which the button's
+  **long touch** opens. Only the options its own device answers are offered —
+  **Hue Lamp Options** for a Hue lamp, **Sonos Options** for a speaker — and the
+  page is bound to that device without asking. When only one fits, it is added
+  straight away, with no dialog. Those options templates are
+  offered here only; they are not pages to swipe to, so the **Add page** button
+  leaves them out. The new page's hardware **Back** button leads back to the
+  page the button sits on, whatever the template itself puts there. Offered while
+  **Long touch** and **Options pages** are both switched on for the remote (gear
+  tab → Buttons), the button has no long touch yet, and an options template fits
+  its device. Delete the options page and the long touch goes with it, so the
+  button can be given a new one.
 
 Every action you assign is also listed in the **Actions** tab, the library of actions
 in use across all buttons and pages:
@@ -310,7 +383,7 @@ choose **liza** as its API there.
 **What the assistant does.** For a speaker, a TV or Hue lights
 it uses the matching [template](#define-pages), bound to the device you named — "in the
 Wohnzimmer" picks the speaker in that room. Otherwise it builds an ordinary page button by
-button: each button gets an action, the entity it acts on, a short label and an icon, and a
+button: each button gets an action, the entity it acts on, a short tooltip and an icon, and a
 shade or lamp button can steer the vertical slider while it is selected. Either way the page
 is added at the end of the remote's pages, as if you had made it yourself, and you can edit
 it in the panel like any other.
@@ -322,11 +395,11 @@ when it names both the page's number and its title.
 
 ### Config (gear tab)
 
-The gear tab controls the remote's fonts and a couple of button-wide behaviours — page
-title and tooltip font/size (with a live preview), and whether buttons support **long
-touch** (a second action on press-and-hold).
+The gear tab picks the remote's **theme** — which is where the page title and tooltip
+font and size live — and a couple of button-wide behaviours, such as whether buttons
+support **long touch** (a second action on press-and-hold).
 
-![The Settings / gear tab — fonts and long touch](images/settings-tab.png)
+![The Settings / gear tab — theme and long touch](images/settings-tab.png)
 
 ### Themes
 
@@ -354,17 +427,17 @@ meant to look different therefore sets that, not only its swatches.
 
 The card offers one row of themes. Each is shown as what it draws — its
 colours, its title text at its own size, and its own on/off glyphs — so the
-choice is made by looking rather than by reading a name. Click one to try it.
+choice is made by looking rather than by reading a name. Click one and the
+remote is given it at once.
 
 **Result** underneath shows the whole remote under the theme you are trying:
 the page title, a row of buttons in each colour, and the tooltip. Every
 picture in it is drawn by the integration for this remote, so it is what the
 device will show rather than an impression of it.
 
-Nothing is written to the remote while you look. **Apply theme** saves what is
-on screen; **Cancel** puts back what the remote has. Both stay greyed out until
-you pick something other than the theme the remote already has, and a pick you
-never applied is dropped when you leave the page.
+The pick is the whole gesture: there is no **Apply** to press afterwards and
+no **Cancel**. Clicking the theme the remote is already on writes nothing, and
+picking the one you came from puts it back.
 
 A shipped theme is never changed. Each one carries only an eye and a copy
 icon: the eye opens it read-only, the copy opens the custom editor with that
@@ -498,8 +571,8 @@ colors:
     default: "FFFFFF"
 
 text:
-  title:   { font: filsonsoft-light, font_size: 48 }
-  tooltip: { font: filsonsoft-light, font_size: 24 }
+  title:   { font: roboto-light, font_size: 48 }
+  tooltip: { font: roboto-light, font_size: 24 }
 
 icons:
   # Only the rows you want changed; everything else keeps its usual icon.
@@ -717,25 +790,69 @@ matches without a restart. If the remote is offline the restore still happens �
 Assistant holds the configuration either way — and it catches up when it is back.
 
 What a configuration download does **not** carry: the remote's connection settings,
-the icon rendering options and the fonts you uploaded. Those belong to the device entry
-rather than to the pages, and a restore leaves them exactly as they are.
+the icon rendering options, the fonts you uploaded and who the remote is assigned to.
+Those belong to the device entry rather than to the pages, and a restore leaves them
+exactly as they are.
+
+### Letting somebody else configure a remote
+
+By default only a Home Assistant administrator sees the lizaIP panel. If you want the
+person who actually uses a remote to set up its own pages and buttons without making
+them an administrator of your whole house, assign the remote to them: open the **⋮**
+of the remote and pick **Assign user…**. The window lists the active users without
+administrator rights; switch on the ones who should configure this remote and press
+**Save**.
+
+Administrators always have access to every remote, so they are not listed. Somebody
+with no login of their own cannot be assigned — give them a Home Assistant user
+account first. Until there is at least one active user without administrator rights,
+**Assign user…** is greyed out.
+
+What changes for an assigned user:
+
+- The **lizaIP** item appears in their sidebar. While somebody is assigned no remote
+  at all, the item is hidden from them instead, so the panel is not something they
+  have to ignore.
+- They see only the remotes assigned to them — their panel's remote list is their
+  own, and so is everything they can reach from it.
+- They can do everything to those remotes that you can: pages, buttons, actions,
+  images, the per-remote settings and the remote's own theme.
+- They can download a configuration or a diagnostics bundle for their own remote and
+  restore one onto it — it is their remote to look after. A bundle they build
+  describes that remote rather than your installation: the log is filtered down to
+  it, the error log every integration shares is left out, and the environment report
+  keeps the versions without your configuration path or your list of custom
+  integrations. The bundle's own README says so, so nobody reads a narrowed one as a
+  complete one. If you need the whole picture, build the bundle yourself.
+- They cannot add or remove a remote, use the debug tab, change the shared theme
+  library, or see who else a remote is assigned to. Those stay with administrators.
+
+Taking a remote away works the same way and takes effect at once: if their panel is
+open when you save, the remote disappears from it without a reload.
+
+> **This scopes the panel, not your house.** It decides which remotes somebody can
+> configure — it does not narrow what those buttons may then do. An assigned user
+> putting an action on a button can target any entity their own Home Assistant
+> account is allowed to call a service on, exactly as they could from a dashboard.
+> Home Assistant's own user and entity permissions are unchanged by this, and are
+> still the thing that decides what anyone can actually switch on.
 
 ---
 
-## How to use mdi, phu, text, media
+## How to use mdi, text, media
 
-A button's **Image**, its **Tooltip** and a page's **title** are edited the same way
+A button's **Icon**, its **Tooltip** and a page's **title** are edited the same way
 and accept the same values: one plain text box, so anything in it can be copied and
 pasted into another field. It accepts one of these schemes:
 
 | Scheme | Shows | Example |
 |---|---|---|
 | `mdi:<icon-name>` | A [Material Design Icon](https://pictogrammers.com/library/mdi/) | `mdi:lightbulb`, `mdi:page-next` |
-| `phu:<icon-name>` | An icon from the [custom-brand-icons](https://github.com/elax46/custom-brand-icons) HACS frontend add-on | `phu:ceiling-fan` |
-| `<set>:<icon-name>` | An icon from any other icon set a HACS frontend add-on registered in Home Assistant, e.g. [hass-hue-icons](https://github.com/arallsopp/hass-hue-icons) | `hue:bulb-group` |
+| `<set>:<icon-name>` | An icon from any icon set a dashboard plugin registered in Home Assistant, such as [custom-brand-icons](https://github.com/elax46/custom-brand-icons) or [hass-hue-icons](https://github.com/arallsopp/hass-hue-icons) | `phu:ceiling-fan`, `hue:bulb-group` |
 | `logo:<name>` | A bundled brand logo, in its native colours | `logo:sonos`, `logo:netflix`, `logo:spotify` |
 | `text:<content>` | Plain text, rendered as an image. Plain words need no prefix: `Kitchen` is stored as you typed it and drawn as text | `text:22°C`, `Kitchen` |
 | `media:<url-or-path>` | A live thumbnail — album art, a camera snapshot, anything HA can fetch. Takes [options](#options-for-a-media-picture) such as `?size=200x200` | `media:${media_player.living_room.entity_picture}` |
+| `history:<entity-id>` | A graph of an entity's recent history. `?hours=` or `?days=` sets how far back it looks | `history:sensor.outdoor_temperature`, `history:sensor.house_power?days=7` |
 | `http(s)://…`, `/local/…` | A picture from a URL or from Home Assistant's `www` folder | `/local/kitchen.png` |
 
 Editing works the same in all three fields:
@@ -760,16 +877,17 @@ uses `mdi:page-next` for "go to the next page"):
 
 Notes:
 
-- **`phu:` needs an add-on.** It only works if `custom-brand-icons` is installed via
-  HACS; without it, every `phu:` request falls back to nothing (a blank icon).
+- **An icon set needs its plugin.** A `<set>:` name only works if that set's
+  dashboard plugin is installed; without it the request falls back to nothing
+  (a blank icon).
 - **Icon sets reach the remote through the editor.** Their shapes live in
-  the browser (that is where the add-on runs), so the editor hands each one to
-  the integration as you save it — `phu:` exactly like `hue:`. A name a
+  the browser (that is where the plugin runs), so the editor hands each one to
+  the integration as you save it. A name a
   [variable](#how-to-use-variables-with-examples)
   makes up at run time (`hue:battery-${…}`) is fetched the next time you open
   the editor; until then the remote shows nothing for it.
-- **`logo:` has a fixed set:** `disney`, `hue`, `knx`, `netflix`, `prime`, `sonos`,
-  `spotify`, `youtube`. Add a colour (`logo:sonos?fg=white`) to render it
+- **`logo:` has a fixed set:** `disney`, `dreame`, `hue`, `knx`, `netflix`, `prime`,
+  `sonos`, `spotify`, `unifi`, `youtube`. Add a colour (`logo:sonos?fg=white`) to render it
   monochrome instead of in its original colours.
 - **`text:` always keeps room for accents and tails.** The image is cut to the highest
   any letter of the font can reach (`Ä`) and the lowest (`g`), whether or not the text
@@ -963,13 +1081,13 @@ split, so a device name with spaces stays one name.
 
 For the full technical reference — query parameters, available fonts, icon tinting —
 see the
-[Image Server section of the developer README](../README.md#image-server-imgserv).
+[Image Server section of the developer README](https://github.com/liza-home/home-assistant/blob/main/custom_components/lizaip/README.md#image-server-imgserv).
 
 ---
 
 ## How to use variables with examples
 
-A button's **Tooltip**, a button's **Image**, and a page **title** can all show the
+A button's **Tooltip**, a button's **Icon**, and a page **title** can all show the
 current value of any Home Assistant entity, by writing its entity ID inside `${…}`:
 
 ```
@@ -985,11 +1103,11 @@ ${weather.forecast_home}             → Partly cloudy (a weather condition, in 
 | Tooltip | `Outside ${sensor.outdoor_temperature}` | Outside 21.5 °C |
 | Tooltip | `Battery ${sensor.lizaip_1c63499a7193_battery}` | Battery 85 % |
 | Tooltip | `${media_player.living_room.media_title}` | the song that is playing |
-| Image | `text:${weather.home.temperature}°` | 18° |
-| Image | `mdi:battery ${sensor.lizaip_1c63499a7193_battery}` | a battery mark beside 85 % |
-| Image | `${weather.forecast_home}` | the current weather as an icon (`mdi:weather-partly-cloudy`, …) |
+| Icon | `text:${weather.home.temperature}°` | 18° |
+| Icon | `mdi:battery ${sensor.lizaip_1c63499a7193_battery}` | a battery mark beside 85 % |
+| Icon | `${weather.forecast_home}` | the current weather as an icon (`mdi:weather-partly-cloudy`, …) |
 | Tooltip | `Today ${weather.forecast_home}` | Today Partly cloudy |
-| Image | `mdi:${sensor.lizaip_battery_icon}` | an icon chosen by a template helper |
+| Icon | `mdi:${sensor.lizaip_battery_icon}` | an icon chosen by a template helper |
 | Page title | `Living room ${sensor.living_room_temperature}` | Living room 22 °C |
 | Page title (template page) | `${_device}` | the name of the device (or hub) the page is bound to |
 | Page title (template page) | `Vol ${round(_device.volume_level * 100)}%` | Vol 12% |
@@ -1110,6 +1228,22 @@ tracks. Type `${_device.` in a tooltip and the editor offers them.
   empty — and so is a tooltip that holds nothing else. With **repeat one**, the next
   track is the one playing.
 
+### Words in the remote's language
+
+`{translate: …}` writes a word in the language the remote is set to (its **Language**
+option, else Home Assistant's), in a **Tooltip**, an **Icon** or a page **title**:
+
+| Field | You write | The remote shows (German) |
+|---|---|---|
+| Tooltip | `{translate: volume}` | Lautstärke |
+| Tooltip | `{translate: Volume Up} ${sensor.tv_volume}` | Lauter 40 |
+| Icon | `text:{translate: volume}` | Lautstärke, drawn as the tile |
+
+The word inside is the English one or its key — `{translate: Volume Up}` and
+`{translate: volume_up}` are the same. It works for the words the integration already
+translates for buttons and page titles (Volume, Next, Power, Playlists, …); a word it does
+not know is shown as you wrote it. Change the remote's language and the words follow.
+
 ### Calculating with variables
 
 Inside `${…}` you can calculate with numbers and variables. The result is a plain
@@ -1162,13 +1296,13 @@ inside an icon name, since `mdi:battery-80 %` isn't a valid icon.
 
 ### Using a variable to generate an icon
 
-Every icon field reads variables the same way — the button's **Image**, its per-state
+Every icon field reads variables the same way — the button's **Icon**, its per-state
 **Button icons**, and the icons of an action (its own icon and one per state, edited in
 the action editor). The hint line under each field shows what it reads right now. A
 variable with no value never leaves a broken icon: a per-state icon falls back to the
 action's icon for that state, and that in turn to the icon the action would show anyway.
 
-A variable can sit inside an **Image** field, not just a tooltip — `${sensor.x}` as the
+A variable can sit inside an **Icon** field, not just a tooltip — `${sensor.x}` as the
 whole Image makes the button draw that value as a picture, and `${sensor.x}` inside an
 `mdi:` name picks a different icon depending on the value. The catch: an icon name has
 to match an existing icon *exactly*. Battery icons, for example, only exist in steps of
@@ -1178,7 +1312,7 @@ ten (`mdi:battery-10` … `mdi:battery-90`, plus `mdi:battery` for full and
 and falls back to a blank icon.
 
 The fix is a small Home Assistant **template helper**: an entity whose whole job is to
-turn a raw value into the icon name you actually want, which the button's Image field
+turn a raw value into the icon name you actually want, which the button's Icon field
 then just references.
 
 1. In Home Assistant open **Settings → Devices & services → Helpers → Create helper →
@@ -1199,7 +1333,7 @@ then just references.
    Leave unit, device class and state class empty. The preview at the bottom of the
    dialog should show something like `battery-80`. A sensor with no value names
    `android` instead, so a missing reading shows a placeholder rather than a blank.
-4. **Submit**, then in the lizaIP editor set the button's **Image** (or a page title) to
+4. **Submit**, then in the lizaIP editor set the button's **Icon** (or a page title) to
 
    ```
    mdi:${sensor.lizaip_battery_icon}
@@ -1251,7 +1385,7 @@ it onto bars. Replace `sensor.living_room_wifi_signal` with your own sensor:
 ```
 
 Name the helper e.g. `lizaIP wifi icon` (entity `sensor.lizaip_wifi_icon`) and set the
-button's **Image** to `${sensor.lizaip_wifi_icon}`; a tooltip of
+button's **Icon** to `${sensor.lizaip_wifi_icon}`; a tooltip of
 `${sensor.living_room_wifi_signal}` adds the exact reading.
 
 If your sensor reports signal **quality in %** instead of dBm, replace the inner
@@ -1294,8 +1428,8 @@ A `weather.*` entity is understood directly. Its state is a condition code such 
 
 | Where the variable sits | `${weather.home}` becomes |
 |---|---|
-| Image, on its own: `${weather.home}` | `mdi:weather-partly-cloudy` — the condition's icon |
-| Image, after `mdi:` or `mdi:weather-` | the same icon (`mdi:weather-${weather.home}` works for every condition, `clear-night` included) |
+| Icon, on its own: `${weather.home}` | `mdi:weather-partly-cloudy` — the condition's icon |
+| Icon, after `mdi:` or `mdi:weather-` | the same icon (`mdi:weather-${weather.home}` works for every condition, `clear-night` included) |
 | Tooltip, page title text, `text:` image | `Partly cloudy` — the condition as Home Assistant names it, in your language |
 | An attribute, e.g. `${weather.home.temperature}` | the value as stored (`18`) |
 
@@ -1341,7 +1475,7 @@ condition the table doesn't know. Name the helper e.g. `lizaIP weather icon`
 
 | Field | You write | The remote shows |
 |---|---|---|
-| Image | `${sensor.lizaip_weather_icon}` | the current weather as an icon, a moon at night |
+| Icon | `${sensor.lizaip_weather_icon}` | the current weather as an icon, a moon at night |
 | Tooltip | `${weather.home.temperature}°` | 18° |
 | Page title | `${sensor.lizaip_weather_icon}` | the weather icon as the page's title |
 

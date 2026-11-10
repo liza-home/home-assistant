@@ -21,8 +21,8 @@ from ._state import cycle_index
 from .toggle import (
     MODE_CYCLE,
     rule_icon,
-    rule_label,
-    resolve_rule_label,
+    rule_tooltip,
+    resolve_rule_tooltip,
     step_icon,
     toggle_mode,
     toggle_rules,
@@ -155,7 +155,7 @@ def toggle_icon(
         # A press icon takes the same `${sensor.x}` a button's Image does, and
         # was reaching the device with the braces still in it -- `mdi:battery-
         # ${sensor.foo}` is not an icon name, so the tile drew nothing. The
-        # assignment's own image has been resolved by `with_resolved_image`
+        # assignment's own image has been resolved by `with_resolved_icon`
         # all along; this is the same rule, applied to the same syntax, from
         # the one place all three callers of this function pass through.
         #
@@ -219,12 +219,12 @@ def toggle_tooltip(
         # `buttons.py` answers when a press actually runs -- and it handed the
         # stored text out verbatim, so a `${_state}` press printed its braces
         # onto the tile until the first press rewrote it. The two must agree;
-        # see `resolve_rule_label`.
+        # see `resolve_rule_tooltip`.
         #
         # Without `hass` there is nothing to resolve against, and the raw text
         # is still better than nothing: the callers that can pass it do.
         if hass is None:
-            return rule_label(rules[index])
-        return resolve_rule_label(rules[index], hass, entry) or None
+            return rule_tooltip(rules[index])
+        return resolve_rule_tooltip(rules[index], hass, entry) or None
 
     return None

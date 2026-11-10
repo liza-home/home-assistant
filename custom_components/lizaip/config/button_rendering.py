@@ -28,7 +28,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State
 
 # Here since HA 2024.2, the release that introduced icon translations and with
-# them the per-service icons this module reads. `hacs.json` asks for 2024.7.0,
+# them the per-service icons this module reads. `hacs.json` asks for 2026.11.0,
 # so the import cannot fail. It used to point at `homeassistant.loader`, which
 # has never held this function in any release; the resulting ImportError was
 # swallowed silently and left every button on its coarse per-domain icon.
@@ -38,9 +38,9 @@ from ..shared.tokens import (
     button_scope,
     entity_token_entities,
     resolve_image_tokens,
-    clean_label_text,
+    clean_tooltip_text,
     finish_tooltip,
-    substitute_label_tokens,
+    substitute_tooltip_tokens,
 )
 from ..shared.services import (
     service_name,
@@ -59,10 +59,10 @@ from ..shared.services import (
 )
 from ..shared.history import history_entities
 from ..shared.icon_defaults import icon_defaults
-from ..shared.i18n import action_labels, get_ui_language
-from ..shared.labels import (
+from ..shared.i18n import button_tooltips, get_ui_language, translate_inline
+from ..shared.tooltips import (
     STATE_TOKEN,
-    state_token_label,
+    state_token_tooltip,
 )
 from ..shared.assignment import (
     name_is_user_written,
@@ -83,7 +83,7 @@ from ..action_controller import (
 )
 from ..action_controller.icons import toggle_icon, toggle_tooltip
 from .internal_commands import (
-    command_label as internal_command_label,
+    command_tooltip as internal_command_tooltip,
     command_target_name as internal_command_target_name,
     get_internal_command,
     resolve_action as resolve_internal_action,
@@ -138,14 +138,14 @@ def library_names(library: Any) -> dict[str, str]:
     }
 
 
-def _label_is_auto_filled(
+def _tooltip_is_auto_filled(
     stored: str, assign: dict, hass: HomeAssistant,
     state: State | None = None,
     library_name: str | None = None,
 ) -> bool:
     """Is *stored* only the auto-filled library name, standing in for a derived one?
 
-    The mirror of the panel's ``_labelIsAutoFilled`` with ``_computeLabel``: the
+    The mirror of the panel's ``_tooltipIsAutoFilled`` with ``_computeTooltip``: the
     Tooltip field shows the derived label instead of the stored name in
     exactly these cases -- ``${_state}``, or a payload button's own item over a
     name copied from the shared library entry -- and the stored name everywhere
@@ -158,7 +158,7 @@ def _label_is_auto_filled(
         return False
     config = assign.get("config", []) if isinstance(assign, dict) else []
     service = step_service(config) or ""
-    # `_computeLabel`'s rungs before `${_state}`: a command names its target, a
+    # `_computeTooltip`'s rungs before `${_state}`: a command names its target, a
     # payload its item, an unfinished step nothing.
     if get_internal_command(service) is not None:
         return False
@@ -188,7 +188,7 @@ def _internal_target_hint(assign: dict) -> str:
     return hint.strip() if isinstance(hint, str) else ""
 
 
-def _fill_label_tokens(
+def _fill_tooltip_tokens(
     text: str,
     assign: dict,
     hass: HomeAssistant,
@@ -219,7 +219,7 @@ def _fill_label_tokens(
     step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
     data = step.get("data") or {}
 
-    values = {"_state": state_token_label(svc, current_state, lang, attributes, data)}
+    values = {"_state": state_token_tooltip(svc, current_state, lang, attributes, data)}
 
     # `${_name}` is a device-local command's token and nobody else's. The key
     # is only added when the button carries one, so on a plain HA action the
@@ -229,7 +229,7 @@ def _fill_label_tokens(
             service, data, internal_context, _internal_target_hint(assign)
         )
 
-    return substitute_label_tokens(
+    return substitute_tooltip_tokens(
         text, values, hass, getattr(state_obj, "entity_id", None),
     )
 
@@ -297,25 +297,27 @@ def _resolve_button_tooltip_ladder(
     # A payload-carrying button (play_media, select_source) names itself, so a
     # name it was merely given must not shadow the payload; one the user typed
     # still wins. Stripped first, as `action_controller` does.
-    stored_name = (assign.get("label") or "").strip()
+    stored_name = (assign.get("tooltip") or "").strip()
     # The panel records who wrote the name.
     user_named = name_is_user_written(assign)
-    # A stored label is printed as it reads, its placeholders filled -- empty
+    # A stored tooltip is printed as it reads, its placeholders filled -- empty
     # included: `${_device.media_title_prev}` with nothing before it reads as
     # nothing, not as a derived "Previous". It is what the panel's Tooltip field
     # shows, and the remote must print what that field says; the one exception
-    # is the field's own: see `_label_is_auto_filled`.
-    if stored_name and not _label_is_auto_filled(
+    # is the field's own: see `_tooltip_is_auto_filled`.
+    if stored_name and not _tooltip_is_auto_filled(
         stored_name, assign, hass, state, library_name,
     ):
         if "${" not in stored_name:
-            # As the panel's `_displayLabel`: a preset's English name in the
-            # remote's language, a name the user typed as typed.
-            return clean_label_text(
-                action_labels.localize(stored_name, get_ui_language(hass, entry), user_named)
+            # As the panel's `_displayTooltip`: a preset's English name in the
+            # remote's language, a name the user typed as typed;
+            # `{translate: brightness} 25 %` in the remote's language.
+            lang = get_ui_language(hass, entry)
+            return clean_tooltip_text(
+                button_tooltips.localize(translate_inline(stored_name, lang), lang, user_named)
             )
-        return clean_label_text(
-            _fill_label_tokens(
+        return clean_tooltip_text(
+            _fill_tooltip_tokens(
                 stored_name, assign, hass, entry, internal_context, state
             )
         )
@@ -326,13 +328,13 @@ def _resolve_button_tooltip_ladder(
     internal_step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
     internal_cmd = get_internal_command(service)
     if internal_cmd is not None:
-        label = internal_command_label(
+        tooltip = internal_command_tooltip(
             service,
             internal_step.get("data"),
             internal_context,
             _internal_target_hint(assign),
         )
-        return label or stored_name or internal_cmd.name
+        return tooltip or stored_name or internal_cmd.name
 
     payload_title, _ = payload_display(assign)
     if payload_title:
@@ -343,7 +345,7 @@ def _resolve_button_tooltip_ladder(
     # The device's own language option first, then the panel/HA language.
     lang = get_ui_language(hass, entry)
     # Presets hardcode English here ("Power", "Volume Up").
-    static_name = action_labels.localize(static_name, lang, user_named)
+    static_name = button_tooltips.localize(static_name, lang, user_named)
 
     if not svc:
         return static_name
@@ -356,38 +358,38 @@ def _resolve_button_tooltip_ladder(
     # `volume_mute` button whose stored name is still the library's "Mute" would
     # read a frozen "Mute" while its own icon already showed the opposite.
     if is_attribute_state_service(svc):
-        attr_label = _fill_label_tokens(
+        attr_tooltip = _fill_tooltip_tokens(
             STATE_TOKEN, assign, hass, entry, state=state,
         )
-        if attr_label:
-            return attr_label
+        if attr_tooltip:
+            return attr_tooltip
 
     # Toggle services — show the opposite of current state
     if is_state_toggle_service(svc) and current_state:
         next_key = NEXT_STATE_MAP.get(current_state)
         if next_key:
-            return action_labels.get(next_key, lang)
+            return button_tooltips.get(next_key, lang)
 
     # Stateless services with a predefined name — use the button name as tooltip
     # (e.g., template buttons: "CH+", "Up", "OK" instead of generic "Send Command")
     if is_stateless_service(svc) and static_name:
         return static_name
 
-    # All other services — derive friendly label from service name
-    label = action_labels.for_service(svc, lang)
-    if label:
-        return label
+    # All other services — derive friendly tooltip from service name
+    tooltip = button_tooltips.for_service(svc, lang)
+    if tooltip:
+        return tooltip
 
     # Nothing the button does has a word: an empty button stays empty, rather
     # than borrowing the name of what it acts on.
     return static_name
 
 
-def button_image_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> bool:
-    """Does the button's own stored image win over deriving an icon from state?
+def button_icon_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> bool:
+    """Does the button's own stored icon win over deriving an icon from state?
 
     This is the panel/device parity rule. The panel's `_resolveButtonIcon`
-    returns `assign.image` before deriving anything, so whenever the device
+    returns `assign.icon` before deriving anything, so whenever the device
     derives instead, the two surfaces disagree -- the user picks an icon in the
     button config view and the device shows something else.
 
@@ -404,13 +406,13 @@ def button_image_wins(assign: dict, svc_name: str, payload_thumb: str | None) ->
     identity, and a pinned image inherited from a template may belong to a
     different item, so the payload thumbnail wins unless the user pinned it.
     """
-    image = assign.get("image")
-    if not image:
+    icon = assign.get("icon")
+    if not icon:
         return False
     if svc_name and icon_varies_with_state(svc_name):
         return False
     return bool(
-        assign.get("image_pinned") or not payload_thumb or image == payload_thumb
+        assign.get("icon_pinned") or not payload_thumb or icon == payload_thumb
     )
 
 
@@ -556,8 +558,8 @@ def _icon_from_button_identity(s: _IconSubject) -> str | None:
     service-keyed action-library icon, which may belong to a different item.
     """
     _, payload_thumb = payload_display(s.assign)
-    if button_image_wins(s.assign, s.svc_name, payload_thumb):
-        return s.assign["image"]
+    if button_icon_wins(s.assign, s.svc_name, payload_thumb):
+        return s.assign["icon"]
     return payload_thumb or None
 
 
@@ -688,8 +690,8 @@ _ICON_LADDER = (
 )
 
 
-def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
-    """*assign* with the entity variables in its image filled in.
+def with_resolved_icon(assign: dict, hass: HomeAssistant) -> dict:
+    """*assign* with the entity variables in its icon filled in.
 
     ``mdi:weather-${weather.home}`` or ``text:${sensor.outdoor}`` follow the
     entity, and a weather entity alone (``${weather.home}``) or after ``mdi:``
@@ -697,14 +699,14 @@ def with_resolved_image(assign: dict, hass: HomeAssistant) -> dict:
     entity is unavailable) is dropped, so the button falls back to the icon it
     would derive without one.
     """
-    image = assign.get("image") if isinstance(assign, dict) else None
+    icon = assign.get("icon") if isinstance(assign, dict) else None
     # A `history:` graph is resolved too: it gets the version that moves it.
-    if not entity_token_entities(image) and not history_entities(image):
+    if not entity_token_entities(icon) and not history_entities(icon):
         return assign
     # The rules themselves are in `resolve_image_tokens`, shared with the
     # toggle rule icons that accept exactly the same syntax -- weather
     # conditions included, which is why that helper and not a copy of it.
-    return {**assign, "image": resolve_image_tokens(image, hass)}
+    return {**assign, "icon": resolve_image_tokens(icon, hass)}
 
 
 def _resolve_button_icon(
@@ -738,7 +740,7 @@ def _resolve_button_icon_ladder(
     config = assign.get("config", [])
     service = step_service(config) or ""
     svc_domain = service.split(".")[0] if "." in service else ""
-    assign = with_resolved_image(assign, hass)
+    assign = with_resolved_icon(assign, hass)
 
     # The same state the label speaks about, so an area-bound button's face and
     # its words agree about whether the room is on.

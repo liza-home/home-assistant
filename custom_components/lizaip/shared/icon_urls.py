@@ -8,20 +8,17 @@ from typing import Any, Final
 from urllib.parse import quote, unquote, urlencode
 
 from ..imgserv.const import (
-    PART_SOURCE_TYPES,
+    DEFAULT_FG_COLOR,
     SIZE_IDS,
     _custom_icon_prefixes,
     is_address,
+    names_a_source,
+    parse_color,
     split_source_parts,
 )
 from ..imgserv.fonts import DEFAULT_FONT_ID
-from .theme import (
-    DEFAULT_THEME_ID,
-    compose_id,
-    get_theme,
-    split_id,
-    theme_revision,
-)
+from .i18n import translate_inline
+from .theme import DEFAULT_THEME, DEFAULT_THEME_ID, get_theme
 
 #: imgserv options a picture may carry in its query: ``media:<url>?size=200x200``.
 MEDIA_OPTION_KEYS: Final = ("size", "box", "fit", "mode", "fg", "bg", "crop", "alpha", "percent")
@@ -77,8 +74,8 @@ def _media_options(query: str) -> tuple[dict[str, str], list[str]]:
     return options, kept
 
 
-def _option_parts(query: str) -> tuple[list[str], bool]:
-    """The parts of *query* that are imgserv options, and whether any are.
+def _option_parts(query: str) -> list[str]:
+    """The parts of *query* that are imgserv options.
 
     A second ``?`` counts as ``&``. Only the key is judged here, not the
     value: ``size=large`` is still imgserv's ``size`` being asked for
@@ -96,7 +93,7 @@ def _option_parts(query: str) -> tuple[list[str], bool]:
             # otherwise hide the option from the `[?&]size=` test that keeps
             # the field from writing its own size a second time.
             kept.append(f"{key}={val}")
-    return kept, bool(kept)
+    return kept
 
 
 def split_option_query(value: str) -> tuple[str, str]:
@@ -114,8 +111,8 @@ def split_option_query(value: str) -> tuple[str, str]:
     head, q, query = value.rpartition("?")
     if not q:
         return value, ""
-    kept, is_options = _option_parts(query)
-    if not is_options:
+    kept = _option_parts(query)
+    if not kept:
         return value, ""
     return head, "&".join(kept)
 
@@ -232,6 +229,9 @@ def _ascii_safe_path(value: str) -> str:
     # ``fg=#112233`` would reach imgserv as ``fg=``. Written as ``%23`` it
     # arrives intact, and imgserv's colour parser reads either form.
     value = value.replace("#", "%23")
+    # A browser reads a backslash in an http path as a slash, which would cut
+    # the escaped colon of `text\\:` in two.
+    value = value.replace("\\", "%5C")
     if value.isascii():
         return value
     return "".join(c if c.isascii() else quote(c, safe="") for c in value)
@@ -287,12 +287,14 @@ def resolve_icon_url(
     only on the branches that address imgserv -- a `ha://`, `local://` or
     `data:` value is fetched or decoded by the device itself, and an already
     written `imgserv://` value belongs to whoever typed it, query and all.
+
+    A ``{translate: <key>}`` in the value is written out in the language being
+    drawn in (:func:`..i18n.translate_inline`).
     """
-    icon = icon.strip() if icon else ""
+    icon = translate_inline(icon).strip() if icon else ""
     if not icon:
         return ""
     pct = f"percent={percent}" if percent is not None else ""
-    thm = _theme_part(icon, theme)
     # Scheme tests run against a lowercased copy; the returned value always uses the
     # original casing so signed URLs and file names stay byte-exact.
     low = icon.lower()
@@ -303,81 +305,96 @@ def resolve_icon_url(
         # exactly as it is on any other branch. ASCII is returned byte for
         # byte, so an already percent-encoded URL is untouched.
         return _ascii_safe_path(icon)
-    fg = color.lstrip("#") if color else ""
     composite = _with_pictures(icon)
-    if composite is not None:
-        # Several parts, one of them a picture: each picture is encoded on
-        # its own, so its query stays its own and the words beside it stay words.
-        return _with_query(
-            composite, _size_part(composite, size), "mode=dark",
-            f"fg={fg}" if fg and _tintable(composite) else "", pct, thm,
-        )
-    if low.startswith(("http://", "https://")):
-        return _media_url(icon, size, pct)
-    if icon.startswith("/"):
-        # An HA path (a player's `entity_picture`, `/local/…`) is fetched by
-        # imgserv too: the remote's firmware does not resolve `ha://` and would
-        # ask HA for `/ha://api/…`.
-        return _media_url(icon, size, pct)
-    if icon.startswith("mdi:"):
-        # The value may carry its own query (`mdi:lightbulb?color=blue`): join
-        # with `&`, and only add the page colour when the value has none of its own.
-        own = re.search(r"[?&](fg|color)=", icon)
-        return _with_query(
-            icon, _size_part(icon, size), f"fg={fg}" if fg and not own else "",
-            pct, thm,
-        )
-    if icon.startswith("media:"):
-        # The value is a URL in its own right — encode it so its query survives.
-        return _media_url(icon[6:], size, pct)
-    # imgserv source types: logo:, text:, phu:, history:, and the extra
-    # icon sets the frontend registered (drawn from their uploaded shapes).
-    custom = custom_icon_scheme(icon)
-    if icon.startswith(("logo:", "text:", "phu:", "history:")) or custom:
-        # Tint monochrome sources (text:, icons, a graph's line); leave
-        # logos/photos untouched. A composite is tinted as soon as one of its
-        # parts can take it -- imgserv is what decides which parts spend it.
-        color_suffix = fg if fg and _tintable(icon) and not re.search(r"[?&](fg|color)=", icon) else ""
-        return _with_query(
-            icon, _size_part(icon, size), "mode=dark",
-            f"fg={color_suffix}" if color_suffix else "", pct, thm,
-        )
-
-    return resolve_icon_url(_words_source(icon), size, color, percent, theme)
+    if composite is None:
+        if low.startswith(("http://", "https://", "/")):
+            # An HA path (a player's `entity_picture`, `/local/…`) is fetched
+            # by imgserv too: the firmware does not resolve `ha://` and would
+            # ask HA for `/ha://api/…`.
+            return _media_url(icon, size, pct)
+        if icon.startswith("media:"):
+            # The value is a URL in its own right — encode it so its query survives.
+            return _media_url(icon[len("media:"):], size, pct)
+        if not names_a_source(icon):
+            return resolve_icon_url(_words_source(icon), size, color, percent, theme)
+    # Something imgserv draws: an icon, words, a logo, a graph, or several
+    # parts with a picture among them (each picture encoded on its own, so its
+    # query stays its own). The value may carry its own query
+    # (`mdi:lightbulb?color=blue`), which `_with_query` joins with `&`.
+    icon = composite or icon
+    icon, colour = _drawn_in(icon, color.lstrip("#") if color else "", theme, _tintable(icon))
+    # A lone `mdi:` icon is drawn in the foreground without being told to.
+    mode = "" if composite is None and icon.startswith("mdi:") else "mode=dark"
+    return _with_emoji(_with_query(icon, _size_part(icon, size), mode, colour, pct), theme)
 
 
-def _theme_part(icon: str, theme: str) -> str:
-    """``theme=…&tv=…`` for a remote on a theme of its own, ``tv=…`` alone
-    for one on an edited default, or nothing for the untouched default.
+def _with_emoji(url: str, theme: str) -> str:
+    """*url* with the emoji font *theme* names, when it draws words.
 
-    Left out when the three facets all resolve to the default theme, so a
-    remote that has picked nothing keeps the URLs it had before themes
-    existed. The id is collapsed first: ``monochrome`` and its three-facet
-    spelling name the same pixels, and two addresses for one picture would
-    halve the device's cache.
-
-    It rides in the URL rather than being resolved here because the remote
-    caches images by URL: switching a theme has to change the address or the
-    old pictures stay on the screen. ``tv`` carries the theme's content
-    digest for the same reason -- editing a theme keeps its id, so the id
-    alone would leave every address untouched. imgserv ignores it.
+    Left out while the theme names none, so every URL is the one it was
+    before themes could name one -- and the remote's cached pictures hold.
     """
-    theme = theme.strip().lower() if theme else ""
-    if re.search(r"[?&](theme|tv)=", icon):
-        return ""
-    # No theme at all is the default one: split_id reads "" as default.
-    collapsed = compose_id(*split_id(theme))
-    if collapsed == DEFAULT_THEME_ID:
-        # Never a theme=: imgserv draws a request without one in the default
-        # theme -- the edited one, when /config/lizaip/themes holds a
-        # default.yaml -- so an address needs no name to reach it. An
-        # untouched default adds nothing, so a remote that picked nothing
-        # keeps the URLs it had before themes existed; an edited one adds
-        # only its digest, because the remote caches by URL and the old
-        # pictures would otherwise stay on the screen.
-        default = get_theme(DEFAULT_THEME_ID)
-        return f"tv={default.revision}" if default.modified else ""
-    return f"theme={quote(collapsed, safe='')}&tv={theme_revision(collapsed)}"
+    font = get_theme(theme).emoji_font if theme else ""
+    if not font or "emoji=" in url or not _draws_words(url):
+        return url
+    return f"{url}{'&' if '?' in url else '?'}emoji={quote(font, safe='')}"
+
+
+#: A colour the value names itself: ``mdi:lightbulb?color=blue``.
+_OWN_COLOUR: Final = re.compile(r"(?<=[?&])(?:fg|color)=([^&#]*)", re.IGNORECASE)
+
+
+def _drawn_in(icon: str, fg: str, theme: str, tinted: bool) -> tuple[str, str]:
+    """*icon* and the ``fg=…`` that make its address name the colour it is drawn in.
+
+    The remote caches a picture by its address, so the address has to change
+    exactly when the picture does -- and a theme reaches a picture only
+    through the one colour imgserv draws it in. A ``media:`` cover or a logo in
+    its own colours never changes with the theme and keeps its address; a
+    picture drawn in one colour carries that colour (:func:`_spelled`). No
+    theme name and no digest: the colour itself is what moves the address.
+
+    *tinted* says whether the page colour *fg* applies to *icon* at all.
+    """
+    if own := _OWN_COLOUR.search(icon):
+        return icon[:own.start(1)] + _spelled(own.group(1), theme) + icon[own.end(1):], ""
+    if fg and tinted:
+        return icon, f"fg={_spelled(fg, theme)}"
+    if (tinted or _monochrome_logo(icon)) and not re.search(r"[?&]mode=light", icon, re.I):
+        # Drawn in the theme's foreground.
+        spelled = _spelled("", theme)
+        return icon, f"fg={spelled}" if spelled else ""
+    return icon, ""
+
+
+def _spelled(colour: str, theme: str) -> str:
+    """*colour* (``""``: the foreground) as the address must spell it.
+
+    As given while the remote's theme, the shipped default and the default
+    imgserv has loaded all draw it the same -- so an untouched remote keeps
+    its addresses -- and otherwise as the exact hex the remote draws.
+    """
+    def drawn(t):
+        return parse_color(colour, t.colors) or t.color("default") or DEFAULT_FG_COLOR
+
+    rgba = drawn(get_theme(theme))
+    if rgba == drawn(DEFAULT_THEME) == drawn(get_theme(DEFAULT_THEME_ID)):
+        return colour
+    return "".join(f"{c:02X}" for c in rgba[:3 if rgba[3] == 255 else 4])
+
+
+def _monochrome_logo(icon: str) -> bool:
+    """Whether *icon* is a lone logo shipped only as an SVG, which imgserv
+    draws in the foreground; one with a PNG keeps the PNG's colours."""
+    if not icon.startswith("logo:") or len(split_source_parts(icon)) > 1:
+        return False
+    from ..imgserv.render_logo import LOGOS_DIR, WIDE_SUFFIX
+
+    name = icon[len("logo:"):].split("?", 1)[0].removesuffix(".svg")
+    return any(
+        (LOGOS_DIR / f"{n}.svg").is_file() and not (LOGOS_DIR / f"{n}.png").is_file()
+        for n in (name, f"{name}{WIDE_SUFFIX}")
+    )
 
 
 def _tintable(source: str) -> bool:
@@ -410,16 +427,11 @@ def _with_pictures(icon: str) -> str | None:
             # address goes to its host.
             address, _options = split_media_options(address)
             spelled.append(encode_media_source(address))
-        elif i == 0 and not _names_a_source(part):
+        elif i == 0 and not names_a_source(part):
             spelled.append(f"text:{part}")
         else:
             spelled.append(part)
     return " ".join(spelled)
-
-
-def _names_a_source(part: str) -> bool:
-    m = re.match(r"^([a-z][a-z0-9_]*):", part)
-    return bool(m) and (m.group(1) in PART_SOURCE_TYPES or bool(custom_icon_scheme(part)))
 
 
 def _with_query(icon: str, *parts: str) -> str:
@@ -468,10 +480,8 @@ def _words_source(words: str) -> str:
 
 def _first_part_after_words(words: str) -> int:
     """Where the first source part after the leading words starts, or the end."""
-    from ..imgserv.const import PART_SOURCE_TYPES, custom_icon_prefixes
-
-    for m in re.finditer(r"\s([a-z][a-z0-9_]*):", words):
-        if m.group(1) in PART_SOURCE_TYPES or m.group(1) in custom_icon_prefixes():
+    for m in re.finditer(r"\s", words):
+        if names_a_source(words[m.end():]):
             return m.start()
     return len(words)
 
@@ -545,7 +555,7 @@ def resolve_tooltip_url(
     take the tooltip font, and a value naming its own ``font_size=`` or
     ``font=`` keeps it -- the rule `resolve_title_url` applies.
     """
-    value = text.strip() if text else ""
+    value = translate_inline(text).strip() if text else ""
     if not value:
         return ""
     explicit = is_media_source(value)
@@ -575,7 +585,7 @@ def resolve_title_url(
     ``font_size=`` or ``font=`` keeps all of it: the settings are a default,
     not an override.
     """
-    value = image.strip() if image else ""
+    value = translate_inline(image).strip() if image else ""
     url = resolve_icon_url(value, size="title", color=color, theme=theme)
     if (
         not _draws_words(url)

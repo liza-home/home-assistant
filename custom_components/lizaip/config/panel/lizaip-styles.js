@@ -29,6 +29,7 @@ import { STYLES_DIALOGS } from "./styles/dialogs.js";
 import { STYLES_SLIDER } from "./styles/slider.js";
 import { STYLES_A11Y } from "./styles/a11y.js";
 import { STYLES_GUIDE } from "./styles/guide.js";
+import { STYLES_DISCOVERY } from "./styles/discovery.js";
 
 export const STYLES = [
   STYLES_BASE,
@@ -44,4 +45,5 @@ export const STYLES = [
   STYLES_SLIDER,
   STYLES_A11Y,
   STYLES_GUIDE,
+  STYLES_DISCOVERY,
 ].join("");

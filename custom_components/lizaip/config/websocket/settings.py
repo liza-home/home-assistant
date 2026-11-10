@@ -11,9 +11,9 @@ from homeassistant.core import HomeAssistant
 
 from ...action_controller import serialized_controls
 from ...const import DOMAIN
-from ...imgserv.fonts import list_fonts, user_fonts_dir
-from ...runtime import _get_store, _resolve_device_id
-from ...shared.i18n import action_labels, get_ui_language
+from ...imgserv.fonts import list_fonts, www_fonts_dir
+from ...runtime import _get_store, _resolve_device_id, find_store
+from ...shared.i18n import button_tooltips, get_ui_language
 from ...shared.icon_defaults import icon_defaults
 from ...shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ...shared.theme import (
@@ -65,6 +65,7 @@ from ..text_style import (
     validate_settings,
 )
 from .common import requires_device
+from ..access import require_any_device_access, require_device_access
 
 
 def icon_options_for_entry(hass: HomeAssistant, entry_id: str) -> dict:
@@ -169,9 +170,9 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/get_icon_options",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> None:
     """Report the icon-rendering settings the panel has to mirror.
@@ -191,13 +192,13 @@ async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/set_icon_options",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Optional("icon_fill_step"): object,
     vol.Optional("icon_fill_enabled"): object,
     vol.Optional("icon_color_enabled"): object,
     vol.Optional("variables_interval_ms"): object,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> None:
     """Save the icon-rendering settings edited in the gear tab."""
@@ -223,6 +224,7 @@ async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     vol.Optional("entry_id"): str,
     vol.Optional("shipped"): bool,
 })
+@require_device_access
 @websocket_api.async_response
 async def ws_get_icon_defaults(
     hass: HomeAssistant,
@@ -247,7 +249,7 @@ async def ws_get_icon_defaults(
 
 
 async def async_list_fonts(hass: HomeAssistant) -> list[dict[str, str]]:
-    return await hass.async_add_executor_job(list_fonts, user_fonts_dir(hass))
+    return await hass.async_add_executor_job(list_fonts, www_fonts_dir(hass))
 
 
 async def _entry_theme(hass: HomeAssistant, entry_id: str | None):
@@ -287,9 +289,9 @@ def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/get_settings",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_get_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -310,19 +312,18 @@ _MAX_IMAGE_URLS = 400
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/image_urls",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("items"): vol.All(
         [{
             vol.Required("value"): str,
             vol.Required("kind"): vol.In(("tile", "title", "tooltip")),
             vol.Optional("color", default=""): vol.Any(None, str),
-            vol.Optional("percent"): vol.Any(None, vol.All(int, vol.Range(min=0, max=100))),
             vol.Optional("theme"): vol.Any(None, str),
         }],
         vol.Length(max=_MAX_IMAGE_URLS),
     ),
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -357,9 +358,7 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
             urls.append(resolve(value, color, style, theme=tid))
         else:
             urls.append(
-                resolve_icon_url(
-                    value, color=color, percent=item.get("percent"), theme=tid,
-                )
+                resolve_icon_url(value, color=color, theme=tid)
                 if value.strip() else ""
             )
     connection.send_result(msg["id"], {"urls": urls})
@@ -367,21 +366,21 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/set_settings",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("settings"): dict,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
     """Save the text settings and redraw the remote's pages with them."""
     fonts = await async_list_fonts(hass)
     store = _get_store(hass)
-    # What the remote has now, so a font that went missing since it was chosen
-    # is carried through rather than refusing the save -- see validate_settings.
+    # What the remote has now, so a theme that went missing since it was
+    # chosen is carried through rather than refusing the save.
     stored = await store.async_get_settings(device_id)
     try:
-        settings = validate_settings(msg["settings"], {f["id"] for f in fonts}, stored)
+        settings = validate_settings(msg["settings"], stored)
     except ValueError as exc:
         connection.send_error(msg["id"], "invalid_format", str(exc))
         return
@@ -394,6 +393,7 @@ async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id:
     vol.Required("type"): "lizaip_config/get_palette",
     vol.Optional("entry_id"): str,
 })
+@require_device_access
 @websocket_api.async_response
 async def ws_get_palette(
     hass: HomeAssistant,
@@ -411,6 +411,7 @@ async def ws_get_palette(
 
 
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_themes"})
+@require_any_device_access
 @websocket_api.async_response
 async def ws_get_themes(
     hass: HomeAssistant,
@@ -422,9 +423,15 @@ async def ws_get_themes(
 
 
 async def async_reload_themes(hass: HomeAssistant) -> None:
-    """Re-read both theme folders, so a saved file is pickable at once."""
+    """Re-read both theme folders, so a saved file is pickable at once.
+
+    The remotes' kept settings go with it: they hold the text the old theme
+    supplied, and the next read must resolve the new one.
+    """
     themes_dir = user_themes_dir(hass)
     set_themes(await hass.async_add_executor_job(load_themes, themes_dir))
+    if store := find_store(hass):
+        store.forget_settings()
 
 
 async def _redraw_theme_users(hass: HomeAssistant, theme_id: str) -> None:
@@ -517,7 +524,7 @@ async def ws_delete_theme(
     vol.Required("type"): "lizaip_config/export_theme",
     vol.Required("theme_id"): str,
 })
-@websocket_api.require_admin
+@require_any_device_access
 @websocket_api.async_response
 async def ws_export_theme(
     hass: HomeAssistant,
@@ -571,23 +578,24 @@ async def ws_import_theme(
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): "lizaip_config/get_action_labels",
+    vol.Required("type"): "lizaip_config/get_button_tooltips",
     vol.Optional("entry_id"): str,
     vol.Optional("language"): str,
 })
+@require_device_access
 @websocket_api.async_response
-async def ws_get_action_labels(
+async def ws_get_button_tooltips(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    """Return translated action labels for the device language, with English fallback.
+    """Return translated button tooltips for the device language, with English fallback.
 
-    The panel and device share ``translations/<lang>.json`` so labels cannot
+    The panel and device share ``translations/<lang>.json`` so tooltips cannot
     drift; an entry-pinned language outranks the browser language.
 
     Response payload:
-      {language, labels}
+      {language, tooltips}
     """
     entry = (
         hass.config_entries.async_get_entry(msg["entry_id"])
@@ -598,12 +606,13 @@ async def ws_get_action_labels(
     # A no-op once setup has run, which is always the case by the time a panel
     # can send this — kept so the command does not depend on that ordering to
     # stay off the disk.
-    await action_labels.async_preload(hass)
-    labels = {**action_labels.load("en"), **action_labels.load(lang)}
-    connection.send_result(msg["id"], {"language": lang, "labels": labels})
+    await button_tooltips.async_preload(hass)
+    tooltips = {**button_tooltips.load("en"), **button_tooltips.load(lang)}
+    connection.send_result(msg["id"], {"language": lang, "tooltips": tooltips})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_slider_controls"})
+@require_any_device_access
 @websocket_api.async_response
 async def ws_get_slider_controls(
     hass: HomeAssistant,
@@ -619,7 +628,7 @@ async def ws_get_slider_controls(
 
 
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_internal_commands"})
-@websocket_api.require_admin
+@require_any_device_access
 @websocket_api.async_response
 async def ws_get_internal_commands(hass: HomeAssistant, connection, msg: dict) -> None:
     """Return device-local command descriptors consumed by the panel.

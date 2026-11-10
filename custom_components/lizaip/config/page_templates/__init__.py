@@ -31,13 +31,22 @@ the services and triggers it registers — import the submodule by name.
 from __future__ import annotations
 
 from .generate import (
+    TEMPLATE_VERSION,
+    TEMPLATE_VERSION_KEY,
     async_load_template,
     forget_template,
     generate_assignments,
+    is_unbound,
     list_templates,
     load_template,
+    page_definition,
     set_user_templates_dir,
+    template_pages,
     user_templates_dir,
+)
+from .compose import (
+    ComposedPage,
+    async_compose_pages,
 )
 from .resolver import template_bindings, resolve_template_variables
 from .sources import (
@@ -50,17 +59,24 @@ from .sources import (
 )
 
 __all__ = [
+    "TEMPLATE_VERSION",
+    "TEMPLATE_VERSION_KEY",
+    "ComposedPage",
     "DEFAULT_MAX_ITEMS",
     "DEFAULT_TRACKED_FIELDS",
     "SOURCES",
+    "async_compose_pages",
     "async_load_template",
     "async_resolve_source",
     "forget_template",
     "generate_assignments",
     "get_source",
     "template_bindings",
+    "template_pages",
+    "is_unbound",
     "list_templates",
     "load_template",
+    "page_definition",
     "resolve_template_variables",
     "set_user_templates_dir",
     "user_templates_dir",

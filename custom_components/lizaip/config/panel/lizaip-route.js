@@ -280,7 +280,7 @@ export const RouteMixin = {
     } catch (e) {
       // An address bar that will not move is a cosmetic failure; the panel
       // behind it still works, so this must never take a render down.
-      console.debug("[LIZA] route sync failed:", e);
+      console.debug("[lizaIP] route sync failed:", e);
     }
     this._routeRemember(path);
   },
@@ -301,7 +301,7 @@ export const RouteMixin = {
       else window.sessionStorage?.setItem(ROUTE_MEMORY_KEY, path);
     } catch (e) {
       // Private browsing, or a storage quota. Nothing to do but forget.
-      console.debug("[LIZA] route memory unavailable:", e);
+      console.debug("[lizaIP] route memory unavailable:", e);
     }
   },
 
@@ -528,7 +528,7 @@ export const RouteMixin = {
         this._render();
       }
     } catch (e) {
-      console.debug("[LIZA] route navigation failed:", e);
+      console.debug("[lizaIP] route navigation failed:", e);
     } finally {
       this._routeNavigating = false;
     }

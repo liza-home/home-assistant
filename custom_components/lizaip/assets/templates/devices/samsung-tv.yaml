@@ -1,5 +1,26 @@
+# Samsung TV Template — pre-configured remote control
+#
+# Keys go through the Samsung Smart TV integration's `remote.send_command`
+# (KEY_UP, KEY_ENTER, KEY_HOME, KEY_0 …); volume uses the media player's
+# ordinary services.
+#
+# The remote page follows the LG webOS TV template: the arrow keys around OK,
+# Home below them, and the TV's further pages on the right-hand column --
+# Apps (button 4), Digits (button 8) and Inputs (button 12) where the TV has
+# them. They are subpages: not in the remote's page order, only reached from
+# those buttons; on each, the remote's Back button leads back.
+#   - Apps: the apps the TV reports, each chosen with
+#     `media_player.select_source`; more than twelve get more Apps pages,
+#     button 12 leading on.
+#   - Inputs: the TV's own sources, TV and HDMI, which the integration lists
+#     ahead of the apps.
+#   - Digits: 1–9 and 0 as on a phone keypad, with Channel up and down.
+#
+# Reference: https://www.home-assistant.io/integrations/samsungtv
+
+version: 2
 name: Samsung TV
-icon: mdi:television
+icon: logo:samsung
 description: Control your Samsung TV (SmartThings / Samsung TV integration)
 
 # Device selector — the picker offers devices of this integration that
@@ -9,130 +30,389 @@ target_selector:
     integration: samsungtv
     primary_domain: remote
 
-# Button mappings (Liza button_key → HA action), written the way a stored
-# page writes a button. Leave one out for a slot that should do nothing.
-buttons:
-  button_power:
-    label: Power
-    image: mdi:power
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_POWER
+# The `apps` kind of the favourites source reads the apps the player lists:
+# its `apps` browse folder where it has one, else its `source_list` -- where
+# the Samsung integration lists TV and HDMI first, then the apps. Those two
+# are its inputs. A newer TV lists no apps there, so it is asked about each
+# app of Samsung's store for its country (page_templates/samsung_tv.py),
+# with the store's icons.
+placeholders:
+  app:
+    source: favorites
+    spec:
+      category: apps
+      exclude: [TV, HDMI*]
+  input:
+    source: favorites
+    spec:
+      category: inputs
+      include: [TV, HDMI*]
 
-  button_1:
-    label: Home
-    image: mdi:home
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_HOME
+pages:
+  remote:
+    title: "logo:samsung ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: mdi:menu
+        tooltip: {translate: menu}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_MENU
 
-  button_2:
-    label: Up
-    repeat: true
-    image: mdi:arrow-up
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_UP
+      button_2:
+        icon: mdi:arrow-up-bold-outline
+        tooltip: {translate: up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_UP
 
-  button_3:
-    label: Back
-    image: mdi:keyboard-return
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_RETURN
+      button_3:
+        icon: mdi:play-pause
+        tooltip: {translate: play_pause}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_PLAY
 
-  button_4:
-    label: Menu
-    image: mdi:menu
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_MENU
+      button_4:
+        icon: mdi:apps
+        tooltip: {translate: apps}
+        goto_page: apps
 
-  button_5:
-    label: Left
-    repeat: true
-    image: mdi:arrow-left
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_LEFT
+      button_5:
+        icon: mdi:arrow-left-bold-outline
+        tooltip: {translate: left}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_LEFT
 
-  button_6:
-    label: Select
-    image: mdi:checkbox-marked-circle
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_ENTER
+      button_6:
+        icon: mdi:circle-outline
+        tooltip: {translate: select}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_ENTER
 
-  button_7:
-    label: Right
-    repeat: true
-    image: mdi:arrow-right
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_RIGHT
+      button_7:
+        icon: mdi:arrow-right-bold-outline
+        tooltip: {translate: right}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_RIGHT
 
-  button_8:
-    label: Tools / More
-    image: mdi:dots-vertical
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_TOOLS
+      button_8:
+        icon: mdi:dialpad
+        tooltip: {translate: digits}
+        goto_page: digits
 
-  button_9:
-    label: Previous
-    image: mdi:skip-previous
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_REWIND
+      button_9:
+        icon: mdi:rewind
+        tooltip: {translate: previous}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_REWIND
 
-  button_10:
-    label: Down
-    repeat: true
-    image: mdi:arrow-down
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_DOWN
+      button_10:
+        icon: mdi:arrow-down-bold-outline
+        tooltip: {translate: down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_DOWN
 
-  button_11:
-    label: Next
-    image: mdi:skip-next
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_FF
+      button_11:
+        icon: mdi:home-outline
+        tooltip: {translate: home}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_HOME
 
-  button_12:
-    label: Play / Pause
-    image: mdi:play-pause
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_PLAY
+      button_12:
+        icon: mdi:video-input-hdmi
+        tooltip: {translate: inputs}
+        goto_page: inputs
 
-  # --- back & voice ---
-  button_back:
-    label: Back
-    image: mdi:arrow-left-circle
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_RETURN
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_POWER
 
-  button_voice:
-    label: Source
-    image: mdi:import
-    config:
-      - action: remote.send_command
-        data:
-          command: KEY_SOURCE
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      button_voice:
+        icon: mdi:import
+        tooltip: {translate: source}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_SOURCE
+
+      button_back:
+        icon: mdi:keyboard-return
+        tooltip: {translate: back}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_RETURN
+
+  apps:
+    subpage: true
+    paginate: app
+    max_parts: 3
+    title: "mdi:apps ${_device.area_name}"
+    buttons:
+      button_1: "@app[1]"
+      button_2: "@app[2]"
+      button_3: "@app[3]"
+      button_4: "@app[4]"
+      button_5: "@app[5]"
+      button_6: "@app[6]"
+      button_7: "@app[7]"
+      button_8: "@app[8]"
+      button_9: "@app[9]"
+      button_10: "@app[10]"
+      button_11: "@app[11]"
+
+      button_12:
+        placeholder: "@app[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_POWER
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, remote]
+
+  inputs:
+    subpage: true
+    title: "mdi:video-input-hdmi ${_device.area_name}"
+    buttons:
+      button_1: "@input[1]"
+
+      button_2: "@input[2]"
+
+      button_3: "@input[3]"
+
+      button_4: "@input[4]"
+
+      button_5: "@input[5]"
+
+      button_6: "@input[6]"
+
+      button_7: "@input[7]"
+
+      button_8: "@input[8]"
+
+      button_9: "@input[9]"
+
+      button_10: "@input[10]"
+
+      button_11: "@input[11]"
+
+      button_12: "@input[12]"
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_POWER
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote
+
+  digits:
+    subpage: true
+    title: "mdi:dialpad ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: 1
+        tooltip: 1
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_1
+
+      button_2:
+        icon: 2
+        tooltip: 2
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_2
+
+      button_3:
+        icon: 3
+        tooltip: 3
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_3
+
+      button_4:
+        icon: mdi:chevron-up
+        tooltip: CH+
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_CHUP
+
+      button_5:
+        icon: 4
+        tooltip: 4
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_4
+
+      button_6:
+        icon: 5
+        tooltip: 5
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_5
+
+      button_7:
+        icon: 6
+        tooltip: 6
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_6
+
+      button_8:
+        icon: mdi:chevron-down
+        tooltip: CH-
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_CHDOWN
+
+      button_9:
+        icon: 7
+        tooltip: 7
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_7
+
+      button_10:
+        icon: 8
+        tooltip: 8
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_8
+
+      button_11:
+        icon: 9
+        tooltip: 9
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_9
+
+      button_12:
+        icon: 0
+        tooltip: 0
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_0
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: KEY_POWER
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote

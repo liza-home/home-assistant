@@ -17,7 +17,7 @@ ASSIGNMENT_DYNAMIC_KEY: Final = "dynamic"
 # writes it and the tooltip ladders read it. Stored only when true — absence is
 # how "nobody has named this button, keep deriving" is spelled, matching every
 # other optional field in the assignment schema.
-ASSIGNMENT_LABEL_EDITED_KEY: Final = "label_edited"
+ASSIGNMENT_TOOLTIP_EDITED_KEY: Final = "tooltip_edited"
 
 
 # The name a device-local command's target had when the button was saved.
@@ -41,14 +41,14 @@ ASSIGNMENT_LONGTOUCH_KEY: Final = "longtouch"
 LONGTOUCH_SECONDS: Final = 2.0
 
 
-# ``repeat: true`` on a stored button: holding it runs its action again and
+# ``key_repeat: true`` on a stored button: holding it runs its action again and
 # again (key repeat), at the delay and rate the remote's settings name,
 # like a TV remote's cursor keys. Absent or anything else: a held button runs
 # once.
-ASSIGNMENT_REPEAT_KEY: Final = "repeat"
+ASSIGNMENT_REPEAT_KEY: Final = "key_repeat"
 
 
-def repeats(assign) -> bool:
+def key_repeats(assign) -> bool:
     """Whether a stored button runs again while it is held."""
     return isinstance(assign, dict) and assign.get(ASSIGNMENT_REPEAT_KEY) is True
 
@@ -74,4 +74,4 @@ def name_is_user_written(assign) -> bool:
     """
     if not isinstance(assign, dict):
         return False
-    return bool(assign.get(ASSIGNMENT_LABEL_EDITED_KEY))
+    return bool(assign.get(ASSIGNMENT_TOOLTIP_EDITED_KEY))

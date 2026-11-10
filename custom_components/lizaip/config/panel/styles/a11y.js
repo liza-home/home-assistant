@@ -12,10 +12,13 @@
  */
 export const STYLES_A11Y = `
   /* ── keyboard focus ────────────────────────────────────────────────
-     HA's geometry (2px outline, 2px offset) but not its colour -- see
-     --liza-focus above. No border-radius, so the ring follows the element's
-     own shape. !important throughout: the panel's state rules are written
-     far heavier than any focus selector can be, and 2.4.7 is not optional. */
+     Home Assistant's ring, and only that: its width, offset and colour
+     (--wa-focus-ring-*), drawn the same way on every control. No control
+     adds a frame, glow or colour of its own on focus -- two indicators read
+     as two things focused. No border-radius, so the ring follows the
+     element's own shape. !important throughout: the panel's state rules are
+     written far heavier than any focus selector can be, and 2.4.7 is not
+     optional. */
   /* Announcements only. Clipped rather than display:none, which would take
      it out of the accessibility tree and silence it. */
   .liza-sr-only {
@@ -25,8 +28,19 @@ export const STYLES_A11Y = `
   }
 
   :host *:focus-visible {
-    outline: 2px solid var(--liza-focus) !important;
-    outline-offset: 2px !important;
+    outline: var(--wa-focus-ring-width, 2px) solid var(--liza-focus) !important;
+    outline-offset: var(--wa-focus-ring-offset, 2px) !important;
+  }
+
+  /* Inside the box, as Home Assistant draws it on list rows and menu items:
+     a row fills its list, so an outset ring is clipped by the list's edge or
+     runs into the next row. */
+  .template-row:focus-visible,
+  .face-menu-item:focus-visible,
+  .guide-toc-item:focus-visible,
+  .guide-ext:focus-visible,
+  .page-thumb-del:focus-visible {
+    outline-offset: calc(-1 * var(--wa-focus-ring-width, 2px)) !important;
   }
 
   /* outline-offset draws the ring outside the border box, so it contrasts
@@ -78,25 +92,11 @@ export const STYLES_A11Y = `
     outline: none !important;
   }
 
-  /* Text fields clear the outline on :focus and signal focus with a 1px
-     border colour instead, which is easy to miss; put the ring back. */
-  :host input:focus-visible,
-  :host select:focus-visible,
-  :host textarea:focus-visible {
-    outline: 2px solid var(--liza-focus) !important;
-    outline-offset: 1px !important;
-  }
-
-  /* Three corrections the generic ring cannot make. opacity:1 -- the button
-     is invisible until hover, and a blind focus on a *delete* is the worst
-     one to hand over. Negative offset -- .page-thumb is overflow:hidden, so
-     an outset ring is clipped (2.4.11). And the hover fill, because the icon
-     is itself a circle and a grey ring beside it read as a double edge. */
+  /* Shown while focused: the button is invisible until hover, and a blind
+     focus on a *delete* is the worst one to hand over. Its ring is inset
+     (above) because .page-thumb is overflow:hidden (2.4.11). */
   .page-thumb-del:focus-visible {
     opacity: 1;
-    outline-offset: -2px !important;
-    background: var(--liza-error-fill);
-    color: #fff;
   }
 
   /* A button that opens a page, while its link is drawn. !important for the
@@ -143,23 +143,20 @@ export const STYLES_A11Y = `
      keyboard, and the first keydown takes the class off). */
   .template-dialog.focus-quiet .template-row:focus-visible {
     outline: none !important;
-    border-color: transparent;
-    box-shadow: none;
   }
-  .template-dialog.focus-quiet .template-row.is-chosen:focus-visible {
-    border-color: var(--primary-color, #03a9f4);
-  }
-
-  /* The add button is a dashed circle at rest, so an outset ring made two
-     concentric circles. The dashes go solid instead -- one indicator, and
-     broken-to-continuous reads without colour. border-width is restated
-     because the rest state sets it via a shorthand whose color-mix can
-     fail, falling back to 'medium' (3px) against everything else's 2px. */
-  .page-add-btn:focus-visible {
-    border-style: solid;
-    border-width: 2px;
-    border-color: var(--liza-focus);
+  /* Home Assistant's own list rows and menu items draw their own focus ring,
+     inside the row; the panel's ring would make it two. Quiet means theirs
+     too. */
+  ha-list-item-button:focus-visible,
+  ha-list-item-option:focus-visible,
+  ha-dropdown-item:focus-visible {
     outline: none !important;
+  }
+  .template-dialog.focus-quiet ha-list-item-button,
+  .template-dialog.focus-quiet ha-list-item-option {
+    --ha-list-item-focus-width: 0;
+    --ha-list-item-focus-width-start: 0;
+    --ha-list-item-focus-background: transparent;
   }
 
   /* WCAG 1.4.10 Reflow. In one row only the device name can shrink, so under

@@ -83,6 +83,11 @@ USER_THEMES_SUBDIR: Final = ("lizaip", "themes")
 
 TEXT_KINDS: Final = ("title", "tooltip")
 
+#: The emoji font a theme names under ``text: emoji: font:`` -- a font id, or
+#: this for none at all, emoji then drawn in the text font as far as it has
+#: them. A theme that names none leaves imgserv to find one, as it always has.
+EMOJI_NONE: Final = "none"
+
 #: The colours named for a state rather than a hue, as the Colours tab lists
 #: them. ``default`` is what a button whose state says nothing is drawn in. A
 #: theme may re-point them; ``?fg=off`` keeps working either way.
@@ -172,6 +177,9 @@ class Theme:
             for kind in TEXT_KINDS
         },
     )
+    #: The emoji font (``text: emoji: font:``): a font id, :data:`EMOJI_NONE`,
+    #: or ``""`` for imgserv's own choice.
+    emoji_font: str = ""
     #: Whether the picker offers this theme as a whole look. A file that
     #: supplies one facet only says ``preset: false``, so picking it never
     #: silently resets the other two.
@@ -203,6 +211,8 @@ class Theme:
                 [(name, list(rgba)) for name, rgba in self.palette_colors.items()],
                 self.text,
                 self.icon_overrides,
+                # Only when set: a theme naming none keeps the revision it had.
+                *([self.emoji_font] if self.emoji_font else []),
             ],
             sort_keys=True,
             default=str,
@@ -264,7 +274,10 @@ class Theme:
                 self.colors != DEFAULT_THEME.colors
                 or self.palette_colors != DEFAULT_THEME.palette_colors
             ),
-            "text": self.text != DEFAULT_THEME.text,
+            "text": (
+                self.text != DEFAULT_THEME.text
+                or self.emoji_font != DEFAULT_THEME.emoji_font
+            ),
             "icons": bool(self.icon_overrides),
         }
 
@@ -291,7 +304,10 @@ class Theme:
                     name: color_to_hex(rgba) for name, rgba in self.colors.items()
                 },
             },
-            "text": {kind: self.text_style(kind) for kind in TEXT_KINDS},
+            "text": {
+                **{kind: self.text_style(kind) for kind in TEXT_KINDS},
+                "emoji": {"font": self.emoji_font},
+            },
             "icons": self.icon_changes(),
             # The same changes as the file holds them, so an editor that only
             # offers some of them can write the rest back untouched.
@@ -418,6 +434,13 @@ def _parse_colors(
                 colors[key] = rgba
 
 
+def _parse_emoji(raw: Any) -> str:
+    """The emoji font a ``text:`` block names, ``""`` when it names none."""
+    given = raw.get("emoji") if isinstance(raw, dict) else None
+    font = given.get("font") if isinstance(given, dict) else None
+    return font.strip().lower() if isinstance(font, str) else ""
+
+
 def _parse_text(raw: Any, text: dict) -> None:
     if not isinstance(raw, dict):
         return
@@ -483,6 +506,7 @@ def parse_theme(
     name = theme_id
     preset = True
     icon_overrides: dict[str, dict] = {}
+    emoji_font = ""
 
     if isinstance(raw, dict):
         given_name = raw.get("name")
@@ -492,6 +516,7 @@ def parse_theme(
         _apply_tint(raw.get("tint"), colors, palette, theme_id)
         _parse_colors(raw.get("colors"), colors, palette, theme_id)
         _parse_text(raw.get("text"), text)
+        emoji_font = _parse_emoji(raw.get("text"))
         icon_overrides = _icon_overrides(raw.get("icons"))
 
     # `transparent` is not a colour a theme may take away: a part asked for in
@@ -506,6 +531,7 @@ def parse_theme(
         colors=colors,
         palette_colors=palette,
         text=text,
+        emoji_font=emoji_font,
         icon_overrides=icon_overrides,
     )
 
@@ -633,6 +659,7 @@ def compose(colors: str, text: str, icons: str) -> Theme:
         theme_id=key,
         source="composed",
         text=_themes.get(text, DEFAULT_THEME).text,
+        emoji_font=_themes.get(text, DEFAULT_THEME).emoji_font,
         icon_overrides=_themes.get(icons, DEFAULT_THEME).icon_overrides,
     )
     # Only a composition of themes that exist is kept: the id reaches here
@@ -651,11 +678,6 @@ def get_theme(theme_id: Any) -> Theme:
     if FACET_SEPARATOR in wanted:
         return compose(*split_id(wanted))
     return _themes.get(wanted, _themes[DEFAULT_THEME_ID])
-
-
-def theme_revision(theme_id: Any) -> str:
-    """The content digest of the theme *theme_id* names."""
-    return get_theme(theme_id).revision
 
 
 def theme_ids() -> set[str]:

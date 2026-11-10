@@ -1,0 +1,152 @@
+# Sonos Options — the settings behind a speaker, on one page
+#
+# Made for **Add options…**: a button that plays or pauses a speaker gets a
+# subpage behind its long touch, and that subpage is this. It binds to the
+# same speaker the button already acts on, so the page is created without
+# asking anything.
+#
+#   1       mute, read live from the speaker and flipped on each press
+#   2       shuffle, the same way
+#   3-5     repeat: off, the whole queue, one track
+#   6-8     volume presets
+#   9-11    sleep timer: 15, 30 and 60 minutes
+#   12      sleep timer off
+#
+# Playback itself is not repeated here — the page the button sits on already
+# has it.
+#
+# Reference: https://www.home-assistant.io/integrations/sonos
+
+version: 2
+name: Sonos Options
+icon: mdi:tune-variant
+description: Mute, shuffle, repeat, volume and sleep timer for one speaker
+
+target_selector:
+  device:
+    integration: sonos
+    primary_domain: media_player
+
+pages:
+  options:
+    title: "logo:sonos + options"
+    buttons:
+      button_1:
+        icon: mdi:volume-mute
+        tooltip: "{translate: mute} ${_device.is_volume_muted}"
+        config:
+          # volume_mute is a setter, not a toggle: reading the target's current
+          # state and inverting it is what makes this button behave like one.
+          - action: media_player.volume_mute
+            data:
+              is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
+
+      button_2:
+        icon: mdi:shuffle-variant
+        tooltip: "{translate: shuffle} ${_device.shuffle}"
+        config:
+          - action: media_player.shuffle_set
+            data:
+              shuffle: "{{ not is_state_attr('@target', 'shuffle', true) }}"
+
+      button_3:
+        icon: mdi:repeat-off
+        tooltip: {translate: repeat_off}
+        config:
+          - action: media_player.repeat_set
+            data:
+              repeat: "off"
+      button_4:
+        icon: mdi:repeat
+        tooltip: {translate: repeat_all}
+        config:
+          - action: media_player.repeat_set
+            data:
+              repeat: all
+      button_5:
+        icon: mdi:repeat-once
+        tooltip: {translate: repeat_one}
+        config:
+          - action: media_player.repeat_set
+            data:
+              repeat: one
+
+      # The icon is filled to the level it sets, so the three read as a run.
+      button_6:
+        icon: mdi:volume-medium?percent=20
+        tooltip: "{translate: volume} 20 %"
+        config:
+          - action: media_player.volume_set
+            data:
+              volume_level: 0.2
+      button_7:
+        icon: mdi:volume-medium?percent=40
+        tooltip: "{translate: volume} 40 %"
+        config:
+          - action: media_player.volume_set
+            data:
+              volume_level: 0.4
+      button_8:
+        icon: mdi:volume-high?percent=60
+        tooltip: "{translate: volume} 60 %"
+        config:
+          - action: media_player.volume_set
+            data:
+              volume_level: 0.6
+
+      # `sonos.set_sleep_timer` counts in seconds and replaces whatever was
+      # running, so the three are a choice rather than a sum.
+      button_9:
+        icon: mdi:timer-outline
+        tooltip: "{translate: sleep_in} 15 min"
+        config:
+          - action: sonos.set_sleep_timer
+            data:
+              sleep_time: 900
+      button_10:
+        icon: mdi:timer-outline
+        tooltip: "{translate: sleep_in} 30 min"
+        config:
+          - action: sonos.set_sleep_timer
+            data:
+              sleep_time: 1800
+      button_11:
+        icon: mdi:timer-outline
+        tooltip: "{translate: sleep_in} 60 min"
+        config:
+          - action: sonos.set_sleep_timer
+            data:
+              sleep_time: 3600
+      button_12:
+        icon: mdi:timer-off-outline
+        tooltip: {translate: sleep_timer_off}
+        config:
+          - action: sonos.clear_sleep_timer
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      # The mechanics live in `slider_actions`, as a page stores them; the subject
+      # is left out because the page's own target supplies it.
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0

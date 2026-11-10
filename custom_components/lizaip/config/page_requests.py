@@ -22,8 +22,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from ..device.protocol import is_valid_page_id
-from ..runtime import _get_store, entry_device_id
+from ..runtime import entry_device_id
 from ..shared.logs import device_logger
+from .default_pages import async_effective_pages
 from .page_payload import build_page_payload, build_sync_context
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,7 +47,8 @@ async def async_page_payloads(
     if not device_id:
         return []
 
-    pages = await _get_store(hass).async_get_pages(device_id)
+    effective = await async_effective_pages(hass, entry)
+    pages = effective.pages
     wanted = [p for p in pages if is_valid_page_id(p.get("id", 1))]
     if len(wanted) != len(pages):
         device_logger(_LOGGER, entry).warning(
@@ -61,7 +63,10 @@ async def async_page_payloads(
     # `all_pages` stays the whole list even for a single page: an internal
     # command is cross-checked against every page that exists, not against
     # the one being answered.
-    ctx = await build_sync_context(hass, entry, pages)
+    ctx = await build_sync_context(
+        hass, entry, pages,
+        assignments=effective.assignments,
+    )
     return [
         await build_page_payload(
             hass, entry, page.get("id", 1), page, pages, ctx=ctx,

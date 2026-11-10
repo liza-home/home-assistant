@@ -8,6 +8,9 @@
 # that the tiles are ordinary values: edit one in the panel to point it at
 # anything else.
 #
+# The same page is the second of the pages a remote with none shows
+# (`_default-pages.yaml`); the two are copies, so change both.
+#
 #   1      the battery level beside its icon (stacked on a square tile)
 #   2      the same level as a fill: `?percent=` takes a calculation
 #   3      an icon picked by arithmetic -- battery icons only exist in steps
@@ -29,11 +32,10 @@
 #   12     the level as a pie of eight slices: arithmetic maps 0-100 %
 #          onto circle-slice-1 ... -8
 
+version: 2
 name: "This remote"
 icon: mdi:remote
-page_image: "mdi:remote text:This remote"
 description: The remote's own battery, charge, addresses and firmware — values, fill levels and history
-unbound: true
 
 placeholders:
   battery:
@@ -55,42 +57,45 @@ placeholders:
     source: entities
     spec: {config_entry: "@remote_entry", translation_key: firmware}
 
-buttons:
-  button_1:
-    label: "Battery ${{@battery[1].entity_id}}"
-    image: "mdi:battery ${{@battery[1].entity_id}}"
-  button_2:
-    label: "Battery as a fill level"
-    image: "mdi:battery-outline?percent=${round({@battery[1].entity_id})}"
-  button_3:
-    label: "An icon picked by arithmetic"
-    image: "mdi:battery-${max(10, min(90, round({@battery[1].entity_id} / 10) * 10))}"
-  button_4:
-    label: "history:{@battery[1].entity_id}?hours=168"
-    image: "history:{@battery[1].entity_id}?hours=24"
+pages:
+  this-remote:
+    title: "mdi:remote text:This remote"
+    buttons:
+      button_1:
+        icon: "mdi:battery ${{@battery[1].entity_id}}"
+        tooltip: "Battery ${{@battery[1].entity_id}}"
+      button_2:
+        icon: "mdi:battery-outline?percent=${round({@battery[1].entity_id})}"
+        tooltip: "Battery as a fill level"
+      button_3:
+        icon: "mdi:battery-${max(10, min(90, round({@battery[1].entity_id} / 10) * 10))}"
+        tooltip: "An icon picked by arithmetic"
+      button_4:
+        icon: "history:{@battery[1].entity_id}?hours=24"
+        tooltip: "history:{@battery[1].entity_id}?hours=168"
 
-  button_5:
-    label: "HA ${{@ha_address[1].entity_id}}"
-    image: "mdi:home-assistant"
-  button_6:
-    label: "RCU ${{@address[1].entity_id}}"
-    image: "mdi:remote"
-  button_7:
-    label: "Firmware ${{@firmware[1].entity_id}.installed_version}"
-    image: "mdi:chip ${{@firmware[1].entity_id}.installed_version}"
-  button_8:
-    label: "In hand: ${{@in_hand[1].entity_id}}"
-    image: mdi:hand-back-right
+      button_5:
+        icon: "mdi:home-assistant"
+        tooltip: "HA ${{@ha_address[1].entity_id}}"
+      button_6:
+        icon: "mdi:remote"
+        tooltip: "RCU ${{@address[1].entity_id}}"
+      button_7:
+        icon: "mdi:chip ${{@firmware[1].entity_id}.installed_version}"
+        tooltip: "Firmware ${{@firmware[1].entity_id}.installed_version}"
+      button_8:
+        icon: mdi:hand-back-right
+        tooltip: "In hand: ${{@in_hand[1].entity_id}}"
 
-  button_9:
-    label: "Charging: ${{@charging[1].entity_id}}"
-    image: mdi:battery-charging
-  button_10:
-    label: "Battery ${round({@battery[1].entity_id})}%"
-    image: "text:${round({@battery[1].entity_id})}%"
-  button_11:
-    label: "${100 - round({@battery[1].entity_id})}% short of a full charge"
-    image: "text:-${100 - round({@battery[1].entity_id})}%?font_size=24"
-  button_12:
-    label: "Battery ${round({@battery[1].entity_id})}% as a pie"
-    image: "mdi:circle-slice-${max(1, min(8, 1 + round({@battery[1].entity_id} * 7 / 100)))}"
+      button_9:
+        icon: mdi:battery-charging
+        tooltip: "Charging: ${{@charging[1].entity_id}}"
+      button_10:
+        icon: "text:${round({@battery[1].entity_id})}%"
+        tooltip: "Battery ${round({@battery[1].entity_id})}%"
+      button_11:
+        icon: "text:-${100 - round({@battery[1].entity_id})}%?font_size=24"
+        tooltip: "${100 - round({@battery[1].entity_id})}% short of a full charge"
+      button_12:
+        icon: "mdi:circle-slice-${max(1, min(8, 1 + round({@battery[1].entity_id} * 7 / 100)))}"
+        tooltip: "Battery ${round({@battery[1].entity_id})}% as a pie"

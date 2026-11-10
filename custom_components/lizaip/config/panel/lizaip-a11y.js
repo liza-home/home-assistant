@@ -70,6 +70,13 @@ const isHidden = (el) => {
   return false;
 };
 
+// An HA component that has not drawn its inner control yet throws from
+// focus() instead of refusing it, and a render must not die for that. Every
+// caller re-asks the document afterwards, so a throw reads as "did not focus".
+const focusSafely = (el) => {
+  try { el.focus({ preventScroll: true }); } catch { /* not drawn yet */ }
+};
+
 // Focusing a text field from script leaves the caret at character zero, so the
 // user types in front of their own text. Only where we move focus ourselves.
 // HA's ha-input draws its <input> a microtask after it is created, so a caret
@@ -154,7 +161,7 @@ export const A11yMixin = {
       } catch (err) {
         // A keyboard shortcut must never be the reason the panel stops
         // working: a missed key is recoverable, a thrown listener is not.
-        console.error("[LIZA] a11y keydown failed:", err);
+        console.error("[lizaIP] a11y keydown failed:", err);
       }
     };
     sr.addEventListener("keydown", this._a11yKeydown);
@@ -379,13 +386,13 @@ export const A11yMixin = {
       // `preventScroll`: this is focus going back where it already was, and
       // the render has just put the page back there too. Letting the platform
       // scroll to it as well is what used to yank the view around.
-      el.focus({ preventScroll: true });
+      focusSafely(el);
       // HA's pickers keep their real control in a shadow root and the host
       // itself does not take focus. Either way the document reports the host
       // as the active element, so the check below still answers for both.
       if (sr.activeElement !== el && el.shadowRoot) {
         const inner = el.shadowRoot.querySelector(NATIVE);
-        if (inner && typeof inner.focus === "function") inner.focus({ preventScroll: true });
+        if (inner && typeof inner.focus === "function") focusSafely(inner);
       }
       // `focus()` on an element that is no longer focusable is a silent no-op,
       // and reporting success there is how focus gets lost while every check
@@ -401,7 +408,7 @@ export const A11yMixin = {
     if (token.after) {
       const next = sr.querySelector(token.after);
       if (next && typeof next.focus === "function" && !isHidden(next)) {
-        next.focus({ preventScroll: true });
+        focusSafely(next);
         if (sr.activeElement === next) { caretToEnd(next); return true; }
       }
     }
@@ -447,7 +454,7 @@ export const A11yMixin = {
     for (const el of ordered) {
       // `preventScroll`: the caller scrolls the editor into view on purpose a
       // frame later, and focus() doing it first makes the two fight.
-      el.focus({ preventScroll: true });
+      focusSafely(el);
       // A control can be present and still refuse focus -- hidden, not yet
       // upgraded, zero-sized. Ask the document rather than assume, and move on.
       if (sr.activeElement === el) { caretToEnd(el); return true; }
@@ -472,7 +479,7 @@ export const A11yMixin = {
       if (pad) el.setAttribute("data-a11y-landing", "");
       // A landing pad is where focus ended up, not where the user asked to go;
       // scrolling the page to it would move the view for no reason they gave.
-      el.focus({ preventScroll: true });
+      focusSafely(el);
       if (sr.activeElement === el) {
         // A container does not announce its own name the way a control does:
         // VoiceOver reads a group's label when entering its contents, not when

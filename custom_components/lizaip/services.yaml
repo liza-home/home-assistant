@@ -28,6 +28,20 @@ clear_device_pages:
         config_entry:
           integration: lizaip
 
+launch_app:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: media_player
+          multiple: true
+    app_id:
+      required: true
+      example: "3201907018807"
+      selector:
+        text:
+
 refresh_dynamic_sources:
   fields:
     entry_id:
@@ -59,3 +73,18 @@ goto_page:
         number:
           min: 1
           mode: box
+
+send_ir:
+  # Same three target keys as goto_page, for the same reasons.
+  target:
+    entity:
+      integration: lizaip
+    device:
+      integration: lizaip
+    primary_entities_only: false
+  fields:
+    ir_blob:
+      required: true
+      example: "aGFsbG93ZWx0"
+      selector:
+        text:

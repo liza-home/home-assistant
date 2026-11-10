@@ -7,16 +7,17 @@ several modules *and* by the config panel, and they are what a user actually
 sees, so one file is the right home for them.
 
 **What does not:** numbers that only make sense next to the code they steer —
-the SVG supersampling factor, the text padding, where a HACS plugin installs
+the SVG supersampling factor, the text padding, where a dashboard plugin installs
 its JS. Those live in the module that uses them, where the comment explaining
 them is one screen away from the algorithm they belong to. Hoisting them here
 would only put distance between a value and its reason.
 """
 from __future__ import annotations
 
+import io
 import os
 import re
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 
@@ -125,11 +126,12 @@ MIN_FONT_SIZE: Final = 6
 DEFAULT_SIZE_ID: Final = "tile"
 DEFAULT_SIZE: Final = SIZE_IDS[DEFAULT_SIZE_ID][:2]
 
-# The sources whose value is a slug and so can never hold a space: a logo is a
-# file we ship (`hue`, `netflix_wide`), an mdi glyph is a hyphenated name
-# (`play-circle`) and a picture is an address, which spells a space `%20`.
-# After one of those the first space starts something else.
-SLUG_SOURCES: Final = ("logo:", "mdi:", "media:")
+# Every source but words has a slug for its value, which can never hold a
+# space: a logo is a file we ship (`hue`, `netflix_wide`), an icon a
+# hyphenated name (`mdi:play-circle`, `phu:sonos`, a registered set's
+# `hue:bulb`), a graph an entity id and a picture an address, which spells a
+# space `%20`. After one of those the first space starts something else.
+WORDS_SOURCE: Final = "text:"
 
 # A picture written as a bare address: an HA path (`/local/a.png`,
 # `${_device.entity_picture}`) or an http(s) URL. It is a part of its own, as
@@ -159,12 +161,30 @@ PART_SOURCE_TYPES: Final = frozenset(
 )
 
 
-def _is_part_start(word: str) -> bool:
-    """Whether *word* names a source, and so starts a part of its own."""
-    if is_address(word):
-        return True
+def has_source_type(word: str) -> bool:
+    """Whether *word* is written ``type:…`` at all, a type imgserv knows or not.
+
+    An escaped colon (``text\\:``) writes no type, and nor does a colon a
+    space follows: ``battery: 50`` and ``Battery: ${level}`` are words, as a
+    label is written. ``battery:50`` names a type, unknown or not yet
+    registered.
+    """
+    m = _PART_START.match(word)
+    if not m:
+        return False
+    rest = word[m.end():]
+    return bool(rest) and not rest[0].isspace() or names_a_source(word)
+
+
+def names_a_source(word: str) -> bool:
+    """Whether *word* starts with a source type imgserv draws (``mdi:``, ``hue:``…)."""
     m = _PART_START.match(word)
     return bool(m) and (m.group(1) in PART_SOURCE_TYPES or m.group(1) in _custom_icon_prefixes)
+
+
+def _is_part_start(word: str) -> bool:
+    """Whether *word* names a source, and so starts a part of its own."""
+    return is_address(word) or names_a_source(word)
 
 
 def split_source_parts(source: str) -> tuple[str, ...]:
@@ -220,7 +240,9 @@ def split_source_parts(source: str) -> tuple[str, ...]:
 
 def _is_slug_part(part: str) -> bool:
     """Whether *part* is a slug subject still holding nothing but its slug."""
-    return (part.startswith(SLUG_SOURCES) or is_address(part)) and " " not in part
+    return (
+        is_address(part) or (names_a_source(part) and not part.startswith(WORDS_SOURCE))
+    ) and " " not in part
 
 
 # Symbolic color names → (R, G, B, A)
@@ -300,21 +322,6 @@ DEFAULT_FG_COLOR: Final = _DEFAULT_FG
 # alpha intact so the device composites it onto its own dark screen.
 DEFAULT_BG_COLOR: Final = TRANSPARENT
 
-# Bundled fonts live under the integration's shared asset directory. Keep the
-# path here because ``find_font`` below defaults to it.
-FONTS_DIR: Final = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "assets",
-    "fonts",
-)
-
-# System fallback paths tried when the bundled font is not found
-FALLBACK_FONT_PATHS: Final = (
-    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-)
-
 FALLBACK_EMOJI_PATHS: Final = (
     "/usr/share/fonts/noto/NotoEmoji-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
@@ -324,10 +331,33 @@ FALLBACK_EMOJI_PATHS: Final = (
 
 # ── Font lookup ───────────────────────────────────────────────────────────
 
+FONT_EXTENSIONS: Final = (".ttf", ".otf", ".ttc")
+WEBFONT_EXTENSIONS: Final = (".woff", ".woff2")
+
+
+# Only the three web fonts used last stay decoded, in memory only.
+@lru_cache(maxsize=3)
+def _decoded_webfont(path: str, _mtime: float) -> bytes:
+    from fontTools.ttLib import TTFont  # noqa: PLC0415 - only needed for web fonts
+    font = TTFont(path)
+    font.flavor = None
+    buf = io.BytesIO()
+    font.save(buf)
+    return buf.getvalue()
+
+
+def open_font(path: str, size: int, **kwargs: Any) -> ImageFont.FreeTypeFont:
+    """Load *path* with Pillow; a ``.woff``/``.woff2`` is decoded in memory on first use."""
+    if path.lower().endswith(WEBFONT_EXTENSIONS):
+        data = _decoded_webfont(path, os.path.getmtime(path))
+        return ImageFont.truetype(io.BytesIO(data), size, **kwargs)
+    return ImageFont.truetype(path, size, **kwargs)
+
+
 def font_has_all_glyphs(font_path: str, text: str) -> bool:
     """Return False if *font_path* renders any character as the .notdef glyph."""
     try:
-        font = ImageFont.truetype(font_path, 40)
+        font = open_font(font_path, 40)
         notdef_mask = font.getmask("\ufffe", mode="1")
         notdef_bytes = bytes(notdef_mask) if notdef_mask else b""
         for ch in text:
@@ -343,7 +373,7 @@ def font_has_all_glyphs(font_path: str, text: str) -> bool:
         return False
 
 
-def find_font(name: str, fonts_dir: str = FONTS_DIR) -> str | None:
+def find_font(name: str, fonts_dir: str) -> str | None:
     """Find a font file in *fonts_dir* matching *name* (case-insensitive, fuzzy)."""
     if not os.path.isdir(fonts_dir):
         return None
@@ -440,3 +470,29 @@ def set_custom_icon_prefixes(prefixes) -> None:
 def custom_icon_prefixes() -> frozenset[str]:
     """The extra icon sets currently registered."""
     return frozenset(_custom_icon_prefixes)
+
+
+def parse_color(color_str: str | None, names: dict | None = None) -> tuple | None:
+    """Parse a color value and return RGBA, or None when invalid/missing.
+
+    *names* is the symbolic vocabulary to read, which a remote's theme may have
+    re-coloured. It only ever re-points a name, never removes one, so a button
+    configured with ``?fg=blue`` keeps drawing under every theme.
+    """
+    if not color_str:
+        return None
+    key = color_str.lower()
+    named = (names or COLOR_NAMES).get(LEGACY_COLOR_ALIASES.get(key, key))
+    if named:
+        return named
+    color_str = color_str.lstrip("#")
+    try:
+        if len(color_str) == 6:
+            r, g, b = int(color_str[0:2], 16), int(color_str[2:4], 16), int(color_str[4:6], 16)
+            return (r, g, b, 255)
+        if len(color_str) == 8:
+            r, g, b, a = int(color_str[0:2], 16), int(color_str[2:4], 16), int(color_str[4:6], 16), int(color_str[6:8], 16)
+            return (r, g, b, a)
+    except ValueError:
+        return None
+    return None

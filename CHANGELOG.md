@@ -11,6 +11,172 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
+## [2026.11.2b1] - 2026-11-10
+
+### ⚠ Breaking changes
+
+- **Templates you wrote yourself need updating.** A template file now starts
+  with `version: 2` and lists its pages under `pages:`, each with its own
+  `title:`; a button's text is `tooltip:` and its picture `icon:` (were
+  `label:` and `image:`), a held button's repeat is `key_repeat:` (was
+  `repeat:`), and `unbound`, `action_name`, `name_key`, `description_key` and
+  `title_key` are gone -- translated words are written `{translate: …}`. A
+  file in the old form is no longer read. The templates that come with lizaIP,
+  and the pages made from them, are converted for you.
+  **What to do:** update your own templates as the README describes under
+  "Page templates", then add the pages made from them again.
+- **No fonts are shipped any more, and the default is Roboto Light.** Filson
+  Soft Light and the Noto emoji fonts are no longer included, and
+  `/config/lizaip/fonts/` is no longer read: fonts come from
+  `/config/www/fonts/` and from Home Assistant itself.
+  **What to do:** pick Roboto Light or a font of your own in the theme editor,
+  or put `FilsonSoft-Light.otf` -- and `NotoColorEmoji.ttf` for colour emoji
+  -- into `/config/www/fonts/` to keep the old look.
+- **Sonos is now Sonos+, and the single favourites page is Sonos Control.**
+  **Sonos+** adds three pages: album art and playback, with Playlists and Radio
+  behind it. Pages you already added keep working.
+  **What to do:** pick **Sonos Control** where you used to pick **Sonos** for
+  one page of favourites.
+- **Overview is now called Table of contents.**
+  **What to do:** nothing for pages you already have; pick **Table of
+  contents** when you add a new one.
+- **The AI assistant's page tools use new names.** A button's text is
+  `tooltip` (was `label`), a page's readable name `name` (was `title`) and its
+  title picture `title` (was `image`). Your pages are converted, and the remote
+  is sent every page once after the update.
+  **What to do:** nothing, unless you call these tools or the panel's
+  WebSocket API yourself: then use the new names.
+
+### Added
+
+- **Let the person who uses a remote set it up.** Open the **⋮** of a remote,
+  pick **Assign user…** and switch on whoever should configure it. They get
+  the **lizaIP** item in their sidebar and see only the remotes
+  assigned to them, with everything they need for those: pages, buttons,
+  actions, images, the remote's settings and its theme. They can also download
+  a configuration or a diagnostics bundle for their own remote and restore one
+  onto it; a bundle they build is narrowed to that remote and says so in its
+  README, so it is not a copy of your installation. Adding or removing a
+  remote, the debug tab, the shared theme library and seeing who else holds a
+  remote stay with administrators. Somebody assigned no remote at all does not
+  get the sidebar item, and taking a remote away takes effect immediately — an
+  open panel drops it without a reload.
+
+  Only active users without administrator rights are listed — administrators
+  always have access — and **Assign user…** is greyed out until there is one.
+  Somebody with no Home Assistant login of their own cannot be assigned, so
+  give them a user account first.
+
+  This decides which remotes somebody can *configure*, not what those buttons
+  may do. An assigned user can put an action on a button targeting any
+  entity their own Home Assistant account may call a service on, exactly as
+  they could from a dashboard — Home Assistant's own user and entity
+  permissions are unchanged and still decide what anyone can actually switch
+  on. One rough edge: if you make somebody an administrator while they have no
+  remote assigned, the sidebar item stays hidden for them until they unhide it
+  once in Home Assistant's sidebar editor.
+
+- **Send an IR code from a remote.** The new **Send IR** action
+  (`lizaip.send_ir`) has a remote transmit an infrared code, given as base64.
+  Like the other lizaIP actions, it goes to the remotes you name, or to every
+  remote when you name none.
+- **Sonos pages for albums, tracks, podcasts and audiobooks**, like Sonos
+  Radio and Sonos Playlists: your favourites of that kind, twelve to a page.
+  Each is offered only once your speakers have favourites of its kind. They,
+  Sonos Radio and Sonos Playlists are under **Sonos → Categories** when adding
+  a page.
+- **Apple TV apps show their App Store icons** on the Apps page — TV, Music
+  and Photos included, and App Store and Arcade their own logos; Computers,
+  Settings and Search, which the store does not list, get a lookalike in their
+  home-screen colours.
+- **Samsung TVs show and start their apps again**, with the icons from
+  Samsung's TV app store — newer Samsung TVs no longer tell Home Assistant which
+  apps they have, nor start one when it asks, so the Apps page stayed empty and
+  its buttons did nothing. The new action **Launch app** starts an app on a TV.
+- **A TV's apps stay on the remote while it is off**: the apps and icons it
+  showed last stand in until it is back.
+- **All TV templates now work like the LG one.** Android TV, Apple TV, Fire
+  TV, Roku, Samsung, Sony Bravia and Hisense share its layout: arrows around
+  OK, Home below, and **Apps**, **Digits** and **Inputs** pages on the right
+  — wherever the device has them. Samsung, Sony, Hisense and Roku TVs get an
+  Inputs page; several templates gain volume keys.
+- **New TV templates: Sony Bravia, Hisense (Vidaa) and Philips**, each with
+  Apps and Digits pages, and Inputs where the TV has them. Hisense needs the
+  Hisense TV integration from HACS.
+- **TV pages are headed with the TV's brand and room** -- "LG Living room"
+  rather than the TV's long model name.
+- **Apps, playlists, radio stations and Hue lamps get as many pages as they
+  need**, up to three, each leading on to the next.
+- **The LG TV's Apps page leaves out the TV's own tools**, and its inputs get
+  a page of their own.
+- **Options pages can now be made from a template.** Switch on **Options
+  pages** (with **Long touch**) under the remote's **Buttons** settings, then
+  right-click a button and pick **Add options…**. It is offered only on buttons
+  whose device has options — Hue options for a Hue lamp, Sonos options for a
+  Sonos speaker — and the page is bound to that device without asking. With
+  only one option for the device, it is added straight away. The new
+  page's hardware **Back** button always leads back to the page the button sits
+  on.
+- **Two new templates for exactly that: Hue Lamp Options and Sonos Options.**
+  Brightness and colour-temperature presets for one lamp; mute, shuffle,
+  repeat, volume presets and a sleep timer for one speaker. Both are offered
+  under **Add options…** only — they belong behind a button, not in the row of
+  pages you swipe through.
+- **Add a remote found on the network right from the panel.** It appears at
+  the top of the remote list with **Add** and **Ignore**.
+- **Choose a theme's emoji font.** The theme editor's Text group has an
+  **Emoji** field: Automatic, None, or any font you have installed.
+- **Fontbook in the settings.** With the Fontbook integration installed, the
+  gear tab shows it beside Appearance.
+
+### Changed
+
+- **With no remote yet, the panel shows how to add one**: the setup steps, with
+  the QR code.
+- **The panel looks and behaves like the rest of Home Assistant.** Its dialogs,
+  menus, messages, foldable sections, lists and keyboard focus ring are Home
+  Assistant's own.
+- **German and Spanish address you the way Home Assistant does** ("du",
+  "tú").
+- **Changing a theme no longer makes the remote reload every picture**, only
+  the ones the theme draws differently.
+- **The help button is on a remote's toolbar only.** Open a remote and press
+  **?** to read the guide.
+
+### Fixed
+
+- **Renaming a remote reaches everything.** Renamed on its device page or on
+  the integrations card, it now has one name everywhere, and renaming its
+  entities no longer leaves pages and buttons pointing at the old ones.
+- **Adding a template no longer stalls the panel for minutes** on the SD card
+  or eMMC most Home Assistant boxes run from.
+- **A deleted page leaves the panel at once**, also while another page is
+  still being added.
+- **Amazon Fire TV keys work**, and so do Roku's skip and replay keys.
+- **The battery level survives a restart of Home Assistant.**
+- **LG TV apps show their icons**, and a TV that is switched off no longer
+  holds up the remote's pictures.
+- **A TV's apps and inputs work when their page was added with the TV off.**
+- **The Sony Bravia volume slider moves the volume.**
+- **A page deleted with the Delete key is confirmed with Enter again.**
+- **Moving a set of template pages to another device refreshes all of it.**
+- **An options page no longer wipes the buttons you already set up.** Adding
+  one saved the old action list back over the one the new page had just
+  written, so its buttons -- and in some cases others -- ended up empty.
+- **The Sonos options page's sleep timer works.** The four sleep-timer buttons
+  were created without an action behind them.
+- **Cancelling while an options page is being prepared really cancels it.**
+  Pressing Cancel, Back or Escape during the short wait still created the page
+  and pointed the button at it.
+- **Switching pages while an options page is being made no longer scrambles
+  the page you left.** The buttons of the page you moved to were saved onto it.
+- **An options page is seated beside its button without disturbing the rest.**
+  A page the remote added at the same moment could be lost before.
+- **An options page's Back button no longer looks dead.** The arrow was drawn
+  faint, as an unused hardware key is, even though it was wired to lead back to
+  the page the button sits on. It is now drawn like any other configured
+  button.
+
 ## [2026.11.1] - 2026-11-02
 
 ### ⚠ Breaking changes

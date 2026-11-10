@@ -44,6 +44,7 @@ from homeassistant.util.ulid import ulid_now
 
 from .action_controller.sliders import SLIDER_CONTROLS
 from .const import DOMAIN
+from .shared.assignment import ASSIGNMENT_REPEAT_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,17 +78,17 @@ the target matching what the user named (match the area for "in the living room"
 then lizaip_add_template_page. Otherwise build the page button by button: call \
 lizaip_find_entities to find the entities the user means, lizaip_describe_remote if \
 you need the layout or a page's current buttons, then lizaip_create_page. Use dry_run first when unsure and show the user the plan. \
-Give every button a short label and an icon: "mdi:<name>" (Material Design Icons), \
+Give every button a short tooltip and an icon: "mdi:<name>" (Material Design Icons), \
 "logo:<brand>" for a brand, or "text:<words>". Prefer toggles for things with an on \
 and off state (light.toggle, cover.toggle, switch.toggle, fan.toggle) and \
 scene.turn_on / script.turn_on for scenes and scripts. A button can steer the \
 vertical slider while it is selected (slider: cover-position for a shade, \
-light-brightness for a lamp). Set repeat: true for keys meant to be held (volume, \
-arrows). A button's label is the tooltip the remote shows for it; its icon is the \
-tile picture. To change only a label or icon, call lizaip_update_button with just \
+light-brightness for a lamp). Set key_repeat: true for keys meant to be held (volume, \
+arrows). A button's tooltip is the text the remote shows for it; its icon is the \
+tile picture. To change only a tooltip or icon, call lizaip_update_button with just \
 that field; to rearrange, lizaip_move_button swaps two slots; lizaip_update_page \
 renames, moves or hides a page. Only change or delete what the user asked for; \
-deleting a page needs its page_id and its title.\
+deleting a page needs its page_id and its name.\
 """
 
 _BUTTON_SCHEMA = vol.Schema({
@@ -95,9 +96,9 @@ _BUTTON_SCHEMA = vol.Schema({
     vol.Required("action"): str,
     vol.Optional("entity_id"): str,
     vol.Optional("data"): dict,
-    vol.Optional("label"): str,
+    vol.Optional("tooltip"): str,
     vol.Optional("icon"): str,
-    vol.Optional("repeat"): bool,
+    vol.Optional("key_repeat"): bool,
     vol.Optional("slider"): vol.In(sorted(_CONTROLS)),
 })
 
@@ -230,12 +231,12 @@ def _template_button(
     if spec.get("data"):
         step["data"] = dict(spec["data"])
     button: dict[str, Any] = {"config": [step]}
-    if spec.get("label"):
-        button["label"] = spec["label"]
+    if spec.get("tooltip"):
+        button["tooltip"] = spec["tooltip"]
     if spec.get("icon"):
-        button["image"] = spec["icon"]
-    if spec.get("repeat"):
-        button["repeat"] = True
+        button["icon"] = spec["icon"]
+    if spec.get("key_repeat"):
+        button[ASSIGNMENT_REPEAT_KEY] = True
 
     control_id = spec.get("slider")
     if control_id:
@@ -258,8 +259,8 @@ def _summary(slot: str, assignment: dict) -> dict:
     entity = (target or {}).get("entity_id") if isinstance(target, dict) else None
     return {
         "slot": slot,
-        "label": assignment.get("label") or "",
-        "icon": assignment.get("image") or "",
+        "tooltip": assignment.get("tooltip") or "",
+        "icon": assignment.get("icon") or "",
         "action": step.get("action", "") if isinstance(step, dict) else "",
         **({"entity_id": entity} if entity else {}),
         **({"data": step["data"]} if isinstance(step, dict) and step.get("data") else {}),
@@ -267,23 +268,23 @@ def _summary(slot: str, assignment: dict) -> dict:
 
 
 def _patched(assignment: dict, args: dict) -> dict:
-    """*assignment* with only its label, picture or repeat changed.
+    """*assignment* with only its tooltip, picture or repeat changed.
 
-    Marked as the user's own, as the panel marks an edited label and a chosen
+    Marked as the user's own, as the panel marks an edited tooltip and a chosen
     picture, so nothing derived writes over them afterwards.
     """
     patched = dict(assignment)
-    if "label" in args:
-        patched["label"] = args["label"]
-        patched["label_edited"] = True
+    if "tooltip" in args:
+        patched["tooltip"] = args["tooltip"]
+        patched["tooltip_edited"] = True
     if "icon" in args:
-        patched["image"] = args["icon"]
-        patched["image_pinned"] = True
-    if "repeat" in args:
-        if args["repeat"]:
-            patched["repeat"] = True
+        patched["icon"] = args["icon"]
+        patched["icon_pinned"] = True
+    if "key_repeat" in args:
+        if args["key_repeat"]:
+            patched[ASSIGNMENT_REPEAT_KEY] = True
         else:
-            patched.pop("repeat", None)
+            patched.pop(ASSIGNMENT_REPEAT_KEY, None)
     return patched
 
 
@@ -300,7 +301,7 @@ def _generate(page_key: str, buttons: dict, hass: HomeAssistant):
     """
     from .config.page_templates import generate_assignments
 
-    definition = {"unbound": True, "buttons": buttons}
+    definition = {"buttons": buttons}
     actions, assignments = generate_assignments(page_key, "", definition, None, hass)
     prefix = f"template_{page_key}_"
     renamed = {
@@ -335,8 +336,8 @@ def _is_picture_part(part: str) -> bool:
     )
 
 
-def _title_parts(image: str) -> tuple[list[str], str]:
-    """The words and the first picture of a page's title image.
+def _title_parts(title: str) -> tuple[list[str], str]:
+    """The words and the first picture of a page's title.
 
     Variables are left out (they would be read against the wrong page), and so
     are a part's options (``text:demo?percent=47``).
@@ -345,7 +346,7 @@ def _title_parts(image: str) -> tuple[list[str], str]:
 
     words: list[str] = []
     picture = ""
-    for part in split_source_parts(re.sub(r"\$\{[^}]*\}", "", image or "").strip()):
+    for part in split_source_parts(re.sub(r"\$\{[^}]*\}", "", title or "").strip()):
         part = part.split("?", 1)[0].strip()
         if not part or part in ("+", "-"):
             continue
@@ -358,9 +359,9 @@ def _title_parts(image: str) -> tuple[list[str], str]:
     return [w for w in words if w and w not in ("+", "-")], picture
 
 
-def _page_title(image: str, page_id: Any = None) -> str:
+def _page_name(title: str, page_id: Any = None) -> str:
     """A page's name: the words of its title, else the name of its picture."""
-    words, picture = _title_parts(image)
+    words, picture = _title_parts(title)
     name = " ".join(words).strip(" +-")
     if not name and picture and ":" in picture and not picture.startswith(("media:", "/", "http")):
         slug = picture.split(":", 1)[1]
@@ -368,8 +369,8 @@ def _page_title(image: str, page_id: Any = None) -> str:
     return name or (f"Page {page_id}" if page_id is not None else "")
 
 
-def _page_image(title: str, icon: str | None) -> str:
-    words = f"text:{title.strip()}" if title.strip() else ""
+def _page_title(name: str, icon: str | None) -> str:
+    words = f"text:{name.strip()}" if name.strip() else ""
     return " ".join(p for p in ((icon or "").strip(), words) if p)
 
 
@@ -395,8 +396,8 @@ class ListRemotesTool(llm.Tool):
                 "pages": [
                     {
                         "page_id": p["id"],
-                        "title": _page_title(str(p.get("image") or ""), p["id"]),
-                        "image": p.get("image") or "",
+                        "name": _page_name(str(p.get("title") or ""), p["id"]),
+                        "title": p.get("title") or "",
                         "subpage": bool(p.get("subpage")),
                     }
                     for p in pages if isinstance(p, dict) and p.get("id") is not None
@@ -504,13 +505,14 @@ class FindEntitiesTool(llm.Tool):
 class CreatePageTool(llm.Tool):
     name = "lizaip_create_page"
     description = (
-        "Create a new page on a lizaIP remote. Each button names its slot, the action "
-        "it runs, the entity it acts on, a short label and an icon. Set dry_run to see "
+        "Create a new page on a lizaIP remote, headed by its name (and title_icon, if "
+        "given). Each button names its slot, the action "
+        "it runs, the entity it acts on, a short tooltip and an icon. Set dry_run to see "
         "the result without saving it. Existing pages are never changed."
     )
     parameters = vol.Schema({
         vol.Optional("remote"): str,
-        vol.Required("title"): str,
+        vol.Required("name"): str,
         vol.Optional("title_icon"): str,
         vol.Required("buttons"): [_BUTTON_SCHEMA],
         vol.Optional("subpage", default=False): bool,
@@ -534,7 +536,7 @@ class CreatePageTool(llm.Tool):
         buttons_def = {
             b["slot"]: _template_button(hass, llm_context, b) for b in args["buttons"]
         }
-        image = _page_image(args["title"], args.get("title_icon"))
+        title = _page_title(args["name"], args.get("title_icon"))
         page_key = f"ai_{ulid_now()[-8:].lower()}"
 
         actions, assignments = _generate(page_key, buttons_def, hass)
@@ -546,33 +548,33 @@ class CreatePageTool(llm.Tool):
             )
         buttons = [_summary(s, assignments[s]) for s in slots]
         if args.get("dry_run", False):
-            return {"dry_run": True, "remote": entry.entry_id, "image": image, "buttons": buttons}
+            return {"dry_run": True, "remote": entry.entry_id, "title": title, "buttons": buttons}
 
         try:
             # Appended as an ordinary page: unbound, so no `template:` link.
             page_id = await async_add_template_page(
                 hass, entry.entry_id, device_id, page_key,
-                {"unbound": True, "buttons": buttons_def},
-                page_image=image, subpage=args.get("subpage", False),
+                {"buttons": buttons_def},
+                title=title, subpage=args.get("subpage", False),
                 generated=(actions, assignments),
             )
         except TemplatePageError as err:
             raise LizaIPToolError(str(err)) from err
         _LOGGER.info(
             "[%s] An assistant created page %s (%r, %d buttons)",
-            entry.title, page_id, args["title"], len(buttons),
+            entry.title, page_id, args["name"], len(buttons),
         )
         return {
             "success": True, "remote": entry.entry_id, "page_id": page_id,
-            "image": image, "buttons": buttons,
+            "title": title, "buttons": buttons,
         }
 
 
 class UpdateButtonTool(llm.Tool):
     name = "lizaip_update_button"
     description = (
-        "Change one button on an existing page. Give only what changes: a label "
-        "(the button's tooltip), an icon (its tile picture) or repeat on their own "
+        "Change one button on an existing page. Give only what changes: a tooltip "
+        "(the words the remote shows), an icon (its tile picture) or key_repeat on their own "
         "keep the button's action; giving an action rebuilds the button. "
         "delete: true empties it. Every other button stays as it is."
     )
@@ -584,9 +586,9 @@ class UpdateButtonTool(llm.Tool):
         vol.Optional("action"): str,
         vol.Optional("entity_id"): str,
         vol.Optional("data"): dict,
-        vol.Optional("label"): str,
+        vol.Optional("tooltip"): str,
         vol.Optional("icon"): str,
-        vol.Optional("repeat"): bool,
+        vol.Optional("key_repeat"): bool,
         vol.Optional("slider"): vol.In(sorted(_CONTROLS)),
     })
 
@@ -612,8 +614,8 @@ class UpdateButtonTool(llm.Tool):
                 raise LizaIPToolError(
                     "entity_id, data and slider come with an action: give the action too"
                 )
-            if not any(k in args for k in ("label", "icon", "repeat")):
-                raise LizaIPToolError("Say what changes: label, icon, repeat, an action, or delete")
+            if not any(k in args for k in ("tooltip", "icon", "key_repeat")):
+                raise LizaIPToolError("Say what changes: tooltip, icon, key_repeat, an action, or delete")
             current = assignments.get(slot)
             if not _assigned(current):
                 raise LizaIPToolError(f"{slot} is empty; give it an action first")
@@ -647,13 +649,13 @@ class UpdateButtonTool(llm.Tool):
 class DeletePageTool(llm.Tool):
     name = "lizaip_delete_page"
     description = (
-        "Delete one page from a remote. Give its page_id and its title as listed by "
+        "Delete one page from a remote. Give its page_id and its name as listed by "
         "lizaip_list_remotes; nothing is deleted unless both match."
     )
     parameters = vol.Schema({
         vol.Optional("remote"): str,
         vol.Required("page_id"): vol.Coerce(int),
-        vol.Required("title"): str,
+        vol.Required("name"): str,
     })
 
     @_serialized
@@ -669,10 +671,10 @@ class DeletePageTool(llm.Tool):
         page = next((p for p in pages if p.get("id") == args["page_id"]), None)
         if page is None:
             raise LizaIPToolError(f"The remote has no page {args['page_id']}")
-        title = _page_title(str(page.get("image") or ""), page["id"])
-        if title.casefold() != args["title"].strip().casefold():
+        name = _page_name(str(page.get("title") or ""), page["id"])
+        if name.casefold() != args["name"].strip().casefold():
             raise LizaIPToolError(
-                f"Page {page['id']} is titled {title!r}, not {args['title']!r}; nothing deleted"
+                f"Page {page['id']} is named {name!r}, not {args['name']!r}; nothing deleted"
             )
         remaining = [p for p in pages if p.get("id") != page["id"]]
         if not remaining:
@@ -684,8 +686,8 @@ class DeletePageTool(llm.Tool):
         await async_drop_links_to(hass, entry.entry_id, store, device_id, {page["id"]})
         schedule_push_rescan(hass, entry.entry_id)
         await _push_page_list(hass, entry.entry_id, remaining, False)
-        _LOGGER.info("[%s] An assistant deleted page %s (%r)", entry.title, page["id"], title)
-        return {"success": True, "deleted": {"page_id": page["id"], "title": title}}
+        _LOGGER.info("[%s] An assistant deleted page %s (%r)", entry.title, page["id"], name)
+        return {"success": True, "deleted": {"page_id": page["id"], "name": name}}
 
 
 _TARGET_LIMIT = 40
@@ -693,9 +695,10 @@ _TARGET_LIMIT = 40
 
 def _template_targets(hass: HomeAssistant, template: dict) -> tuple[str, list[dict]]:
     """``(kind, targets)`` a template can be bound to: devices, hubs, or nothing."""
+    from .config.page_templates import is_unbound
     from .config.websocket.templates import _eligible_devices, selector_integrations
 
-    if template.get("unbound"):
+    if is_unbound(template):
         return "none", []
     selector = template.get("target_selector") or {}
     if selector.get("config_entry"):
@@ -746,6 +749,9 @@ class ListTemplatesTool(llm.Tool):
                 "description": meta.get("description") or "",
                 "binds_to": kind,
                 "targets": targets,
+                # More than one: the template adds its page plus subpages
+                # reached from it, as one set.
+                "pages": meta.get("page_count", 1),
             })
         return {"templates": result}
 
@@ -756,7 +762,8 @@ class AddTemplatePageTool(llm.Tool):
         "Add a page made from a template to a remote, bound to one of the targets "
         "lizaip_list_templates names for it (a device or hub; nothing for templates "
         "that bind to none). The page keeps itself up to date from that device, as "
-        "one added in the panel does."
+        "one added in the panel does. A template listed with several pages adds "
+        "them all, the first leading to the others; page_ids names every one."
     )
     parameters = vol.Schema({
         vol.Optional("remote"): str,
@@ -771,6 +778,7 @@ class AddTemplatePageTool(llm.Tool):
         from .config.websocket.templates import (
             TemplatePageError,
             async_create_page_from_template,
+            template_set_page_ids,
         )
 
         args = self.parameters(tool_input.tool_args)
@@ -815,8 +823,10 @@ class AddTemplatePageTool(llm.Tool):
             "[%s] An assistant added page %s from template %s (%s)",
             entry.title, page_id, template_id, target_device or target_entry or "unbound",
         )
+        pages = await store_pages(hass, device_id)
         return {
             "success": True, "remote": entry.entry_id, "page_id": page_id,
+            "page_ids": template_set_page_ids(pages, page_id),
             "template_id": template_id,
             "target": target_device or target_entry or None,
         }
@@ -874,14 +884,14 @@ class MoveButtonTool(llm.Tool):
 class UpdatePageTool(llm.Tool):
     name = "lizaip_update_page"
     description = (
-        "Change a page: its title, its title icon, its position among the pages "
+        "Change a page: its name, its title icon, its position among the pages "
         "(1 = first), or whether it is a subpage (reachable only from a 'go to page' "
         "button, not in the remote's own page list). Give only what changes."
     )
     parameters = vol.Schema({
         vol.Optional("remote"): str,
         vol.Required("page_id"): vol.Coerce(int),
-        vol.Optional("title"): str,
+        vol.Optional("name"): str,
         vol.Optional("title_icon"): str,
         vol.Optional("position"): vol.All(vol.Coerce(int), vol.Range(min=1)),
         vol.Optional("subpage"): bool,
@@ -897,8 +907,8 @@ class UpdatePageTool(llm.Tool):
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
         await _require_admin(hass, llm_context)
-        if not any(k in args for k in ("title", "title_icon", "position", "subpage")):
-            raise LizaIPToolError("Say what changes: title, title_icon, position or subpage")
+        if not any(k in args for k in ("name", "title_icon", "position", "subpage")):
+            raise LizaIPToolError("Say what changes: name, title_icon, position or subpage")
 
         store = _get_store(hass)
         pages = await store_pages(hass, device_id)
@@ -907,11 +917,11 @@ class UpdatePageTool(llm.Tool):
             raise LizaIPToolError(f"The remote has no page {args['page_id']}")
 
         content_changed = False
-        if "title" in args or "title_icon" in args:
-            image = str(page.get("image") or "")
-            title = args.get("title", _page_title(image, page["id"]))
-            icon = args.get("title_icon", _title_parts(image)[1])
-            page["image"] = _page_image(title, icon)
+        if "name" in args or "title_icon" in args:
+            current = str(page.get("title") or "")
+            name = args.get("name", _page_name(current, page["id"]))
+            icon = args.get("title_icon", _title_parts(current)[1])
+            page["title"] = _page_title(name, icon)
             content_changed = True
         if "subpage" in args:
             # Written whether true or false, as the panel does: the store keeps
@@ -936,8 +946,8 @@ class UpdatePageTool(llm.Tool):
         _LOGGER.info("[%s] An assistant changed page %s", entry.title, page["id"])
         return {
             "success": True, "page_id": page["id"],
-            "title": _page_title(str(page.get("image") or ""), page["id"]),
-            "image": page.get("image") or "",
+            "name": _page_name(str(page.get("title") or ""), page["id"]),
+            "title": page.get("title") or "",
             "position": [p.get("id") for p in pages].index(page["id"]) + 1,
             "subpage": bool(page.get(PAGE_SUBPAGE_KEY)),
         }

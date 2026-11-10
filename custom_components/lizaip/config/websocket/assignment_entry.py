@@ -27,10 +27,10 @@ from ...shared.assignment import (
     ASSIGNMENT_LONGTOUCH_KEY,
     ASSIGNMENT_REPEAT_KEY,
     longtouch_steps,
-    repeats,
+    key_repeats,
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_INTERNAL_TARGET_NAME_KEY,
-    ASSIGNMENT_LABEL_EDITED_KEY,
+    ASSIGNMENT_TOOLTIP_EDITED_KEY,
 )
 from ...shared.numbers import to_float
 from ..const import payload_display
@@ -233,28 +233,28 @@ def build_assignment_entry(
     if assign_data.get("action_id"):
         entry["action_id"] = assign_data["action_id"]
         entry["config"] = assign_data.get("config", [])
-    # Payload title outranks the shared library label; play_media/select_source
+    # Payload title outranks the shared library name; play_media/select_source
     # actions can identify a media item better than their shared action id can.
-    # Whitespace is not a label, matching the panel's Label trimming.
-    submitted_label = assign_data.get("label")
-    if isinstance(submitted_label, str):
-        submitted_label = submitted_label.strip()
-    label = submitted_label or None
-    if not label and entry["action_id"]:
+    # Whitespace is not a tooltip, matching the panel's Tooltip trimming.
+    submitted_tooltip = assign_data.get("tooltip")
+    if isinstance(submitted_tooltip, str):
+        submitted_tooltip = submitted_tooltip.strip()
+    tooltip = submitted_tooltip or None
+    if not tooltip and entry["action_id"]:
         payload_title, _ = payload_display(entry)
         action_def = lib_by_id.get(entry["action_id"], {})
-        label = payload_title or action_def.get("name")
-    entry["label"] = label
-    # label_edited marks only a submitted non-empty label. A cleared Label field
+        tooltip = payload_title or action_def.get("name")
+    entry["tooltip"] = tooltip
+    # tooltip_edited marks only a submitted non-empty tooltip. A cleared Tooltip field
     # asks for derivation again; marking the fallback as edited would freeze it.
-    if assign_data.get(ASSIGNMENT_LABEL_EDITED_KEY) and submitted_label:
-        entry[ASSIGNMENT_LABEL_EDITED_KEY] = True
+    if assign_data.get(ASSIGNMENT_TOOLTIP_EDITED_KEY) and submitted_tooltip:
+        entry[ASSIGNMENT_TOOLTIP_EDITED_KEY] = True
     # Internal target name is allowlisted so panel-written hints survive save.
     target_hint = assign_data.get(ASSIGNMENT_INTERNAL_TARGET_NAME_KEY)
     if isinstance(target_hint, str) and target_hint.strip():
         entry[ASSIGNMENT_INTERNAL_TARGET_NAME_KEY] = target_hint.strip()
-    entry["image"] = assign_data.get("image") or None
-    entry["image_pinned"] = bool(assign_data.get("image_pinned"))
+    entry["icon"] = assign_data.get("icon") or None
+    entry["icon_pinned"] = bool(assign_data.get("icon_pinned"))
     entry["state_icons"] = assign_data.get("state_icons") or {}
     # Omitted slider_actions means the default following slider.
     slider_actions = _sanitize_slider_actions(assign_data.get("slider_actions"))
@@ -304,7 +304,7 @@ def build_assignment_entry(
     if longtouch:
         entry[ASSIGNMENT_LONGTOUCH_KEY] = longtouch
     # A flag: stored only when on, so absence keeps meaning "runs once".
-    if repeats(assign_data):
+    if key_repeats(assign_data):
         entry[ASSIGNMENT_REPEAT_KEY] = True
     # ``toggle`` is a sibling of ``config`` for the same reason before/after are:
     # ``config[0]`` must keep meaning "the step that represents this button" for

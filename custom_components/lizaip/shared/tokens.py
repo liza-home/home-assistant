@@ -15,9 +15,9 @@ from .variables_calc import (
 )
 from .history import versioned_history_image
 from .icon_urls import is_media_source
-from .i18n import get_ui_language
+from .i18n import get_ui_language, translate_inline
 from ..config.media_queue.alias import device_attribute, expand_queue_alias
-from .labels import DANGLING_SEPARATOR_RE, LABEL_TOKEN_RE
+from .tooltips import DANGLING_SEPARATOR_RE, TOOLTIP_TOKEN_RE
 
 if TYPE_CHECKING:
     # Type-only: this module stays importable without Home Assistant, which is
@@ -618,7 +618,7 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
     device unresolved. ``config.button_rendering`` imports *from* that module,
     so the shared piece cannot live in either.
     """
-    image = versioned_history_image(_with_page_device(image, hass), hass)
+    image = versioned_history_image(_with_page_device(translate_inline(image), hass), hass)
     if not entity_token_entities(image):
         return image
     # All or nothing: half an icon name ("mdi:weather-") draws a broken glyph.
@@ -662,7 +662,7 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
     return None if missing or not resolved else resolved
 
 
-def substitute_label_tokens(
+def substitute_tooltip_tokens(
     text: str, values: dict[str, str], hass: HomeAssistant | None = None,
     subject: str | None = None,
 ) -> str:
@@ -682,6 +682,7 @@ def substitute_label_tokens(
     because the picture branch below returns early and would otherwise hand an
     unexpanded alias to ``finish_tooltip``.
     """
+    text = translate_inline(text)
     if not text or "${" not in text:
         return text
     text = expand_queue_alias(text, subject)
@@ -689,19 +690,19 @@ def substitute_label_tokens(
     if is_media_source(text):
         # A picture keeps its entity variables for `finish_tooltip`, which
         # reads them by the picture rules (no unit inside an icon name).
-        return LABEL_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
+        return TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
     if hass is not None:
         text = substitute_entity_tokens(text, hass)
-    substituted = LABEL_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
+    substituted = TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
     # A token that collapsed can leave a separator joining nothing — a goto
     # whose page was deleted printed a dangling "Go to page:". Trimmed here
-    # rather than in `clean_label_text`, which sees the text *after* this and
+    # rather than in `clean_tooltip_text`, which sees the text *after* this and
     # so cannot tell a resolved-away token from a colon the user typed.
-    return clean_label_text(DANGLING_SEPARATOR_RE.sub("", substituted))
+    return clean_tooltip_text(DANGLING_SEPARATOR_RE.sub("", substituted))
 
 
 # A placeholder the user has damaged while editing: an opening ``${`` that
-# LABEL_TOKEN_RE could not match, because the closing brace is missing or there
+# TOOLTIP_TOKEN_RE could not match, because the closing brace is missing or there
 # is something other than a word between the braces. Measured on the device: a
 # stored name of ``Schreibtisch ${STATE`` reached the wire as
 # ``imgserv://text:Schreibtisch ${STATE?size=tooltip``, putting a brace in the
@@ -713,7 +714,7 @@ _BROKEN_TOKEN_RE = re.compile(r"\$\{\s*[\w.]*\s*\}?")
 # one, or the broken-token pass would strip only "${floor" and print the rest.
 _WHOLE_TOKEN_RE = re.compile(r"\$\{[^{}$]*\}")
 
-def clean_label_text(text: str) -> str:
+def clean_tooltip_text(text: str) -> str:
     """Make *text* safe to put in an imgserv URL and tidy to read.
 
     Drops any placeholder wreckage left over after substitution and collapses
@@ -743,10 +744,11 @@ def finish_tooltip(text: str, hass: HomeAssistant | None) -> str:
     (:func:`resolve_image_tokens`): its variables are filled in without a unit
     inside an icon name, a weather entity becomes its icon, a graph gets its
     version, and a variable with no value leaves no picture at all. Words are
-    tidied by :func:`clean_label_text`.
+    tidied by :func:`clean_tooltip_text`.
     """
+    text = translate_inline(text)
     if text and is_media_source(text):
         return resolve_image_tokens(text.strip(), hass) or ""
     # Words followed by a graph ("Battery 85 % + history:sensor.x"): the graph
     # gets its version all the same, or the remote keeps the picture it cached.
-    return versioned_history_image(clean_label_text(text), hass)
+    return versioned_history_image(clean_tooltip_text(text), hass)

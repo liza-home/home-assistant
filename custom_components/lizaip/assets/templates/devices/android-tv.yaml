@@ -1,17 +1,31 @@
 # Android TV Template — pre-configured remote control
 #
 # Maps Liza physical buttons to Android TV Remote commands.
-# Used with `remote.send_command` targeting an Android TV device.
+# Used with `remote.send_command` targeting an Android TV device; the volume
+# slider uses the media player's `volume_set`.
+#
+# The remote page follows the LG webOS TV template: the arrow keys around OK,
+# Home below them, and the TV's further pages on the right-hand column --
+# Apps (button 4), Digits (button 8) and Inputs (button 12) where the TV has
+# them. They are subpages: not in the remote's page order, only reached from
+# those buttons; on each, the remote's Back button leads back.
+#   - Apps: the configured apps of the Android TV Remote integration (its
+#     options list them), each opening with `media_player.play_media`; a TV
+#     with more than twelve gets more Apps pages, button 12 leading on.
+#   - Digits: 1–9 and 0 as on a phone keypad, with Channel up and down.
+#   - Inputs: the integration lists no inputs, so button 12 opens the TV's own
+#     input menu instead.
 #
 # Reference: https://www.home-assistant.io/integrations/androidtv_remote
 
+version: 2
 name: Android TV
 icon: mdi:android
 description: Control your Android TV
 
 # Device selector — this template spans two entity domains of the same device:
 #   remote.*       → key codes (DPAD, POWER, CHANNEL)
-#   media_player.* → app launch
+#   media_player.* → app launch and the volume slider
 # Each button is bound to the entity matching its own action's domain, falling
 # back to the primary when the device has no better match.
 target_selector:
@@ -19,146 +33,371 @@ target_selector:
     integration: androidtv_remote
     primary_domain: remote
 
-# Button mappings (Liza button_key → HA action), written the way a stored
-# page writes a button. Leave one out for a slot that should do nothing.
-buttons:
-  button_power:
-    label: Power
-    image: mdi:power
-    config:
-      - action: remote.send_command
-        data:
-          command: POWER
+# The `apps` kind of the favourites source reads the apps the player lists:
+# its `apps` browse folder where it has one, else its `source_list`.
+placeholders:
+  app:
+    source: favorites
+    spec:
+      category: apps
 
-  button_1:
-    label: ORF ON
-    image: media:https://play-lh.googleusercontent.com/eZkMp2Ogz8wN3deIwGFmLRqxBjR6iMkqszaWBTezpwFKnDsTmgaqMvuZ08uS5yzyigdGTjqm2LFmn9NNIM7nGQ=w240-h480
-    config:
-      - action: media_player.play_media
-        # A cold TV silently drops the launch: androidtv_remote writes to the
-        # socket without waking or checking state, and reports `on` about a
-        # second before it can service an intent. The executor infers the wake
-        # and the settle from the action itself, so nothing declares them here
-        # — which also covers the same button built by hand in the panel.
-        #
-        # Deep link, not application ID: a package name is sent as
-        # `market://launch?id=…` and the Play Store stopped honouring that in
-        # mid-August 2026. `on.orf.at` is delegated to the ORF app in ORF's
-        # assetlinks.json, so App Links opens the app rather than a browser.
-        data:
-          media:
-            media_content_id: https://on.orf.at/
-            media_content_type: url
+pages:
+  remote:
+    title: "logo:android ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: media:https://play-lh.googleusercontent.com/eZkMp2Ogz8wN3deIwGFmLRqxBjR6iMkqszaWBTezpwFKnDsTmgaqMvuZ08uS5yzyigdGTjqm2LFmn9NNIM7nGQ=w240-h480
+        tooltip: ORF ON
+        config:
+          - action: media_player.play_media
+            # A cold TV silently drops the launch: androidtv_remote writes to the
+            # socket without waking or checking state, and reports `on` about a
+            # second before it can service an intent. The executor infers the wake
+            # and the settle from the action itself, so nothing declares them here
+            # — which also covers the same button built by hand in the panel.
+            #
+            # Deep link, not application ID: a package name is sent as
+            # `market://launch?id=…` and the Play Store stopped honouring that in
+            # mid-August 2026. `on.orf.at` is delegated to the ORF app in ORF's
+            # assetlinks.json, so App Links opens the app rather than a browser.
+            data:
+              media:
+                media_content_id: https://on.orf.at/
+                media_content_type: url
 
-  button_2:
-    label: Up
-    repeat: true
-    image: mdi:arrow-up-bold
-    config:
-      - action: remote.send_command
-        data:
-          command: DPAD_UP
+      button_2:
+        icon: mdi:arrow-up-bold-outline
+        tooltip: {translate: up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: DPAD_UP
 
-  button_4:
-    label: CH+
-    image: mdi:chevron-up
-    config:
-      - action: remote.send_command
-        data:
-          command: CHANNEL_UP
+      button_4:
+        icon: mdi:apps
+        tooltip: {translate: apps}
+        goto_page: apps
 
-  button_5:
-    label: Left
-    repeat: true
-    image: mdi:arrow-left-bold
-    config:
-      - action: remote.send_command
-        data:
-          command: DPAD_LEFT
+      button_5:
+        icon: mdi:arrow-left-bold-outline
+        tooltip: {translate: left}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: DPAD_LEFT
 
-  button_6:
-    label: OK
-    image: mdi:circle
-    config:
-      - action: remote.send_command
-        data:
-          command: DPAD_CENTER
+      button_6:
+        icon: mdi:circle-outline
+        tooltip: {translate: ok}
+        config:
+          - action: remote.send_command
+            data:
+              command: DPAD_CENTER
 
-  button_7:
-    label: Right
-    repeat: true
-    image: mdi:arrow-right-bold
-    config:
-      - action: remote.send_command
-        data:
-          command: DPAD_RIGHT
+      button_7:
+        icon: mdi:arrow-right-bold-outline
+        tooltip: {translate: right}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: DPAD_RIGHT
 
-  button_9:
-    label: Input
-    image: mdi:import
-    config:
-      - action: remote.send_command
-        data:
-          command: TV_INPUT
+      button_8:
+        icon: mdi:dialpad
+        tooltip: {translate: digits}
+        goto_page: digits
 
-  button_10:
-    label: Down
-    repeat: true
-    image: mdi:arrow-down-bold
-    config:
-      - action: remote.send_command
-        data:
-          command: DPAD_DOWN
+      button_10:
+        icon: mdi:arrow-down-bold-outline
+        tooltip: {translate: down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: DPAD_DOWN
 
-  button_11:
-    label: Home
-    image: mdi:home-outline
-    config:
-      - action: remote.send_command
-        data:
-          command: HOME
+      button_11:
+        icon: mdi:home-outline
+        tooltip: {translate: home}
+        config:
+          - action: remote.send_command
+            data:
+              command: HOME
 
-  button_12:
-    label: CH-
-    image: mdi:chevron-down
-    config:
-      - action: remote.send_command
-        data:
-          command: CHANNEL_DOWN
+      button_12:
+        icon: mdi:video-input-hdmi
+        tooltip: {translate: input}
+        config:
+          - action: remote.send_command
+            data:
+              command: TV_INPUT
 
-  button_back:
-    label: Back
-    image: mdi:keyboard-return
-    config:
-      - action: remote.send_command
-        data:
-          command: BACK
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: POWER
 
-  button_voice:
-    label: Voice Assistant
-    image: mdi:microphone
-    config:
-      - action: remote.send_command
-        data:
-          command: ASSIST
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_UP
 
-  # Volume lives on the dedicated +/- buttons: a `remote.` entity exposes no
-  # volume attribute to read and no *_set service to write, so the vertical
-  # slider has nothing to drive proportionally and is left unassigned.
-  button_volume_up:
-    label: Volume Up
-    repeat: true
-    image: mdi:volume-plus
-    config:
-      - action: remote.send_command
-        data:
-          command: VOLUME_UP
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_DOWN
 
-  button_volume_down:
-    label: Volume Down
-    repeat: true
-    image: mdi:volume-minus
-    config:
-      - action: remote.send_command
-        data:
-          command: VOLUME_DOWN
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_voice:
+        icon: mdi:microphone
+        tooltip: {translate: voice_assistant}
+        config:
+          - action: remote.send_command
+            data:
+              command: ASSIST
+
+      button_back:
+        icon: mdi:keyboard-return
+        tooltip: {translate: back}
+        config:
+          - action: remote.send_command
+            data:
+              command: BACK
+
+  apps:
+    subpage: true
+    paginate: app
+    max_parts: 3
+    title: "mdi:apps ${_device.area_name}"
+    buttons:
+      button_1: "@app[1]"
+      button_2: "@app[2]"
+      button_3: "@app[3]"
+      button_4: "@app[4]"
+      button_5: "@app[5]"
+      button_6: "@app[6]"
+      button_7: "@app[7]"
+      button_8: "@app[8]"
+      button_9: "@app[9]"
+      button_10: "@app[10]"
+      button_11: "@app[11]"
+
+      button_12:
+        placeholder: "@app[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: POWER
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_UP
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_DOWN
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, remote]
+
+  digits:
+    subpage: true
+    title: "mdi:dialpad ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: 1
+        tooltip: 1
+        config:
+          - action: remote.send_command
+            data:
+              command: "1"
+
+      button_2:
+        icon: 2
+        tooltip: 2
+        config:
+          - action: remote.send_command
+            data:
+              command: "2"
+
+      button_3:
+        icon: 3
+        tooltip: 3
+        config:
+          - action: remote.send_command
+            data:
+              command: "3"
+
+      button_4:
+        icon: mdi:chevron-up
+        tooltip: CH+
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: CHANNEL_UP
+
+      button_5:
+        icon: 4
+        tooltip: 4
+        config:
+          - action: remote.send_command
+            data:
+              command: "4"
+
+      button_6:
+        icon: 5
+        tooltip: 5
+        config:
+          - action: remote.send_command
+            data:
+              command: "5"
+
+      button_7:
+        icon: 6
+        tooltip: 6
+        config:
+          - action: remote.send_command
+            data:
+              command: "6"
+
+      button_8:
+        icon: mdi:chevron-down
+        tooltip: CH-
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: CHANNEL_DOWN
+
+      button_9:
+        icon: 7
+        tooltip: 7
+        config:
+          - action: remote.send_command
+            data:
+              command: "7"
+
+      button_10:
+        icon: 8
+        tooltip: 8
+        config:
+          - action: remote.send_command
+            data:
+              command: "8"
+
+      button_11:
+        icon: 9
+        tooltip: 9
+        config:
+          - action: remote.send_command
+            data:
+              command: "9"
+
+      button_12:
+        icon: 0
+        tooltip: 0
+        config:
+          - action: remote.send_command
+            data:
+              command: "0"
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: POWER
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_UP
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_DOWN
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote

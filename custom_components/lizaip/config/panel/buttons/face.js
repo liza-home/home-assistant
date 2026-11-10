@@ -115,6 +115,7 @@ export const ButtonsFaceMixin = {
     // The tiles below are about to be rebuilt, so what the icon pass learned
     // from the previous ones no longer describes anything on screen.
     this._invalidateFaceCaches();
+    this._prefetchOptionsFit?.();
 
     this.shadowRoot.querySelectorAll(".pg-svg-container").forEach(container => {
       const pageIdx = parseInt(container.dataset.pageIdx);
@@ -206,7 +207,7 @@ export const ButtonsFaceMixin = {
         if (key === SLIDER_VERTICAL_KEY && assign[SLIDER_ICON_HIDDEN_KEY]) return "";
         // Slider mechanics carry their own icon (see sliderIconFor) — checked
         // before the action_id branch because proportional sliders have none.
-        if (!assign.image) {
+        if (!assign.icon) {
           const sIcon = sliderIconFor(this._sliderControls, assign);
           if (sIcon) return sIcon;
         }
@@ -220,7 +221,7 @@ export const ButtonsFaceMixin = {
       // branch below matches a title pasted with surrounding whitespace.
       // An unset title renders nothing — the device shows a blank title bar, so the
       // preview must too. Never substitute the page id as a stand-in label.
-      const rawTitle = this._pageTitleImage(page);
+      const rawTitle = this._resolvedPageTitle(page);
       const mode = this._getThemeMode();
       container.classList.toggle("face-dark", mode === "dark");
       const pgColor = page.default_color || "";
@@ -332,18 +333,17 @@ export const ButtonsFaceMixin = {
         // unassigned — the fixed control the page leaves blank but the context
         // drives would come out greyed under the icon just drawn for it.
         const overlayAssign = assignFor(btn.key);
-        // The bound light's own colour and level, so the preview matches the
-        // tile the device is drawing. Falls back to the page colour like
-        // everything else.
-        const tileStyle = this._buttonIconStyle(overlayAssign, pgColor);
         const tile = this._buildTileImgUrl(
-          icon, mode, tileStyle.color, storesConfig(overlayAssign), tileStyle.percent,
+          icon, mode, pgColor, storesConfig(overlayAssign),
         );
         // "" is nothing to draw; null is a URL still being asked for.
         if (tile.src === "") return;
         const el = this._tileImg(pageIdx, btn.key, tile);
         el.className = 'pg-btn-img';
-        const dim = DEFAULT_BUTTON_ICONS[btn.key] && !overlayAssign?.action_id;
+        // Dimmed while the firmware glyph is all there is. Read through
+        // `storesConfig`, like the tint above: a fixed key configured inline,
+        // with no library action, is assigned too.
+        const dim = DEFAULT_BUTTON_ICONS[btn.key] && !storesConfig(overlayAssign);
         this._fitTileImg(el, b, tile.key,
           'pointer-events:none;' + (dim ? 'opacity:0.3;' : ''));
         container.appendChild(el);
@@ -437,10 +437,7 @@ export const ButtonsFaceMixin = {
         if (!action) return;
         const newIcon = this._resolveButtonIcon(assign, action, "", page);
         if (!newIcon) return;
-        const tileStyle = this._buttonIconStyle(assign, pageColor);
-        const tile = this._buildTileImgUrl(
-          newIcon, mode, tileStyle.color, true, tileStyle.percent,
-        );
+        const tile = this._buildTileImgUrl(newIcon, mode, pageColor, true);
         if (tile.src === null) {
           // Asked for; `_applyDeviceUrls` fills it in when the answer comes.
           // The picture on the tile stays until then.
@@ -513,10 +510,14 @@ export const ButtonsFaceMixin = {
    * `{src, key}` for a button face: the tile the remote is sent (`_deviceImg`).
    * An untinted tile -- a default the page leaves unassigned -- is asked for
    * without the colour.
+   *
+   * The colour is the page's default and nothing else: the editor draws a
+   * button from how it is configured, not from what its target is currently
+   * doing. The remote still tints and fills by state, device-side.
    */
 
-  _buildTileImgUrl(icon, mode, color, isTinted, percent = null) {
-    return this._deviceImg(icon, "tile", isTinted ? color : "", percent);
+  _buildTileImgUrl(icon, mode, color, isTinted) {
+    return this._deviceImg(icon, "tile", isTinted ? color : "");
   },
 
   // --- Wiring ---

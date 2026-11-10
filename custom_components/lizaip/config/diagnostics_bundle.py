@@ -49,7 +49,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
-from ..const import DOMAIN
+from ..const import CONF_ASSIGNED_USERS, DOMAIN
+from .access import can_access_entry
 from .store import YAML_DIR
 from ..device import report as device_report
 from ..diagnostics import (
@@ -141,7 +142,8 @@ class _Collector:
     """
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, scope: str = SCOPE_STANDARD
+        self, hass: HomeAssistant, entry: ConfigEntry, scope: str = SCOPE_STANDARD,
+        *, whole_system: bool = True,
     ) -> None:
         self.hass = hass
         self.entry = entry
@@ -149,6 +151,10 @@ class _Collector:
         #: Which build this is: the support bundle, or a copy of the stored
         #: configuration. Sections read it rather than being written twice.
         self.scope = scope
+        #: Whether the three sections that are not about one remote may be
+        #: collected whole. False for somebody holding a single remote: the
+        #: rest of the bundle is already theirs alone, these three are not.
+        self.whole_system = whole_system
         self.files: dict[str, bytes] = {}
         self.skipped: list[dict[str, str]] = []
         #: What the remote's steps hand each other. The probe decides whether
@@ -182,6 +188,39 @@ class _Collector:
             return None
 
 
+def _without_assignments(options: dict[str, Any], whole_system: bool) -> dict[str, Any]:
+    """Drop who a remote is assigned to from a bundle narrowed to one remote.
+
+    The entry's options go in whole everywhere else, deliberately, so an option
+    added later cannot go missing from diagnostics. This is the one exception:
+    `websocket/devices.py` withholds the assignment list from somebody who is
+    not an administrator, and a bundle they build must not hand back what the
+    panel refused them. An administrator's bundle still carries it.
+    """
+    if whole_system:
+        return options
+    return {k: v for k, v in options.items() if k != CONF_ASSIGNED_USERS}
+
+
+def _narrowed_payload(payload: dict[str, Any], whole_system: bool) -> dict[str, Any]:
+    """The device page's JSON with its installation-wide parts taken out.
+
+    Neither log is about one remote: `log` is every lizaIP line Home Assistant
+    wrote, `system_log` every fault it holds for the integration. The summary
+    counts them, so those counts go too.
+    """
+    if whole_system:
+        return payload
+    payload = {k: v for k, v in payload.items() if k not in ("log", "system_log")}
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        payload["summary"] = {
+            k: v for k, v in summary.items()
+            if k not in ("ha_log_lines", "ha_log_source", "errors_held")
+        }
+    return payload
+
+
 async def _add_diagnostics(collector: _Collector) -> None:
     """The same JSON the device page's button produces.
 
@@ -189,14 +228,19 @@ async def _add_diagnostics(collector: _Collector) -> None:
     here that would otherwise repeat all nine requests makes none.
     """
     async def build() -> None:
+        payload = await async_get_config_entry_diagnostics(
+            collector.hass,
+            collector.entry,
+            probe=collector.device_probe,
+            prefetched=collector.device_sections or None,
+        )
+        entry_facts = payload["entry"]
+        entry_facts["options"] = _without_assignments(
+            entry_facts["options"], collector.whole_system
+        )
         collector.add(
             "homeassistant/device_page.json",
-            _dumps(await async_get_config_entry_diagnostics(
-                collector.hass,
-                collector.entry,
-                probe=collector.device_probe,
-                prefetched=collector.device_sections or None,
-            )),
+            _dumps(_narrowed_payload(payload, collector.whole_system)),
         )
 
     await collector.section("homeassistant/device_page.json", build)
@@ -284,7 +328,9 @@ async def _add_settings(collector: _Collector) -> None:
                 "entry_id": entry.entry_id,
                 "title": entry.title,
                 "data": dict(entry.data),
-                "options": dict(entry.options),
+                "options": _without_assignments(
+                    dict(entry.options), collector.whole_system
+                ),
             },
             **await async_settings_snapshot(hass, entry),
         }
@@ -515,14 +561,17 @@ async def _add_traffic(collector: _Collector) -> None:
     await collector.section(LOG_MESSAGES, build)
 
 
-def _filter_lines(text: str) -> str:
-    """Keep only the lines that mention us.
+def _filter_lines(text: str, needle: str = _LOG_NEEDLE) -> str:
+    """Keep only the lines that mention *needle*.
 
     The rest of the log belongs to other integrations and to the household —
     tokens in URLs, addresses, names of people — and none of it answers a
     question about a remote.
+
+    The needle is the domain for an administrator and ``[this remote]`` for
+    anybody else, which is why :mod:`..shared.logs` puts the name there.
     """
-    needle = _LOG_NEEDLE
+    needle = needle.lower()
     kept = "".join(
         line for line in text.splitlines(keepends=True) if needle in line.lower()
     )
@@ -590,9 +639,21 @@ async def _add_ha_log(collector: _Collector) -> None:
 
     Filtered to our own lines: the rest of the log is other integrations and
     the household, and none of it is ours to carry.
+
+    Left out entirely for somebody who holds one remote. The only handle on a
+    line is the ``[name]`` prefix, and a name is neither unique nor stable --
+    narrowing on it would hand over another remote's lines.
     """
     async def build() -> None:
         hass = collector.hass
+        if not collector.whole_system:
+            collector.skip(
+                LOG_HA,
+                "Every lizaIP remote's lines, not this one's — there is no "
+                "reliable way to tell them apart, so an administrator's "
+                "bundle carries them",
+            )
+            return
         raw_chunks: list[tuple[str, str]] = []
         # Oldest first, so the result reads forwards.
         for name in ("home-assistant.log.1", "home-assistant.log"):
@@ -614,8 +675,10 @@ async def _add_ha_log(collector: _Collector) -> None:
                 return
             raw_chunks.append(("supervisor core log", journal))
 
+        needle = _LOG_NEEDLE
         collector.add(LOG_HA, "\n".join(
-            f"===== {name} =====\n{_filter_lines(text)}" for name, text in raw_chunks
+            f"===== {name} =====\n{_filter_lines(text, needle)}"
+            for name, text in raw_chunks
         ))
 
     await collector.section(LOG_HA, build)
@@ -627,8 +690,18 @@ async def _add_system_log(collector: _Collector) -> None:
     Not filtered to this integration: an error raised in a template or another
     integration is often what a button press actually ran into, and the count of
     how often it repeated is in here and nowhere else.
+
+    Which is also why it is left out of a bundle built by somebody who holds
+    one remote: there is no per-remote version of it to give them.
     """
     async def build() -> None:
+        if not collector.whole_system:
+            collector.skip(
+                LOG_ERRORS,
+                "Every integration's errors, not this remote's — an "
+                "administrator's bundle carries them",
+            )
+            return
         handler = collector.hass.data.get("system_log")
         records = getattr(handler, "records", None)
         if records is None:
@@ -704,21 +777,28 @@ async def _add_environment(collector: _Collector) -> None:
     answers: Home Assistant's version, the integration's, and the Python it runs
     on — plus which other custom integrations are installed and how long our own
     setup took, both of which Home Assistant's own download carries.
+
+    Those last three describe the installation rather than the remote, so a
+    bundle built by somebody who holds one remote carries only the versions.
     """
     async def build() -> None:
         hass = collector.hass
         version, platform_name = await hass.async_add_executor_job(_environment_facts)
-        collector.add("homeassistant/environment.json", _dumps({
+        facts = {
             "integration_version": version,
             "home_assistant_version": HA_VERSION,
             "python_version": sys.version,
             "platform": platform_name,
-            "config_dir": hass.config.path(),
             "time_zone": str(hass.config.time_zone),
             "debug_tooling": debug_available(),
-            "custom_integrations": await _custom_integrations(hass),
-            "setup_times": _setup_times(hass),
-        }))
+        }
+        if collector.whole_system:
+            facts |= {
+                "config_dir": hass.config.path(),
+                "custom_integrations": await _custom_integrations(hass),
+                "setup_times": _setup_times(hass),
+            }
+        collector.add("homeassistant/environment.json", _dumps(facts))
 
     await collector.section("homeassistant/environment.json", build)
 
@@ -836,7 +916,7 @@ def _inventory(collector: _Collector) -> str:
 
 def _readme(collector: _Collector, created: str) -> str:
     """The README, with its inventory built from what is actually in the ZIP."""
-    privacy = _PRIVACY_FULL
+    privacy = _PRIVACY_FULL if collector.whole_system else _PRIVACY_ONE_REMOTE
     return _README.format(
         created=created,
         title=collector.entry.title,
@@ -854,6 +934,25 @@ anything about your household. log_messages.json carries the messages exchanged
 with the remote, which name the same entities. The Home Assistant log here is
 filtered to lines mentioning lizaip, so other integrations' messages are not
 included.\
+"""
+
+
+#: The same warning for a bundle built by somebody who holds this one remote:
+#: the installation-wide sections were narrowed or left out, and anybody
+#: reading the ZIP should know that before drawing conclusions from it.
+_PRIVACY_ONE_REMOTE = """\
+configuration/ names the entities your buttons act on -- the lights, media
+players and scripts in your home, by their entity ids. That is what makes a
+misbehaving button diagnosable, and it is the one part of this bundle that says
+anything about your household. log_messages.json carries the messages exchanged
+with the remote, which name the same entities.
+
+This bundle was built by somebody who holds this remote rather than the whole
+installation, so it is narrowed to it: the Home Assistant log and the error log
+are both left out -- neither can be split per remote -- the environment report
+carries the versions without the rest of the installation, and who else this
+remote is assigned to is not listed. An administrator's bundle carries all of
+it.\
 """
 
 
@@ -1008,6 +1107,7 @@ async def async_build_bundle(
     entry: ConfigEntry,
     *,
     scope: str = SCOPE_STANDARD,
+    whole_system: bool = True,
     progress: Any = None,
     should_stop: Any = None,
 ) -> dict[str, bytes]:
@@ -1025,11 +1125,15 @@ async def async_build_bundle(
     ``should_stop`` is asked the same question between sections. Nobody will
     ever see a bundle whose browser has closed, and the remote has better uses
     for the next eight requests.
+
+    ``whole_system`` is False when the caller holds this one remote rather than
+    the installation. Every other section is already scoped to ``entry``; the
+    three that are not are narrowed or left out, and the manifest says which.
     """
     if scope not in _ALL:
         raise ValueError(f"Unknown diagnostics scope {scope!r}")
 
-    collector = _Collector(hass, entry, scope)
+    collector = _Collector(hass, entry, scope, whole_system=whole_system)
     created = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     steps = steps_for_scope(scope)
@@ -1121,6 +1225,7 @@ async def async_build_zip(
     entry: ConfigEntry,
     *,
     scope: str = SCOPE_STANDARD,
+    whole_system: bool = True,
     progress: Any = None,
     should_stop: Any = None,
 ) -> tuple[str, bytes]:
@@ -1130,7 +1235,8 @@ async def async_build_zip(
     hundred kilobytes, and the event loop has a remote to answer in the meantime.
     """
     files = await async_build_bundle(
-        hass, entry, scope=scope, progress=progress, should_stop=should_stop,
+        hass, entry, scope=scope, whole_system=whole_system,
+        progress=progress, should_stop=should_stop,
     )
     # The clock the user reads, not UTC: a file named two hours before the
     # download that made it looks like the wrong one. `created` inside the
@@ -1147,12 +1253,18 @@ async def async_build_zip(
     return f"{name}.zip", data
 
 
-def _bundles(hass: HomeAssistant) -> dict[str, tuple[float, str, bytes]]:
-    """The built-but-not-yet-downloaded bundles, by token."""
+def _bundles(hass: HomeAssistant) -> dict[str, tuple[float, str, bytes, str]]:
+    """The built-but-not-yet-downloaded bundles, by token.
+
+    Each is `(expires, filename, data, entry_id)` -- the remote it describes
+    travels with it, because the view has only the token to decide by.
+    """
     return hass.data.setdefault(DOMAIN, {}).setdefault("_bundles", {})
 
 
-def async_store_bundle(hass: HomeAssistant, filename: str, data: bytes) -> str:
+def async_store_bundle(
+    hass: HomeAssistant, filename: str, data: bytes, entry_id: str,
+) -> str:
     """Park a built bundle and return the token the browser fetches it with.
 
     Expired bundles are dropped here rather than on a timer: a build is the only
@@ -1163,21 +1275,27 @@ def async_store_bundle(hass: HomeAssistant, filename: str, data: bytes) -> str:
     """
     now = time.monotonic()
     bundles = _bundles(hass)
-    for token in [t for t, (expires, _, _) in bundles.items() if expires <= now]:
+    for token in [t for t, parked in bundles.items() if parked[0] <= now]:
         del bundles[token]
 
     token = secrets.token_urlsafe(32)
-    bundles[token] = (now + BUNDLE_TTL, filename, data)
+    # The remote it describes travels with it: the view has only the token to
+    # decide by, and the bundle is this remote's rather than the panel's.
+    bundles[token] = (now + BUNDLE_TTL, filename, data, entry_id)
     return token
 
 
 class LizaIPDiagnosticsView(HomeAssistantView):
     """Hand one built bundle to the browser, once.
 
-    Admin-only and single-use. The token is unguessable and short-lived, but
-    neither of those is the protection — the authenticated admin check is, and
-    the token exists so that a URL which has already served its file cannot
-    serve it again to whatever the browser's history syncs to.
+    Single-use, and served only to somebody the remote it describes is assigned
+    to. The token is unguessable and short-lived, but neither of those is the
+    protection — the access check is, and the token exists so that a URL which
+    has already served its file cannot serve it again to whatever the browser's
+    history syncs to.
+
+    ``requires_auth`` only means somebody is logged in, which is why the check
+    below is the same one the command that built the bundle made.
     """
 
     url = BUNDLE_URL_BASE + "/{token}"
@@ -1186,17 +1304,20 @@ class LizaIPDiagnosticsView(HomeAssistantView):
 
     async def get(self, request: web.Request, token: str) -> web.StreamResponse:
         """Return the bundle named by *token*, or 404 once it is gone."""
-        if not request["hass_user"].is_admin:
-            return web.Response(status=401)
-
         hass = request.app["hass"]
-        entry = _bundles(hass).pop(token, None)
-        if entry is None:
+        parked = _bundles(hass).pop(token, None)
+        if parked is None:
             return web.Response(status=404)
 
-        expires, filename, data = entry
+        expires, filename, data, entry_id = parked
         if expires <= time.monotonic():
             return web.Response(status=404)
+
+        user = request["hass_user"]
+        # Taken out of the table above either way: a bundle somebody else's
+        # token reached is not one to leave sitting there for a retry.
+        if not can_access_entry(hass, user, entry_id):
+            return web.Response(status=401)
 
         return web.Response(
             body=data,

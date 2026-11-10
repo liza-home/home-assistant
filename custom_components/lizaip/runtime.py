@@ -10,7 +10,8 @@ import importlib.util
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 
@@ -29,6 +30,20 @@ def debug_available() -> bool:
     tools it shipped.
     """
     return importlib.util.find_spec(f"{__package__}.config.debug_websocket") is not None
+
+
+def renamed_device(hass: HomeAssistant, event: Event) -> dr.DeviceEntry | None:
+    """The device a device-registry event renamed, or ``None``.
+
+    The registry fires on every device touch -- a new connection, a via
+    device, a config entry added -- and only a change of name matters here.
+    """
+    data = event.data
+    if data.get("action") != "update":
+        return None
+    if not {"name", "name_by_user"} & set(data.get("changes") or ()):
+        return None
+    return dr.async_get(hass).async_get(data.get("device_id") or "")
 
 
 #: Integration-wide keys in ``hass.data[DOMAIN]``, next to the config entry ids.

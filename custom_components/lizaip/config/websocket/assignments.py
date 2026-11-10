@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 
 from ...runtime import _get_store, remember_panel_language
 from ...shared.history import history_entities
+from ...shared.i18n import get_ui_language, language_scope, translate_inline
 from ...shared.logs import device_id_logger
 from ...shared.tokens import (
     entity_token_entities,
@@ -29,6 +30,7 @@ from .common import (
     schedule_push_rescan,
     send_failure,
 )
+from ..access import require_device_access
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ _MAX_VARIABLE_ITEMS: Final = 500
     vol.Optional("images", default=list): [vol.All(str, vol.Length(max=2000))],
     vol.Optional("entry_id"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_resolve_variables(hass: HomeAssistant, connection, msg: dict) -> None:
     """What ``${…}`` variables read right now, as the remote will print them.
@@ -64,15 +66,27 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
     for item in (*texts, *images):
         entities |= entity_token_entities(item)
         entities |= history_entities(item)
-    connection.send_result(msg["id"], {
-        "texts": {t: substitute_entity_tokens(t, hass) for t in texts},
-        "images": {i: resolve_image_tokens(i, hass) for i in images},
-        "entities": sorted(entities),
-    })
+    # `{translate: …}` reads as the remote the panel shows prints it.
+    language = None
+    if any("{translate:" in item for item in (*texts, *images)):
+        entry_id = msg.get("entry_id")
+        entries = getattr(hass, "config_entries", None)
+        entry = entries.async_get_entry(entry_id) if entry_id and entries is not None else None
+        language = get_ui_language(hass, entry)
+    with language_scope(language):
+        answer = {
+            "texts": {t: substitute_entity_tokens(translate_inline(t), hass) for t in texts},
+            "images": {i: resolve_image_tokens(i, hass) for i in images},
+            "entities": sorted(entities),
+        }
+    connection.send_result(msg["id"], answer)
 
 
-@websocket_api.websocket_command({"type": "lizaip_config/get_actions", "entry_id": str})
-@websocket_api.require_admin
+@websocket_api.websocket_command({
+    "type": "lizaip_config/get_actions",
+    vol.Required("entry_id"): str,
+})
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_get_actions(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -82,10 +96,10 @@ async def ws_get_actions(hass: HomeAssistant, connection, msg: dict, device_id: 
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/save_actions",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("actions"): list,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -107,10 +121,10 @@ async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id:
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/get_assignments",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Optional("page_id", default=1): PAGE_ID_SCHEMA,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_get_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -123,9 +137,9 @@ async def ws_get_assignments(hass: HomeAssistant, connection, msg: dict, device_
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/get_all_assignments",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -150,12 +164,12 @@ async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, dev
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/save_assignments",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Optional("page_id", default=1): PAGE_ID_SCHEMA,
     vol.Required("assignments"): ASSIGNMENTS_SCHEMA,
     vol.Optional("language"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:

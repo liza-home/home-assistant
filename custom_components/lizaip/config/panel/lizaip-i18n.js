@@ -82,10 +82,6 @@ export const STRINGS = {
   settings_font_size: {
     en: "Font size", de: "Schriftgröße", fr: "Taille de police", it: "Dimensione carattere", es: "Tamaño de fuente",
   },
-  settings_font_user: {
-    en: "{name} (your font)", de: "{name} (eigene Schrift)", fr: "{name} (votre police)",
-    it: "{name} (tuo carattere)", es: "{name} (tu fuente)",
-  },
   settings_font_missing: {
     en: "{name} (not installed)", de: "{name} (nicht installiert)", fr: "{name} (non installée)",
     it: "{name} (non installato)", es: "{name} (no instalada)",
@@ -128,10 +124,6 @@ export const STRINGS = {
     fr: "il est trop volumineux pour un fichier de thème",
     it: "è troppo grande per essere un file tema",
     es: "es demasiado grande para ser un archivo de tema",
-  },
-  settings_theme_apply: {
-    en: "Apply", de: "Anwenden", fr: "Appliquer",
-    it: "Applica", es: "Aplicar",
   },
   settings_theme_view_heading: {
     en: "View theme", de: "Design ansehen", fr: "Voir le thème",
@@ -214,7 +206,7 @@ export const STRINGS = {
   },
   settings_theme_name_hint: {
     en: "Saved in {path} as a file you can also edit by hand.",
-    de: "Wird in {path} als Datei gespeichert, die Sie auch von Hand bearbeiten können.",
+    de: "Wird in {path} als Datei gespeichert, die du auch von Hand bearbeiten kannst.",
     fr: "Enregistré dans {path} comme un fichier que vous pouvez aussi modifier à la main.",
     it: "Salvato in {path} come file che puoi anche modificare a mano.",
     es: "Se guarda en {path} como un archivo que también puedes editar a mano.",
@@ -283,15 +275,15 @@ export const STRINGS = {
     en: "Colours", de: "Farben", fr: "Couleurs", it: "Colori", es: "Colores",
   },
   settings_theme_text: {
-    en: "Text size", de: "Textgröße", fr: "Taille du texte",
-    it: "Dimensione testo", es: "Tamaño del texto",
+    en: "Fonts", de: "Schriften", fr: "Polices",
+    it: "Caratteri", es: "Fuentes",
   },
   settings_theme_icons: {
     en: "Icons", de: "Icons", fr: "Icônes",
     it: "Icone", es: "Iconos",
   },
   settings_theme_mix: {
-    en: "Your earlier mix", de: "Ihre frühere Mischung", fr: "Votre ancien mélange",
+    en: "Your earlier mix", de: "Deine frühere Mischung", fr: "Votre ancien mélange",
     it: "La tua vecchia combinazione", es: "Tu mezcla anterior",
   },
   settings_theme_name_missing: {
@@ -359,18 +351,35 @@ export const STRINGS = {
   },
   settings_fonts_hint: {
     en: "To use a font of your own, put its .ttf, .otf, .woff or .woff2 file in {path} and reopen this tab.",
-    de: "Für eine eigene Schrift legen Sie die .ttf-, .otf-, .woff- oder .woff2-Datei in {path} ab und öffnen diesen Tab erneut.",
+    de: "Für eine eigene Schrift lege die .ttf-, .otf-, .woff- oder .woff2-Datei in {path} ab und öffne diesen Tab erneut.",
     fr: "Pour utiliser votre propre police, placez son fichier .ttf, .otf, .woff ou .woff2 dans {path} et rouvrez cet onglet.",
     it: "Per usare un carattere tuo, metti il file .ttf, .otf, .woff o .woff2 in {path} e riapri questa scheda.",
     es: "Para usar una fuente propia, coloca su archivo .ttf, .otf, .woff u .woff2 en {path} y vuelve a abrir esta pestaña.",
   },
   // NotoColorEmoji.ttf is too large to ship, so colour emoji are opt-in.
+  settings_fontbook_failed: {
+    en: "Fontbook could not be shown here. Open it on its own:",
+    de: "Fontbook konnte hier nicht angezeigt werden. Eigenständig öffnen:",
+    fr: "Fontbook n'a pas pu être affiché ici. L'ouvrir à part :",
+    it: "Impossibile mostrare Fontbook qui. Aprilo a parte:",
+    es: "No se pudo mostrar Fontbook aquí. Ábrelo por separado:",
+  },
+  settings_emoji_font: {
+    en: "Emoji", de: "Emoji", fr: "Emoji", it: "Emoji", es: "Emoji",
+  },
+  settings_emoji_auto: {
+    en: "Automatic", de: "Automatisch", fr: "Automatique", it: "Automatico", es: "Automático",
+  },
+  settings_emoji_none: {
+    en: "None (text font only)", de: "Keine (nur Textschrift)", fr: "Aucune (police du texte seule)",
+    it: "Nessuno (solo carattere del testo)", es: "Ninguna (solo la fuente del texto)",
+  },
   settings_emoji_hint: {
-    en: "For colour emoji in titles and labels, also put NotoColorEmoji.ttf in {path}.",
-    de: "Für farbige Emojis in Titeln und Beschriftungen legen Sie zusätzlich NotoColorEmoji.ttf in {path} ab.",
-    fr: "Pour des emoji en couleur dans les titres et libellés, placez aussi NotoColorEmoji.ttf dans {path}.",
-    it: "Per emoji a colori in titoli ed etichette, metti anche NotoColorEmoji.ttf in {path}.",
-    es: "Para emojis en color en títulos y etiquetas, coloca también NotoColorEmoji.ttf en {path}.",
+    en: "Automatic draws emoji with NotoColorEmoji.ttf when it is in {path}, else in black and white; or pick any emoji font you put there.",
+    de: "Automatisch zeichnet Emojis mit NotoColorEmoji.ttf, wenn sie in {path} liegt, sonst schwarz-weiß; oder wähle eine Emoji-Schrift, die du dort ablegst.",
+    fr: "Automatique dessine les emoji avec NotoColorEmoji.ttf quand elle est dans {path}, sinon en noir et blanc ; ou choisissez une police d'emoji que vous y placez.",
+    it: "Automatico disegna le emoji con NotoColorEmoji.ttf se si trova in {path}, altrimenti in bianco e nero; oppure scegli un font emoji che metti lì.",
+    es: "Automático dibuja los emojis con NotoColorEmoji.ttf si está en {path}, si no en blanco y negro; o elige una fuente de emojis que pongas allí.",
   },
   add_click_action: {
     en: "Add click action", de: "Klick-Aktion hinzufügen", fr: "Ajouter une action de clic",
@@ -452,10 +461,10 @@ export const STRINGS = {
   },
   settings_key_repeat_out_of_range: {
     en: "Enter a whole number from {min} to {max}.",
-    de: "Geben Sie eine ganze Zahl von {min} bis {max} ein.",
+    de: "Gib eine ganze Zahl von {min} bis {max} ein.",
     fr: "Saisissez un nombre entier de {min} à {max}.",
     it: "Inserisci un numero intero da {min} a {max}.",
-    es: "Introduzca un número entero de {min} a {max}.",
+    es: "Introduce un número entero de {min} a {max}.",
   },
   unit_ms: { en: "ms", de: "ms", fr: "ms", it: "ms", es: "ms" },
   unit_per_second: {
@@ -519,10 +528,10 @@ export const STRINGS = {
   // what a file contains is only useful where the file is being made.
   diagnostics_privacy: {
     en: "The ZIP names the entities your buttons act on, and carries the messages exchanged with the remote. Send it to support rather than posting it publicly.",
-    de: "Die ZIP-Datei nennt die Entitäten, die Ihre Tasten schalten, und enthält die mit der Fernbedienung ausgetauschten Nachrichten. Schicken Sie sie an den Support, statt sie öffentlich zu posten.",
+    de: "Die ZIP-Datei nennt die Entitäten, die deine Tasten schalten, und enthält die mit der Fernbedienung ausgetauschten Nachrichten. Schick sie an den Support, statt sie öffentlich zu posten.",
     fr: "Le ZIP nomme les entités commandées par vos boutons et contient les messages échangés avec la télécommande. Envoyez-le au support plutôt que de le publier.",
     it: "Lo ZIP nomina le entità comandate dai tuoi pulsanti e contiene i messaggi scambiati con il telecomando. Invialo all'assistenza invece di pubblicarlo.",
-    es: "El ZIP nombra las entidades que accionan sus botones y contiene los mensajes intercambiados con el mando. Envíelo al soporte en lugar de publicarlo.",
+    es: "El ZIP nombra las entidades que accionan tus botones y contiene los mensajes intercambiados con el mando. Envíalo al soporte en lugar de publicarlo.",
   },
   // Said beside a menu item whose lane is already building, and in the pill
   // that lane leaves behind.
@@ -802,10 +811,10 @@ export const STRINGS = {
   },
   diagnostics_dialog_hint: {
     en: "You can close this window; collecting continues and the download starts on its own.",
-    de: "Sie können dieses Fenster schließen; das Sammeln läuft weiter und der Download startet von selbst.",
+    de: "Du kannst dieses Fenster schließen; das Sammeln läuft weiter und der Download startet von selbst.",
     fr: "Vous pouvez fermer cette fenêtre ; la collecte continue et le téléchargement démarre tout seul.",
     it: "Puoi chiudere questa finestra; la raccolta continua e il download parte da solo.",
-    es: "Puede cerrar esta ventana; la recopilación continúa y la descarga empieza sola.",
+    es: "Puedes cerrar esta ventana; la recopilación continúa y la descarga empieza sola.",
   },
   diagnostics_hide: {
     en: "Run in background", de: "Im Hintergrund weiterlaufen",
@@ -965,7 +974,7 @@ export const STRINGS = {
     de: "Der Upload ist abgelaufen. Bitte die Datei erneut auswählen.",
     fr: "Le téléversement a expiré. Choisissez à nouveau le fichier.",
     it: "Il caricamento è scaduto. Seleziona di nuovo il file.",
-    es: "La subida ha caducado. Elija el archivo de nuevo.",
+    es: "La subida ha caducado. Elige el archivo de nuevo.",
   },
   settings_buttons: {
     en: "Buttons", de: "Tasten", fr: "Boutons", it: "Pulsanti", es: "Botones",
@@ -994,6 +1003,17 @@ export const STRINGS = {
     fr: "Permet à un bouton de porter plusieurs actions et de passer à la suivante à chaque appui. Ajoute une section Bouton à bascule multiple à chaque bouton de la grille. En désactivant, les étapes restent enregistrées mais ces boutons relancent leur action normale.",
     it: "Consente a un pulsante di contenere più azioni e di passare alla successiva a ogni pressione. Aggiunge una sezione Pulsante a commutazione multipla a ogni pulsante della griglia. Disattivandola i passaggi restano salvati, ma i pulsanti tornano a eseguire la loro azione normale.",
     es: "Permite que un botón lleve varias acciones y avance a la siguiente en cada pulsación. Añade una sección Botón de conmutación múltiple a cada botón de la cuadrícula. Al desactivarlo los pasos siguen guardados, pero esos botones vuelven a ejecutar su acción normal.",
+  },
+  settings_options: {
+    en: "Options pages", de: "Optionsseiten", fr: "Pages d’options",
+    it: "Pagine di opzioni", es: "Páginas de opciones",
+  },
+  settings_options_hint: {
+    en: "Adds Add options… to a button’s menu when an options template fits its device: a page of settings for that device, opened by the button’s long touch. Needs Long touch. Switching this off keeps the options pages already made.",
+    de: "Fügt dem Menü einer Taste „Optionen hinzufügen…“ hinzu, wenn eine Optionsvorlage zu ihrem Gerät passt: eine Seite mit Einstellungen für dieses Gerät, die das lange Berühren der Taste öffnet. Benötigt „Langes Berühren“. Beim Ausschalten bleiben bereits angelegte Optionsseiten erhalten.",
+    fr: "Ajoute Ajouter des options… au menu d’un bouton quand un modèle d’options convient à son appareil : une page de réglages pour cet appareil, ouverte par l’appui long du bouton. Nécessite Appui long. En désactivant, les pages d’options déjà créées sont conservées.",
+    it: "Aggiunge Aggiungi opzioni… al menu di un pulsante quando un modello di opzioni è adatto al suo dispositivo: una pagina di impostazioni per quel dispositivo, aperta dal tocco lungo del pulsante. Richiede Tocco lungo. Disattivandola, le pagine di opzioni già create restano.",
+    es: "Añade Añadir opciones… al menú de un botón cuando una plantilla de opciones encaja con su dispositivo: una página de ajustes para ese dispositivo, que abre el toque largo del botón. Requiere Toque largo. Al desactivarlo se conservan las páginas de opciones ya creadas.",
   },
   settings_memory_card: {
     en: "Device memory", de: "Gerätespeicher",
@@ -1159,11 +1179,11 @@ export const STRINGS = {
     es: "Tintar los iconos con el color de la luz",
   },
   settings_icon_color_enabled_hint: {
-    en: "A button bound to a lit lamp takes that lamp's colour instead of the page colour.",
-    de: "Eine Taste, die einer eingeschalteten Lampe zugeordnet ist, übernimmt deren Farbe statt der Seitenfarbe.",
-    fr: "Un bouton associé à une lampe allumée prend la couleur de cette lampe au lieu de celle de la page.",
-    it: "Un pulsante associato a una luce accesa assume il colore di quella luce invece di quello della pagina.",
-    es: "Un botón asociado a una lámpara encendida toma el color de esa lámpara en lugar del de la página.",
+    en: "On the remote, a button bound to a lit lamp takes that lamp's colour instead of the page colour.",
+    de: "Auf der Fernbedienung übernimmt eine Taste, die einer eingeschalteten Lampe zugeordnet ist, deren Farbe statt der Seitenfarbe.",
+    fr: "Sur la télécommande, un bouton associé à une lampe allumée prend la couleur de cette lampe au lieu de celle de la page.",
+    it: "Sul telecomando, un pulsante associato a una luce accesa assume il colore di quella luce invece di quello della pagina.",
+    es: "En el mando, un botón asociado a una lámpara encendida toma el color de esa lámpara en lugar del de la página.",
   },
   settings_icon_fill_enabled: {
     en: "Fill icons with the light's brightness",
@@ -1173,11 +1193,11 @@ export const STRINGS = {
     es: "Rellenar los iconos según el brillo",
   },
   settings_icon_fill_enabled_hint: {
-    en: "Fills the icon from the bottom, like a gauge. Independent of the tint above.",
-    de: "Füllt das Symbol von unten wie eine Anzeige. Unabhängig von der Einfärbung darüber.",
-    fr: "Remplit l'icône par le bas, comme une jauge. Indépendant de la teinte ci-dessus.",
-    it: "Riempie l'icona dal basso, come un indicatore. Indipendente dalla colorazione sopra.",
-    es: "Rellena el icono desde abajo, como un indicador. Independiente del tinte de arriba.",
+    en: "On the remote, fills the icon from the bottom, like a gauge. Independent of the tint above.",
+    de: "Füllt das Symbol auf der Fernbedienung von unten wie eine Anzeige. Unabhängig von der Einfärbung darüber.",
+    fr: "Sur la télécommande, remplit l'icône par le bas, comme une jauge. Indépendant de la teinte ci-dessus.",
+    it: "Sul telecomando, riempie l'icona dal basso, come un indicatore. Indipendente dalla colorazione sopra.",
+    es: "En el mando, rellena el icono desde abajo, como un indicador. Independiente del tinte de arriba.",
   },
   settings_fill_step: {
     en: "Fill step", de: "Füllschritt", fr: "Pas de remplissage", it: "Passo di riempimento", es: "Paso de relleno",
@@ -1593,10 +1613,10 @@ export const STRINGS = {
   // nothing to cycle through yet.
   toggle_click_hint_add: {
     en: "Add another action to build the cycle.",
-    de: "Fügen Sie eine weitere Aktion hinzu, um den Durchlauf aufzubauen.",
+    de: "Füge eine weitere Aktion hinzu, um den Durchlauf aufzubauen.",
     fr: "Ajoutez une autre action pour construire le cycle.",
     it: "Aggiungi un'altra azione per costruire il ciclo.",
-    es: "Añada otra acción para construir el ciclo.",
+    es: "Añade otra acción para construir el ciclo.",
   },
   // Names what the section edits, not what the user does to the remote. It was
   // "Presses", which named the input while every field under it sets an output,
@@ -1716,6 +1736,18 @@ export const STRINGS = {
     en: "Add options…", de: "Optionen hinzufügen…", fr: "Ajouter des options…",
     it: "Aggiungi opzioni…", es: "Añadir opciones…",
   },
+  // The same thing, worded as a place rather than a command: the title and
+  // first crumb of the walk the menu item opens.
+  add_options_title: {
+    en: "Add options", de: "Optionen hinzufügen", fr: "Ajouter des options",
+    it: "Aggiungi opzioni", es: "Añadir opciones",
+  },
+  // Add options… on a button whose device no options template answers.
+  no_options: {
+    en: "No options available for {name}", de: "Keine Optionen für {name} verfügbar",
+    fr: "Aucune option disponible pour {name}", it: "Nessuna opzione disponibile per {name}",
+    es: "No hay opciones disponibles para {name}",
+  },
   options_page_title: {
     en: "{name} options", de: "{name} Optionen", fr: "Options {name}",
     it: "Opzioni {name}", es: "Opciones de {name}",
@@ -1745,25 +1777,6 @@ export const STRINGS = {
     en: "{name} now uses this device", de: "{name} nutzt jetzt dieses Gerät",
     fr: "{name} utilise maintenant cet appareil", it: "{name} usa ora questo dispositivo",
     es: "{name} usa ahora este dispositivo",
-  },
-  save_as_template: {
-    en: "Save as template…", de: "Als Vorlage speichern…", fr: "Enregistrer comme modèle…",
-    it: "Salva come modello…", es: "Guardar como plantilla…",
-  },
-  save_as_template_desc: {
-    en: "Saved under My Templates. Adding it asks for a device of the same kind.",
-    de: "Wird unter „Meine Vorlagen“ gespeichert. Beim Hinzufügen wird nach einem gleichartigen Gerät gefragt.",
-    fr: "Enregistré dans Mes modèles. L'ajouter demande un appareil du même type.",
-    it: "Salvato in I miei modelli. Aggiungendolo viene chiesto un dispositivo dello stesso tipo.",
-    es: "Se guarda en Mis plantillas. Al añadirla se pide un dispositivo del mismo tipo.",
-  },
-  template_name: {
-    en: "Name", de: "Name", fr: "Nom", it: "Nome", es: "Nombre",
-  },
-  template_saved: {
-    en: "Saved as template {name}: {n} button(s)", de: "Als Vorlage {name} gespeichert: {n} Taste(n)",
-    fr: "Enregistré comme modèle {name} : {n} bouton(s)", it: "Salvato come modello {name}: {n} pulsante/i",
-    es: "Guardado como plantilla {name}: {n} botón(es)",
   },
   save: {
     en: "Save", de: "Speichern", fr: "Enregistrer", it: "Salva", es: "Guardar",
@@ -1878,6 +1891,12 @@ export const STRINGS = {
     en: "1 template", de: "1 Vorlage", fr: "1 modèle",
     it: "1 modello", es: "1 plantilla",
   },
+  // After the name of a template that brings subpages, on its row and in its
+  // dialog: adding it makes more than the one page the user is looking at.
+  template_page_count: {
+    en: "({count} pages)", de: "({count} Seiten)", fr: "({count} pages)",
+    it: "({count} pagine)", es: "({count} páginas)",
+  },
   search_templates: {
     en: "Search templates…", de: "Vorlagen suchen…", fr: "Rechercher un modèle…",
     it: "Cerca modelli…", es: "Buscar plantillas…",
@@ -1893,10 +1912,10 @@ export const STRINGS = {
   },
   search_no_matches_hint: {
     en: "Try a device name, or clear the search to browse.",
-    de: "Versuchen Sie einen Gerätenamen, oder leeren Sie die Suche zum Blättern.",
+    de: "Versuch einen Gerätenamen, oder leere die Suche zum Blättern.",
     fr: "Essayez un nom d'appareil, ou effacez la recherche pour parcourir.",
     it: "Prova il nome di un dispositivo, o cancella la ricerca per sfogliare.",
-    es: "Pruebe con el nombre de un dispositivo, o borre la búsqueda para explorar.",
+    es: "Prueba con el nombre de un dispositivo, o borra la búsqueda para explorar.",
   },
   add_page_root: {
     en: "Add page", de: "Seite hinzufügen", fr: "Ajouter une page",
@@ -2167,22 +2186,231 @@ export const STRINGS = {
     fr: "Chargement des appareils…", it: "Caricamento dispositivi…",
     es: "Cargando dispositivos…",
   },
-  // The link is a `{link}` slot rather than markup in the table: the URL then
-  // lives in one place, and each language can put the link where its own
-  // sentence wants it instead of at a position English happens to use.
-  no_devices: {
-    en: "No devices found. Add one via {link}.",
-    de: "Keine Geräte gefunden. Über {link} hinzufügen.",
-    fr: "Aucun appareil trouvé. Ajoutez-en via {link}.",
-    it: "Nessun dispositivo trovato. Aggiungilo da {link}.",
-    es: "No se han encontrado dispositivos. Añádalos en {link}.",
+  // ── a list with no remotes in it yet ───────────────────────────────
+  // The first three steps of the setup page, shown where the rows will be.
+  // The `_text` values carry <strong> markup and are written by us, never user input.
+  // As the heading of the setup page (www/info/index.html) words it.
+  setup_steps_heading: {
+    en: "Get started with your lizaIP.",
+    de: "Los geht's mit deiner lizaIP.",
+    fr: "Premiers pas avec votre lizaIP.",
+    it: "Inizia con la tua lizaIP.",
+    es: "Empieza con tu lizaIP.",
   },
-  no_devices_link: {
-    en: "Settings → Integrations",
-    de: "Einstellungen → Integrationen",
-    fr: "Paramètres → Intégrations",
-    it: "Impostazioni → Integrazioni",
-    es: "Ajustes → Integraciones",
+  setup_wake_title: {
+    en: "Wake up",
+    de: "Aufwecken",
+    fr: "Réveiller",
+    it: "Accendere",
+    es: "Despertar",
+  },
+  setup_wake_text: {
+    en: "Plug lizaIP into any USB power supply or charger.",
+    de: "Schließe lizaIP an ein beliebiges USB-Netzteil oder Ladegerät an.",
+    fr: "Branchez lizaIP sur n'importe quelle alimentation ou chargeur USB.",
+    it: "Collega lizaIP a un qualsiasi alimentatore o caricabatterie USB.",
+    es: "Conecta lizaIP a cualquier fuente de alimentación o cargador USB.",
+  },
+  setup_connect_title: {
+    en: "Connect",
+    de: "Verbinden",
+    fr: "Connecter",
+    it: "Collegare",
+    es: "Conectar",
+  },
+  setup_connect_text: {
+    en: "Open the Wi-Fi settings and join the network named <strong>lizaIP-xxxxxx</strong>.",
+    de: "Öffne die WLAN-Einstellungen und verbinde dich mit dem Netzwerk <strong>lizaIP-xxxxxx</strong>.",
+    fr: "Ouvrez les réglages Wi-Fi et rejoignez le réseau <strong>lizaIP-xxxxxx</strong>.",
+    it: "Apri le impostazioni Wi-Fi e connettiti alla rete <strong>lizaIP-xxxxxx</strong>.",
+    es: "Abre los ajustes de Wi-Fi y únete a la red <strong>lizaIP-xxxxxx</strong>.",
+  },
+  setup_provision_title: {
+    en: "Provision",
+    de: "Einrichten",
+    fr: "Configurer",
+    it: "Configurare",
+    es: "Configurar",
+  },
+  setup_provision_text: {
+    en: "Scan the QR code, or open <strong>172.16.10.1</strong> in a web browser. Pick your home Wi-Fi network.",
+    de: "Scanne den QR-Code oder öffne <strong>172.16.10.1</strong> in einem Webbrowser. Wähle dein Heim-WLAN aus.",
+    fr: "Scannez le code QR ou ouvrez <strong>172.16.10.1</strong> dans un navigateur web. Choisissez votre réseau Wi-Fi domestique.",
+    it: "Scansiona il codice QR oppure apri <strong>172.16.10.1</strong> in un browser web. Scegli la tua rete Wi-Fi di casa.",
+    es: "Escanea el código QR o abre <strong>172.16.10.1</strong> en un navegador web. Elige tu red Wi-Fi doméstica.",
+  },
+
+  // ── a list with none of them assigned to you ───────────────────────
+  // Somebody who is not an administrator and holds no remote. Not a call to
+  // action either: there is nobody here to ask but the administrator.
+  no_assigned_remotes: {
+    en: "No remote has been assigned to you yet. Ask an administrator to assign you one.",
+    de: "Dir wurde noch keine Fernbedienung zugewiesen. Bitte eine Administratorin oder einen Administrator darum.",
+    fr: "Aucune télécommande ne vous a encore été attribuée. Demandez à un administrateur de vous en attribuer une.",
+    it: "Non ti è ancora stato assegnato alcun telecomando. Chiedi a un amministratore di assegnartene uno.",
+    es: "Todavía no se te ha asignado ningún mando. Pide a un administrador que te asigne uno.",
+  },
+
+  // ── who a remote is assigned to ────────────────────────────────────
+  // Administrators only. "People" rather than "users": the dialog lists the
+  // persons Home Assistant knows, which is what a household recognises.
+  assigned_people: {
+    en: "Assign user",
+    de: "Benutzer zuweisen",
+    fr: "Attribuer un utilisateur",
+    it: "Assegna utente",
+    es: "Asignar usuario",
+  },
+  assign_user_menu: {
+    en: "Assign user…",
+    de: "Benutzer zuweisen…",
+    fr: "Attribuer un utilisateur…",
+    it: "Assegna utente…",
+    es: "Asignar usuario…",
+  },
+  assigned_people_hint: {
+    en: "Only these users will see the remote.",
+    de: "Nur diese Benutzer sehen die Fernbedienung.",
+    fr: "Seuls ces utilisateurs verront la télécommande.",
+    it: "Solo questi utenti vedranno il telecomando.",
+    es: "Solo estos usuarios verán el mando.",
+  },
+  assigned_people_section: {
+    en: "Users",
+    de: "Benutzer",
+    fr: "Utilisateurs",
+    it: "Utenti",
+    es: "Usuarios",
+  },
+  assigned_people_count: {
+    en: "{count} of {total} selected",
+    de: "{count} von {total} ausgewählt",
+    fr: "{count} sur {total} sélectionnés",
+    it: "{count} di {total} selezionati",
+    es: "{count} de {total} seleccionados",
+  },
+  assigned_people_search: {
+    en: "Search users",
+    de: "Benutzer suchen",
+    fr: "Rechercher des utilisateurs",
+    it: "Cerca utenti",
+    es: "Buscar usuarios",
+  },
+  assigned_people_no_match: {
+    en: "No users match your search.",
+    de: "Keine Benutzer passen zur Suche.",
+    fr: "Aucun utilisateur ne correspond à la recherche.",
+    it: "Nessun utente corrisponde alla ricerca.",
+    es: "Ningún usuario coincide con la búsqueda.",
+  },
+  assigned_people_saved: {
+    en: "Assigned users saved",
+    de: "Zugewiesene Benutzer gespeichert",
+    fr: "Utilisateurs attribués enregistrés",
+    it: "Utenti assegnati salvati",
+    es: "Usuarios asignados guardados",
+  },
+  assigned_people_none: {
+    en: "Home Assistant has no users set up yet.",
+    de: "In Home Assistant sind noch keine Benutzer angelegt.",
+    fr: "Aucun utilisateur n'est encore configuré dans Home Assistant.",
+    it: "In Home Assistant non è ancora configurato alcun utente.",
+    es: "Todavía no hay usuarios configurados en Home Assistant.",
+  },
+  assigned_people_summary: {
+    en: "Assigned to {names}",
+    de: "Zugewiesen an {names}",
+    fr: "Attribuée à {names}",
+    it: "Assegnato a {names}",
+    es: "Asignado a {names}",
+  },
+  assigned_people_pair: {
+    en: "{first} and {second}",
+    de: "{first} und {second}",
+    fr: "{first} et {second}",
+    it: "{first} e {second}",
+    es: "{first} y {second}",
+  },
+  assigned_people_more: {
+    en: "{names} +{count}",
+    de: "{names} +{count}",
+    fr: "{names} +{count}",
+    it: "{names} +{count}",
+    es: "{names} +{count}",
+  },
+  assigned_people_unnamed: {
+    en: "{count} without a name",
+    de: "{count} ohne Namen",
+    fr: "{count} sans nom",
+    it: "{count} senza nome",
+    es: "{count} sin nombre",
+  },
+  assigned_people_saving: {
+    en: "Saving…", de: "Wird gespeichert…", fr: "Enregistrement…",
+    it: "Salvataggio…", es: "Guardando…",
+  },
+  assigned_people_failed: {
+    en: "Could not change who this remote is assigned to",
+    de: "Die Zuweisung dieser Fernbedienung konnte nicht geändert werden",
+    fr: "Impossible de modifier l'attribution de cette télécommande",
+    it: "Non è stato possibile modificare l'assegnazione di questo telecomando",
+    es: "No se pudo cambiar la asignación de este mando",
+  },
+
+  // ── the other way round: a person and the remotes they hold ───────
+
+  setup_guide_link: {
+    en: "Step-by-step guide for iPhone and Android",
+    de: "Schritt-für-Schritt-Anleitung für iPhone und Android",
+    fr: "Guide pas à pas pour iPhone et Android",
+    it: "Guida passo passo per iPhone e Android",
+    es: "Guía paso a paso para iPhone y Android",
+  },
+
+  // ── remotes waiting to be added ────────────────────────────────────
+  discovered_heading: {
+    en: "Discovered",
+    de: "Entdeckt",
+    fr: "Détectés",
+    it: "Rilevati",
+    es: "Detectados",
+  },
+  devices_heading: {
+    en: "Devices",
+    de: "Geräte",
+    fr: "Appareils",
+    it: "Dispositivi",
+    es: "Dispositivos",
+  },
+  discovery_fallback_name: {
+    en: "lizaIP remote", de: "lizaIP-Fernbedienung",
+    fr: "Télécommande lizaIP", it: "Telecomando lizaIP",
+    es: "Mando lizaIP",
+  },
+  discovery_add: {
+    en: "Add", de: "Hinzufügen", fr: "Ajouter", it: "Aggiungi", es: "Añadir",
+  },
+  discovery_adding: {
+    en: "Adding…", de: "Wird hinzugefügt…", fr: "Ajout…",
+    it: "Aggiunta…", es: "Añadiendo…",
+  },
+  discovery_added: {
+    en: "{name} added", de: "{name} hinzugefügt", fr: "{name} ajoutée",
+    it: "{name} aggiunto", es: "{name} añadido",
+  },
+  discovery_gone: {
+    en: "That remote is no longer available",
+    de: "Diese Fernbedienung ist nicht mehr verfügbar",
+    fr: "Cette télécommande n'est plus disponible",
+    it: "Quel telecomando non è più disponibile",
+    es: "Ese mando ya no está disponible",
+  },
+  discovery_add_failed: {
+    en: "Could not add the remote: {error}",
+    de: "Fernbedienung konnte nicht hinzugefügt werden: {error}",
+    fr: "Impossible d'ajouter la télécommande : {error}",
+    it: "Impossibile aggiungere il telecomando: {error}",
+    es: "No se pudo añadir el mando: {error}",
   },
 
   // ── buttons ────────────────────────────────────────────────────────
@@ -2223,10 +2451,10 @@ export const STRINGS = {
   },
   no_actions_yet: {
     en: "No actions yet. Assign actions to buttons in the {tab} tab.",
-    de: "Noch keine Aktionen. Weisen Sie Tasten im Reiter {tab} Aktionen zu.",
+    de: "Noch keine Aktionen. Weise Tasten im Reiter {tab} Aktionen zu.",
     fr: "Aucune action pour l'instant. Attribuez des actions aux touches dans l'onglet {tab}.",
     it: "Ancora nessuna azione. Assegna azioni ai tasti nella scheda {tab}.",
-    es: "Aún no hay acciones. Asigne acciones a los botones en la pestaña {tab}.",
+    es: "Aún no hay acciones. Asigna acciones a los botones en la pestaña {tab}.",
   },
 
   // ── validation messages ────────────────────────────────────────────
@@ -2312,10 +2540,10 @@ export const STRINGS = {
   // ── images and states ──────────────────────────────────────────────
   no_service_defined: {
     en: "No service defined. Assign this action to a button first.",
-    de: "Kein Dienst definiert. Weisen Sie diese Aktion zuerst einer Taste zu.",
+    de: "Kein Dienst definiert. Weise diese Aktion zuerst einer Taste zu.",
     fr: "Aucun service défini. Attribuez d'abord cette action à une touche.",
     it: "Nessun servizio definito. Assegna prima questa azione a un tasto.",
-    es: "Ningún servicio definido. Asigne primero esta acción a un botón.",
+    es: "Ningún servicio definido. Asigna primero esta acción a un botón.",
   },
 
   // ── outcomes ───────────────────────────────────────────────────────
@@ -2413,10 +2641,10 @@ export const STRINGS = {
   },
   slider_entity_hint: {
     en: "What the slider drives until a button retargets it. Leave empty to do nothing until you touch a device.",
-    de: "Was der Schieberegler steuert, bis eine Taste ihn umlenkt. Leer lassen, damit nichts geschieht, bis Sie ein Gerät berühren.",
+    de: "Was der Schieberegler steuert, bis eine Taste ihn umlenkt. Leer lassen, damit nichts geschieht, bis du ein Gerät berührst.",
     fr: "Ce que le curseur commande jusqu'à ce qu'une touche le réoriente. Laissez vide pour qu'il ne fasse rien tant que vous ne touchez pas un appareil.",
     it: "Ciò che il cursore comanda finché un tasto non lo ridirige. Lascia vuoto perché non faccia nulla finché non tocchi un dispositivo.",
-    es: "Lo que acciona el control deslizante hasta que un botón lo redirige. Déjelo vacío para que no haga nada hasta que toque un dispositivo.",
+    es: "Lo que acciona el control deslizante hasta que un botón lo redirige. Déjalo vacío para que no haga nada hasta que toques un dispositivo.",
   },
   slider_factor_hint: {
     en: "At 1.0, touching one end of the track reaches the full range and touching the middle reaches half. Raise it to cover the range in less travel.",
@@ -2433,10 +2661,10 @@ export const STRINGS = {
   },
   slider_pinned_hint: {
     en: "This page pins its slider, so no button can retarget it. Clear the slider's own entity under <b>{page_default}</b> to let buttons drive it.",
-    de: "Diese Seite legt ihren Schieberegler fest, keine Taste kann ihn umlenken. Löschen Sie die eigene Entität des Schiebereglers unter <b>{page_default}</b>, damit Tasten ihn steuern können.",
+    de: "Diese Seite legt ihren Schieberegler fest, keine Taste kann ihn umlenken. Lösche die eigene Entität des Schiebereglers unter <b>{page_default}</b>, damit Tasten ihn steuern können.",
     fr: "Cette page fixe son curseur, aucune touche ne peut le réorienter. Effacez l'entité propre du curseur sous <b>{page_default}</b> pour que les touches puissent le commander.",
     it: "Questa pagina fissa il suo cursore, nessun tasto può ridirigerlo. Cancella l'entità propria del cursore sotto <b>{page_default}</b> per far sì che i tasti lo comandino.",
-    es: "Esta página fija su control deslizante, ningún botón puede redirigirlo. Borre la entidad propia del control deslizante en <b>{page_default}</b> para que los botones puedan accionarlo.",
+    es: "Esta página fija su control deslizante, ningún botón puede redirigirlo. Borra la entidad propia del control deslizante en <b>{page_default}</b> para que los botones puedan accionarlo.",
   },
   slider_points_here: {
     en: "Touching {name} points this slider here.",
@@ -2493,10 +2721,10 @@ export const STRINGS = {
   },
   icon_nothing_chosen: {
     en: "Nothing is chosen, so there is no control to borrow an icon from — pick one here, or set the slider's entity first.",
-    de: "Es ist nichts gewählt, also gibt es keine Regelgröße, von der ein Symbol geborgt werden könnte — wählen Sie hier eines oder setzen Sie zuerst die Entität des Schiebereglers.",
+    de: "Es ist nichts gewählt, also gibt es keine Regelgröße, von der ein Symbol geborgt werden könnte — wähle hier eines oder setze zuerst die Entität des Schiebereglers.",
     fr: "Rien n'est sélectionné, il n'y a donc aucune commande à laquelle emprunter une icône — choisissez-en une ici, ou définissez d'abord l'entité du curseur.",
     it: "Non è selezionato nulla, quindi non c'è un controllo da cui prendere un'icona — scegline una qui o imposta prima l'entità del cursore.",
-    es: "No hay nada seleccionado, así que no hay ningún control del que tomar un icono — elija uno aquí o defina primero la entidad del control deslizante.",
+    es: "No hay nada seleccionado, así que no hay ningún control del que tomar un icono — elige uno aquí o define primero la entidad del control deslizante.",
   },
   label_own_hint: {
     en: "{name}'s own — leave empty for <b>{auto}</b>.",
@@ -2507,10 +2735,10 @@ export const STRINGS = {
   },
 
   visual_editor_unavailable: {    en: "Visual editor unavailable. Visit Settings → Automations first, then reload this page.",
-    de: "Visueller Editor nicht verfügbar. Rufen Sie zuerst Einstellungen → Automatisierungen auf und laden Sie diese Seite dann neu.",
+    de: "Visueller Editor nicht verfügbar. Ruf zuerst Einstellungen → Automatisierungen auf und lade diese Seite dann neu.",
     fr: "Éditeur visuel indisponible. Ouvrez d'abord Paramètres → Automatisations, puis rechargez cette page.",
     it: "Editor visuale non disponibile. Apri prima Impostazioni → Automazioni, poi ricarica questa pagina.",
-    es: "Editor visual no disponible. Abra primero Ajustes → Automatizaciones y vuelva a cargar esta página.",
+    es: "Editor visual no disponible. Abre primero Ajustes → Automatizaciones y vuelve a cargar esta página.",
   },
 
   // ── icon field, under a context ────────────────────────────────────
@@ -2549,21 +2777,21 @@ export const STRINGS = {
   },
   factor_inherited_hint: {
     en: "Inherited from the page. Change it to give {name} its own.",
-    de: "Von der Seite geerbt. Ändern Sie ihn, um {name} einen eigenen zu geben.",
+    de: "Von der Seite geerbt. Ändere ihn, um {name} einen eigenen zu geben.",
     fr: "Hérité de la page. Modifiez-le pour donner le sien à {name}.",
     it: "Ereditato dalla pagina. Modificalo per dare a {name} il proprio.",
     es: "Heredado de la página. Cámbielo para darle uno propio a {name}.",
   },
   pick_target_first: {
     en: "Pick a target entity first.",
-    de: "Wählen Sie zuerst eine Ziel-Entität.",
+    de: "Wähle zuerst eine Ziel-Entität.",
     fr: "Choisissez d'abord une entité cible.",
     it: "Scegli prima un'entità di destinazione.",
-    es: "Elija primero una entidad de destino.",
+    es: "Elige primero una entidad de destino.",
   },
   no_presets_for_domain: {
     en: "No presets for <code>{domain}</code> — configure it under Advanced.",
-    de: "Keine Vorgaben für <code>{domain}</code> — richten Sie es unter Erweitert ein.",
+    de: "Keine Vorgaben für <code>{domain}</code> — richte es unter Erweitert ein.",
     fr: "Aucun préréglage pour <code>{domain}</code> — configurez-le sous Avancé.",
     it: "Nessun preset per <code>{domain}</code> — configuralo in Avanzate.",
     es: "No hay valores predefinidos para <code>{domain}</code> — configúrelo en Avanzado.",
@@ -2602,10 +2830,10 @@ export const STRINGS = {
   },
   control_unsupported: {
     en: "<b>{name}</b> does not support {control} — this slider will do nothing. Pick another control.",
-    de: "<b>{name}</b> unterstützt {control} nicht — dieser Schieberegler tut nichts. Wählen Sie eine andere Regelgröße.",
+    de: "<b>{name}</b> unterstützt {control} nicht — dieser Schieberegler tut nichts. Wähle eine andere Regelgröße.",
     fr: "<b>{name}</b> ne prend pas en charge {control} — ce curseur ne fera rien. Choisissez une autre commande.",
     it: "<b>{name}</b> non supporta {control} — questo cursore non farà nulla. Scegli un altro controllo.",
-    es: "<b>{name}</b> no admite {control} — este control deslizante no hará nada. Elija otro control.",
+    es: "<b>{name}</b> no admite {control} — este control deslizante no hará nada. Elige otro control.",
   },
   max_must_exceed_min: {
     en: "Max must be greater than Min, or the slider can never change anything.",
@@ -2625,7 +2853,7 @@ export const STRINGS = {
   },
   label_state_hint: {
     en: "<code>${_state}</code> follows the entity — replace it to fix the wording.",
-    de: "<code>${_state}</code> folgt der Entität — ersetzen Sie es, um die Formulierung zu ändern.",
+    de: "<code>${_state}</code> folgt der Entität — ersetze es, um die Formulierung zu ändern.",
     fr: "<code>${_state}</code> suit l'entité — remplacez-le pour corriger la formulation.",
     it: "<code>${_state}</code> segue l'entità — sostituiscilo per correggere la formulazione.",
     es: "<code>${_state}</code> sigue a la entidad — sustitúyalo para corregir la redacción.",
@@ -2688,6 +2916,16 @@ export const STRINGS = {
     it: "Pagine che mostrano cosa sanno fare i riquadri",
     es: "Páginas que muestran lo que pueden hacer los botones",
   },
+  sonos_categories: {
+    en: "Categories", de: "Kategorien", fr: "Catégories", it: "Categorie", es: "Categorías",
+  },
+  sonos_categories_desc: {
+    en: "One page per kind of favourite: radio, playlists, albums, audiobooks and more",
+    de: "Eine Seite je Art von Favorit: Radio, Playlists, Alben, Hörbücher und mehr",
+    fr: "Une page par type de favori : radio, playlists, albums, livres audio et plus",
+    it: "Una pagina per tipo di preferito: radio, playlist, album, audiolibri e altro",
+    es: "Una página por tipo de favorito: radio, listas, álbumes, audiolibros y más",
+  },
   random_pages: {
     en: "Random pages", de: "Zufallsseiten", fr: "Pages aléatoires",
     it: "Pagine casuali", es: "Páginas aleatorias",
@@ -2748,10 +2986,10 @@ export const STRINGS = {
   },
   tooltip_needs_action: {
     en: "Add an action first — a tooltip on its own is not stored.",
-    de: "Fügen Sie zuerst eine Aktion hinzu — ein Tooltip allein wird nicht gespeichert.",
+    de: "Füge zuerst eine Aktion hinzu — ein Tooltip allein wird nicht gespeichert.",
     fr: "Ajoutez d'abord une action — une infobulle seule n'est pas enregistrée.",
     it: "Aggiungi prima un'azione — un tooltip da solo non viene salvato.",
-    es: "Añada primero una acción — una información sobre herramientas por sí sola no se guarda.",
+    es: "Añade primero una acción — una información sobre herramientas por sí sola no se guarda.",
   },
 
   // ── page targets that no longer resolve ────────────────────────────
@@ -2786,10 +3024,10 @@ export const STRINGS = {
   },
   goto_ambiguous_name: {
     en: "{count} pages are called {name}, so this button cannot tell which one you mean and will do nothing. Rename one, or pick the page again to store its id.",
-    de: "{count} Seiten heißen {name}, daher kann diese Taste nicht erkennen, welche gemeint ist, und tut nichts. Benennen Sie eine um oder wählen Sie die Seite erneut, um ihre Kennung zu speichern.",
+    de: "{count} Seiten heißen {name}, daher kann diese Taste nicht erkennen, welche gemeint ist, und tut nichts. Benenne eine um oder wähle die Seite erneut, um ihre Kennung zu speichern.",
     fr: "{count} pages s'appellent {name}, ce bouton ne peut donc pas savoir laquelle vous voulez et ne fera rien. Renommez-en une, ou choisissez à nouveau la page pour enregistrer son identifiant.",
     it: "{count} pagine si chiamano {name}, quindi questo pulsante non può sapere quale intendi e non farà nulla. Rinominane una, oppure scegli di nuovo la pagina per salvarne l'id.",
-    es: "{count} páginas se llaman {name}, por lo que este botón no puede saber cuál quiere y no hará nada. Cambie el nombre de una, o elija la página de nuevo para guardar su id.",
+    es: "{count} páginas se llaman {name}, por lo que este botón no puede saber cuál quieres y no hará nada. Cambia el nombre de una, o elige la página de nuevo para guardar su id.",
   },
   goto_id_gone: {
     en: "There is no page with the id {id} any more, so this button will do nothing.",
@@ -2808,10 +3046,10 @@ export const STRINGS = {
   },
   no_hub_found: {
     en: "No {integration} hub found. Set up the {integration} integration first.",
-    de: "Kein {integration}-Hub gefunden. Richten Sie zuerst die Integration {integration} ein.",
+    de: "Kein {integration}-Hub gefunden. Richte zuerst die Integration {integration} ein.",
     fr: "Aucun hub {integration} trouvé. Configurez d'abord l'intégration {integration}.",
     it: "Nessun hub {integration} trovato. Configura prima l'integrazione {integration}.",
-    es: "No se ha encontrado ningún concentrador {integration}. Configure primero la integración {integration}.",
+    es: "No se ha encontrado ningún concentrador {integration}. Configura primero la integración {integration}.",
   },
   // Stands in for a template that does not name its integration. A placeholder
   // cannot carry this one: "the required integration" substituted into "Set up
@@ -2819,10 +3057,10 @@ export const STRINGS = {
   // integration", which is what it did before it was split in two.
   no_hub_found_generic: {
     en: "No hub found. Set up the required integration first.",
-    de: "Kein Hub gefunden. Richten Sie zuerst die benötigte Integration ein.",
+    de: "Kein Hub gefunden. Richte zuerst die benötigte Integration ein.",
     fr: "Aucun hub trouvé. Configurez d'abord l'intégration requise.",
     it: "Nessun hub trovato. Configura prima l'integrazione richiesta.",
-    es: "No se ha encontrado ningún concentrador. Configure primero la integración necesaria.",
+    es: "No se ha encontrado ningún concentrador. Configura primero la integración necesaria.",
   },
   devices_load_failed: {
     en: "Could not load devices: {error}",
@@ -2833,17 +3071,17 @@ export const STRINGS = {
   },
   no_matching_devices: {
     en: "No matching devices found. Set up the {integration} integration first.",
-    de: "Keine passenden Geräte gefunden. Richten Sie zuerst die Integration {integration} ein.",
+    de: "Keine passenden Geräte gefunden. Richte zuerst die Integration {integration} ein.",
     fr: "Aucun appareil correspondant trouvé. Configurez d'abord l'intégration {integration}.",
     it: "Nessun dispositivo corrispondente trovato. Configura prima l'integrazione {integration}.",
-    es: "No se han encontrado dispositivos coincidentes. Configure primero la integración {integration}.",
+    es: "No se han encontrado dispositivos coincidentes. Configura primero la integración {integration}.",
   },
   no_matching_devices_generic: {
     en: "No matching devices found. Set up the required integration first.",
-    de: "Keine passenden Geräte gefunden. Richten Sie zuerst die benötigte Integration ein.",
+    de: "Keine passenden Geräte gefunden. Richte zuerst die benötigte Integration ein.",
     fr: "Aucun appareil correspondant trouvé. Configurez d'abord l'intégration requise.",
     it: "Nessun dispositivo corrispondente trovato. Configura prima l'integrazione richiesta.",
-    es: "No se han encontrado dispositivos coincidentes. Configure primero la integración necesaria.",
+    es: "No se han encontrado dispositivos coincidentes. Configura primero la integración necesaria.",
   },
 
   // ── confirmations and tooltips ─────────────────────────────────────
@@ -2867,6 +3105,22 @@ export const STRINGS = {
     fr: "Cette page et ses {n} touche(s) configurée(s) seront définitivement supprimées.",
     it: "Questa pagina e i suoi {n} tasto/i configurato/i verranno eliminati definitivamente.",
     es: "Esta página y sus {n} botón(es) configurado(s) se eliminarán permanentemente.",
+  },
+  // Appended to the delete confirmation of a page a template brought
+  // subpages with: they are reachable only from it, so they go too.
+  delete_page_subpages: {
+    en: "Its {count} subpages, which only it leads to, are deleted with it.",
+    de: "Ihre {count} Unterseiten, zu denen nur sie führt, werden mit gelöscht.",
+    fr: "Ses {count} sous-pages, auxquelles elle seule mène, sont supprimées avec elle.",
+    it: "Le sue {count} sottopagine, a cui porta solo lei, vengono eliminate con essa.",
+    es: "Sus {count} subpáginas, a las que solo ella lleva, se eliminan con ella.",
+  },
+  delete_page_subpages_one: {
+    en: "Its subpage, which only it leads to, is deleted with it.",
+    de: "Ihre Unterseite, zu der nur sie führt, wird mit gelöscht.",
+    fr: "Sa sous-page, à laquelle elle seule mène, est supprimée avec elle.",
+    it: "La sua sottopagina, a cui porta solo lei, viene eliminata con essa.",
+    es: "Su subpágina, a la que solo ella lleva, se elimina con ella.",
   },
   delete_page_confirm_empty: {
     en: "This page will be permanently deleted.",

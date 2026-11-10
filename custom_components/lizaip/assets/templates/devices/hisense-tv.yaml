@@ -1,0 +1,477 @@
+# Hisense / Vidaa TV Template — the TV's own remote keys
+#
+# For the Hisense TV custom integration (HACS: sehaas/ha_hisense_tv), which
+# talks to the TV through the TV's own MQTT broker, bridged to Home
+# Assistant's. That integration gives the TV a `media_player` only and has no
+# service for pressing keys, so the keys are MQTT messages: `mqtt.publish` to
+# the topic the integration itself uses, with the key as the payload
+# (KEY_UP, KEY_OK, KEY_RETURNS, KEY_HOME, KEY_0 …, KEY_CHANNELUP …).
+#
+# The topic starts with the integration's MQTT prefix, `hisense` unless it was
+# changed when the TV was set up. A TV set up with another prefix needs that
+# word changed in each key's topic -- the Find and replace of a text editor on
+# this file, saved under My Templates, does it once for all of them.
+#
+# Power and volume use the media player's ordinary services.
+#
+# The remote page follows the LG webOS TV template: the arrow keys around OK,
+# Home below them, and the TV's further pages on the right-hand column --
+# Apps (button 4), Digits (button 8) and Inputs (button 12) where the TV has
+# them. They are subpages: not in the remote's page order, only reached from
+# those buttons; on each, the remote's Back button leads back.
+#   - Apps: the TV's apps, from the integration's media browser, each opening
+#     with `media_player.play_media`; more than twelve get more Apps pages,
+#     button 12 leading on.
+#   - Inputs: the TV's sources (HDMI, AV, TV), each chosen with
+#     `media_player.select_source`.
+#   - Digits: 1–9 and 0 as on a phone keypad, with Channel up and down.
+#
+# Reference: https://github.com/sehaas/ha_hisense_tv
+
+version: 2
+name: Hisense TV (Vidaa)
+icon: mdi:television
+description: Remote-control keys for a Hisense or other Vidaa TV (Hisense TV integration from HACS)
+
+target_selector:
+  device:
+    integration: hisense_tv
+    primary_domain: media_player
+
+# The `apps` kind of the favourites source reads the apps the player lists:
+# its `apps` browse folder where it has one, else its `source_list`.
+placeholders:
+  app:
+    source: favorites
+    spec:
+      category: apps
+  # Every source the integration lists is an input, apart from its `App` entry.
+  input:
+    source: favorites
+    spec:
+      category: inputs
+      include: "*"
+      exclude: App
+
+pages:
+  remote:
+    title: "mdi:television Hisense ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: mdi:menu
+        tooltip: {translate: menu}
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_MENU
+
+      button_2:
+        icon: mdi:arrow-up-bold-outline
+        tooltip: {translate: up}
+        key_repeat: true
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_UP
+
+      button_3:
+        icon: mdi:close
+        tooltip: {translate: exit}
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_EXIT
+
+      button_4:
+        icon: mdi:apps
+        tooltip: {translate: apps}
+        goto_page: apps
+
+      button_5:
+        icon: mdi:arrow-left-bold-outline
+        tooltip: {translate: left}
+        key_repeat: true
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_LEFT
+
+      button_6:
+        icon: mdi:circle-outline
+        tooltip: {translate: ok}
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_OK
+
+      button_7:
+        icon: mdi:arrow-right-bold-outline
+        tooltip: {translate: right}
+        key_repeat: true
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_RIGHT
+
+      button_8:
+        icon: mdi:dialpad
+        tooltip: {translate: digits}
+        goto_page: digits
+
+      button_9:
+        icon: mdi:rewind
+        tooltip: {translate: previous}
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_BACK
+
+      button_10:
+        icon: mdi:arrow-down-bold-outline
+        tooltip: {translate: down}
+        key_repeat: true
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_DOWN
+
+      button_11:
+        icon: mdi:home-outline
+        tooltip: {translate: home}
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_HOME
+
+      button_12:
+        icon: mdi:video-input-hdmi
+        tooltip: {translate: inputs}
+        goto_page: inputs
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:keyboard-return
+        tooltip: {translate: back}
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_RETURNS
+
+  apps:
+    subpage: true
+    paginate: app
+    max_parts: 3
+    title: "mdi:apps ${_device.area_name}"
+    buttons:
+      button_1: "@app[1]"
+      button_2: "@app[2]"
+      button_3: "@app[3]"
+      button_4: "@app[4]"
+      button_5: "@app[5]"
+      button_6: "@app[6]"
+      button_7: "@app[7]"
+      button_8: "@app[8]"
+      button_9: "@app[9]"
+      button_10: "@app[10]"
+      button_11: "@app[11]"
+
+      button_12:
+        placeholder: "@app[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, remote]
+
+  inputs:
+    subpage: true
+    title: "mdi:video-input-hdmi ${_device.area_name}"
+    buttons:
+      button_1: "@input[1]"
+
+      button_2: "@input[2]"
+
+      button_3: "@input[3]"
+
+      button_4: "@input[4]"
+
+      button_5: "@input[5]"
+
+      button_6: "@input[6]"
+
+      button_7: "@input[7]"
+
+      button_8: "@input[8]"
+
+      button_9: "@input[9]"
+
+      button_10: "@input[10]"
+
+      button_11: "@input[11]"
+
+      button_12: "@input[12]"
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote
+
+  digits:
+    subpage: true
+    title: "mdi:dialpad ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: 1
+        tooltip: 1
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_1
+
+      button_2:
+        icon: 2
+        tooltip: 2
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_2
+
+      button_3:
+        icon: 3
+        tooltip: 3
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_3
+
+      button_4:
+        icon: mdi:chevron-up
+        tooltip: CH+
+        key_repeat: true
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_CHANNELUP
+
+      button_5:
+        icon: 4
+        tooltip: 4
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_4
+
+      button_6:
+        icon: 5
+        tooltip: 5
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_5
+
+      button_7:
+        icon: 6
+        tooltip: 6
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_6
+
+      button_8:
+        icon: mdi:chevron-down
+        tooltip: CH-
+        key_repeat: true
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_CHANNELDOWN
+
+      button_9:
+        icon: 7
+        tooltip: 7
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_7
+
+      button_10:
+        icon: 8
+        tooltip: 8
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_8
+
+      button_11:
+        icon: 9
+        tooltip: 9
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_9
+
+      button_12:
+        icon: 0
+        tooltip: 0
+        config:
+          - action: mqtt.publish
+            data:
+              topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
+              payload: KEY_0
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: media_player.toggle
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
+
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: remote}
+        goto_page: remote

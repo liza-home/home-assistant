@@ -49,7 +49,7 @@ MAX_PATH_LENGTH: Final = 50_000
 MAX_MISSING: Final = 200
 
 #: A miss looks at the files again at most this often, so a set installed or
-#: updated through HACS is picked up without a restart.
+#: updated through the Marketplace is picked up without a restart.
 FILE_RESCAN_SECONDS: Final = 60.0
 
 #: Material's own grid, which ``ha-icon`` assumes when a set gives no viewBox.

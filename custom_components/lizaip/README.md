@@ -1,6 +1,6 @@
 # lizaIP Integration
 
-Single HACS-installable integration for ruwido LIZA IP remote controls.
+Single installable integration for ruwido lizaIP remote controls.
 
 ## Structure
 
@@ -24,10 +24,10 @@ lizaip/
     variables_calc.py  # Calculations inside ${…} variables
     slider_throttle.py # Shared slider rate limiting
     assignment.py      # Keys and helpers for a stored button assignment
-    i18n.py            # Languages; ActionLabels (translated action wordings)
+    i18n.py            # Languages; ButtonTooltips (translated action wordings)
     icon_defaults.py   # IconDefaults (default icon per domain/state/service)
     icon_urls.py       # URLs the device fetches tiles, tooltips and titles from
-    labels.py          # ${_state} / ${_name} label placeholders
+    tooltips.py        # ${_state} / ${_name} tooltip placeholders
     numbers.py         # to_float: numbers typed into forms
     preludes.py        # Wake prelude and launch verification steps
     services.py        # What HA services do: state maps, icon scopes
@@ -85,7 +85,6 @@ lizaip/
     const.py           # Size IDs, color names, path constants
   config/page_templates/       # Dynamic page-template engine
   assets/
-    fonts/                     # Bundled font files
     logos/                     # Bundled SVG/PNG logo assets
     templates/                 # Ready-made page-template presets
     themes/                    # Bundled remote appearances: monochrome, high-contrast
@@ -93,12 +92,11 @@ lizaip/
 
 ## Installation
 
-### Via HACS
+### Via the Marketplace
 
-1. HACS → Integrations → ⋮ → Custom repositories
-2. Add this repository, category: **Integration**
-3. Install **lizaIP**
-4. Restart Home Assistant
+1. Settings → Marketplace → **Add from link**
+2. Add this repository, type: **Integration**
+3. Open **lizaIP** and click **Install**
 
 ### Manual / development
 
@@ -109,8 +107,8 @@ ssh root@homeassistant.local 'ha core restart'
 
 ## Setup
 
-After restart, Home Assistant discovers lizaIP devices automatically via mDNS
-(`_lizaip._tcp`). Confirm the prompt in **Settings → Devices & Services**.
+Once the integration is loaded, Home Assistant discovers lizaIP devices automatically
+via mDNS (`_lizaip._tcp`). Confirm the prompt in **Settings → Devices & Services**.
 
 ## Configuration parameters
 
@@ -302,20 +300,20 @@ Server, gets these tools:
 
 | Tool | Does |
 | --- | --- |
-| `lizaip_list_remotes` | The connected remotes and their pages (id, title, image, subpage). |
+| `lizaip_list_remotes` | The connected remotes and their pages (`page_id`, `name` -- the readable name `lizaip_delete_page` asks for --, `title` as stored, `subpage`). |
 | `lizaip_describe_remote` | The 4×3 grid and fixed keys, the picture forms, the slider controls; with `page_id`, that page's buttons. |
 | `lizaip_find_entities` | Entities by domain, area and name -- only those exposed to the assistant. |
-| `lizaip_list_templates` | The templates that can be added now, each with its targets (device + area, or hub). Debug templates are left out. |
-| `lizaip_add_template_page` | A template page bound to a named target, through `async_create_page_from_template` -- what **Add page → Template** runs. |
-| `lizaip_create_page` | An ordinary page from a title and buttons (`slot`, `action`, `entity_id`, `data`, `label`, `icon`, `repeat`, `slider`); `dry_run` shows it without saving. |
-| `lizaip_update_button` | One slot of one page: rebuilt when an `action` is given, otherwise only its `label` (the tooltip), `icon` (the tile picture) or `repeat` change, marked as the user's own (`label_edited`, `image_pinned`); `delete: true` empties it. |
+| `lizaip_list_templates` | The templates that can be added now, each with its targets (device + area, or hub) and how many `pages` adding it makes. Debug templates are left out. |
+| `lizaip_add_template_page` | A template page bound to a named target, through `async_create_page_from_template` -- what **Add page → Template** runs. A template with several pages adds them all; `page_ids` names every one, the page it lands on first. |
+| `lizaip_create_page` | An ordinary page from a `name` (and optional `title_icon`), which make its title, and buttons (`slot`, `action`, `entity_id`, `data`, `tooltip`, `icon`, `key_repeat`, `slider`); `dry_run` shows it without saving. |
+| `lizaip_update_button` | One slot of one page: rebuilt when an `action` is given, otherwise only its `tooltip`, `icon` (its picture) or `key_repeat` change, marked as the user's own (`tooltip_edited`, `icon_pinned`); `delete: true` empties it. |
 | `lizaip_move_button` | Swaps two slots of a page, whole records (bindings and overrides included), as **Move** in the face menu. |
-| `lizaip_update_page` | A page's title, title icon, position (1 = first; pushed as an order change) or subpage flag -- what `update_page` and a reorder do. |
-| `lizaip_delete_page` | One page, only when its `page_id` and title agree; never the last. |
+| `lizaip_update_page` | A page's `name`, `title_icon` (the two make its title), position (1 = first; pushed as an order change) or subpage flag -- what `update_page` and a reorder do. |
+| `lizaip_delete_page` | One page, only when its `page_id` and `name` agree; never the last. |
 
 A page built button by button is checked first -- the action must exist, the entity must
 exist and be exposed, a `slider` control must fit the entity's domain -- then generated by
-the template generator from an unbound definition, so it is stored as an ordinary page (no
+the template generator from a definition bound to nothing (no `target_selector`), so it is stored as an ordinary page (no
 `template:` key) with plain `ai_…` action ids, and a slot the generator cannot fill is
 reported back instead of left empty. Writes need an admin user on the request's context.
 The tools never write outside the paths the panel uses: `async_add_template_page` for a new
@@ -364,7 +362,8 @@ which only mean something for `text:` and for the words of a pair.
 | `crop` | Trim the transparent margin: `1`/`true` or `0`/`false`/`no`. `text:` is cut to the font's full reach above and below the baseline, whatever the letters, and keeps its sides. Never cropped when `bg` paints a colour: the background fills the whole requested size, and a picture drawn smaller (`text:` is as wide as its words) is centred on it | `1` (enabled) |
 | `alpha` | Keep the alpha channel (`1`) instead of flattening onto black (`0`). Use `1` for browser previews, `0` for the device | `0` |
 | `percent` | Fill level `0`–`100`: the band holding N % of the icon's ink stays fully opaque; the upper remainder is dimmed via alpha (`70%`), with the boundary feathered across ~8 % of the height so it reads as a level rather than a cut. Measured in ink rather than rows so transparent gaps cost nothing — see **Fill is measured in ink** below. `0` and `100` are uniform, having no boundary | — |
-| `font` | Font ID for `text:` source (see [Available Fonts](#available-fonts)) | `filson-light` |
+| `font` | Font ID for `text:` source (see [Available Fonts](#available-fonts)) | `roboto-light` |
+| `emoji` | The font emoji in words are drawn in: a font ID, or `none` for the text font only | found as in [Available Fonts](#available-fonts) |
 | `font_size` | Font size in pixels for `text:` source | `title` 48, `tooltip` 24, otherwise the image height |
 | `hours` | How far back a `history:` graph looks, `1`–`168` | `24` |
 | `days` | The same period in days, `1`–`7`. Cannot be combined with `hours` | — |
@@ -439,17 +438,18 @@ imgserv://mdi:battery?size=tile&fg=green&percent=40       # 40 % filled
 imgserv://mdi:home?size=tile&fg=white&bg=333333&crop=0    # padded dark tile
 ```
 
-#### `phu:<icon-name>` — Custom Brand Icons (Philips Hue style)
+#### `<set>:<icon-name>` — Icon sets registered in the browser
 
-Renders icons from the [custom-brand-icons](https://github.com/elax46/custom-brand-icons)
-HACS frontend integration. That set is registered in the browser, like `hue:` or any
-other plugin's, so its shapes reach imgserv the same way: the config panel looks each
+Renders icons from any dashboard plugin that registers an icon set, such as
+[custom-brand-icons](https://github.com/elax46/custom-brand-icons) (`phu:`) or
+[hass-hue-icons](https://github.com/arallsopp/hass-hue-icons) (`hue:`). A set is
+registered in the browser, so its shapes reach imgserv the same way: the config panel looks each
 one up and uploads it, and imgserv draws it from the stored shape. Nothing is read off
-disk, so it does not matter where HACS put the JS bundle.
+disk, so it does not matter where the JS bundle was installed to.
 
 ```
 imgserv://phu:ceiling-fan?size=tile&fg=white
-imgserv://phu:hue-go?size=tile&fg=FFD700
+imgserv://hue:bulb-group?size=tile&fg=FFD700
 ```
 
 > **Note:** A name whose shape has not been uploaded yet returns 404, and is remembered
@@ -473,7 +473,9 @@ imgserv://logo:spotify?size=tile&fg=green         # monochrome green
 imgserv://logo:sonos?size=tile&fg=white&alpha=1   # monochrome, transparent
 ```
 
-**Available logos:** `disney`, `hue`, `knx`, `netflix`, `prime`, `sonos`, `spotify`, `youtube`
+**Available logos:** `android`, `appletv`, `disney`, `dreame`, `firetv`, `hue`, `knx`, `lg`, `netflix`, `prime`, `roku`, `samsung`, `sonos`, `sony`, `spotify`, `unifi`, `youtube`
+(`android`, `appletv`, `firetv`, `lg`, `roku`, `samsung` and `sony` are from [Simple Icons](https://simpleicons.org), CC0;
+the marks themselves remain their owners' trademarks)
 
 > **Tip:** Install `cairosvg` (`pip install cairosvg`) for best native-colour SVG rendering.
 > Without it, SVG logos fall back to monochrome when no PNG variant exists.
@@ -481,12 +483,18 @@ imgserv://logo:sonos?size=tile&fg=white&alpha=1   # monochrome, transparent
 #### `text:<content>` — Text rendering
 
 Renders text on a canvas as wide as the string needs and as tall as `size` asks.
-Supports emoji via the bundled `NotoEmoji-Regular.ttf` fallback font — if the primary
+A source written without any `type:` is text too (`hello`, `Küche 2`, and on a
+button `icon: 1`); a colon with a space after it writes no type, so
+`Battery: ${level}` and `battery: 50` are words, while `battery:50` names a type. `\:` writes a colon that starts nothing: `text\:` draws "text:",
+and `mdi\:home` the words "mdi:home" rather than the icon (in YAML, write it
+unquoted or in single quotes). A `type:` imgserv does not know is refused, not
+drawn as words: it may be an icon set the panel registers later.
+Supports emoji via the optional `NotoEmoji-Regular.ttf` fallback font — if the primary
 font lacks a glyph, the emoji font is used automatically.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `font` | Font ID (see below) | `filson-light` |
+| `font` | Font ID (see below) | `roboto-light` |
 | `font_size` | Size in pixels | `title` 48, `tooltip` 24, otherwise the requested image height |
 
 The font size is reduced until the font's full reach -- from the top of an
@@ -498,7 +506,7 @@ size with the baseline in the same row, and a row of labels stands on one line.
 ```
 imgserv://text:22°C?size=tile&fg=FF8800
 imgserv://text:Living%20Room?size=title&fg=white
-imgserv://text:Large?size=title&font=filson-light&font_size=28&fg=white
+imgserv://text:Large?size=title&font=roboto-light&font_size=28&fg=white
 imgserv://text:🎵%20Music?size=title&fg=white
 imgserv://text:ON?size=tile&mode=light&bg=FFFFFF     # black on white
 ```
@@ -509,27 +517,35 @@ imgserv://text:ON?size=tile&mode=light&bg=FFFFFF     # black on white
 
 | Font ID | File |
 |---------|------|
-| `filson` / `filson-light` | FilsonSoft-Light.otf (default) |
+| `roboto-light` | Roboto-Light (default, from Home Assistant's own frontend) |
+| `roboto-regular`, `roboto-bold`, … | The other Roboto weights Home Assistant ships |
 
-Only Filson Soft Light is bundled; the other fonts are not redistributable. Your own
-fonts (`.ttf`, `.otf`, `.ttc`) go into `/config/lizaip/fonts/` — a folder in your Home
-Assistant configuration, so an update of the integration leaves them alone. A font's
-ID is its file name without the extension, in lower case: `/config/lizaip/fonts/Inter-Bold.ttf`
-is `inter-bold`. A user font with the same ID as a bundled one is ignored.
+No fonts are shipped with the integration. Fonts come from Home Assistant itself or
+from your own `/config/www/fonts/` (`/local/fonts`; `.ttf`, `.otf`, `.ttc`, `.woff`,
+`.woff2`), so an update of the integration leaves them alone. A font's
+ID is its file name without the extension, in lower case: `/config/www/fonts/Inter-Bold.ttf`
+is `inter-bold`. A font in `/config/www/fonts/` wins over a Home Assistant one with the same ID.
 
 **Emoji are optional.** `NotoColorEmoji.ttf` (colour) and `NotoEmoji-Regular.ttf`
-(monochrome, tintable) are *not* in the release archive — they are 12 MB and not ours
+(monochrome, tintable) are *not* shipped — they are 12 MB and not ours
 to redistribute. Without them, `render_text` looks for a system NotoEmoji under
 `/usr/share/fonts/`, and failing that draws emoji from the primary font, which
 normally means a missing-glyph box. To get colour emoji back, download
-`NotoColorEmoji.ttf` and drop it into `/config/lizaip/fonts/` (survives updates; the
-settings tab says so too) or into `assets/fonts/`; the monochrome font is only read
-from `assets/fonts/`. Either is picked up on the next render, no restart needed. A
-HACS install copies the repository directly and does include them.
+`NotoColorEmoji.ttf` and drop it into `/config/www/fonts/` (survives updates; the
+settings tab says so too); the same goes for `NotoEmoji-Regular.ttf`. They are picked
+up on the next render, no restart needed.
 
-Font lookup tries the exact ID first (bundled fonts, then your own), then a
-case-insensitive fuzzy match over the bundled fonts (hyphens, underscores, spaces are
-interchangeable). If the requested font is not found, the default font (Filson Soft
+**A theme picks the emoji font** -- `text: emoji: font:` in its file, the **Emoji** field
+of the theme editor. Unset (**Automatic**) is the lookup above; `none` draws emoji in the
+text font only; a font ID draws them in that font: a colour bitmap font (as
+NotoColorEmoji) at its own size and scaled, an outline one (a COLR font such as Twemoji
+in its own colours, a monochrome one in the text's) at the size of the words. It reaches
+imgserv as `emoji=` on every picture that draws words, and only when a theme sets it, so
+the URLs a remote has cached do not change.
+
+Font lookup tries the exact ID first (your own fonts, then Home Assistant's), then a
+case-insensitive fuzzy match over the same folders (hyphens, underscores, spaces are
+interchangeable). If the requested font is not found, the default font (Roboto
 Light) is used; DejaVu Sans Bold is only the last resort when even that is missing.
 
 #### `media:<url-or-ha-path>` — Media thumbnails
@@ -665,8 +681,8 @@ template page title; it now survives a Tooltip field too, so
 `play:5 ${_state} - ${_device.media_title}` reaches the device as
 "play:5 Pause - Bohemian Rhapsody".
 
-- **What actually changed.** `DOTTED_TOKEN_RE` in `shared/labels.py` widened from
-  `_queue\.` to `(?:_queue|_device)\.`, so `is_token_only_label` strips the token and
+- **What actually changed.** `DOTTED_TOKEN_RE` in `shared/tooltips.py` widened from
+  `_queue\.` to `(?:_queue|_device)\.`, so `is_token_only_tooltip` strips the token and
   sees a label made only of placeholders. The classification decides
   *tooltips* only — page titles never call it.
 - **The page, not the target.** This is the cost of reusing the page device. The
@@ -689,12 +705,12 @@ template page title; it now survives a Tooltip field too, so
 - **Panel**: `_expandPageDevice` in `lizaip-helpers.js` rewrites the token to the
   page entity before `_substituteEntityTokens` resolves it, so the Tooltip preview shows
   the real current track — a beat late, because that resolution is an async websocket
-  round-trip. `_labelHasMediaToken` and `_targetsMediaPlayer` gate the
+  round-trip. `_tooltipHasMediaToken` and `_targetsMediaPlayer` gate the
   `label_media_hint` under the field, which is shown whenever the button targets a media
   player — discovery, not just explanation.
-- **Suggestion list**: `matchLabelTokens` (`lizaip-helpers.js`) puts the
+- **Suggestion list**: `matchTooltipTokens` (`lizaip-helpers.js`) puts the
   panel-side tokens at the head of the `${…}` completion list, which until then
-  offered only the backend's variables. `_labelTokenOptions` builds the gated set
+  offered only the backend's variables. `_tooltipTokenOptions` builds the gated set
   per button — `${_state}` wherever there is a service, `${_queue.…}` only off a
   readable queue, `${_name}` only on a device-local command. The track is absent on
   purpose: the `_device` completion already offers it after the dot.
@@ -711,7 +727,7 @@ player gets a queue sensor even before a button points at it.
 Four more label tokens — `${_queue.next_song}`, `${_queue.next_artist}`,
 `${_queue.prev_song}`, `${_queue.prev_artist}` — naming the track **Next** or
 **Previous** would actually move to, so `⏭` can say where it is going rather than
-repeating what is already playing. `sonos.yaml`'s `button_9` and `button_11` ship
+repeating what is already playing. `sonos-single.yaml`'s `button_9` and `button_11` ship
 them: `"${_state} - ${_queue.next_song}"` reaches the device as
 "Sonos Next - Stairway to Heaven".
 
@@ -772,14 +788,14 @@ into an entity, and the token into an alias for one of its attributes.
   `media_next_track` is one-way so it has no state glyph, and a media_player is
   neither tintable nor fillable, so the button fell out of the flush entirely. A label
   containing `${` is now its own reason to repaint.
-- **Panel**: `_targetsQueue` offers the four entries in `_labelTokenOptions` when the
+- **Panel**: `_targetsQueue` offers the four entries in `_tooltipTokenOptions` when the
   target's `sensor.<speaker>_queue` exists -- the backend keeps one for exactly the
-  speakers it can read, so there is no list of integrations to mirror. `_displayLabel`
+  speakers it can read, so there is no list of integrations to mirror. `_displayTooltip`
   adds the keys as blanks, since only the backend can read a queue.
 
 ### A label made of tokens is a shape
 
-`is_token_only_label` decides whether a stored tooltip is a *name* or a *shape*
+`is_token_only_tooltip` decides whether a stored tooltip is a *name* or a *shape*
 made only of placeholders. Either is printed as it reads; the classification only
 keeps a shape from being handed out as the live tooltip's static fallback, and lets
 the panel offer the derived `${_state}` in place of an auto-filled name.
@@ -787,28 +803,28 @@ the panel offer the derived `${_state}` in place of an auto-filled name.
 A separator left between two placeholders is part of the shape, not a word:
 `"${_state} - ${_device.media_title}"` is as unnamed as `"${_state}"`. The same character class
 decides both this and which dangling separator `DANGLING_SEPARATOR_RE` takes away
-when a token resolves to nothing — `SEPARATOR_CHARS` in `shared/labels.py` is the
+when a token resolves to nothing — `SEPARATOR_CHARS` in `shared/tooltips.py` is the
 one definition.
 
 A stored label -- the user's, a template's, a source's -- is printed as it reads with
 its placeholders filled, and nothing is put in front of it; if it reads as nothing,
 the tooltip is empty. Only a label that is empty, or merely the library entry's own
-name and not marked `label_edited`, is derived (attribute state, next state, static
-name, service word). `_isTokenOnlyLabel` in `lizaip-helpers.js` is the panel's
+name and not marked `tooltip_edited`, is derived (attribute state, next state, static
+name, service word). `_isTokenOnlyTooltip` in `lizaip-helpers.js` is the panel's
 twin, held to the same answers by `tests/label_parity_cases.json`.
 
-#### `action_name:` on a preset button
+#### The Action Library entry of a preset button
 
-With the label holding placeholders, the minted library entry would be named
-`"${_state} - ${_device.media_title}"`. The optional `action_name:` key (read in
-`generate.py → _register_action`) names the entry instead, so the Action Library
-still reads "Play/Pause". It is generation-time only and never reaches the stored
-page.
+A button's tooltip names its Action Library entry. A tooltip built out of
+placeholders (`"${_state} - ${_device.media_title}"`) is a shape, not a name, so
+`generate.py → _register_action` names that entry after the service instead, as the
+panel names a new action (`button_tooltips.for_service`, `_deriveActionName`):
+`media_player.media_play_pause` is "Play Pause".
 
 ### Entity variables
 
-Button tooltips (`label`), button images (`image`, including context overrides) and
-page titles (`image` of a page) accept `${domain.object_id}` and
+Button tooltips (`tooltip`), button icons (`icon`, including context overrides) and
+page titles (`title` of a page) accept `${domain.object_id}` and
 `${domain.object_id.attribute}`. User documentation with examples, including a template
 helper for battery icons: [README.public.md → Live values on the remote](../../README.public.md#live-values-on-the-remote).
 
@@ -817,24 +833,24 @@ helper for battery icons: [README.public.md → Live values on the remote](../..
   `unit_of_measurement`; an attribute as stored (lists joined with `, `, booleans
   `on`/`off`, whole floats without `.0`). `unknown`, `unavailable` or a missing entity
   yields `""`, and the token collapses together with a dangling separator.
-- **Tooltips**: `substitute_label_tokens(text, values, hass)` fills entity tokens before
+- **Tooltips**: `substitute_tooltip_tokens(text, values, hass)` fills entity tokens before
   `${_state}`/`${_name}`, in both the sync ladder (`button_rendering`) and the live ladder
   (`action_controller/icons.py`). `${_state}`/`${_name}` never match the entity pattern
   (no dot), and a label of only an entity token counts as the user's own words.
 - **Pictures in tooltips** (`tokens.finish_tooltip`): a tooltip that names a picture
   (`is_media_source`) is resolved by `resolve_image_tokens`, like an image or a title, in
-  both ladders; `substitute_label_tokens` only fills `${_state}`/`${_name}` in it and
-  `clean_label_text` leaves it alone.
-- **Images and titles** (`button_rendering.with_resolved_image`): all or nothing — if
+  both ladders; `substitute_tooltip_tokens` only fills `${_state}`/`${_name}` in it and
+  `clean_tooltip_text` leaves it alone.
+- **Images and titles** (`button_rendering.with_resolved_icon`): all or nothing — if
   any token is empty the image is dropped and the derived icon is used (a title is
   blank). A token keeps its unit, as in a tooltip, unless it is glued into a name
   (`mdi:battery-${…}`): a unit there is not an icon.
-- **Live updates** (`config/variables.py`): watches every entity named in a label, image
+- **Live updates** (`config/variables.py`): watches every entity named in a tooltip, image
   or page title, refreshes that set on `CONFIG_CHANGED_EVENT`, and on a state change
   runs `sync_config_to_device` at most every 2 s. The value is part of the page payload
   and therefore of the page hash, so only pages whose output changed are resent.
 - **Panel**: `_entityTokenValue`, `_substituteEntityTokens`, `_resolveImageVariables`
-  and `_pageTitleImage` in `lizaip-helpers.js` mirror the Python, reading
+  and `_resolvedPageTitle` in `lizaip-helpers.js` mirror the Python, reading
   `hass.states` and `hass.entities[…].display_precision`.
 
 ### Pages
@@ -844,41 +860,165 @@ The device supports multiple pages of buttons. Pages are managed via the config 
 - A new page is posted without an ID and the backend mints one: `generate_page_id` returns `max(existing) + 1`. IDs are sequential, not gap-filling — a hole in the middle is never backfilled, but deleting the highest page frees its ID for the next add. The protocol's range is `1…4294967295` (0 is reserved, see `PROTOCOL.md` §3); the generator enforces the lower bound but not the upper one, so an overflow is only reachable by hand-editing a page file, and `is_valid_page_id` catches it during sync
 - Pages are synced to the device using hash-based diffing (unchanged pages are skipped)
 
+#### Page templates
+
+A template is a YAML file under `assets/templates/` (shipped) or
+`<config>/lizaip/templates/` (yours, offered under **My Templates**). A button's
+options subpages are templates under `assets/options/` (shipped) or
+`<config>/lizaip/options/` (yours, under **My Templates**): offered only under
+**Add options…**, with ids of their own (`options:<file stem>`), so
+`options/sonos.yaml` never clashes with the Sonos page template. The options
+folder works as the templates folder does -- subfolders, `_group.yaml`, `01_`
+ordering -- and a subfolder's id is `options/<name>`, apart from a template
+folder of the same name. A template
+starts with `version: 2`, the template format it is written in: a file without one
+is format 1 (buttons at the top level, `unbound`, `name_key`), which is no longer
+read, and a file in a format this release does not know is skipped with a warning.
+A page made from a template records the format too (`template.version`), so a page
+of an older format can be brought up to date when it is read
+(`config/store.py` `_migrate_page_file`, in memory; the next save writes the new
+form). A stored page file says `title:` for its title and, on each button,
+`tooltip:` / `tooltip_edited:` for its text and `icon:` / `icon_pinned:` for its
+picture; files written by an earlier release said `image:` (title), `label:`,
+`label_edited:`, `image:` and `image_pinned:` (button), and are read as the new names. Its
+file level says what the template is — `name`, `icon`, `description`,
+`target_selector` (none: bound to nothing, added without asking for a device), `placeholders` — and every page it makes is named
+under `pages:`, a single page included. The first page is the one the remote
+lands on; each page made remembers its name (`template.page`), which is how a
+refresh finds its buttons again.
+
+The file name is the template's id and its place: cards are listed by file name, so
+`01_sonos.yaml` comes before `sonos-cover.yaml` (digits sort before letters), and the
+leading `NN_` is no part of the id -- `01_sonos.yaml` is template `sonos`. A template without `pages:` makes one empty
+page with no title (the blank page).
+
+| Page key | Meaning |
+|---|---|
+| `buttons` | The page's buttons, keyed by slot (`button_1`…`button_12`, `button_back`, `slider_vertical`, …) |
+| `title` | The page's title. A first page without one is headed with the template's `icon`; `{translate: <key>}` takes it from the `page_titles` translations, in the remote's language |
+| `subpage` | `true`: left out of the remote's page order; only buttons lead to it |
+| `template` | This page is another template's first page; `buttons` beside it are laid over that page |
+
+**Translated words.** `{translate: <key>}` stands for words from a translation
+table, in the reader's language; the key may also be the English words
+(`{translate: Volume Up}` is `volume_up`), which are shown as written when no
+table has them. Quote a key YAML would read otherwise (`{translate: "off"}`).
+Translate the word and write the value beside it --
+`tooltip: "{translate: brightness} 25 %"` -- rather than a wording per value.
+
+| Where | Table | Language |
+|---|---|---|
+| `name`, `description` (template or `_group.yaml`) | the panel's (`lizaip-i18n.js`) | the panel's |
+| a page's whole `title` | `page_titles` | the remote's |
+| a button's `tooltip` | `button_tooltips` | the remote's |
+| inside any picture, tooltip or title: `text:{translate: volume}` | `button_tooltips`, then `page_titles` | the remote's, each time it is drawn |
+
+**Numbers.** A number written as a button's `icon` is that number drawn as text
+(`icon: 1` is `icon: "text:1"`), and one written as its `tooltip` is its text, so a
+keypad needs no quotes.
+
+A button with `goto_page: <name>` leads to that page of the same template; adding the
+template turns it into the remote's own go-to-page command. All pages are added
+as one set: **Change device…** on the first page moves them all, and deleting it
+deletes the pages that came with it.
+
+```yaml
+version: 2
+name: Sonos
+icon: mdi:music-circle
+target_selector:
+  device: {integration: sonos, primary_domain: media_player}
+pages:
+  now-playing:
+    title: "logo:sonos + ${_device}"
+    buttons:
+      button_3: {tooltip: Playlists, icon: mdi:playlist-music, goto_page: playlists}
+      button_4: {tooltip: Radio, icon: mdi:radio, goto_page: radio}
+      # … artwork and transport
+  playlists:
+    subpage: true
+    template: sonos-playlists
+    buttons:
+      button_back: {tooltip: Now Playing, goto_page: now-playing}
+  radio:
+    subpage: true
+    template: sonos-radio
+    buttons:
+      button_back: {tooltip: Now Playing, goto_page: now-playing}
+```
+
+**Pages that grow with their items.** A page that says `paginate: <placeholder>`
+is repeated while that placeholder has more items than the page shows: each
+repeat (a *part*) shows the next run, every `@<placeholder>[N]` moved on by
+the highest `N` on the page. Adding the template makes the first part; every
+refresh then counts the items and adds the parts that are missing, up to
+`max_parts` (default 4), or removes trailing parts whose items have all gone
+(not one holding a button you put there). A source that cannot be read -- a
+TV that is off -- leaves the parts as they are. A part has the page's title
+with its number, is a subpage when the page is, and belongs to the set.
+`goto_page: next` and `goto_page: previous` lead to the neighbouring part, and are
+left empty where it does not exist. A button that is one thing on the last part and
+another before it says both: `placeholder:` is what the last part shows, `more_parts:`
+what the others show. `placeholder: "@app[12]"` with a `goto_page: next` under
+`more_parts:` puts a twelfth item where the way on would be, so twelve fit one page;
+items under `placeholder:` of such a button are not counted into the span.
+
+```yaml
+  apps:
+    subpage: true
+    paginate: app          # @app[1..11] here, @app[12..22] on part 2, …
+    max_parts: 3
+    buttons:
+      button_1: "@app[1]"
+      # … button_11: "@app[11]"
+      button_12:
+        placeholder: "@app[12]"            # on the last page
+        more_parts:                        # while another follows
+          {icon: mdi:dots-horizontal, tooltip: {translate: more}, goto_page: next}
+      button_back: {icon: mdi:arrow-left, tooltip: {translate: back}, goto_page: [previous, remote]}
+```
+
 ### Settings (gear tab)
 
 The gear icon at the right end of the panel's tabs opens the settings of the selected
-remote: the **font** and **font size** of page **titles** and of **tooltips**. The font
-list holds the bundled fonts and your own from `/config/lizaip/fonts/`; the size is
-limited to what fits the image (titles 6–50 px, tooltips 6–40 px). A preview shows the
-result, and **Restore fonts** (right below the font hint) goes back to Filson Soft Light at 48 px (titles) and
-24 px (tooltips).
+remote. While the [Fontbook](https://github.com/ruwidoaustria/lizaip_ha_fonts)
+integration is installed, its row of sections has a **Fontbook** group beside **Appearance**,
+showing Fontbook's own panel, where the fonts offered here are managed.
+
+The **font** and **font size** of page **titles** and of **tooltips** belong to the
+remote's [theme](#themes) and are edited there, not per remote: the font list holds
+the bundled fonts and your own from `/config/www/fonts/`, and the size is limited to
+what fits the image (titles 6–50 px, tooltips 6–40 px).
 
 The **Icon options** card holds the two [icon tint and fill](#icon-tint-and-fill)
 switches and the fill step (1–25 %, default 5 %). The switches both start off, so
 neither the tint nor the fill appears until asked for. All three are stored
 in the integration entry's options rather than in `settings.yaml`, and a change resyncs
-the remote. **Restore fonts** leaves them alone.
+the remote.
 
 A change is saved at once to `/config/lizaip/<device_id>/settings.yaml` and pushed to
 the remote:
 
 ```yaml
 theme: default
-title:
-  font: filsonsoft-light
-  font_size: 48
-tooltip:
-  font: filsonsoft-light
-  font_size: 24
+longtouch:
+  enabled: false
+toggle:
+  enabled: false
+options:
+  enabled: false
 ```
 
-The remote caches images by URL, so the style is part of the title and tooltip URLs
-(`&font_size=…`, plus `&font=…` when it differs from the default); a change therefore
-re-sends the affected pages once. On default settings the URLs are the same as before
-the setting existed. A title that names its own `font=` or `font_size=` keeps it. A font
-that is later removed stays the setting (shown as *not installed*) and is drawn in the
-default font until it is back. Edits made to `settings.yaml` by hand take effect after a
-restart.
+The file names the theme but never copies its text: a `title:` or `tooltip:` block an
+older version left behind is ignored and dropped the next time the settings are saved,
+so editing the theme reaches every remote drawing with it.
+
+The remote caches images by URL, so the text style is part of the title and tooltip URLs
+(`&font_size=…`, plus `&font=…` when it differs from the default); editing a theme
+therefore re-sends the affected pages once. On the default theme the URLs are the same
+as before the setting existed. A title that names its own `font=` or `font_size=` keeps
+it. A font that is later removed is drawn in the default font until it is back. Edits
+made to `settings.yaml` by hand take effect after a restart.
 
 ### Themes
 
@@ -925,22 +1065,23 @@ rather than drawing from a second copy. The shipped default's `icons:` block
 equals the table, so it overrides nothing and its revision is that of the
 built-in values. It can be edited
 the way a shipped theme is: a `default.yaml` in `/config/lizaip/themes` stands
-in for it, and deleting that file puts the shipped one back. A remote on the
-default never names it in an image URL: untouched, the URLs are exactly those
-from before themes existed; edited, they carry only `tv=<digest>`, since imgserv
-draws an unnamed request in whatever default it has loaded and only the remote's
-cache needs telling. The other themes are read from
+in for it, and deleting that file puts the shipped one back. The other themes are read from
 `custom_components/lizaip/assets/themes/*.yaml` and
 from `/config/lizaip/themes/*.yaml`; a theme's id is its file name without the
 extension, lowercased, and a user file stands in for a shipped one of the same
 id. Both folders are read once at setup, so a new file needs a
 restart.
 
-The resolved theme travels to imgserv as `&theme=<id>` on the URLs built for
-that remote, collapsed first and left out entirely when it resolves to
-`default`. That keeps today's URLs unchanged, and because the remote caches
-images by URL it is also what makes a theme change actually repaint the
-device.
+No theme name and no digest travel in an image URL. imgserv takes only one
+thing from a theme -- the colour a picture is drawn in -- so that colour is what
+the URL carries, and only where it matters: an icon, words or a graph drawn in
+one colour, or a logo shipped only as an SVG. It is written as given (`fg=white`,
+or nothing for the foreground) while the remote's theme, the shipped default and
+the default imgserv has loaded all draw it the same, and as the exact hex
+(`fg=FFFF00`) otherwise. A `media:` cover, a logo in its own colours, or any
+picture whose colour the theme leaves alone keeps its URL, so switching or
+editing a theme makes the remote fetch again exactly the pictures that look
+different -- the remote caches by URL, and a changed URL is all it needs.
 
 A theme's `colors.palette` re-colours and reorders the swatches but never
 shrinks what `?fg=` accepts — a button already configured with a colour the
@@ -982,7 +1123,12 @@ See the user guide's **Themes** section for the file format.
 
 ### Config Panel WebSocket API
 
-The frontend panel communicates with HA via these WebSocket commands (admin-only):
+The frontend panel communicates with HA via these WebSocket commands. Access is
+not uniform: commands scoped to one remote carry `config/access.py`'s
+`require_device_access` and admit an administrator or a user the remote is
+assigned to; the rest are either administrators-only or open to any
+authenticated user (see the classification in `config/websocket/__init__.py`
+and the AST pins in `tests/test_remote_access.py`).
 
 | Command | Description |
 |---------|-------------|
@@ -995,14 +1141,18 @@ The frontend panel communicates with HA via these WebSocket commands (admin-only
 | `lizaip_config/save_assignments` | Save assignments and push to device |
 | `lizaip_config/get_pages` | Get the pages list |
 | `lizaip_config/set_pages` | Replace the pages list |
-| `lizaip_config/update_page` | Update a page's title image and/or default colour |
+| `lizaip_config/update_page` | Update a page's `title` and/or default colour |
 | `lizaip_config/get_settings` | Get a device's title/tooltip text settings, with the defaults, the installed fonts, the size limits, the theme list and the resolved theme |
 | `lizaip_config/get_themes` | The themes the picker may offer, bundled and user-authored |
 | `lizaip_config/set_settings` | Validate and save the text settings and push them to the device |
 | `lizaip_config/image_urls` | The `imgserv://` URL the device is sent for each `{value, kind: tile\|title\|tooltip, color, percent}`, built by the same `resolve_icon_url` / `resolve_title_url` / `resolve_tooltip_url` as the page sync |
 | `lizaip_config/sync_custom_icons` | Report the browser's extra icon sets (`window.customIcons`); answers the names the remote asked for that imgserv has no shape for yet |
 | `lizaip_config/store_custom_icons` | Upload icon shapes from those sets (`getIcon()`), which imgserv then draws |
-| `lizaip_config/get_action_labels` | Translated action wordings for a device's language |
+| `lizaip_config/get_button_tooltips` | Translated action wordings for a device's language |
+| `lizaip_config/subscribe_devices` | The caller's device list, re-sent whenever an assignment changes |
+| `lizaip_config/list_persons` | Admin-only. Home Assistant persons with the user account behind each, and why one cannot be assigned |
+| `lizaip_config/set_device_users` | Admin-only. Write a remote's assigned user ids to `entry.options[assigned_users]` |
+| `lizaip_config/set_user_devices` | Admin-only. The same assignment from the other end: write the remotes one person holds |
 
 ## Localization
 
@@ -1023,14 +1173,14 @@ To add a string:
 matching `{placeholders}`, and a grep that fails if a translated wording is
 pasted back into the panel sources.
 
-### Button action labels
+### Button tooltips
 
 The words a button prints for what a press *does* ("Mute", "Repeat all") live
-under the `action_labels` key. Both halves of the app read the same file:
+under the `button_tooltips` key. Both halves of the app read the same file:
 
-- **Python** — `shared.i18n.action_labels.get(key, lang)` reads
+- **Python** — `shared.i18n.button_tooltips.get(key, lang)` reads
   `translations/<lang>.json` directly. This is what the physical remote renders.
-- **Panel JS** — fetches `lizaip_config/get_action_labels` at startup and on
+- **Panel JS** — fetches `lizaip_config/get_button_tooltips` at startup and on
   every device switch. It holds no table of its own, so the panel and the
   device cannot disagree.
 
@@ -1577,7 +1727,7 @@ power/network status.
 ### Image returns 404
 
 - **MDI:** Check the icon name at [materialdesignicons.com](https://materialdesignicons.com)
-- **PHU and other browser sets:** Ensure the set's HACS frontend plugin is installed, then
+- **Browser-registered sets (`phu:`, `hue:`, …):** Ensure the set's dashboard plugin is installed, then
   open the lizaIP config panel once so it uploads the shapes
 - **Logo:** Check spelling against the available list above
 - **File:** Ensure the file exists under `/config/www/` (not `/config/`)
@@ -1624,5 +1774,5 @@ for connection state, protocol version, and capabilities.
 
 1. Go to **Settings → Devices & Services → lizaIP**
 2. Click the entry → **Delete**
-3. Optionally remove the integration via HACS → Integrations → lizaIP → Uninstall
+3. Optionally uninstall it from **Settings → Marketplace → lizaIP → ⋮ → Uninstall**
 4. Restart Home Assistant

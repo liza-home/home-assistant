@@ -36,7 +36,7 @@ TOKEN_RE = re.compile(r"^@([a-z][a-z0-9_]*)\[(\d+)\](?:\.(\w+))?$")
 
 #: Template-button field → attribute of :class:`DynamicItem`.
 FIELD_MAP = {
-    "label": "button_label",
+    "tooltip": "button_tooltip",
     "icon": "icon",
     "title": "title",
     "thumbnail": "icon",
@@ -54,8 +54,8 @@ class BindingResolution(NamedTuple):
 #: Template-button field → where it lands on a stored assignment.
 #: ``config`` fields address ``assignment["config"][0][...]``.
 ASSIGNMENT_FIELD_MAP = {
-    "label": ("label", None),
-    "icon": ("image", None),
+    "tooltip": ("tooltip", None),
+    "icon": ("icon", None),
     "data": ("config", "data"),
     "action": ("config", "action"),
 }
@@ -71,7 +71,7 @@ PLACEHOLDER_META = frozenset({"source", "spec", "overflow"})
 
 #: What the whole-button shorthand maintains, and so what a placeholder binds
 #: for every field it does not state statically itself.
-BOUND_FIELDS = ["label", "icon", "data", "action"]
+BOUND_FIELDS = ["tooltip", "icon", "data", "action"]
 
 
 def config_step(btn_def: dict) -> dict | None:
@@ -171,6 +171,7 @@ def expand_placeholders(template: dict) -> dict[str, dict]:
 
     overflow_defs: dict[str, dict] = {}
     expanded: dict[str, Any] = {}
+    used: set[str] = set()
 
     for btn_key, val in buttons.items():
         parsed = parse_token(val)
@@ -181,6 +182,7 @@ def expand_placeholders(template: dict) -> dict[str, dict]:
             expanded[btn_key] = val
             continue
 
+        used.add(parsed[0])
         source_id = str(spec.get("source") or "").strip()
         if not TOKEN_RE.match(f"@{source_id}[1]"):
             _LOGGER.warning(
@@ -216,7 +218,30 @@ def expand_placeholders(template: dict) -> dict[str, dict]:
 
     buttons.clear()
     buttons.update(expanded)
+    _keep_used_placeholders(template, placeholders, used)
     return overflow_defs
+
+
+def _keep_used_placeholders(template: dict, placeholders: dict, used: set[str]) -> None:
+    """Drop the placeholders this page does not use that share a source with
+    one it does.
+
+    A template's placeholders serve all its pages, and two of them may narrow
+    one source differently -- a TV's apps on one page, its inputs on another.
+    A page fetches a source once, so the spec it fetches with must be the one
+    its own buttons named. Writes a new mapping: pages may share the old one.
+    """
+    if not used:
+        return
+
+    def source_of(spec: Any) -> str:
+        return str(spec.get("source") or "").strip() if isinstance(spec, dict) else ""
+
+    used_sources = {source_of(placeholders[name]) for name in used}
+    template[PLACEHOLDERS_KEY] = {
+        name: spec for name, spec in placeholders.items()
+        if name in used or source_of(spec) not in used_sources
+    }
 
 
 def _apply_overflow(buttons: dict, overflow_defs: dict[str, dict]) -> None:
@@ -235,7 +260,7 @@ def _apply_overflow(buttons: dict, overflow_defs: dict[str, dict]) -> None:
         # Only placeholders are overflow. Soft source failures keep last-known
         # content; initial unreadable sources still take fallback icons while
         # their bindings survive for later refill.
-        if button.get("label") != "" or button.get("action") != "null":
+        if button.get("tooltip") != "" or button.get("action") != "null":
             continue
         for field, value in overflow.items():
             if field != DYNAMIC_KEY:
@@ -422,7 +447,7 @@ def _binding(
         "stale": bool(stale),
     }
     # Needed only for cross-mapped tokens such as
-    # ``label: "@favorites[1].icon"``; default bindings keep their current shape.
+    # ``tooltip: "@favorites[1].icon"``; default bindings keep their current shape.
     trimmed = {k: v for k, v in (field_map or {}).items() if v and v != k}
     if trimmed:
         binding["field_map"] = trimmed
@@ -503,7 +528,7 @@ async def resolve_inline_tokens(
         return template
     wanted: dict[str, int] = {}
     _inline_names(buttons, wanted)
-    _inline_names(template.get("page_image"), wanted)
+    _inline_names(template.get("title"), wanted)
     if not wanted:
         return template
 
@@ -536,10 +561,10 @@ async def resolve_inline_tokens(
             del buttons[key]
         else:
             buttons[key] = filled
-    if "page_image" in template:
+    if "title" in template:
         missing = []
-        image = _inline_fill(template["page_image"], items, missing)
-        template["page_image"] = "" if missing else image
+        title = _inline_fill(template["title"], items, missing)
+        template["title"] = "" if missing else title
     return template
 
 
@@ -597,10 +622,10 @@ async def resolve_template_variables(
             source_id, idx, _ = tokens[""]
             items, error = resolved.get(source_id, ([], "unresolved"))
             item = items[idx] if 0 <= idx < len(items) else None
-            fields = ["label", "icon", "action", "data"]
+            fields = ["tooltip", "icon", "action", "data"]
             if item is not None:
                 buttons[btn_key] = {
-                    "label": item.button_label,
+                    "tooltip": item.button_tooltip,
                     "icon": item.icon,
                     "action": item.action,
                     "data": dict(item.data),
@@ -611,7 +636,7 @@ async def resolve_template_variables(
                 }
             else:
                 buttons[btn_key] = {
-                    "label": "",
+                    "tooltip": "",
                     "action": "null",
                     DYNAMIC_KEY: _binding(
                         source_id, idx, specs.get(source_id, {}), target_entity,
@@ -690,7 +715,7 @@ async def resolve_template_variables(
             statics = {k: v for k, v in btn_def.items() if k not in tokens}
             buttons[btn_key] = {
                 **statics,
-                "label": "",
+                "tooltip": "",
                 "action": statics.get("action") or "null",
                 DYNAMIC_KEY: binding,
             }
@@ -712,6 +737,7 @@ def template_bindings(
     template: dict,
     target_entity: str,
     target_config_entry: str = "",
+    domain_entities: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """What each bound button's binding would be, read back off the template.
 
@@ -727,6 +753,9 @@ def template_bindings(
     compares before dropping anything, so such a page simply keeps its spec on
     disk instead of being quietly given the wrong one. No shipped template does
     this today, which is exactly why it would otherwise go unnoticed.
+
+    *domain_entities* (the target device's entities by domain) opts into that
+    fallback, for a caller that is about to resolve the binding live.
 
     *template* is not mutated.
     """
@@ -758,7 +787,7 @@ def template_bindings(
             ]
         if source_id not in specs:
             specs[source_id] = spec_for_source(
-                template, source_id, target_entity, None, target_config_entry,
+                template, source_id, target_entity, domain_entities, target_config_entry,
             )
         derived[btn_key] = {
             "source": source_id,

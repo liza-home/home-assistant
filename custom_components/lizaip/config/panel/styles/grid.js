@@ -318,7 +318,7 @@ export const STYLES_GRID = `
   /* A field with a trailing action beside it -- Sensitivity and its reset to
      the page value. HA's field draws its own outline, so the row is layout
      only: a border here would be a box around a box. */
-  .config-label-row {
+  .config-tooltip-row {
     display: flex;
     gap: 4px;
     align-items: center;
@@ -326,7 +326,7 @@ export const STYLES_GRID = `
   /* Only the reset. The confirm/cancel pair this used to list with it is
      gone: a tooltip now commits on Enter or blur, so there is nothing left
      to confirm. */
-  .config-label-reset {
+  .config-tooltip-reset {
     flex-shrink: 0;
   }
   .config-field { display: flex; flex-direction: column; gap: 4px; }
@@ -390,10 +390,6 @@ export const STYLES_GRID = `
     font-size: var(--liza-font-m);
     font-family: inherit;
     box-sizing: border-box;
-  }
-  .config-field input[type="text"]:focus {
-    outline: none;
-    border-color: var(--primary-color);
   }
   .config-field .icon-picker-row {
     display: flex;
@@ -464,46 +460,11 @@ export const STYLES_GRID = `
     background: var(--liza-option-active-bg, rgba(3, 169, 244, 0.22));
     box-shadow: inset 3px 0 0 var(--primary-color, #03a9f4);
   }
-  /* Foldable section. Matches the live container idiom on this panel: 8px
-     radius, hairline divider border, tinted header. */
+  /* Home Assistant's expansion panel: heading, chevron and frame are its. */
   .slider-advanced {
-    margin-top: 4px;
-    border: 1px solid var(--divider-color, rgba(127,127,127,.15));
-    border-radius: 8px;
-    overflow: hidden;
+    display: block;
+    margin-top: 12px;
   }
-  .slider-advanced > summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-    font-size: var(--liza-font-13);
-    font-weight: 600;
-    color: var(--primary-text-color);
-    cursor: pointer;
-    user-select: none;
-    background: var(--secondary-background-color, rgba(127,127,127,.06));
-  }
-  .slider-advanced > summary:hover {
-    background: color-mix(in srgb, var(--primary-color) 6%, transparent);
-  }
-  .slider-advanced[open] > summary {
-    border-bottom: 1px solid var(--divider-color, rgba(127,127,127,.15));
-  }
-  /* display:flex on a summary suppresses the ::marker in Chrome, so the
-     disclosure affordance is drawn explicitly and rotated on open. */
-  .slider-advanced > summary::before {
-    content: "";
-    width: 0;
-    height: 0;
-    border-left: 5px solid currentColor;
-    border-top: 4px solid transparent;
-    border-bottom: 4px solid transparent;
-    opacity: .6;
-    transition: transform .15s;
-  }
-  .slider-advanced[open] > summary::before { transform: rotate(90deg); }
-  .slider-advanced > summary::-webkit-details-marker { display: none; }
   /* State icons section */
   .state-icons-list {
     display: flex;
@@ -648,11 +609,6 @@ export const STYLES_GRID = `
   }
   .press-appearance-row[open] > summary::after {
     transform: translateY(2px) rotate(-135deg);
-  }
-  .press-appearance-row > summary:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 2px;
-    border-radius: 6px;
   }
   /* What the press will wear, on the heading, because a shut row has hidden
      the field that would otherwise show it. In front of the name, not after

@@ -55,7 +55,7 @@ export const ButtonsSliderMixin = {
   // label under `slider_image` / `slider_name` — a fourth axis beside
   // the slider subject, the control name and `slider_factor`, and stored the same
   // way, on the grid button itself rather than in `overrides`. Nobody holding
-  // it means the page does, which is the plain `image` / `name` on the slider's
+  // it means the page does, which is the plain `icon` / `tooltip` on the slider's
   // own record and the only case that existed before.
   //
   // Null for every non-slider card: a grid button's own icon is not this
@@ -64,7 +64,7 @@ export const ButtonsSliderMixin = {
   _sliderAppearanceTarget(selKey) {
     if (selKey !== SLIDER_VERTICAL_KEY) return null;
     const ctx = this._liveContextKey();
-    if (!ctx) return { key: selKey, imageKey: "image", nameKey: "label", hiddenKey: SLIDER_ICON_HIDDEN_KEY, scoped: false };
+    if (!ctx) return { key: selKey, iconKey: "icon", nameKey: "tooltip", hiddenKey: SLIDER_ICON_HIDDEN_KEY, scoped: false };
     // A live context owns the appearance whether or not it retargets. It used
     // to fall back to page scope when it did not, on the grounds that a
     // non-retargeting button leaves the slider showing the page's icon so a
@@ -75,7 +75,7 @@ export const ButtonsSliderMixin = {
     // renders once the button names a device is the lesser of the two.
     // The flag keeps its name in both scopes: it sits on a different record, and
     // one spelling means the read path cannot pick the wrong one.
-    return { key: ctx, imageKey: "slider_image", nameKey: "slider_name", hiddenKey: SLIDER_ICON_HIDDEN_KEY, scoped: true };
+    return { key: ctx, iconKey: "slider_image", nameKey: "slider_name", hiddenKey: SLIDER_ICON_HIDDEN_KEY, scoped: true };
   },
 
   // Whether the slider's icon is explicitly hidden, in whichever scope the
@@ -97,12 +97,12 @@ export const ButtonsSliderMixin = {
       ? (this._assignments[appr.key] || (this._assignments[appr.key] = {}))
       : this._editAssignEnsure(appr.key);
     if (value) {
-      rec[appr.imageKey] = value;
+      rec[appr.iconKey] = value;
       delete rec[appr.hiddenKey];
     } else {
       // Deleting rather than blanking: absence is the inherit spelling
       // everywhere else in this file, and the flag is what says otherwise.
-      delete rec[appr.imageKey];
+      delete rec[appr.iconKey];
       rec[appr.hiddenKey] = true;
     }
     return rec;

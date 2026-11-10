@@ -18,14 +18,17 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from ..restore import (
+    archive_carries_themes,
     async_restore_files,
     async_take_upload,
 )
 from ...const import DOMAIN
+from ...device.const import LIZAIP_AVAILABILITY_EVENT
 from ..diagnostics_bundle import (
     BUNDLE_URL_BASE,
     BundleAbandoned,
@@ -41,8 +44,18 @@ from ...runtime import (
     entry_connection,
     find_store,
     remember_panel_language,
+    renamed_device,
 )
 from ...shared.logs import device_id_logger, device_logger
+from ..access import (
+    SIGNAL_ASSIGNMENTS_CHANGED,
+    accessible_entry_ids,
+    assigned_user_ids,
+    holds_any_entry,
+    is_admin_user,
+    require_any_device_access,
+    require_device_access,
+)
 from ..blueprint import async_get_blueprint
 from ..const import PAGE_ID_SCHEMA
 from ..device_sync import sync_config_to_device
@@ -54,6 +67,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_features"})
+@require_any_device_access
 @websocket_api.async_response
 async def ws_get_features(hass: HomeAssistant, connection, msg: dict) -> None:
     """Report which optional features this build carries.
@@ -84,7 +98,7 @@ _BUILDS_IN_FLIGHT: Final[set[tuple[str, str]]] = set()
     vol.Required("entry_id"): str,
     vol.Optional("scope", default=SCOPE_STANDARD): vol.In(SCOPES),
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_build_diagnostics_bundle(hass: HomeAssistant, connection, msg: dict) -> None:
     """Assemble the support bundle and say where the browser can fetch it.
@@ -156,7 +170,9 @@ async def ws_build_diagnostics_bundle(hass: HomeAssistant, connection, msg: dict
     _BUILDS_IN_FLIGHT.add(lane)
     try:
         filename, data = await async_build_zip(
-            hass, entry, scope=scope, progress=progress, should_stop=lambda: abandoned,
+            hass, entry, scope=scope,
+            whole_system=is_admin_user(connection.user),
+            progress=progress, should_stop=lambda: abandoned,
         )
     except BundleAbandoned:
         log.debug("Stopped building a diagnostics bundle: nobody is waiting")
@@ -172,7 +188,7 @@ async def ws_build_diagnostics_bundle(hass: HomeAssistant, connection, msg: dict
     finally:
         _BUILDS_IN_FLIGHT.discard(lane)
 
-    token = async_store_bundle(hass, filename, data)
+    token = async_store_bundle(hass, filename, data, entry.entry_id)
     skipped = _bundle_skipped(data, filename)
 
     # Signed here rather than by the panel's own `auth/sign_path` call: a
@@ -235,20 +251,22 @@ def _battery_entity(hass: HomeAssistant, entry_id: str) -> str | None:
     return None
 
 
-@websocket_api.websocket_command({
-    "type": "lizaip_config/list_devices",
-    vol.Optional("language"): str,
-})
-@websocket_api.require_admin
-@websocket_api.async_response
-async def ws_list_devices(hass: HomeAssistant, connection, msg: dict) -> None:
-    if "language" in msg:
-        remember_panel_language(hass, msg["language"])
+def device_list(hass: HomeAssistant, user) -> list[dict]:
+    """The remotes this user may configure, as the panel's list rows.
 
+    Scoped rather than complete: an administrator sees every remote, anyone
+    else only the ones assigned to them, and a user with none gets an empty
+    list and the panel's own empty state. The assignment itself travels with
+    the row for administrators, so their device list can say who holds a
+    remote without a second round-trip; nobody else is told who else is on it.
+    """
     dev_reg = dr.async_get(hass)
+    allowed = accessible_entry_ids(hass, user)
     devices = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.state is not ConfigEntryState.LOADED:
+            continue
+        if entry.entry_id not in allowed:
             continue
         entry_devices = dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
         if not entry_devices:
@@ -259,7 +277,7 @@ async def ws_list_devices(hass: HomeAssistant, connection, msg: dict) -> None:
         device_name = (dev.name_by_user or dev.name or "").strip()
         device_id = conn._device_id if available else (entry.unique_id or entry.data.get("device_id"))
         title = device_name or (entry.title or "").strip() or device_id or entry.entry_id or "lizaIP"
-        devices.append({
+        row = {
             "entry_id": entry.entry_id,
             "title": title,
             "available": available,
@@ -275,15 +293,100 @@ async def ws_list_devices(hass: HomeAssistant, connection, msg: dict) -> None:
             # from `hass.states` so it stays live. None where the sensor has
             # not been created yet, and the pill is then just a pill.
             "battery_entity": _battery_entity(hass, entry.entry_id),
+        }
+        if is_admin_user(user):
+            row["assigned_users"] = sorted(assigned_user_ids(entry))
+        devices.append(row)
+    return devices
+
+
+def _remember_language(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Keep the panel's language, if the caller may set it.
+
+    The list answers everybody, so a stranger sees an empty panel rather than
+    an error -- but the remembered language is the installation's, so only
+    somebody who holds a remote may set it.
+    """
+    if "language" in msg and holds_any_entry(hass, connection.user):
+        remember_panel_language(hass, msg["language"])
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/list_devices",
+    vol.Optional("language"): str,
+})
+@websocket_api.async_response
+async def ws_list_devices(hass: HomeAssistant, connection, msg: dict) -> None:
+    """The caller's own remotes, once.
+
+    No longer administrators only: the list is what scopes the panel, and it
+    answers an assigned user with their remotes and everyone else with nothing.
+    """
+    _remember_language(hass, connection, msg)
+    connection.send_result(msg["id"], device_list(hass, connection.user))
+
+
+@websocket_api.websocket_command({
+    "type": "lizaip_config/subscribe_devices",
+    vol.Optional("language"): str,
+})
+@websocket_api.async_response
+async def ws_subscribe_devices(hass: HomeAssistant, connection, msg: dict) -> None:
+    """The same list, and again whenever the assignments move.
+
+    A subscription rather than a second poll because the list is the caller's
+    scope: a remote taken away from someone has to leave their open panel at
+    once, not at the next reload, and one newly given to them has to appear
+    without one.
+
+    Availability rides along for the same reason. Home Assistant only lets an
+    administrator subscribe to a custom event, so without this an assigned
+    user's Online badge would be whatever it was when the panel opened.
+
+    So does a rename: the row's title is the device's name, and a remote
+    renamed from the device page or the integrations card has to say so in the
+    open panel rather than at the next reload.
+    """
+    _remember_language(hass, connection, msg)
+
+    @callback
+    def _send(_event=None) -> None:
+        connection.send_message({
+            "id": msg["id"],
+            "type": "event",
+            "event": {"devices": device_list(hass, connection.user)},
         })
-    connection.send_result(msg["id"], devices)
+
+    @callback
+    def _renamed(event) -> None:
+        """Re-send only for a lizaIP device whose name actually moved: the
+        list is a per-user scope walk, not something to rebuild on every
+        registry touch."""
+        device = renamed_device(hass, event)
+        if device is not None and any(i[0] == DOMAIN for i in device.identifiers):
+            _send()
+
+    unsubscribe = (
+        async_dispatcher_connect(hass, SIGNAL_ASSIGNMENTS_CHANGED, _send),
+        hass.bus.async_listen(LIZAIP_AVAILABILITY_EVENT, _send),
+        hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _renamed),
+    )
+
+    @callback
+    def _stop() -> None:
+        for unsub in unsubscribe:
+            unsub()
+
+    connection.subscriptions[msg["id"]] = _stop
+    connection.send_result(msg["id"])
+    _send()
 
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/get_blueprint",
     vol.Optional("entry_id"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_get_blueprint(hass: HomeAssistant, connection, msg: dict) -> None:
     """The face of one remote, or the default when the panel has not picked one.
@@ -299,9 +402,10 @@ async def ws_get_blueprint(hass: HomeAssistant, connection, msg: dict) -> None:
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/goto_page",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("page_id"): PAGE_ID_SCHEMA,
 })
+@require_device_access
 @websocket_api.async_response
 async def ws_goto_page(hass: HomeAssistant, connection, msg: dict) -> None:
     """Send a 32-bit page id to the device without changing stored page order."""
@@ -317,9 +421,9 @@ async def ws_goto_page(hass: HomeAssistant, connection, msg: dict) -> None:
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/clear_device_pages",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_clear_device_pages(hass: HomeAssistant, connection, msg: dict) -> None:
     """Wipe every page off the device, then rebuild it from the store.
@@ -355,7 +459,7 @@ async def ws_clear_device_pages(hass: HomeAssistant, connection, msg: dict) -> N
     vol.Required("entry_id"): str,
     vol.Required("token"): str,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_restore_config(hass: HomeAssistant, connection, msg: dict) -> None:
     """Put a previously downloaded configuration back, and re-sync the remote.
@@ -382,6 +486,16 @@ async def ws_restore_config(hass: HomeAssistant, connection, msg: dict) -> None:
     if parsed is None:
         connection.send_error(
             msg["id"], "expired", "That upload has expired; choose the file again"
+        )
+        return
+
+    # The upload view refuses these too; this is the gate that counts, because
+    # a theme lands in the library every remote draws from.
+    if not connection.user.is_admin and archive_carries_themes(parsed["files"]):
+        connection.send_error(
+            msg["id"], "unauthorized",
+            "This archive carries a theme, which every remote shares. "
+            "Ask an administrator to restore it.",
         )
         return
 

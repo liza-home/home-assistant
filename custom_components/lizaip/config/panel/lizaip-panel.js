@@ -41,8 +41,11 @@ import { SettingsViewMixin, THEME_DEFAULT } from "./lizaip-settings-view.js";
 import { RestoreViewMixin } from "./lizaip-restore-view.js";
 import { ThemeDownloadMixin } from "./lizaip-theme-download.js";
 import { GuideViewMixin, PANEL_MIN } from "./lizaip-guide-view.js";
+import { DiscoveryMixin } from "./lizaip-discovery.js";
+import { PeopleViewMixin } from "./lizaip-people-view.js";
 import { ButtonTipMixin } from "./lizaip-button-tip.js";
 import { RouteMixin, ROUTE_PREFIX } from "./lizaip-route.js";
+import { SETUP_STEP_ICONS, SETUP_QR } from "./lizaip-setup-steps.js";
 
 
 /**
@@ -215,6 +218,9 @@ class LizaRemotePanel extends HTMLElement {
     // once it is not. Without it the edge is simply dropped, and since the
     // backend fires only on real transitions there is no second chance.
     this._availabilityStale = false;
+    // The same deferral for the caller's scope: an assignment that moves
+    // mid-load must still close a remote that is no longer theirs.
+    this._scopeStale = false;
     // True while a page add/delete/reorder is in flight, so the config_changed
     // the backend fires mid-operation is ignored rather than raced against.
     this._pageOpInFlight = false;
@@ -323,7 +329,7 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   connectedCallback() {
-    console.log("[LIZA] connectedCallback, initialized:", this._initialized, "hass:", !!this._hass);
+    console.log("[lizaIP] connectedCallback, initialized:", this._initialized, "hass:", !!this._hass);
     this._a11yInit();
     this._narrowWatch();
     // On window, not the shadow root: after a click on a page thumb focus sits
@@ -379,6 +385,11 @@ class LizaRemotePanel extends HTMLElement {
       this._labelRegistryUnsub = null;
     }
     this._unsubscribeDeviceSynced?.();
+    this._unsubscribeDiscovery?.();
+    if (this._devicesUnsub) {
+      Promise.resolve(this._devicesUnsub).then(u => u && u()).catch(() => {});
+      this._devicesUnsub = null;
+    }
     if (this._availabilityUnsub) {
       Promise.resolve(this._availabilityUnsub).then(u => u && u()).catch(() => {});
       this._availabilityUnsub = null;
@@ -403,6 +414,7 @@ class LizaRemotePanel extends HTMLElement {
    */
   async _subscribeConfigChanged() {
     if (this._configChangedUnsub || !this._hass?.connection) return;
+    if (!this._canSubscribeEvents()) return;
     try {
       this._configChangedUnsub = await this._hass.connection.subscribeEvents(
         (ev) => this._onConfigChanged(ev),
@@ -410,7 +422,7 @@ class LizaRemotePanel extends HTMLElement {
       );
     } catch (e) {
       // Live updates are a convenience; the refresh control still works.
-      console.debug("[LIZA] config_changed subscription failed:", e);
+      console.debug("[lizaIP] config_changed subscription failed:", e);
     }
   }
 
@@ -424,13 +436,14 @@ class LizaRemotePanel extends HTMLElement {
    */
   async _subscribeDeviceHello() {
     if (this._helloUnsub || !this._hass?.connection) return;
+    if (!this._canSubscribeEvents()) return;
     try {
       this._helloUnsub = await this._hass.connection.subscribeEvents(
         (ev) => this._onDeviceHello(ev),
         "lizaip_device_hello",
       );
     } catch (e) {
-      console.debug("[LIZA] device_hello subscription failed:", e);
+      console.debug("[lizaIP] device_hello subscription failed:", e);
     }
   }
 
@@ -445,6 +458,90 @@ class LizaRemotePanel extends HTMLElement {
     // mid-edit, unlike `_reloadFromBackend` — nothing the user has typed lives
     // in the blueprint, so there is no unflushed state to discard.
     if (await this._refreshBlueprint()) this._render();
+  }
+
+  /**
+   * Whether the signed-in user administers Home Assistant.
+   *
+   * Only an explicit `is_admin: false` counts as "no". A `hass` without a user
+   * on it is not evidence of anything, and guessing somebody is not an
+   * administrator would hide controls from the one person who needs them. The
+   * commands behind every gated control refuse the wrong caller anyway -- this
+   * is about not offering what cannot be done, not about the boundary.
+   */
+  _isAdmin() {
+    const user = this._hass?.user;
+    return !user || user.is_admin !== false;
+  }
+
+  /**
+   * Whether this user may subscribe to the integration's own events.
+   *
+   * Home Assistant reserves `subscribe_events` for administrators, so for
+   * anybody else the call is refused and logged as an error on the way. The
+   * subscriptions are a convenience either way -- every view they feed has a
+   * refresh of its own -- so an assigned user is simply not asked to make a
+   * request that cannot succeed.
+   */
+  _canSubscribeEvents() {
+    return this._isAdmin();
+  }
+
+  /**
+   * Follow the device list, which is now a per-user answer.
+   *
+   * A remote can be taken away from somebody while they are looking at it, or
+   * handed to them while the panel is open, so the list cannot be a snapshot
+   * taken at load. The backend re-sends the caller's own scoped list whenever
+   * an assignment moves; here that becomes a repaint, and -- when the remote
+   * being configured is the one that went away -- a fall back to the list.
+   *
+   * Availability is not its concern: `_onAvailabilityChanged` owns the badges
+   * and arrives far more often.
+   */
+  async _subscribeDevices() {
+    if (this._devicesUnsub || !this._hass?.connection) return;
+    try {
+      this._devicesUnsub = await this._hass.connection.subscribeMessage(
+        (msg) => this._onDevicesChanged(msg),
+        { type: "lizaip_config/subscribe_devices", language: this._uiLanguage() },
+      );
+    } catch (e) {
+      console.debug("[lizaIP] device subscription failed:", e);
+    }
+  }
+
+  async _onDevicesChanged(msg) {
+    const devices = msg?.devices;
+    if (!Array.isArray(devices)) return;
+    this._devices = devices;
+    // Mid-load the route has not been resolved yet, so the check is deferred
+    // rather than dropped: a remote revoked during a load would stay open.
+    if (!this._initDone || this._loading) {
+      this._scopeStale = true;
+      return;
+    }
+    this._applyScope();
+    this._render();
+  }
+
+  /**
+   * Leave the open remote if the last device list no longer carries it.
+   */
+  _applyScope() {
+    this._scopeStale = false;
+    const open = this._currentEntry;
+    if (!open || this._devices.some(d => d?.entry_id === open)) return;
+    // The remote being configured is no longer the user's. Back to the
+    // list, which is now either somebody else's remotes or the empty state.
+    this._clearEntrySelection();
+    this._routeNavigate?.(ROUTE_PREFIX);
+  }
+
+  _flushScope() {
+    if (!this._scopeStale) return;
+    this._applyScope();
+    this._render();
   }
 
   /**
@@ -465,13 +562,14 @@ class LizaRemotePanel extends HTMLElement {
    */
   async _subscribeAvailability() {
     if (this._availabilityUnsub || !this._hass?.connection) return;
+    if (!this._canSubscribeEvents()) return;
     try {
       this._availabilityUnsub = await this._hass.connection.subscribeEvents(
         (ev) => this._onAvailabilityChanged(ev),
         "lizaip_device_availability",
       );
     } catch (e) {
-      console.debug("[LIZA] availability subscription failed:", e);
+      console.debug("[lizaIP] availability subscription failed:", e);
     }
   }
 
@@ -494,7 +592,7 @@ class LizaRemotePanel extends HTMLElement {
         "label_registry_updated",
       );
     } catch (e) {
-      console.debug("[LIZA] label_registry subscription failed:", e);
+      console.debug("[lizaIP] label_registry subscription failed:", e);
     }
   }
 
@@ -604,7 +702,7 @@ class LizaRemotePanel extends HTMLElement {
         dropReady = () => { try { conn.removeEventListener("ready", catchUp); } catch (e) {} };
       }
     } catch (e) {
-      console.debug("[LIZA] connection-ready hook unavailable:", e);
+      console.debug("[lizaIP] connection-ready hook unavailable:", e);
     }
 
     this._missedEdgeUnwatch = () => {
@@ -628,8 +726,8 @@ class LizaRemotePanel extends HTMLElement {
     // itself, so there is nothing left for a deferred reload to apply.
     //
     // Except a dynamic refresh, which is a change of its own rather than an echo
-    // of the operation: adding a page makes the Overview fill a slot for it, and
-    // dropping that left the Overview's cached buttons -- and so its link to the
+    // of the operation: adding a page makes the Table of contents fill a slot for
+    // it, and dropping that left its cached buttons -- and so its link to the
     // new page -- stale until a reload. It is applied once the operation ends.
     if (this._pageOpInFlight) {
       if (ev?.data?.refreshed) this._refreshAfterPageOp = true;
@@ -672,9 +770,22 @@ class LizaRemotePanel extends HTMLElement {
    * cost of a false positive is a refresh delayed until the user closes the
    * editor, which `_flushPendingConfigReload` then applies.
    */
+  /**
+   * Resolves once no page add/delete/reorder is running.
+   *
+   * Each of them sends or receives the whole page list: a delete sent while
+   * an add is still saving names a list without the added pages, and the
+   * add's answer then brings back the page just deleted.
+   */
+  _whenPageOpsIdle() {
+    if (!this._pageOpInFlight) return Promise.resolve();
+    return new Promise(resolve => (this._pageOpWaiters ||= []).push(resolve));
+  }
+
   /** End a page add/delete/reorder, applying a refresh deferred meanwhile. */
   _endPageOp() {
     this._pageOpInFlight = false;
+    for (const resolve of this._pageOpWaiters?.splice(0) || []) resolve();
     if (!this._refreshAfterPageOp) return;
     this._refreshAfterPageOp = false;
     this._pendingConfigReload = true;
@@ -738,7 +849,7 @@ class LizaRemotePanel extends HTMLElement {
       // back so the next flush point retries it, rather than leaving the user
       // to notice and hit refresh themselves.
       this._pendingConfigReload = true;
-      console.debug("[LIZA] config_changed reload failed:", e);
+      console.debug("[lizaIP] config_changed reload failed:", e);
     }
   }
 
@@ -746,6 +857,9 @@ class LizaRemotePanel extends HTMLElement {
     this._hass = hass;
     if (!hass) return;
     if (this._editorEl) this._editorEl.hass = this._editorHass();
+    // Fontbook's panel, shown in the settings, follows Home Assistant as it
+    // would in a panel of its own.
+    if (this._fontbookEl) this._fontbookEl.hass = hass;
     if (!this._initialized) {
       this._initialized = true;
       this._lastThemeMode = this._getThemeMode();
@@ -757,6 +871,9 @@ class LizaRemotePanel extends HTMLElement {
       if (this._lastThemeMode !== mode) {
         this._lastThemeMode = mode;
         this._render();
+        // An open dialog is not part of the render, and its pictures still
+        // ask for the other mode: white marks on a page that just went white.
+        this._applyDeviceUrls();
       } else if (this._activeTab === "actions") {
         // The buttons tab has no counterpart here: its icons are the SVG face
         // tiles, refreshed below. The call that stood here walked `.button-row`,
@@ -804,6 +921,10 @@ class LizaRemotePanel extends HTMLElement {
    * not there.
    */
   async _loadDebugTools() {
+    // The debug commands are administrators-only, so for anyone else the tab
+    // would be a row of "unauthorized" -- the same reason the backend is asked
+    // before the module is imported.
+    if (!this._isAdmin()) return;
     try {
       const features = await this._hass.callWS({ type: "lizaip_config/get_features" });
       if (!features?.debug_tools) return;
@@ -815,7 +936,7 @@ class LizaRemotePanel extends HTMLElement {
       Object.assign(LizaRemotePanel.prototype, memory.MemoryViewMixin);
       this._debugTools = true;
     } catch (e) {
-      console.debug("[LIZA] debug tools unavailable:", e);
+      console.debug("[lizaIP] debug tools unavailable:", e);
     }
   }
 
@@ -839,7 +960,7 @@ class LizaRemotePanel extends HTMLElement {
 
   async _initOnce() {
     try {
-      console.log("[LIZA] _init starting...");
+      console.log("[lizaIP] _init starting...");
       this._initDone = false;
       // The address bar is wherever the navigation that brought us here left
       // it, not what this element last wrote. Cleared so the render at the
@@ -854,6 +975,8 @@ class LizaRemotePanel extends HTMLElement {
       // arrives before `_initDone`, and the flush at the end applies it.
       await this._loadDebugTools();
       await this._subscribeAvailability();
+      await this._subscribeDevices();
+      await this._subscribeDiscovery();
       this._watchForMissedEdges();
       // The static half: tables that belong to the build or to Home Assistant
       // rather than to any remote, so they cannot have moved. `_init` runs on
@@ -884,8 +1007,8 @@ class LizaRemotePanel extends HTMLElement {
       // keeps that guarantee while making it free — the cost is now the slowest
       // of the group rather than their sum.
       //
-      // `_loadActionLabels` is awaited for the same reason: the first render
-      // prints button names, and `_getActionLabel` degrades to a title-cased
+      // `_loadButtonTooltips` is awaited for the same reason: the first render
+      // prints button names, and `_getButtonTooltip` degrades to a title-cased
       // key until the table arrives. Unawaited, a fresh panel would flash the
       // bare key wording and only then settle on the translated one.
       // `_loadLabels` likewise: a label-targeted button is named after its
@@ -901,13 +1024,15 @@ class LizaRemotePanel extends HTMLElement {
         this._sliderControlsLoaded ? null : Promise.resolve(this._loadSliderControls()).then(() => {
           this._sliderControlsLoaded = true;
         }),
-        this._loadActionLabels(),
+        this._loadButtonTooltips(),
         this._loadLabels(),
         this._loadBlueprint(),
         this._listDevices(),
       ]);
-      console.log("[LIZA] blueprint:", this._blueprint?.name, "buttons:", this._blueprint?.buttons?.length);
-      console.log("[LIZA] devices:", this._devices?.length, this._devices);
+      // Not awaited: only the ⋮ menu reads it, and that opens on a click.
+      this._loadAssignablePeople?.()?.catch(() => {});
+      console.log("[lizaIP] blueprint:", this._blueprint?.name, "buttons:", this._blueprint?.buttons?.length);
+      console.log("[lizaIP] devices:", this._devices?.length, this._devices);
 
       // Where the browser is pointing, or -- on a bare `/lizaip` -- where this
       // session last was. Resolved in levels, each falling back to the nearest
@@ -920,13 +1045,30 @@ class LizaRemotePanel extends HTMLElement {
       // `_routeApply` is given `load: false` because `_loadAll` is called
       // here explicitly -- going through `_selectDevice` would reset the very
       // fields the route is about to set.
-      const landed = await this._routeApply(requested, { load: false });
+      // A remote waiting on the network is the one thing the device list has
+      // that a remote's own pages do not, so nothing opens over it -- not the
+      // path this session left behind, and not the single remote that would
+      // otherwise be opened straight onto.
+      //
+      // Awaited rather than read, because subscribing resolves before the
+      // snapshot of flows already in progress arrives.
+      await this._discoveryOpened;
+      const pending = !!this._discovered?.().length;
+      // Home Assistant re-attaches this element rather than building a new
+      // one, so a remote opened before the panel was last left is still the
+      // current entry here, and skipping the route below would leave it open.
+      if (pending) this._clearEntrySelection();
+      const landed = pending ? false : await this._routeApply(requested, { load: false });
       if (landed) {
         await this._loadAll();
-      } else if (this._devices.length === 1) {
+      } else if (this._devices.length === 1 && !pending) {
         // A single remote has no list worth showing, so the panel opens on it
         // whatever the URL said. An unknown entry in the URL lands here too,
         // which is the intended fallback rather than an accident of ordering.
+        //
+        // Unless one has been found: then the list is the only place the new
+        // remote can be added from, and opening over it would hide the one
+        // thing the user has come back to the panel for.
         this._currentEntry = this._devices[0].entry_id;
         await this._loadAll();
       }
@@ -935,7 +1077,7 @@ class LizaRemotePanel extends HTMLElement {
       // it. Without this the settings render over no fonts, the actions tab
       // over no usage counts, and debug shows the previous remote's stream.
       this._routeEnterTab();
-      console.log("[LIZA] _init done, currentEntry:", this._currentEntry, "pages:", this._pages?.length);
+      console.log("[lizaIP] _init done, currentEntry:", this._currentEntry, "pages:", this._pages?.length);
       this._routeBooting = false;
       this._render();
       this._subscribeConfigChanged();
@@ -944,8 +1086,9 @@ class LizaRemotePanel extends HTMLElement {
       this._subscribeDeviceSynced?.();
       this._initDone = true;
       this._flushAvailability();
+      this._flushScope();
     } catch (e) {
-      console.error("[LIZA] _init failed:", e);
+      console.error("[lizaIP] _init failed:", e);
       this._routeBooting = false;
       // This replaces the whole shadow tree, so no --liza-* token resolves
       // here. No literal red clears 1.4.3 on both themes, so the theme's own
@@ -1164,10 +1307,23 @@ class LizaRemotePanel extends HTMLElement {
       // `_loadAll` fetches the selected remote's config, not the device list,
       // so an edge that arrived during the switch is still unapplied here.
       this._flushAvailability();
+      this._flushScope();
     });
   }
 
   _goBack() {
+    this._clearEntrySelection();
+    this._render();
+  }
+
+  /**
+   * Leave the remote that was open, without drawing anything.
+   *
+   * Split out of `_goBack` because a boot that finds a remote waiting has to
+   * do the same thing: the element survives Home Assistant re-attaching the
+   * panel, and with it whichever remote was open last.
+   */
+  _clearEntrySelection() {
     this._flushAutoSave();
     this._currentEntry = null;
     this._editingActionIdx = -1;
@@ -1175,7 +1331,6 @@ class LizaRemotePanel extends HTMLElement {
     this._contextKey = null;
     this._pageTitleSelected = false;
     this._editorEl = null;
-    this._render();
   }
 
   _switchTab(tab) {
@@ -1384,7 +1539,7 @@ class LizaRemotePanel extends HTMLElement {
    */
   _pressOneFace(key) {
     const a = this._editAssign?.(key);
-    return `${a?.image || ""}\u0000${a?.label || ""}`;
+    return `${a?.icon || ""}\u0000${a?.tooltip || ""}`;
   }
 
   /**
@@ -1444,7 +1599,7 @@ class LizaRemotePanel extends HTMLElement {
     const prevRaw = Array.isArray(prevRules)
       ? prevRules
       : (Array.isArray(target.toggle?.rules) ? target.toggle.rules : []);
-    // Press 1 wears the assignment's own `image` and `label`; `rules[0].icon`
+    // Press 1 wears the assignment's own `icon` and `tooltip`; `rules[0].icon`
     // is never read. So to the matcher slot 0 looked faceless, and only half a
     // reorder happened: dragging Stop to the top moved `mdi:stop` onto a
     // `rules[0].icon` nothing renders, left `mdi:play` sitting on the button,
@@ -1453,7 +1608,7 @@ class LizaRemotePanel extends HTMLElement {
     //
     // Seeded onto a copy -- the caller's snapshot is not ours to edit.
     const prev = prevRaw.map((r, i) => (i === 0
-      ? { ...r, icon: r.icon || target.image || "", label: r.label || target.label || "" }
+      ? { ...r, icon: r.icon || target.icon || "", tooltip: r.tooltip || target.tooltip || "" }
       : r));
     const rules = this._sequence.map((step, i) => ({
       config: i === 0
@@ -1494,7 +1649,7 @@ class LizaRemotePanel extends HTMLElement {
     rules.forEach((rule, i) => {
       const was = from[i];
       if (was?.icon) rule.icon = was.icon;
-      if (was?.label) rule.label = was.label;
+      if (was?.tooltip) rule.tooltip = was.tooltip;
       // Resolve-or-create, exactly as press 1 does. `action_id` is what the
       // Actions view counts uses by, so a press without one is a press the
       // library thinks nobody is using -- which is how an action still on a
@@ -1518,13 +1673,13 @@ class LizaRemotePanel extends HTMLElement {
     // blank, exactly as a press inserted anywhere else does.
     if (prev.length) {
       const lead = rules[0];
-      if (lead.icon) target.image = lead.icon; else delete target.image;
+      if (lead.icon) target.icon = lead.icon; else delete target.icon;
       // A name that travelled in with a press is one the user typed, and the
       // flag is what stops the generated name overwriting it on next render.
-      if (lead.label) { target.label = lead.label; target.label_edited = true; }
-      else { delete target.label; delete target.label_edited; }
+      if (lead.tooltip) { target.tooltip = lead.tooltip; target.tooltip_edited = true; }
+      else { delete target.tooltip; delete target.tooltip_edited; }
       delete lead.icon;
-      delete lead.label;
+      delete lead.tooltip;
     }
     target.toggle = { mode: "cycle", rules };
   }
@@ -1545,31 +1700,31 @@ class LizaRemotePanel extends HTMLElement {
     if (!btn) return;
     const existing = this._editAssign(btn.key) || {};
     // The label input is pre-filled with the *auto* label, so its value is only
-    // meaningful once the user has actually typed in it (_labelEdited).
-    const nameInput = this.shadowRoot?.querySelector(".config-label-input");
-    const customName = existing._labelEdited ? (nameInput?.value?.trim() || "") : "";
+    // meaningful once the user has actually typed in it (_tooltipEdited).
+    const nameInput = this.shadowRoot?.querySelector(".config-tooltip-input");
+    const customName = existing._tooltipEdited ? (nameInput?.value?.trim() || "") : "";
     // Emptying the field names nothing, so it hands the button back to the
     // derived label instead of claiming a blank one — the same release ↺ does.
-    const labelCleared = !!existing._labelEdited && !customName;
-    if (labelCleared) delete existing.label_edited;
+    const tooltipCleared = !!existing._tooltipEdited && !customName;
+    if (tooltipCleared) delete existing.tooltip_edited;
     // A label typed in an earlier session is just as much the user's as one
-    // typed a moment ago, but `_labelEdited` does not survive a reload —
-    // `label_edited` is the stored half of the same fact. Without it, picking a
+    // typed a moment ago, but `_tooltipEdited` does not survive a reload —
+    // `tooltip_edited` is the stored half of the same fact. Without it, picking a
     // new action for the button below re-derived `label` and silently threw a
     // label the user typed last week away.
-    const typedName = customName || (existing.label_edited ? existing.label : "");
+    const typedName = customName || (existing.tooltip_edited ? existing.tooltip : "");
 
     if (!this._sequence.length) {
       // No action in editor — only update label if needed
-      if (customName || labelCleared) {
-        existing.label = customName;
-        if (customName) existing.label_edited = true;
+      if (customName || tooltipCleared) {
+        existing.tooltip = customName;
+        if (customName) existing.tooltip_edited = true;
         this._editAssignEnsure(btn.key);
         const target = this._editAssign(btn.key);
         Object.assign(target, existing);
         // `Object.assign` copies keys, it cannot remove one — the release above
         // only reaches the stored record if we delete it there as well.
-        if (labelCleared) delete target.label_edited;
+        if (tooltipCleared) delete target.tooltip_edited;
       }
       return;
     }
@@ -1608,14 +1763,14 @@ class LizaRemotePanel extends HTMLElement {
     // with the payload the user just picked. An empty auto label means we have
     // nothing better to say — keep whatever the template or the user already set
     // rather than blanking it.
-    const autoLabel = this._computeLabel(action, entity, seq);
-    existing.label = typedName || autoLabel || existing.label || "";
-    if (customName) existing.label_edited = true;
+    const autoTooltip = this._computeTooltip(action, entity, seq);
+    existing.tooltip = typedName || autoTooltip || existing.tooltip || "";
+    if (customName) existing.tooltip_edited = true;
 
     // An image inherited from a template (or from a previously selected media item)
     // must not survive a payload change — only a user-pinned one does.
-    if (!existing.image_pinned && existing.image && prevPayload?.thumbnail !== nextPayload?.thumbnail) {
-      delete existing.image;
+    if (!existing.icon_pinned && existing.icon && prevPayload?.thumbnail !== nextPayload?.thumbnail) {
+      delete existing.icon;
     }
 
     // Written back through the slot so a commit under a context lands in the
@@ -1960,7 +2115,7 @@ class LizaRemotePanel extends HTMLElement {
   // they share.
   _isAssignedRecord(assign) {
     if (!assign) return false;
-    if (assign.image) return true;
+    if (assign.icon) return true;
     // A long touch is something the button does, and ✕ clears it.
     if (Array.isArray(assign.longtouch) && assign.longtouch.length) return true;
     return this._hasRunnableAction(assign);
@@ -1999,7 +2154,9 @@ class LizaRemotePanel extends HTMLElement {
    */
   async _switchPageTo(idx, selectKey = null) {
     if (idx < 0 || idx >= this._pages.length || idx === this._currentPageIdx) return;
-    await this._flushAutoSave();
+    // Not awaited: the save keeps the page it was made on, and coming back
+    // reads the copy cached below.
+    this._flushAutoSave();
     const oldPageId = this._pages[this._currentPageIdx]?.id;
     if (oldPageId) this._pageCache[oldPageId] = JSON.parse(JSON.stringify(this._assignments));
 
@@ -2066,16 +2223,54 @@ class LizaRemotePanel extends HTMLElement {
    * folders of templates, so appending them to a dialog already on screen
    * would move the buttons under the pointer. The blank page is a template
    * like any other, so a failed read leaves nothing to offer.
+   *
+   * `options` is `{key, pageId, name, entity}` when the page being added is a
+   * button's options subpage: only the options templates that button's device
+   * answers are offered, and with none there is no dialog, only a toast.
    */
-  async _showAddPageDialog() {
+  async _showAddPageDialog(options = null) {
     let templates = [];
     try {
-      templates = (await this._loadTemplates())
+      templates = (await this._loadTemplates(options?.entity))
         .filter(t => t.available !== false && this._templateAction(t) !== null);
+      // A button's options page is made only from an options template its
+      // own device answers; those templates are offered nowhere else.
+      templates = templates.filter(t => (options ? t.options && t.fits : !t.options));
     } catch (e) {
-      console.warn("[LIZA] Add-page options unavailable:", e);
+      console.warn("[lizaIP] Add-page options unavailable:", e);
     }
-    this._openAddPageSteps(this._addPageFirstStep(templates));
+    if (options && !templates.length) {
+      this._toast(this._t("no_options", { name: options.name }));
+      return;
+    }
+    if (options && templates.length === 1) {
+      await this._applyOnlyOption(templates[0], options);
+      return;
+    }
+    this._openAddPageSteps(options
+      ? this._addOptionsFirstStep(templates, options)
+      : this._addPageFirstStep(templates));
+  }
+
+  /**
+   * The one options template a button's device answers, applied without a
+   * dialog: there is nothing to choose, and the device it binds to is the
+   * button's own. Only where that device cannot be proposed is it asked for.
+   */
+  async _applyOnlyOption(template, options) {
+    const hub = Boolean(template.target_selector?.config_entry);
+    let suggested = "";
+    if (!template.unbound) {
+      ({ suggested = "" } = hub
+        ? await this._loadTemplateConfigEntries(template.id, options.entity)
+        : await this._loadTemplateDevices(template.id, options.entity));
+    }
+    if (suggested) {
+      // Reports for itself: a toast for what it wrote, or why it could not.
+      await this._addTemplatePage(template.id, suggested, hub ? "config_entry" : "device", options);
+      return;
+    }
+    await this._showTemplateEntityPicker(template.id, template, { options });
   }
 
   /**
@@ -2085,8 +2280,18 @@ class LizaRemotePanel extends HTMLElement {
    * of the tree -- the blank page is one. Everything carries the same `items`
    * the deeper steps do, so one piece of code draws and binds them all.
    */
+  /** A template's description. */
+  _templateDesc(t) {
+    return t?.description || "";
+  }
+
+  /** "(3 pages)" after a template's name when adding it makes more than one. */
+  _templatePagesHtml(t) {
+    if (!(t?.page_count > 1)) return "";
+    return ` <span class="template-pages">${this._esc(this._t("template_page_count", { count: t.page_count }))}</span>`;
+  }
+
   _addPageFirstStep(templates) {
-    const options = this._addPageOptions(templates);
     const loose = templates.filter(t => !this._groupChain(t).length);
     return {
       kind: "options",
@@ -2096,14 +2301,8 @@ class LizaRemotePanel extends HTMLElement {
       items: [
         // In no folder, so there is nothing to open on the way: the card adds
         // the page itself, and leads because it is what most pages start from.
-        ...loose.map(template => ({
-          template,
-          primary: true,
-          name: template.name,
-          icon: template.icon,
-          desc: template.description || "",
-        })),
-        ...options.map(group => ({
+        ...loose.map(t => this._templateCard(t)),
+        ...this._addPageOptions(templates).map(group => ({
           group: group.id,
           scope: group.scope || "option",
           primary: group.primary === true,
@@ -2117,6 +2316,35 @@ class LizaRemotePanel extends HTMLElement {
     };
   }
 
+  /** A card that adds *template* itself, rather than opening a folder. */
+  _templateCard(template) {
+    return {
+      template,
+      primary: true,
+      name: template.name,
+      icon: template.icon,
+      desc: this._templateDesc(template),
+    };
+  }
+
+  /**
+   * The first screen of an options walk: what this button's device answers.
+   *
+   * *templates* are already only those, so they are drawn flat, folders
+   * and all: there are a handful at most.
+   */
+  _addOptionsFirstStep(templates, options) {
+    return {
+      kind: "options",
+      options,
+      title: this._t("add_options_title"),
+      crumbs: [{ label: this._t("add_options_title"), icon: "mdi:tune-variant" }],
+      all: templates,
+      items: templates.map(t => this._templateCard(t)),
+      depth: 0,
+    };
+  }
+
   /** One folder deeper, in the same dialog and from the same step shape. */
   _addPageSubStep(step, item) {
     const depth = (step.depth || 0) + 1;
@@ -2125,6 +2353,7 @@ class LizaRemotePanel extends HTMLElement {
       items: this._groupTemplates(item.members, depth),
       crumbs: [...(step.crumbs || []), { label: item.name, icon: item.icon, group: item.group }],
       all: step.all,
+      options: step.options,
       depth,
       back: step,
     };
@@ -2162,7 +2391,8 @@ class LizaRemotePanel extends HTMLElement {
     // A folder is the case grouping was meant for: the four Sonos templates
     // would be four of a dozen cards for a choice that is really "which
     // device", so they collapse into one card that opens a step.
-    const depth = group.split("/").length;
+    // From the chain, not the id: `options/sonos` is a top-level folder.
+    const depth = this._groupChain(templates[0]).findIndex(g => g.id === group) + 1;
     return {
       title: opened ? this._groupLabel(opened) : this._t("choose_template"),
       items: this._groupTemplates(templates, depth),
@@ -2172,6 +2402,7 @@ class LizaRemotePanel extends HTMLElement {
         group,
       }],
       all,
+      options: back?.options,
       depth,
       back,
     };
@@ -2247,7 +2478,7 @@ class LizaRemotePanel extends HTMLElement {
       if (!onName && !onPath) continue;
       const onDesc = this._fuzzyMatch(t.description || "", query);
       found.push({
-        template: t, name, icon: t.icon, desc: t.description,
+        template: t, name, icon: t.icon, desc: this._templateDesc(t),
         hits: onName ? onName.hits : [],
         path: chain.map(g => this._groupLabel(g)),
         score: (onName ? onName.score * 3 : 0)
@@ -2335,7 +2566,7 @@ class LizaRemotePanel extends HTMLElement {
     for (const t of templates) {
       const here = this._groupChain(t)[depth];
       if (!here) {
-        items.push({ template: t, name: this._leafLabel(t, depth), icon: t.icon, desc: t.description });
+        items.push({ template: t, name: this._leafLabel(t, depth), icon: t.icon, desc: this._templateDesc(t) });
         continue;
       }
       let folder = folders.get(here.id);
@@ -2356,7 +2587,7 @@ class LizaRemotePanel extends HTMLElement {
     return items.map(item => {
       if (!item.members || item.members.length !== 1 || item.scope === "option") return item;
       const only = item.members[0];
-      return { template: only, name: this._leafLabel(only, depth), icon: only.icon, desc: only.description };
+      return { template: only, name: this._leafLabel(only, depth), icon: only.icon, desc: this._templateDesc(only) };
     });
   }
 
@@ -2503,10 +2734,10 @@ class LizaRemotePanel extends HTMLElement {
       }
       const found = results.map((r) => this._templateRowHtml({
         attr: `data-template-id="${this._esc(r.template.id)}"`,
-        icon: r.icon, name: r.name, hits: r.hits,
+        icon: r.icon, name: r.name, hits: r.hits, template: r.template,
         desc: r.path.length ? r.path.join(" / ") : (r.desc || ""),
       })).join("");
-      return `<div class="template-list">${found}</div>`;
+      return this._templateListHtml(found);
     }
 
     const items = this._sortedStepItems(step.items || []);
@@ -2532,19 +2763,20 @@ class LizaRemotePanel extends HTMLElement {
         ? this._tCount("template_count", item.members.length)
         : (item.desc || ""),
       kind: item.members ? "folder" : "leaf",
+      template: item.members ? null : item.template,
     })).join("");
     rows.push(rowsFor(lead));
     const tail = [rowsFor(rest)];
     // One empty page over the rest is a running order, not two groups worth
     // naming: the headings earn their place once a folder claims the lead.
     if (!lead.some(i => i.members)) {
-      return `<div class="template-list">${[...rows, ...tail].join("")}</div>`;
+      return this._templateListHtml([...rows, ...tail].join(""));
     }
     return `
         <p class="template-list-title" id="liza-tpl-lead">${this._t("suggested_options")}</p>
-        <div class="template-list is-lead" role="group" aria-labelledby="liza-tpl-lead">${rows.join("")}</div>
+        ${this._templateListHtml(rows.join(""), { cls: "is-lead", labelledBy: "liza-tpl-lead" })}
         <p class="template-list-title" id="liza-tpl-rest">${this._t("other_options")}</p>
-        <div class="template-list" role="group" aria-labelledby="liza-tpl-rest">${tail.join("")}</div>`;
+        ${this._templateListHtml(tail.join(""), { labelledBy: "liza-tpl-rest" })}`;
   }
 
   /**
@@ -2555,13 +2787,26 @@ class LizaRemotePanel extends HTMLElement {
    * changes what is listed rather than the shape of the dialog. Only a
    * folder carries a tail, where its count and a chevron say it opens.
    */
-  _templateRowHtml({ attr, icon, name, desc, hits, kind = "leaf" }) {
-    // A folder says it opens, and is the only kind with a tail. A target is
-    // chosen rather than opened, so it wears a radio at its head: the receipt
-    // above already carries the mark a plate would repeat.
-    const tail = kind === "folder"
-      ? '<span class="template-row-tail"><span class="template-row-chevron"></span></span>'
-      : "";
+  _templateRowHtml({ attr, icon, name, desc, hits, kind = "leaf", template = null }) {
+    const nameHtml = `${hits?.length ? this._markHits(name, hits) : this._esc(name)}${this._templatePagesHtml(template)}`;
+    // A folder says it opens, and is the only kind with a tail.
+    const chevron = kind === "folder" ? '<span class="template-row-chevron"></span>' : "";
+    if (this._haLists()) {
+      // Home Assistant's list row: the picture leads, the name and the line
+      // under it are its headline and supporting text. A target is an option
+      // of a listbox, which marks the chosen one itself.
+      const tag = kind === "target" ? "ha-list-item-option" : "ha-list-item-button";
+      return `
+        <${tag} class="template-row" ${attr}>
+          ${kind === "target" ? "" : `<span slot="start">${this._tilePlateHtml(icon)}</span>`}
+          <span slot="headline" class="template-row-name">${nameHtml}</span>
+          ${desc ? `<span slot="supporting-text" class="template-row-desc">${this._esc(desc)}</span>` : ""}
+          ${chevron ? `<span slot="end" class="template-row-tail">${chevron}</span>` : ""}
+        </${tag}>`;
+    }
+    // A target is chosen rather than opened, so it wears a radio at its head:
+    // the receipt above already carries the mark a plate would repeat.
+    const tail = chevron ? `<span class="template-row-tail">${chevron}</span>` : "";
     const head = kind === "target"
       ? '<span class="template-row-radio" aria-hidden="true"></span>'
       : this._tilePlateHtml(icon);
@@ -2569,12 +2814,32 @@ class LizaRemotePanel extends HTMLElement {
         <button class="template-row" ${attr}>
           ${head}
           <span class="template-row-text">
-            <span class="template-row-name">${hits?.length ? this._markHits(name, hits) : this._esc(name)}</span>
+            <span class="template-row-name">${nameHtml}</span>
             <span class="template-row-desc">${this._esc(desc || "")}</span>
           </span>
           ${tail}
         </button>`;
   }
+
+  /** Whether Home Assistant's own lists are loaded (they come with the
+   *  config panel `_loadHaComponents` pulls in); the walk's own buttons stand
+   *  in until they are. */
+  _haLists() {
+    const ce = globalThis.customElements;
+    return !!(ce?.get?.("ha-list-base") && ce.get("ha-list-item-button")
+      && ce.get("ha-list-selectable") && ce.get("ha-list-item-option"));
+  }
+
+  /** The rows of one step as a list: Home Assistant's, which moves between
+   *  them with the arrow keys and is one tab stop. */
+  _templateListHtml(rowsHtml, { cls = "", labelledBy = "" } = {}) {
+    const label = labelledBy ? ` aria-labelledby="${labelledBy}"` : "";
+    if (this._haLists()) {
+      return `<ha-list-base class="template-list${cls ? ` ${cls}` : ""}"${label}>${rowsHtml}</ha-list-base>`;
+    }
+    return `<div class="template-list${cls ? ` ${cls}` : ""}"${labelledBy ? ` role="group"${label}` : ""}>${rowsHtml}</div>`;
+  }
+
 
   /**
    * The plate the picture sits on, one width for every row.
@@ -2596,9 +2861,14 @@ class LizaRemotePanel extends HTMLElement {
     return `<span class="tile-plate ${wordmark ? 'is-wordmark' : 'is-glyph'}">${art}</span>`;
   }
 
-  /** Rows read in the order they are drawn, so a click finds what it hit. */
+  /** Rows read in the order they are drawn, so a click finds what it hit:
+   *  by file name -- a folder by its directory's -- so a file named `01_…`
+   *  leads its folder, digits sorting before letters. */
   _sortedStepItems(items) {
-    return [...items].sort((a, b) => a.name.localeCompare(b.name));
+    const key = (item) => item.members
+      ? String(item.group || "").split("/").pop()
+      : String(item.template?.file || item.template?.id || item.name || "");
+    return [...items].sort((a, b) => key(a).localeCompare(key(b)));
   }
 
   /** The chrome: breadcrumbs, the search field and the way out. */
@@ -2652,6 +2922,7 @@ class LizaRemotePanel extends HTMLElement {
         host,
         close,
         back: () => show(step),
+        options: step.options,
         // The trail the walk already built, with the template on the end
         // under the name the row gave it: a folder crumb already says
         // "Sonos", so the one under it says "Cover", not "Sonos Cover".
@@ -2661,7 +2932,7 @@ class LizaRemotePanel extends HTMLElement {
           if (chain[i]) show(chain[i]);
         },
       }).catch((e) => {
-        console.warn("[LIZA] Template picker failed:", e);
+        console.warn("[lizaIP] Template picker failed:", e);
         close();
         this._toast(this._t("template_picker_failed"));
       });
@@ -2726,7 +2997,10 @@ class LizaRemotePanel extends HTMLElement {
    * to go back to and passes neither.
    */
   async _showTemplateEntityPicker(templateId, templateMeta, {
-    confirmLabel = this._t("add_page"),
+    // Set when the page being added is a button's options subpage: it binds to
+    // the button's own device without asking, where the template allows it.
+    options = null,
+    confirmLabel = this._t(options ? "add_options_title" : "add_page"),
     busyLabel = this._t("adding"),
     host = null,
     close: hostClose = null,
@@ -2739,7 +3013,10 @@ class LizaRemotePanel extends HTMLElement {
     // list by default; binding a page no template made offers every device.
     loadDevices = null,
     onConfirm = async (target, kind) => {
-      await this._addTemplatePage(templateId, target, kind);
+      await this._addTemplatePage(templateId, target, kind, options);
+      // The options path reports for itself: it toasts what it wrote, or why
+      // it could not, before this ever gets a chance to.
+      if (options) return "";
       return this._t("template_added", { name: templateMeta?.name || templateId });
     },
   } = {}) {
@@ -2749,7 +3026,8 @@ class LizaRemotePanel extends HTMLElement {
     if (templateMeta?.unbound) {
       hostClose?.();
       try {
-        this._toast(await onConfirm(null, "device"));
+        const done = await onConfirm(null, "device");
+        if (done) this._toast(done);
       } catch (e) {
         this._toast(this._t("add_page_error", { error: e?.message || e }));
       }
@@ -2757,14 +3035,16 @@ class LizaRemotePanel extends HTMLElement {
     }
     const deviceSelector = templateMeta?.target_selector?.device || null;
     const entrySelector = templateMeta?.target_selector?.config_entry || null;
-    const description = templateMeta?.description || "";
+    const description = this._templateDesc(templateMeta);
     const fieldLabel = this._t(entrySelector ? "target_hub" : "target_device");
 
     const name = this._esc(templateMeta?.name || templateId);
     const field = `
         <div class="template-entity-picker">
           <p class="template-entity-caption" id="liza-template-target">${fieldLabel}</p>
-          <div class="template-list template-target-list" role="radiogroup" aria-labelledby="liza-template-target"></div>
+          ${this._haLists()
+            ? '<ha-list-selectable class="template-list template-target-list" aria-labelledby="liza-template-target"></ha-list-selectable>'
+            : '<div class="template-list template-target-list" role="radiogroup" aria-labelledby="liza-template-target"></div>'}
           <!-- Replaced asynchronously with the outcome of a round-trip, which
                moves no focus, so a screen reader would otherwise never hear it. -->
           <p class="template-entity-hint" role="status" aria-live="polite">${this._t(entrySelector ? "loading_hubs" : "loading_devices")}</p>
@@ -2783,7 +3063,7 @@ class LizaRemotePanel extends HTMLElement {
           <div class="template-receipt">
             ${this._tilePlateHtml(templateMeta?.icon)}
             <span class="template-receipt-text">
-              <span class="template-receipt-name">${name}</span>
+              <span class="template-receipt-name">${name}${this._templatePagesHtml(templateMeta)}</span>
               <span class="template-receipt-sub">${this._esc(description)}</span>
             </span>
           </div>
@@ -2796,7 +3076,7 @@ class LizaRemotePanel extends HTMLElement {
     ` : `
         <h2 class="add-page-dialog-title" id="liza-dlg-title">
           ${this._renderChromeIconHtml(templateMeta?.icon || 'mdi:remote', 24, "", null, { srcSize: 72, theme: THEME_DEFAULT })}
-          ${name}
+          ${name}${this._templatePagesHtml(templateMeta)}
         </h2>
         ${description ? `<p class="template-dialog-desc">${description}</p>` : ""}
         ${field}
@@ -2807,6 +3087,9 @@ class LizaRemotePanel extends HTMLElement {
     `;
     let overlay;
     let close;
+    // Cancel, Back or Escape while a target is being looked up: what comes
+    // back then belongs to a step nobody is on any more.
+    let dismissed = false;
     if (host) {
       host.innerHTML = body;
       overlay = host;
@@ -2817,10 +3100,13 @@ class LizaRemotePanel extends HTMLElement {
         { labelledBy: "liza-dlg-title" },
       ));
     }
-    this._wireAddPageBack(overlay, () => back());
+    this._wireAddPageBack(overlay, () => { dismissed = true; back(); });
     // Bound before the lookup that fills the list: a load that fails or finds
     // nothing returns early, and a Cancel that does nothing is a trap.
-    overlay.querySelector(".add-page-cancel").addEventListener("click", close);
+    overlay.querySelector(".add-page-cancel").addEventListener("click", () => {
+      dismissed = true;
+      close();
+    });
     (crumbs || []).forEach((_, i) => {
       if (i === crumbs.length - 1) return;
       overlay.querySelector(`[data-crumb="${i}"]`)?.addEventListener("click", () => onCrumb?.(i));
@@ -2864,43 +3150,55 @@ class LizaRemotePanel extends HTMLElement {
       // One list, one row height. Areas are optional per device, so without
       // this the group reads as a ragged stack rather than a column.
       list.classList.toggle("is-two-line", targets.some((t) => t.desc));
+      const ha = this._haLists();
       list.innerHTML = targets.map((t) => this._templateRowHtml({
-        attr: `type="button" role="radio" aria-checked="false" tabindex="-1" data-target="${this._esc(t.id)}"`,
+        attr: ha
+          ? `value="${this._esc(t.id)}" data-target="${this._esc(t.id)}"`
+          : `type="button" role="radio" aria-checked="false" tabindex="-1" data-target="${this._esc(t.id)}"`,
         name: t.name,
         desc: t.desc || "",
         kind: "target",
       })).join("");
       const rows = [...list.querySelectorAll(".template-row")];
-      // A radio group is one tab stop, and the arrows move within it. Without
-      // the roving index the role would promise a group and behave as a list
-      // of separate buttons.
-      const rove = (i) => rows.forEach((r, j) => { r.tabIndex = j === i ? 0 : -1; });
       const mark = (id) => {
         chosen = id;
-        rows.forEach((row, i) => {
+        rows.forEach((row) => {
           const on = row.dataset.target === id;
-          row.classList.toggle("is-chosen", on);
-          row.setAttribute("aria-checked", on ? "true" : "false");
-          if (on) rove(i);
+          if (ha) row.selected = on;
+          else {
+            row.classList.toggle("is-chosen", on);
+            row.setAttribute("aria-checked", on ? "true" : "false");
+            row.tabIndex = on ? 0 : -1;
+          }
         });
         confirmBtn.disabled = !id;
       };
-      for (const row of rows) {
-        row.addEventListener("click", () => mark(row.dataset.target));
+      if (ha) {
+        // Home Assistant's listbox: the arrow keys move between the rows,
+        // Enter, Space or a click chooses one.
+        list.addEventListener("ha-list-item-selected", (e) => {
+          const row = rows[Number(e.detail)];
+          if (row) mark(row.dataset.target);
+        });
+      } else {
+        for (const row of rows) {
+          row.addEventListener("click", () => mark(row.dataset.target));
+        }
+        // A radio group is one tab stop, and the arrows move within it.
+        const STEP = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+        list.addEventListener("keydown", (e) => {
+          const here = rows.indexOf(e.target.closest?.(".template-row"));
+          if (here < 0 || !rows.length) return;
+          const next = e.key in STEP
+            ? (here + STEP[e.key] + rows.length) % rows.length
+            : e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : -1;
+          if (next < 0) return;
+          e.preventDefault();
+          mark(rows[next].dataset.target);
+          rows[next].focus();
+        });
+        if (rows[0]) rows[0].tabIndex = 0;
       }
-      const STEP = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
-      list.addEventListener("keydown", (e) => {
-        const here = rows.indexOf(e.target.closest?.(".template-row"));
-        if (here < 0 || !rows.length) return;
-        const next = e.key in STEP
-          ? (here + STEP[e.key] + rows.length) % rows.length
-          : e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : -1;
-        if (next < 0) return;
-        e.preventDefault();
-        mark(rows[next].dataset.target);
-        rows[next].focus();
-      });
-      rove(0);
       if (preselect) mark(preselect);
       claimFocus(rows.find((r) => r.dataset.target === preselect) || rows[0]);
     };
@@ -2914,10 +3212,36 @@ class LizaRemotePanel extends HTMLElement {
       return;
     }
 
+    // The one way this dialog commits, whether a target was chosen here or --
+    // for an options page the button's own device already answers -- bound
+    // without ever drawing the step.
+    const commit = async (target) => {
+      const done = await onConfirm(target, targetKind);
+      close();
+      if (done) this._toast(done);
+      this._render();
+    };
+    const bindSilently = async (target) => {
+      // Escape and the scrim close the dialog without passing through Cancel,
+      // and it stays in the tree through the closing animation: its open
+      // state is asked as well as the flag and the list.
+      if (dismissed || list.isConnected === false) return;
+      const dlg = overlay.closest?.(".add-page-overlay")
+        || this.shadowRoot?.querySelector(".add-page-overlay");
+      if (dlg && (dlg.isConnected === false || dlg.open === false)) return;
+      try {
+        await commit(target);
+      } catch (e) {
+        close();
+        this._toast(this._t("failed", { error: e.message || e }));
+      }
+    };
+
     if (entrySelector) {
       // Config-entry templates are bound to one instance of an integration -- a
       // Hue bridge -- and generate their whole grid from what it owns.
-      const { entries, error } = await this._loadTemplateConfigEntries(templateId);
+      const { entries, error, suggested = "" } = await this._loadTemplateConfigEntries(
+        templateId, options?.entity);
       const integration = entrySelector.integration || "";
       if (error) {
         hint.textContent = this._t("hubs_load_failed", { error });
@@ -2929,15 +3253,17 @@ class LizaRemotePanel extends HTMLElement {
           : this._t("no_hub_found_generic");
         return;
       }
+      const proposed = entries.some((e) => e.id === suggested) ? suggested : "";
+      if (options && proposed) return bindSilently(proposed);
       const only = entries.length === 1 ? entries[0].id : "";
-      paint(entries.map((e) => ({ id: e.id, name: e.title })), only);
+      paint(entries.map((e) => ({ id: e.id, name: e.title })), proposed || only);
       settled();
     } else {
       // Device-mode templates span several entity domains of one device. The
       // eligible-device list is resolved server-side against the device and
       // entity registries, so this only has to present it.
       const { devices, error, suggested = "" } = loadDevices
-        ? await loadDevices() : await this._loadTemplateDevices(templateId);
+        ? await loadDevices() : await this._loadTemplateDevices(templateId, options?.entity);
       if (error) {
         hint.textContent = this._t("devices_load_failed", { error });
         return;
@@ -2952,6 +3278,9 @@ class LizaRemotePanel extends HTMLElement {
       // Proposed, not chosen: preselected so one click confirms it.
       const allowed = new Set(devices.map((d) => d.id));
       const proposed = allowed.has(suggested) ? suggested : "";
+      // An options page is about one button, and the button already names its
+      // device: there is no question left to ask.
+      if (options && proposed) return bindSilently(proposed);
       paint(devices.map((d) => ({ id: d.id, name: d.name, desc: d.area || "" })), proposed);
       settled();
     }
@@ -2962,10 +3291,7 @@ class LizaRemotePanel extends HTMLElement {
       confirmBtn.disabled = true;
       confirmBtn.textContent = busyLabel;
       try {
-        const done = await onConfirm(target, targetKind);
-        close();
-        if (done) this._toast(done);
-        this._render();
+        await commit(target);
       } catch (e) {
         this._toast(this._t("failed", { error: e.message || e }));
         confirmBtn.disabled = false;
@@ -2984,9 +3310,12 @@ class LizaRemotePanel extends HTMLElement {
   _onPageDeleteKey(e) {
     if (!(e.key === "Delete" || e.key === "Backspace")) return;
     if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (this._activeTab !== "buttons" || this._pageOpInFlight || this._moveSourceKey) return;
+    // Not turned away while a page operation runs: `_deletePage` waits for it,
+    // as the ✕ does. Dropping the key made it dead for the seconds a delete
+    // took to settle on a slow disk.
+    if (this._activeTab !== "buttons" || this._moveSourceKey) return;
     if (!this._pages?.[this._currentPageIdx]) return;
-    if (this._faceMenuEl || this.shadowRoot?.querySelector("dialog.add-page-overlay")) return;
+    if (this._faceMenuEl || this.shadowRoot?.querySelector(".add-page-overlay")) return;
     const path = e.composedPath?.() || [];
     const typing = path.some((n) => n?.isContentEditable
       || /^(INPUT|TEXTAREA|SELECT|HA-INPUT|HA-INPUT-SEARCH|HA-SELECT)$/.test(n?.tagName || "")
@@ -3006,11 +3335,15 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   async _deletePage(pageIdx) {
-    const idx = pageIdx !== undefined ? pageIdx : this._currentPageIdx;
+    // Named by id across the wait: the list can change under it.
+    const wanted = this._pages[pageIdx !== undefined ? pageIdx : this._currentPageIdx]?.id;
+    await this._whenPageOpsIdle();
+    const idx = this._pages.findIndex(p => p.id === wanted);
     const page = this._pages[idx];
+    if (!page) return;
     // Which page by position and id in the title, its name on the line under
     // it: two pages can share a title, and "Page 3/9 (#24)" cannot be confused.
-    // `_pageTitle`, not `page.image`: `image` is a title-*image* spec and
+    // `_pageTitle`, not `page.title`: `title` is a picture spec and
     // reads back as "mdi:sofa" rather than as a name.
     const pageName = this._pagePosition(page);
     const pageSubtitle = this._pageTitle(page);
@@ -3037,39 +3370,56 @@ class LizaRemotePanel extends HTMLElement {
     }
     const configured = Object.entries(assigns)
       .filter(([key, rec]) => key !== "slider_horizontal" && this._isAssignedRecord(rec)).length;
+    // The subpages a template brought with this page go with it: nothing else
+    // leads to them. The backend drops them too; naming them here is what
+    // tells the user, and taking them out of the strip at once is what keeps
+    // the panel from showing pages that no longer exist.
+    const bundled = page.template?.instance === pageId
+      ? this._pages.filter(p => p.id !== pageId && p.template?.instance === pageId)
+      : [];
+    const pageMessage = configured > 0
+      ? this._t("delete_page_confirm", { n: configured })
+      : this._t("delete_page_confirm_empty");
     // Always asked. Skipping it for pages that looked empty went wrong: a
     // page that is neither open nor cached counts as having no buttons, and
     // was deleted with all of them and no warning.
     const confirmed = await this._confirmDestructive({
       title: this._t("delete_page_title", { name: pageName }),
       subtitle: pageSubtitle,
-      message: configured > 0
-        ? this._t("delete_page_confirm", { n: configured })
-        : this._t("delete_page_confirm_empty"),
+      message: bundled.length
+        ? `${pageMessage} ${this._tCount("delete_page_subpages", bundled.length)}`
+        : pageMessage,
       confirmText: this._t("delete"),
     });
     if (!confirmed) return;
-    // A pending save resolves against _currentPageId, and the indices below are
-    // about to move under it. Awaited so it writes to the page it was actually
-    // edited on.
-    await this._flushAutoSave();
+    // Started before the selection moves -- the save takes the page it was
+    // edited on as it starts -- and awaited only before the page list is
+    // sent: on a slow disk a save can take seconds, and the page used to stay
+    // in the strip all that time.
+    const flushed = this._flushAutoSave();
     // Shown first, saved second, as a reorder is: `set_pages` talks to the
     // remote before it answers, and the strip used to keep the deleted page
     // until then. A failed save puts everything back.
     const before = {
       idx: this._currentPageIdx,
       assignments: this._assignments,
+      pages: this._pages.slice(),
     };
-    const removed = this._pages.splice(idx, 1)[0];
+    const removedIds = new Set([pageId, ...bundled.map(p => p.id)]);
     // _currentPageIdx is a position in a list that just got shorter, so
     // deleting anything to the left of the selection slides the selected page
-    // one place down and the index has to follow it. Only clamping the tail —
-    // which is all this did — left every other deletion pointing at the
-    // *next* page. Deleting the selected page itself keeps the index, which
-    // now addresses the page that took its place; the clamp catches the case
-    // where there was nothing after it.
-    const deletedSelected = idx === this._currentPageIdx;
-    if (idx < this._currentPageIdx) this._currentPageIdx--;
+    // down and the index has to follow it. Only clamping the tail — which is
+    // all this once did — left every other deletion pointing at the *next*
+    // page. Deleting the selected page itself lands on the first page left
+    // after it; the clamp catches the case where there was nothing after it.
+    const openBefore = this._currentPageId;
+    const deletedSelected = removedIds.has(openBefore);
+    const survivorsBefore = this._pages
+      .slice(0, this._currentPageIdx).filter(p => !removedIds.has(p.id)).length;
+    this._pages = this._pages.filter(p => !removedIds.has(p.id));
+    this._currentPageIdx = deletedSelected
+      ? survivorsBefore
+      : this._pages.findIndex(p => p.id === openBefore);
     if (this._currentPageIdx >= this._pages.length) this._currentPageIdx = Math.max(0, this._pages.length - 1);
 
     this._selectedButtonIdx = -1;
@@ -3089,10 +3439,11 @@ class LizaRemotePanel extends HTMLElement {
     try {
       let result;
       try {
+        await flushed;
         result = await this._hass.callWS({ type: "lizaip_config/set_pages", entry_id: this._currentEntry, pages: this._pages });
       } catch (e) {
         // Restore on failure
-        this._pages.splice(idx, 0, removed);
+        this._pages = before.pages;
         this._currentPageIdx = before.idx;
         this._assignments = before.assignments;
         this._toast(this._t("delete_page_failed"));
@@ -3100,7 +3451,7 @@ class LizaRemotePanel extends HTMLElement {
         return;
       }
       this._toast(this._t("page_deleted", { name: pageName }));
-      delete this._pageCache[pageId];
+      for (const id of removedIds) delete this._pageCache[id];
 
       // The backend took out every link to the deleted page; the pages it
       // changed are read again, or their buttons would still show the link.
@@ -3146,7 +3497,7 @@ class LizaRemotePanel extends HTMLElement {
       // Nothing was persisted, so the optimistic row is now a lie. Put the old
       // order back and render it properly rather than leaving the user looking
       // at a move that did not happen.
-      console.error("[LIZA] page reorder failed, reverting:", err);
+      console.error("[lizaIP] page reorder failed, reverting:", err);
       this._pages = before;
       this._currentPageIdx = beforeIdx;
       this._render();
@@ -3305,6 +3656,12 @@ class LizaRemotePanel extends HTMLElement {
 
   _longtouchEnabled() {
     return this._featureEnabled("longtouch");
+  }
+
+  // Whether a button may be given an options page. It is opened by the long
+  // touch, so that switch has to be on as well.
+  _optionsFeatureEnabled() {
+    return this._longtouchEnabled() && this._featureEnabled("options");
   }
 
   // Whether buttons on this remote may carry a toggle. Gates the editor section
@@ -3610,7 +3967,7 @@ class LizaRemotePanel extends HTMLElement {
    * target is the `ha-button` inside it -- hidden by `visibility`, which still
    * takes a programmatic click. `.link-button-row` and `ha-button-menu` are
    * kept beside it because they were the shape of the same control on earlier
-   * frontends, and `hacs.json` still supports back to 2026.8.
+   * frontends, back to the 2026.11.0 floor `hacs.json` asks for.
    */
   _enforceSingleAction(editor) {
     const STYLE_ID = "liza-single-action";
@@ -3831,6 +4188,15 @@ class LizaRemotePanel extends HTMLElement {
         if (overlay.showModal) {
           if (overlay.open) overlay.close();
           overlay.showModal();
+        } else if (overlay.localName === "ha-dialog" && overlay.open) {
+          // Detached, ha-dialog forgot it was showing; `open` going false and
+          // back is what shows it again. Not a way out: `closed` is ignored.
+          overlay._lizaReopening = true;
+          overlay.open = false;
+          Promise.resolve(overlay.updateComplete).then(() => {
+            overlay.open = true;
+            return overlay.updateComplete;
+          }).finally(() => { overlay._lizaReopening = false; });
         }
       }
       this._a11yRestoreFocusSoon(focus);
@@ -3859,7 +4225,7 @@ class LizaRemotePanel extends HTMLElement {
       // selection the user cannot see.
       this._syncRoute();
     } catch (e) {
-      console.error("[LIZA] _render failed:", e);
+      console.error("[lizaIP] _render failed:", e);
     }
   }
 
@@ -3903,36 +4269,37 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   _renderDeviceList() {
+    // The setup steps, under the setup page's heading, are for an
+    // administrator with no remote yet; anybody else waits to be given one.
+    const setup = !this._devices.length && this._isAdmin();
     this.shadowRoot.innerHTML = `
       ${this._styleTag()}
-      <div class="toolbar"><ha-menu-button></ha-menu-button><h1 class="main-title">lizaIP</h1>${this._htmlGuideButton?.("toolbar-guide") || ""}</div>
+      <div class="toolbar"><ha-menu-button></ha-menu-button><h1 class="main-title">lizaIP</h1></div>
       <div class="view"><ha-card outlined><div class="card-content">
-        ${this._devices.length === 0
-          // Straight to this integration's own page, not the integration list:
-          // that is where the "Add entry" button for a new hub actually is, and
-          // the panel only exists once lizaIP is loaded, so the page resolves.
-          ? `<p class="empty-state">${this._t("no_devices", {
-              link: `<a href="/config/integrations/integration/lizaip">${this._t("no_devices_link")}</a>`,
-            })}</p>`
-          : `<div class="device-list">${this._devices.map(d => {
+        <div class="device-list">
+          ${this._htmlDiscoverySlot?.() || ""}
+          <section class="list-section">
+            <h2 class="list-section-title"${setup ? " data-setup" : ""} tabindex="-1">${this._esc(this._t(setup ? "setup_steps_heading" : "devices_heading"))}</h2>
+            ${!this._devices.length ? this._htmlNoDevices() : this._devices.map(d => {
               // Same reasoning as the config toolbar: the id is spelled out by
               // a screen reader and read by nobody, so the meta line carries
-              // only the firmware version. An untitled device still falls back
-              // to its id for the title, which is the one place it earns its
-              // space.
-              const meta = d.sw_version ? `v${d.sw_version}` : '';
+              // only the firmware version.
+              const version = d.sw_version ? `<span>${this._esc(`v${d.sw_version}`)}</span>` : '';
+              const assigned = this._htmlAssignedChip(d);
               const displayTitle = (d?.title || '').trim() || d.device_id || d.entry_id || 'lizaIP';
               return `
             <div class="device-item" data-entry="${d.entry_id}" role="button" tabindex="0">
               <div class="device-icon-wrap"><ha-icon icon="mdi:remote" style="color:#fff;--mdc-icon-size:20px" aria-hidden="true"></ha-icon></div>
               <div class="device-info">
                 <div class="device-title">${this._esc(displayTitle)}</div>
-                ${meta ? `<div class="device-meta">${this._esc(meta)}</div>` : ''}
+                ${!version && !assigned ? '' : `<div class="device-meta">${version}${assigned}</div>`}
               </div>
               <div class="status-badge ${d.available ? 'online' : 'offline'}"><span class="dot" aria-hidden="true"></span>${this._t(d.available ? 'device_online' : 'device_offline')}</div>
               ${this._htmlDiagnosticsMenuButton(d.entry_id, "device-item-menu")}
             </div>`;
-            }).join("")}</div>`}
+            }).join("")}
+          </section>
+        </div>
       </div></ha-card></div>
       ${this._htmlDiagnosticsPill?.() || ""}
       <div class="toast" role="status" aria-live="polite"></div>`;
@@ -3941,7 +4308,89 @@ class LizaRemotePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".device-item").forEach(el =>
       el.addEventListener("click", () => this._selectDevice(el.dataset.entry)));
     this._wireDiagnosticsMenus?.();
-    this._wireGuideButton?.();
+    this._wireDiscovery?.();
+    this._wireUserBadges?.();
+  }
+
+  /**
+   * The control at the head of a remote's toolbar.
+   *
+   * A Back arrow whenever there is a list worth going to -- more than one
+   * remote, or one found on the network and waiting in it. A single remote
+   * with nothing waiting has no list behind it, so the sidebar's own menu
+   * button takes the place instead.
+   *
+   * Home Assistant's own back control rather than an arrow of our own: it
+   * carries HA's icon, its "Back" label, and the flip to a right-pointing
+   * arrow in right-to-left languages.
+   */
+  _htmlToolbarLead() {
+    return (this._devices.length > 1 || this._discovered?.().length)
+      ? `<ha-icon-button-arrow-prev id="btn-back" label="${this._esc(this._t("back"))}"></ha-icon-button-arrow-prev>`
+      : `<ha-menu-button></ha-menu-button>`;
+  }
+
+  _wireToolbarLead() {
+    const mb = this.shadowRoot.querySelector("ha-menu-button");
+    if (mb) { mb.hass = this._hass; mb.narrow = this._narrow; }
+    const bb = this.shadowRoot.querySelector("#btn-back");
+    if (bb) {
+      // `ha-icon-button-arrow-prev` reads the language off `hass` to decide
+      // which way its arrow points; without it the arrow stays left-pointing.
+      bb.hass = this._hass;
+      bb.addEventListener("click", () => this._goBack());
+    }
+  }
+
+  /**
+   * Swap that control when a remote is found or taken away.
+   *
+   * Patched rather than rendered: this lands while the user is inside a
+   * remote, and redrawing the view would cost them whatever they were part
+   * way through.
+   */
+  _syncToolbarLead() {
+    const slot = this.shadowRoot?.querySelector(".toolbar-lead");
+    if (!slot) return;
+    const html = this._htmlToolbarLead();
+    if (slot.innerHTML === html) return;
+    slot.innerHTML = html;
+    this._wireToolbarLead();
+  }
+
+  /**
+   * The list with nothing in it: the first three steps of the setup page
+   * (wake up, connect, provision), with its icons and QR code. Nothing here
+   * for the user to press; a remote joining the network announces itself and
+   * Home Assistant hands it to the panel.
+   */
+  _htmlNoDevices() {
+    // An administrator is waiting for a remote to join the network, so the
+    // steps help. Anybody else is waiting to be given one, and they would be
+    // sent setting up hardware they cannot add.
+    if (!this._isAdmin()) {
+      return `
+      <div class="no-devices">
+        <ha-icon icon="mdi:remote" aria-hidden="true"></ha-icon>
+        <p>${this._esc(this._t("no_assigned_remotes"))}</p>
+      </div>`;
+    }
+    const step = (key) => `
+        <li class="setup-step">
+          <svg class="setup-step-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="${SETUP_STEP_ICONS[key]}"/></svg>
+          <div>
+            <h3 class="setup-step-title">${this._esc(this._t(`setup_${key}_title`))}</h3>
+            <p>${this._t(`setup_${key}_text`)}</p>
+          </div>
+        </li>`;
+    // Beside the list rather than in the Provision row, so its height does
+    // not push that row away from the others.
+    return `
+      <div class="no-devices-setup">
+        <ol class="no-devices">${step("wake")}${step("connect")}${step("provision")}
+        </ol>
+        <img class="setup-qr" src="${SETUP_QR}" alt="" width="96" height="96">
+      </div>`;
   }
 
   /**
@@ -4058,12 +4507,7 @@ class LizaRemotePanel extends HTMLElement {
     this.shadowRoot.innerHTML = `
       ${this._styleTag()}
       <div class="toolbar">
-        ${this._devices.length > 1
-          // Home Assistant's own back control rather than an arrow of our
-          // own: it carries HA's icon, its "Back" label, and the flip to a
-          // right-pointing arrow in right-to-left languages.
-          ? `<ha-icon-button-arrow-prev id="btn-back" label="${this._esc(this._t("back"))}"></ha-icon-button-arrow-prev>`
-          : `<ha-menu-button></ha-menu-button>`}
+        <span class="toolbar-lead">${this._htmlToolbarLead()}</span>
         ${this._htmlStatusPill(status)}
         <h1 class="main-title">${titleInner}</h1>
         ${!this._htmlMemoryBars ? "" : `<div class="toolbar-memory" role="group" aria-label="${this._esc(this._t("memory_group"))}">${this._htmlMemoryBars()}</div>`}
@@ -4108,18 +4552,10 @@ class LizaRemotePanel extends HTMLElement {
       ${this._htmlDiagnosticsPill?.() || ""}
       <div class="toast" role="status" aria-live="polite"></div>`;
 
-    const mb = this.shadowRoot.querySelector("ha-menu-button");
-    if (mb) { mb.hass = this._hass; mb.narrow = this._narrow; }
+    this._wireToolbarLead();
     // After the markup, because announcing re-attaches the live region to a
     // shadow root the assignment above has just emptied.
     this._announceDeviceStatus(status, title);
-    const bb = this.shadowRoot.querySelector("#btn-back");
-    if (bb) {
-      // `ha-icon-button-arrow-prev` reads the language off `hass` to decide
-      // which way its arrow points; without it the arrow stays left-pointing.
-      bb.hass = this._hass;
-      bb.addEventListener("click", () => this._goBack());
-    }
     // The group's own event covers the arrow keys, which move the selection
     // without a click; the click covers a press on the tab already shown.
     this.shadowRoot.querySelector(".toolbar-tabs")?.addEventListener("wa-tab-show", (ev) => {
@@ -4153,6 +4589,8 @@ Object.assign(LizaRemotePanel.prototype, SettingsViewMixin);
 Object.assign(LizaRemotePanel.prototype, RestoreViewMixin);
 Object.assign(LizaRemotePanel.prototype, ThemeDownloadMixin);
 Object.assign(LizaRemotePanel.prototype, GuideViewMixin);
+Object.assign(LizaRemotePanel.prototype, DiscoveryMixin);
+Object.assign(LizaRemotePanel.prototype, PeopleViewMixin);
 Object.assign(LizaRemotePanel.prototype, A11yMixin);
 Object.assign(LizaRemotePanel.prototype, RouteMixin);
 

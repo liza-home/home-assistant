@@ -20,9 +20,9 @@
 # report the position only when the state changes, so 4 is not a running
 # clock.
 
+version: 2
 name: "Media wall"
 icon: mdi:image-multiple
-page_image: "mdi:speaker ${_device} ${round(_device.volume_level * 100)}%"
 description: Cover art over four buttons, volume and progress as fill levels
 
 target_selector:
@@ -30,86 +30,85 @@ target_selector:
     integration: sonos
     primary_domain: media_player
 
-buttons:
-  # `box=x,y,w,h` in the 120x124 picture.
-  button_1:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=120x124&box=0,0,60,62"
-  button_2:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=120x124&box=60,0,60,62"
-  button_5:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=120x124&box=0,62,60,62"
-  button_6:
-    label: "${_device.media_artist}: ${_device.media_album_name}"
-    image: "${_device.entity_picture}?size=120x124&box=60,62,60,62"
+pages:
+  media-wall:
+    title: "mdi:speaker ${_device} ${round(_device.volume_level * 100)}%"
+    buttons:
+      # `box=x,y,w,h` in the 120x124 picture.
+      button_1:
+        icon: "${_device.entity_picture}?size=120x124&box=0,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_2:
+        icon: "${_device.entity_picture}?size=120x124&box=60,0,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_5:
+        icon: "${_device.entity_picture}?size=120x124&box=0,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
+      button_6:
+        icon: "${_device.entity_picture}?size=120x124&box=60,62,60,62"
+        tooltip: "${_device.media_artist}: ${_device.media_album_name}"
 
-  button_3:
-    label: "Volume ${round(_device.volume_level * 100)}%"
-    action_name: Volume Up
-    image: "mdi:volume-high?percent=${round(_device.volume_level * 100)}"
-    config:
-      - action: media_player.volume_up
+      button_3:
+        icon: "mdi:volume-high?percent=${round(_device.volume_level * 100)}"
+        tooltip: "Volume ${round(_device.volume_level * 100)}%"
+        config:
+          - action: media_player.volume_up
 
-  button_4:
-    label: "${round(_device.media_position * 100 / _device.media_duration)}% of ${round(_device.media_duration / 60)} min"
-    image: "mdi:progress-clock?percent=${round(_device.media_position * 100 / _device.media_duration)}"
+      button_4:
+        icon: "mdi:progress-clock?percent=${round(_device.media_position * 100 / _device.media_duration)}"
+        tooltip: "${round(_device.media_position * 100 / _device.media_duration)}% of ${round(_device.media_duration / 60)} min"
 
-  button_7:
-    label: "${_device.media_album_name}"
-    image: "text:${_device.media_artist}"
+      button_7:
+        icon: "text:${_device.media_artist}"
+        tooltip: "${_device.media_album_name}"
 
-  button_8:
-    label: "${_state} - ${_device.media_title}"
-    action_name: Play/Pause
-    image: mdi:play mdi:pause
-    config:
-      - action: media_player.media_play_pause
+      button_8:
+        icon: mdi:play mdi:pause
+        tooltip: "${_state} - ${_device.media_title}"
+        config:
+          - action: media_player.media_play_pause
 
-  button_9:
-    label: "${_device.media_title_prev}"
-    action_name: Previous
-    image: mdi:skip-previous
-    config:
-      - action: media_player.media_previous_track
-  button_11:
-    label: "${_device.media_title_next}"
-    action_name: Next
-    image: mdi:skip-next
-    config:
-      - action: media_player.media_next_track
+      button_9:
+        icon: mdi:skip-previous
+        tooltip: "${_device.media_title_prev}"
+        config:
+          - action: media_player.media_previous_track
+      button_11:
+        icon: mdi:skip-next
+        tooltip: "${_device.media_title_next}"
+        config:
+          - action: media_player.media_next_track
 
-  button_10:
-    label: "Source ${_device.source}"
-    image: "text:${_device.source}"
+      button_10:
+        icon: "text:${_device.source}"
+        tooltip: "Source ${_device.source}"
 
-  button_12:
-    label: "${_device} · ${_device.area_name}"
-    image: "mdi:speaker ${_device.area_name}"
+      button_12:
+        icon: "mdi:speaker ${_device.area_name}"
+        tooltip: "${_device} · ${_device.area_name}"
 
-  button_volume_up:
-    label: Volume Up
-    repeat: true
-    image: mdi:volume-plus
-    config:
-      - action: media_player.volume_up
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
 
-  button_volume_down:
-    label: Volume Down
-    repeat: true
-    image: mdi:volume-minus
-    config:
-      - action: media_player.volume_down
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
 
-  slider_vertical:
-    label: Volume
-    image: mdi:volume-high
-    slider_actions:
-      mode: proportional
-      attribute: volume_level
-      service: media_player.volume_set
-      data_key: volume_level
-      factor: 1.0
-      min: 0.0
-      max: 1.0
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level
+          factor: 1.0
+          min: 0.0
+          max: 1.0

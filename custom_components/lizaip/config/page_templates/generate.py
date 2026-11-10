@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -39,7 +40,13 @@ from ...shared.services import (
 from ...const import DOMAIN
 from ...shared.icon_defaults import icon_defaults
 from ...config.const import ASSIGNMENT_BLANKED_KEY, drop_redundant_subject, payload_identity
-from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
+from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_REPEAT_KEY
+from ...shared.i18n import (
+    FALLBACK_LANGUAGE,
+    button_tooltips,
+    translate_fallback,
+    translate_key,
+)
 from .resolver import (
     DYNAMIC_KEY,
     config_step,
@@ -53,12 +60,402 @@ from .resolver import (
 __all__ = [
     "async_load_template",
     "generate_assignments",
+    "is_unbound",
     "list_templates",
     "load_template",
+    "page_definition",
+    "page_source",
     "resolve_template_variables",
+    "template_pages",
+    "template_version",
 ]
 
 _LOGGER = logging.getLogger(__name__)
+
+#: The format a template file is written in, stated as ``version:`` at its top.
+#: 1 is the original one -- buttons at the top of the file, ``unbound``,
+#: ``name_key`` -- and is what a file that states none is; 2 names its pages
+#: under ``pages:``, a page's ``title`` and a button's ``icon`` and
+#: ``tooltip``. A page made from a template
+#: records the version it was made under, so a stored page of an old format
+#: can be brought up to date (``config/store.py``) until that format is
+#: dropped from here.
+TEMPLATE_VERSION_KEY = "version"
+TEMPLATE_VERSION = 2
+#: The template file formats that are read. A file in any other is reported
+#: and skipped, rather than read as something it is not.
+SUPPORTED_TEMPLATE_VERSIONS: frozenset[int] = frozenset({TEMPLATE_VERSION})
+
+
+def template_version(template: Any) -> int:
+    """The format version a template states; 1 for one that states none."""
+    value = template.get(TEMPLATE_VERSION_KEY) if isinstance(template, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else 1
+
+
+def _readable(template_id: str, template: Any, path: str) -> bool:
+    """Whether a parsed template file is in a format this release reads."""
+    version = template_version(template)
+    if version in SUPPORTED_TEMPLATE_VERSIONS:
+        return True
+    _LOGGER.warning(
+        "Template %s (%s) is written in template format %d, which this release "
+        "does not read (it reads %s); skipping it",
+        template_id, path, version,
+        ", ".join(str(v) for v in sorted(SUPPORTED_TEMPLATE_VERSIONS)),
+    )
+    return False
+
+
+#: Where a template names its pages: every page it makes, keyed by a name used
+#: inside the file and remembered by each page made from it.
+TEMPLATE_PAGES_KEY = "pages"
+
+#: A button's shorthand for "send the remote to this template's page *name*".
+PAGE_LINK_KEY = "goto_page"
+
+#: What a page under ``pages:`` may say, and what a template must not say
+#: beside them: the rest of the file -- its selector, its placeholders, its
+#: card -- belongs to the template, and a page's title to that page.
+_PAGE_KEYS = frozenset({"template", "title", "subpage", "buttons", "paginate", "max_parts"})
+
+#: A page that repeats while its placeholder has more items than it has slots:
+#: ``paginate: <placeholder>``. Each repeat -- a *part* -- shows the next run
+#: of items, and ``max_parts`` caps how many there may be.
+PAGINATE_KEY = "paginate"
+MAX_PARTS_KEY = "max_parts"
+DEFAULT_MAX_PARTS = 4
+
+#: Link names that point at a paginated page's neighbouring parts. A link to
+#: a part that does not exist leaves its button empty; a list of names takes
+#: the first that exists (``[previous, remote]``: back a part, else home).
+NEXT_PART = "next"
+PREVIOUS_PART = "previous"
+_PART_LINKS = frozenset({NEXT_PART, PREVIOUS_PART})
+
+#: A button that differs on the last part of a paginated page::
+#:
+#:     button_12:
+#:       placeholder: "@app[12]"     # on the last part
+#:       more_parts: {goto_page: next, icon: …}   # while another follows
+#:
+#: Its item shows on the last part only, so twelve items fit one page.
+PLACEHOLDER_KEY = "placeholder"
+MORE_PARTS_KEY = "more_parts"
+
+_PLACEHOLDER_TOKEN_RE = re.compile(r"@([a-z][a-z0-9_]*)\[(\d+)\]")
+
+
+def paginated_placeholder(page: dict[str, Any]) -> str:
+    """The placeholder a page repeats over, or ``""``."""
+    value = page.get(PAGINATE_KEY) if isinstance(page, dict) else None
+    return str(value).strip() if isinstance(value, str) else ""
+
+
+def page_max_parts(page: dict[str, Any]) -> int:
+    value = page.get(MAX_PARTS_KEY) if isinstance(page, dict) else None
+    return value if isinstance(value, int) and value >= 1 else DEFAULT_MAX_PARTS
+
+
+def page_span(buttons: dict[str, Any], placeholder: str) -> int:
+    """How many items of *placeholder* one part shows: its highest index."""
+    span = 0
+    for value in _strings_in(buttons):
+        for name, index in _PLACEHOLDER_TOKEN_RE.findall(value):
+            if name == placeholder:
+                span = max(span, int(index))
+    return span
+
+
+def has_more_parts(value: Any) -> bool:
+    """Whether a button is one thing on the last part and another before it."""
+    return isinstance(value, dict) and MORE_PARTS_KEY in value
+
+
+def part_view(buttons: dict[str, Any], more_parts: bool) -> dict[str, Any]:
+    """*buttons* as one part shows them: a button's ``more_parts:`` while
+    another part follows (*more_parts*), its ``placeholder:`` otherwise --
+    nothing where it names none."""
+    out: dict[str, Any] = {}
+    for key, value in buttons.items():
+        if isinstance(value, dict) and (MORE_PARTS_KEY in value or PLACEHOLDER_KEY in value):
+            use = MORE_PARTS_KEY if more_parts and MORE_PARTS_KEY in value else PLACEHOLDER_KEY
+            value = value.get(use, {})
+        out[key] = value
+    return out
+
+
+def part_items(buttons: dict[str, Any], placeholder: str) -> tuple[int, int]:
+    """``(span, extra)``: the items every part shows, and how many more the
+    last one shows on its buttons with ``more_parts:``."""
+    every = part_view({k: v for k, v in buttons.items() if not has_more_parts(v)}, False)
+    last = {k: v.get(PLACEHOLDER_KEY) for k, v in buttons.items() if has_more_parts(v)}
+    span = page_span(every, placeholder)
+    return span, max(0, page_span(last, placeholder) - span)
+
+
+def part_buttons(
+    buttons: dict[str, Any], placeholder: str, part: int = 1, *, last: bool = True,
+) -> dict[str, Any]:
+    """*buttons* as part *part* shows them, the *last* part or one before it.
+
+    A button's ``more_parts:`` or ``placeholder:`` is picked, and each
+    ``@placeholder[N]`` moved on by the items the parts before it show.
+    """
+    span = part_items(buttons, placeholder)[0] if placeholder else 0
+    buttons = part_view(buttons, not last)
+    if part <= 1 or not placeholder:
+        return buttons
+    offset = (part - 1) * span
+
+    def shift(value: Any) -> Any:
+        if isinstance(value, str):
+            return _PLACEHOLDER_TOKEN_RE.sub(
+                lambda m: (
+                    f"@{m[1]}[{int(m[2]) + offset}]" if m[1] == placeholder else m[0]
+                ),
+                value,
+            )
+        if isinstance(value, dict):
+            return {k: shift(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [shift(v) for v in value]
+        return value
+
+    return shift(buttons)
+
+
+def _strings_in(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings_in(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings_in(v)
+
+
+def _text_entry(entry: dict[str, Any], data: dict[str, Any], field: str, default: str) -> None:
+    """Put a template's or folder's *field* into its listing entry.
+
+    A translated one travels as ``<field>_key``, which the panel looks up; the
+    plain field then holds *default*, what a reader without the table sees.
+    """
+    value = data.get(field)
+    key = translate_key(value)
+    if key:
+        entry[field] = translate_fallback(value, default)
+        entry[f"{field}_key"] = key
+    else:
+        entry[field] = str(value or default) if not isinstance(value, dict) else default
+
+
+def is_unbound(template: dict[str, Any]) -> bool:
+    """Whether a template is bound to nothing: it names no ``target_selector``.
+
+    Such a page is added without asking for a device, and is stored as an
+    ordinary page with nothing to refresh from or move to another device.
+    """
+    return not template.get("target_selector")
+
+
+def template_pages(
+    template_id: str, template: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    """``(name, page definition)`` for every page a template describes.
+
+    Every template with something on its pages names them under ``pages:``, a
+    single one included, in file order, the first being the page the remote
+    lands on. A template without ``pages:`` makes one empty page with no title
+    -- the blank page -- so it need not spell out that it has nothing.
+    """
+    for key in sorted(set(template) & _PAGE_KEYS):
+        _LOGGER.warning(
+            "Template %s states %r beside its pages, where it belongs to no "
+            "page; ignoring it",
+            template_id, key,
+        )
+
+    pages_def = template.get(TEMPLATE_PAGES_KEY)
+    if pages_def is None:
+        # One page with nothing on it and no title; it needs no name.
+        return [("", {"title": ""})]
+    if not isinstance(pages_def, dict) or not pages_def:
+        _LOGGER.warning(
+            "Template %s has a '%s' that names no pages; it makes no page",
+            template_id, TEMPLATE_PAGES_KEY,
+        )
+        return []
+
+    pages: list[tuple[str, dict[str, Any]]] = []
+    for name, page in pages_def.items():
+        name = str(name)
+        if not name:
+            _LOGGER.warning("Template %s has an unnamed page; ignoring it", template_id)
+            continue
+        if not isinstance(page, dict):
+            _LOGGER.warning(
+                "Template %s page %r is not a mapping; ignoring it", template_id, name,
+            )
+            continue
+        for key in sorted(set(page) - _PAGE_KEYS):
+            _LOGGER.warning(
+                "Template %s page %r has no key %r; ignoring it", template_id, name, key,
+            )
+        pages.append((name, page))
+    return pages
+
+
+def page_definition(
+    template_id: str, template: dict[str, Any], name: str,
+) -> dict[str, Any] | None:
+    """The page called *name* in a template, or ``None`` if it has none of that name."""
+    return next(
+        (page for page_name, page in template_pages(template_id, template) if page_name == name),
+        None,
+    )
+
+
+def page_source(
+    template_id: str,
+    template: dict[str, Any],
+    page: dict[str, Any],
+    included: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(shared, buttons)``: what one page of a template is made of.
+
+    *shared* is the template it resolves under -- the file minus its page list,
+    its selector and placeholders. A page may name another template instead of
+    spelling its buttons out, and is then that template's first page, under
+    that template's placeholders: one page stays described in one place,
+    however many templates put it on a remote. Buttons written beside the name
+    are laid over it. *included* is that template, loaded by the caller (``None``
+    when it does not load), so this stays free of file access. Its first page
+    is the one meant, picture and all; a first page that itself names a third
+    template is not followed -- one level keeps a page described in one place.
+    """
+    shared = {k: v for k, v in template.items() if k != TEMPLATE_PAGES_KEY}
+    buttons = page.get("buttons") or {}
+    include = str(page.get("template") or "")
+    if not include:
+        return shared, buttons
+    if not isinstance(included, dict):
+        _LOGGER.warning(
+            "Template %s includes page template %r, which does not exist",
+            template_id, include,
+        )
+        return shared, {}
+
+    shared = {k: v for k, v in included.items() if k != TEMPLATE_PAGES_KEY}
+    pages = template_pages(include, included)
+    first = pages[0][1] if pages else {}
+    if first.get("template"):
+        _LOGGER.warning(
+            "Template %s is named as a page, but its own first page names "
+            "template %r; a page names one template, not a chain of them",
+            include, first["template"],
+        )
+    if "title" in first:
+        shared["title"] = first["title"]
+    first_buttons = first.get("buttons")
+    return shared, {**(first_buttons if isinstance(first_buttons, dict) else {}), **buttons}
+
+
+def page_buttons(
+    buttons: dict[str, Any], page_ids: dict[str, int],
+    *, template_id: str = "", page_name: str = "",
+) -> dict[str, Any]:
+    """One page's buttons, links made commands and translated words written out.
+
+    A ``goto_page:`` link is written by name because the ids only exist once
+    the pages are being made; it becomes the ``goto_page`` command the remote
+    understands, pointing at whichever id that page was given.
+
+    A ``{translate: <key>}`` tooltip or action name becomes the English wording
+    of that ``button_tooltips`` entry, which is what a button stores: the remote
+    draws a stored wording in its own language.
+    """
+    if not isinstance(buttons, dict):
+        return {}
+
+    resolved: dict[str, Any] = {}
+    for key, btn_def in buttons.items():
+        if isinstance(btn_def, dict):
+            btn_def = _translated_wordings(btn_def, template_id, page_name, key)
+        if not isinstance(btn_def, dict) or PAGE_LINK_KEY not in btn_def:
+            resolved[key] = btn_def
+            continue
+        btn_def = dict(btn_def)
+        named = btn_def.pop(PAGE_LINK_KEY)
+        names = [str(n or "") for n in (named if isinstance(named, list) else [named])]
+        target = next((n for n in names if n in page_ids), "")
+        if not target and names and all(n in _PART_LINKS for n in names):
+            # The neighbouring part does not exist (yet): an empty slot, not
+            # a button that goes nowhere. A refresh that adds it fills it in.
+            resolved[key] = {}
+            continue
+        if not target:
+            target = names[-1] if names else ""
+        if target not in page_ids:
+            _LOGGER.warning(
+                "Template %s page %r button %s links to page %r, which the "
+                "template does not describe; leaving the button unassigned",
+                template_id, page_name, key, target,
+            )
+            resolved[key] = btn_def
+            continue
+        btn_def["action"] = f"{DOMAIN}.goto_page"
+        btn_def["data"] = {**(btn_def.get("data") or {}), "page_id": page_ids[target]}
+        resolved[key] = btn_def
+    return resolved
+
+
+def _translated_wordings(
+    btn_def: dict[str, Any], template_id: str, page_name: str, button_key: str,
+) -> dict[str, Any]:
+    """*btn_def* with a ``{translate: <key>}`` tooltip in English.
+
+    A number written as an icon (``icon: 1``) is that number drawn as text,
+    and one written as a tooltip is its text: YAML reads ``1`` as a number,
+    where a button stores a picture and words.
+    """
+    out = btn_def
+    for field in ("icon", "tooltip"):
+        value = btn_def.get(field)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if out is btn_def:
+                out = dict(btn_def)
+            out[field] = f"text:{value}" if field == "icon" else str(value)
+    btn_def = out
+    for field in ("tooltip",):
+        value = btn_def.get(field)
+        key = translate_key(value)
+        if not key:
+            if isinstance(value, dict):
+                # `{translate: off}` unquoted is YAML's False: say so rather
+                # than store a mapping where a word belongs.
+                _LOGGER.warning(
+                    "Template %s page %r button %s: %s %r is no text and no "
+                    "{translate: <key>}; quote the key",
+                    template_id, page_name, button_key, field, value,
+                )
+                if out is btn_def:
+                    out = dict(btn_def)
+                out[field] = ""
+            continue
+        wording = button_tooltips.load(FALLBACK_LANGUAGE).get(key, "")
+        if not wording:
+            _LOGGER.warning(
+                "Template %s page %r button %s: %s names no button tooltip %r",
+                template_id, page_name, button_key, field, key,
+            )
+        if out is btn_def:
+            out = dict(btn_def)
+        out[field] = wording or translate_fallback(
+            btn_def[field], key.replace("_", " ").capitalize(),
+        )
+    return out
 
 
 def _template_num(raw, default: float, button_key: str, field: str) -> float:
@@ -131,8 +528,8 @@ def _slider_assignment(btn_def: dict, slider_actions: dict) -> dict:
     return {
         "action_id": None,
         "config": [],
-        "label": btn_def.get("label"),
-        "image": page_field(btn_def, "icon"),
+        "tooltip": btn_def.get("tooltip"),
+        "icon": page_field(btn_def, "icon"),
         "state_icons": {},
         "slider_actions": slider_actions,
     }
@@ -145,21 +542,33 @@ TEMPLATES_DIR = os.path.abspath(
         os.path.dirname(__file__), "..", "..", "assets", "templates"
     )
 )
+#: A button's options subpages: templates of their own, offered only under
+#: **Add options…**. Their ids are their own too -- ``options:<stem>`` -- so
+#: ``options/sonos.yaml`` and the Sonos page template never clash.
+OPTIONS_DIR = os.path.abspath(os.path.join(TEMPLATES_DIR, "..", "options"))
+OPTIONS_PREFIX = "options:"
+OPTION_FOLDER_PREFIX = "options/"
 #: Folder metadata, not a template. The leading underscore is the rule: a
 #: ``_``-prefixed file is never offered as a page.
 _GROUP_FILE = "_group.yaml"
 #: Everything ``_group.yaml`` may say. Anything else is a typo worth a warning:
 #: a misspelt ``name`` is silently the folder name otherwise, which reads as
 #: "the file was ignored" and is tedious to chase down.
-_GROUP_KEYS = frozenset(
-    {"name", "name_key", "icon", "description", "description_key", "primary"}
-)
+_GROUP_KEYS = frozenset({"name", "icon", "description", "primary"})
 #: The user's own templates: ``<config>/lizaip/templates``, set at setup.
 #: Outside the integration, so an update does not wipe them. Read after
-#: ``presets/`` as one more folder, :data:`USER_TEMPLATES_GROUP`.
+#: ``presets/`` as one more folder, :data:`USER_TEMPLATES_GROUP`, with their
+#: own options templates from ``<config>/lizaip/options`` beside them.
 _USER_TEMPLATES_DIR: str | None = None
 #: The folder path the user's templates are offered under.
 USER_TEMPLATES_GROUP = ("my-templates",)
+
+
+def _user_options_dir() -> str | None:
+    """The user's own options templates: ``options`` beside their templates."""
+    if not _USER_TEMPLATES_DIR:
+        return None
+    return os.path.join(os.path.dirname(_USER_TEMPLATES_DIR), "options")
 
 
 def set_user_templates_dir(path: str | None) -> None:
@@ -198,7 +607,7 @@ def _template_dirs() -> list[tuple[str, tuple[str, ...]]]:
     """
     dirs: list[tuple[str, tuple[str, ...]]] = []
 
-    def walk(directory: str, path: tuple[str, ...]) -> None:
+    def walk(directory: str, path: tuple[str, ...], prefix: str = "") -> None:
         if not os.path.isdir(directory):
             return
         dirs.append((directory, path))
@@ -216,11 +625,15 @@ def _template_dirs() -> list[tuple[str, tuple[str, ...]]]:
             if os.path.islink(child):
                 _LOGGER.warning("Template folder %s is a symlink; skipping it", child)
                 continue
-            walk(child, (*path, name))
+            walk(child, (*path, prefix + name))
 
     walk(TEMPLATES_DIR, ())
+    # Loose at the top level like the templates; a folder of its own is
+    # `options/<name>`, so it never merges with a template folder of that name.
+    walk(OPTIONS_DIR, (), OPTION_FOLDER_PREFIX)
     if _USER_TEMPLATES_DIR:
         walk(_USER_TEMPLATES_DIR, USER_TEMPLATES_GROUP)
+        walk(_user_options_dir(), USER_TEMPLATES_GROUP, OPTION_FOLDER_PREFIX)
     return dirs
 
 
@@ -232,10 +645,9 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     deliberate act, so the fallback has to be usable rather than a reason to
     refuse.
 
-    ``name_key`` and ``description_key`` name an entry in the panel's
-    translation table instead of spelling the words here, which is how a
-    shipped folder keeps the translations it already had. The literal wins when
-    both are given, since it is the more specific statement.
+    ``name`` and ``description`` may be ``{translate: <key>}``, an entry in
+    the panel's translation table instead of words spelt here, which is how a
+    shipped folder keeps the translations it already had.
     """
     meta: dict[str, Any] = {}
     file_path = os.path.join(directory, _GROUP_FILE)
@@ -256,22 +668,17 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     # option can be drawn; everything nested is an ordinary card.
     scope = "option" if len(path) == 1 else "grid"
 
-    group: dict[str, str] = {
-        "id": "/".join(path),
-        "name": str(meta.get("name") or path[-1].replace("-", " ").title()),
-        "icon": str(meta.get("icon") or "mdi:folder-outline"),
-        "description": str(meta.get("description") or ""),
-        "scope": scope,
-    }
+    group: dict[str, str] = {"id": "/".join(path)}
+    leaf = path[-1].removeprefix(OPTION_FOLDER_PREFIX)
+    _text_entry(group, meta, "name", leaf.replace("-", " ").title())
+    group["icon"] = str(meta.get("icon") or "mdi:folder-outline")
+    _text_entry(group, meta, "description", "")
+    group["scope"] = scope
     # The first screen leads with what most pages start from and names the
     # rest as a second group. Only an option is on that screen, so only an
     # option can ask to lead it.
     if scope == "option" and meta.get("primary") is True:
         group["primary"] = True
-    if not meta.get("name") and meta.get("name_key"):
-        group["name_key"] = str(meta["name_key"])
-    if not meta.get("description") and meta.get("description_key"):
-        group["description_key"] = str(meta["description_key"])
     return group
 
 
@@ -281,6 +688,9 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
 _DATA_ADDRESSED_DOMAINS = frozenset({
     "homeassistant", "notify", "persistent_notification", "tts",
     "logbook", "system_log",
+    # `mqtt.publish` names its topic in the payload: how a TV that is only
+    # reachable over MQTT (Hisense/Vidaa) has its keys pressed.
+    "mqtt",
 })
 
 # script/scene/automation targets name the thing to run, not the bound device.
@@ -294,7 +704,8 @@ _GENERIC_SERVICE_DOMAINS = _DATA_ADDRESSED_DOMAINS | _ENTITY_ADDRESSED_DOMAINS
 #: they act on. ``webostv.button`` presses a key on an LG TV whose only entity
 #: is its ``media_player``: without this the D-pad would look for a
 #: ``webostv.*`` sibling, find none and leave every slot unassigned.
-_INTEGRATION_SERVICE_DOMAINS = {"webostv": "media_player"}
+#: ``sonos.set_sleep_timer`` reaches a speaker the same way.
+_INTEGRATION_SERVICE_DOMAINS = {"webostv": "media_player", "sonos": "media_player"}
 
 
 def _payload_entity(btn_def: dict) -> str:
@@ -325,6 +736,21 @@ def _declared_entity(btn_def: dict, action: Any) -> Any:
     if isinstance(action, str) and split_service(action)[0] in _ENTITY_ADDRESSED_DOMAINS:
         return None
     return page_target_entity(btn_def)
+
+
+def _slider_target(
+    btn_def: dict, target_entity: str, domain_entities: dict[str, str] | None,
+) -> str:
+    """The entity a slider moves unless it names one: the bound entity, or the
+    device's entity of the domain its ``service`` acts on -- as a button binds
+    by its action. A TV bound by its ``remote`` sets the volume on its
+    ``media_player``."""
+    service = page_slider(btn_def).get("service")
+    domain = service.split(".")[0] if isinstance(service, str) and "." in service else ""
+    primary = target_entity.split(".")[0] if "." in target_entity else ""
+    if domain and domain != primary:
+        return (domain_entities or {}).get(domain) or target_entity
+    return target_entity
 
 
 def _button_entity(
@@ -425,13 +851,61 @@ def _button_prelude(btn_def: dict, button_key: str) -> list[dict] | None:
 
 
 
+#: The last :func:`list_templates` answer and the files it was read from.
+_LISTED: tuple[tuple, list[dict[str, Any]]] | None = None
+
+
+def _files_signature(dirs: list[tuple[str, tuple[str, ...]]]) -> tuple:
+    """Every file in *dirs* with its size and change time: what a listing depends on."""
+    return tuple(
+        (directory, tuple(sorted(
+            (e.name, e.stat().st_mtime_ns, e.stat().st_size)
+            for e in os.scandir(directory) if e.is_file()
+        )))
+        for directory, _ in dirs
+    )
+
+
 def list_templates() -> list[dict[str, Any]]:
+    """Every template's card. Blocking — call via the executor.
+
+    Parsing every file costs most of a second on a small host, and the add
+    dialog asks each time it opens; the answer is kept until a file in one of
+    the folders is added, removed or changed, which a directory scan notices.
+    """
+    global _LISTED
     dirs = _template_dirs()
+    signature = _files_signature(dirs)
+    if _LISTED is None or _LISTED[0] != signature:
+        _LISTED = (signature, _read_template_list(dirs))
+    return deepcopy(_LISTED[1])
+
+
+def favorites_kind(template: dict[str, Any]) -> str:
+    """The one kind of favourite a template's pages list, or ``""``.
+
+    Read off its placeholders: every ``favorites`` one asks for the same
+    ``category``, and nothing else is bound.
+    """
+    placeholders = template.get("placeholders")
+    if not isinstance(placeholders, dict) or not placeholders:
+        return ""
+    kinds = {
+        str(((p.get("spec") or {}).get("category") or "")) if p.get("source") == "favorites" else ""
+        for p in placeholders.values() if isinstance(p, dict)
+    }
+    return kinds.pop() if len(kinds) == 1 else ""
+
+
+def _read_template_list(dirs: list[tuple[str, tuple[str, ...]]]) -> list[dict[str, Any]]:
     # Every folder's card, read once. A template carries its whole ancestry, so
     # a parent's metadata is needed while reading its grandchildren too.
-    meta_by_path = {
-        path: _group_meta(directory, path) for directory, path in dirs if path
-    }
+    # The first directory to claim a folder names it: the user's options
+    # share **My Templates** with their templates and must not rename it.
+    meta_by_path: dict[tuple[str, ...], dict[str, Any]] = {}
+    for directory, path in dirs:
+        if path and path not in meta_by_path:
+            meta_by_path[path] = _group_meta(directory, path)
     seen: dict[str, str] = {}
     templates: list[dict[str, Any]] = []
     for directory, group_path in dirs:
@@ -439,7 +913,7 @@ def list_templates() -> list[dict[str, Any]]:
             # `_group.yaml` describes the folder, it is not a page to add.
             if not fname.endswith(".yaml") or fname.startswith("_"):
                 continue
-            template_id = fname[:-5]
+            template_id = template_id_of(fname, directory)
             path = os.path.join(directory, fname)
             # A stored page keeps the bare id it was created from, so one stem
             # can only ever mean one file however deep the tree goes.
@@ -457,27 +931,33 @@ def list_templates() -> list[dict[str, Any]]:
             except (OSError, yaml.YAMLError) as exc:
                 _LOGGER.warning("Failed to read template %s: %s", fname, exc)
                 continue
+            if not _readable(template_id, data, path):
+                continue
             seen[template_id] = path
 
-            entry = {
-                "id": template_id,
-                "name": data.get("name", template_id),
-                "icon": data.get("icon", "mdi:remote"),
-                "description": data.get("description", ""),
-                "target_selector": data.get("target_selector", {}),
-            }
-            # Presence, not truth: an empty value is a page that wants no
-            # picture, which is not the same as not having said.
-            if "page_image" in data:
-                entry["page_image"] = str(data["page_image"] or "")
-            # Named from the panel's translation table instead of here, the
-            # way a folder's card is. The literal wins when both are given.
-            for literal, key in (("name", "name_key"), ("description", "description_key")):
-                if not data.get(literal) and data.get(key):
-                    entry[key] = str(data[key])
+            # The file name orders its card among the others in its folder.
+            entry: dict[str, Any] = {"id": template_id, "file": fname}
+            _text_entry(entry, data, "name", template_id)
+            entry["icon"] = data.get("icon", "mdi:remote")
+            _text_entry(entry, data, "description", "")
+            entry["target_selector"] = data.get("target_selector", {})
+            # A template that brings subpages says how many pages adding it
+            # makes, so the picker and the assistant tools can say so first.
+            if not data.get("action"):
+                page_count = len(template_pages(template_id, data))
+                if page_count > 1:
+                    entry["page_count"] = page_count
             # Added without asking for a device: the page is bound to none.
-            if data.get("unbound"):
+            if is_unbound(data) and not data.get("action"):
                 entry["unbound"] = True
+            # Its pages hold one kind of favourite only, and so are no use on a
+            # speaker without any of that kind.
+            if kind := favorites_kind(data):
+                entry["favorites"] = kind
+            # Only ever a button's options subpage: the plain Add page walk
+            # leaves it out, since it makes no sense on its own.
+            if template_id.startswith(OPTIONS_PREFIX):
+                entry["options"] = True
             # A card that runs a panel routine instead of writing a page. The
             # panel maps the name to a handler and hides the card without one.
             if data.get("action"):
@@ -518,6 +998,16 @@ def load_template(template_id: str) -> dict[str, Any] | None:
     return deepcopy(parsed) if parsed is not None else None
 
 
+def preload_templates() -> None:
+    """Read every template into the cache. Blocking — call via the executor.
+
+    Reading stored pages looks up the template each came from, on the event
+    loop; with every template already read, that lookup never touches disk.
+    """
+    for entry in list_templates():
+        load_template(entry["id"])
+
+
 async def async_load_template(hass: HomeAssistant, template_id: str) -> dict[str, Any] | None:
     """Parse a template without blocking the event loop.
 
@@ -530,27 +1020,61 @@ async def async_load_template(hass: HomeAssistant, template_id: str) -> dict[str
     return await hass.async_add_executor_job(load_template, template_id)
 
 
+#: A file name's leading ``01_``: where its card goes among the others in its
+#: folder -- names are read in order and digits come before letters -- and no
+#: part of its id, so the place can change without orphaning a page.
+_ORDER_PREFIX_RE = re.compile(r"^\d+_(?=.)")
+
+
+def _is_options_dir(directory: str) -> bool:
+    """Whether *directory* holds options templates, shipped or the user's."""
+    return any(
+        root and (directory == root or directory.startswith(root + os.sep))
+        for root in (OPTIONS_DIR, _user_options_dir())
+    )
+
+
+def template_id_of(fname: str, directory: str = "") -> str:
+    """The template id a file name stands for: its stem without ``NN_``.
+
+    A file in :data:`OPTIONS_DIR` has its id in the options space.
+    """
+    stem = fname[:-5] if fname.endswith(".yaml") else fname
+    prefix = OPTIONS_PREFIX if _is_options_dir(directory) else ""
+    return prefix + _ORDER_PREFIX_RE.sub("", stem, count=1)
+
+
 def _read_template(template_id: str) -> dict[str, Any] | None:
     # The id arrives from the panel and is about to become a filename. A bare
     # stem is the whole contract -- folders are a directory layout, never part
     # of an id -- so anything that could step out of the presets tree, or name
     # the `_group.yaml` metadata, is not a template id at all.
+    stem = template_id.removeprefix(OPTIONS_PREFIX) if template_id else ""
     if (
-        not template_id
-        or template_id.startswith((".", "_"))
-        or os.path.basename(template_id) != template_id
-        or os.path.isabs(template_id)
+        not stem
+        or stem.startswith((".", "_"))
+        or os.path.basename(stem) != stem
+        or os.path.isabs(stem)
     ):
         _LOGGER.error("Invalid template id: %r", template_id)
         return None
 
-    # `_template_dirs` walks the tree outermost first and sorted, so a
-    # duplicate stem always resolves to the same file as `list_templates`
-    # offered rather than to whichever the filesystem happened to answer with.
-    matches = [
-        p for d, _ in _template_dirs()
-        if os.path.isfile(p := os.path.join(d, f"{template_id}.yaml"))
-    ]
+    # `_template_dirs` walks the tree outermost first and sorted, and each
+    # folder is read sorted, as `list_templates` reads it, so a duplicate id
+    # resolves to the same file it offered rather than to whichever the
+    # filesystem happened to answer with.
+    matches = []
+    for d, _ in _template_dirs():
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        matches += [
+            p for name in names
+            if name.endswith(".yaml") and not name.startswith("_")
+            and template_id_of(name, d) == template_id
+            and os.path.isfile(p := os.path.join(d, name))
+        ]
     if len(matches) > 1:
         _LOGGER.warning(
             "Template id %r names several files (%s); reading the first",
@@ -564,24 +1088,25 @@ def _read_template(template_id: str) -> dict[str, Any] | None:
 
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            return yaml.safe_load(fh) or {}
+            data = yaml.safe_load(fh) or {}
     except (OSError, yaml.YAMLError) as exc:
         _LOGGER.error("Failed to load template %s: %s", template_id, exc)
         return None
+    return data if _readable(template_id, data, path) else None
 
 
 def _unassigned(btn_def: dict, binding: dict | None = None) -> dict:
     """Empty slot assignment; dynamic bindings stay so later refresh can fill it.
 
-    The label/artwork still render, and the shape matches ``EMPTY_BUTTON`` in
+    The tooltip/artwork still render, and the shape matches ``EMPTY_BUTTON`` in
     ``websocket/common.py`` including fields the panel and device sync read.
     """
     assignment = {
         "action_id": None,
         "config": [],
-        "label": btn_def.get("label"),
-        "image": page_field(btn_def, "icon"),
-        "image_pinned": False,
+        "tooltip": btn_def.get("tooltip"),
+        "icon": page_field(btn_def, "icon"),
+        "icon_pinned": False,
         "state_icons": {},
     }
     if binding:
@@ -609,11 +1134,9 @@ def _register_action(
     keep their button key as the action-list label; dormant generated slots use
     the service because ``button_9`` says nothing about the future item.
 
-    ``action_name`` names the library entry when the label cannot: a label built
-    out of placeholders (``"${_state} - ${_device.media_title}"``) is a shape to
-    fill in, and reading it back as the action's name would put raw token text in
-    the Action Library. The key is generation-time only — it never reaches the
-    stored page.
+    A tooltip built out of placeholders (``"${_state} - ${_device.media_title}"``)
+    is a shape to fill in, not a name: the entry is named after the service the
+    way the panel names a new action (``_deriveActionName``), in English.
     """
     dedup_key = f"{action_str}|{payload_identity(data)}"
     if dedup_key in seen_actions:
@@ -642,21 +1165,19 @@ def _register_action(
                 [{"state": s, "icon": i} for s, i in domain_icons.items() if i],
             )
 
-    # A label with placeholders is a shape, not a name: the Action Library
+    # A tooltip with placeholders is a shape, not a name: the Action Library
     # would show raw token text, and every button bound like it would read as
-    # carrying the library's name. The service names it instead.
-    label = btn_def.get("label")
-    if isinstance(label, str) and "${" in label:
-        label = svc_name.replace("_", " ").capitalize() if svc_name else None
+    # carrying the library's name. The service names it instead, as the panel
+    # names a new action.
+    tooltip = btn_def.get("tooltip")
+    if isinstance(tooltip, str) and "${" in tooltip:
+        tooltip = button_tooltips.for_service(svc_name, FALLBACK_LANGUAGE) if svc_name else None
     actions.append({
         "id": action_id,
         "name": (
-            btn_def.get("action_name")
-            or (
-                label or fallback_name
-                if fallback_name is not None
-                else label or button_key
-            )
+            tooltip or fallback_name
+            if fallback_name is not None
+            else tooltip or button_key
         ),
         "icon": page_field(btn_def, "icon") or "",
         "service": action_str,
@@ -774,8 +1295,9 @@ def _action_step_for(btn_def: dict, action_str: str, btn_entity: str, data: dict
     # Copied: the same payload dict is handed to `_register_action`, and the
     # step is about to drop a key from it.
     step = {"action": action_str, "target": {"entity_id": btn_entity}, "data": dict(data)}
-    if split_service(action_str)[0] == DOMAIN:
-        # A device-local command: its payload is the whole of what it needs.
+    if split_service(action_str)[0] in (DOMAIN, "mqtt"):
+        # A device-local command, or an MQTT message: its payload is the whole
+        # of what it needs, and `mqtt.publish` refuses a target.
         step.pop("target")
 
     # script/scene/automation targets name the runnable object, not bound device.
@@ -815,13 +1337,13 @@ def _action_button_assignment(
             actions, seen_actions, template_id, button_key, btn_def, action_str, data,
         ),
         "config": [_action_step_for(btn_def, action_str, btn_entity, data)],
-        "label": btn_def.get("label"),
-        "image": page_field(btn_def, "icon") or "",
+        "tooltip": btn_def.get("tooltip"),
+        "icon": page_field(btn_def, "icon") or "",
         "state_icons": {},
     }
     # A template that wants a key to repeat while held says so per button.
-    if btn_def.get("repeat") is True:
-        assignment["repeat"] = True
+    if btn_def.get(ASSIGNMENT_REPEAT_KEY) is True:
+        assignment[ASSIGNMENT_REPEAT_KEY] = True
     # Store [] too: before's absence is what allows wake inference.
     prelude = _button_prelude(btn_def, button_key)
     if prelude is not None:
@@ -944,6 +1466,9 @@ def generate_assignments(
     for button_key, btn_def in buttons.items():
         if not isinstance(btn_def, dict):
             continue
+        # Already done when the page was composed; repeated for a caller that
+        # hands in a page straight from the file.
+        btn_def = _translated_wordings(btn_def, template_id, "", button_key)
 
         # Target resolution must precede @target substitution and action building:
         # a button may bind a sibling entity, not the template's primary one.
@@ -957,7 +1482,7 @@ def generate_assignments(
                 template_id, button_key, unresolved_domain,
             )
 
-        # Substitute through the whole button; @target may appear in label, icon,
+        # Substitute through the whole button; @target may appear in tooltip, icon,
         # target, before/after, or data.
         btn_def = substitute_target(btn_def, btn_entity)
 
@@ -977,7 +1502,8 @@ def generate_assignments(
             continue
 
         slider_actions = _slider_actions_for(
-            btn_def, button_key, target_entity, hass, template_id,
+            btn_def, button_key, _slider_target(btn_def, target_entity, domain_entities),
+            hass, template_id,
         )
         if slider_actions is not None:
             assignments[button_key] = _slider_assignment(btn_def, slider_actions)

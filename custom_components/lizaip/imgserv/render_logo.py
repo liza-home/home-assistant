@@ -20,7 +20,6 @@ from __future__ import annotations
 import io
 import logging
 import math
-import os
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path

@@ -21,7 +21,7 @@ from . import longtouch
 from .buttons import execute_action, resolve_button_assignment
 from .helpers import _get_store
 from ..config.text_style import key_repeat_timing
-from ..shared.assignment import repeats
+from ..shared.assignment import key_repeats
 from .helpers import _coerce_page_id, _normalize_position, _raw_page_id, _resolve_entry_id
 from ..shared.logs import device_id_logger
 from .selection import _record_selection
@@ -57,7 +57,7 @@ def _stop_repeat(entry_id: str, button_key: str) -> None:
 async def _start_repeat(hass: HomeAssistant, entry_id: str, button_key: str, page_id: int) -> None:
     """Begin key repeat for a just-pressed button, if it repeats."""
     device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
-    if not repeats(assign):
+    if not key_repeats(assign):
         return
     settings = await _get_store(hass).async_get_settings(device_id) if device_id else None
     delay, interval = key_repeat_timing(settings)

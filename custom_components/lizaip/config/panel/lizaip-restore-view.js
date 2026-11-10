@@ -449,7 +449,7 @@ export const RestoreViewMixin = {
       container.classList.toggle("face-dark", mode === "dark");
       drawSVG(container, bp, -1, configured, null, { interactive: false });
       cropFace(container.querySelector("svg"));
-      this._drawRestoreTitle(container, bp, page.image, mode);
+      this._drawRestoreTitle(container, bp, page.title, mode);
       this._drawRestoreFaceIcons(container, bp, icons, mode);
     });
   },
@@ -520,8 +520,8 @@ export const RestoreViewMixin = {
   _restorePageTiles(summary) {
     const list = Array.isArray(summary?.page_list) ? summary.page_list : [];
     return list.map((page) => {
-      const image = typeof page?.image === "string" ? page.image : "";
-      const named = this._pageTitle?.({ image }) || "";
+      const raw = typeof page?.title === "string" ? page.title : "";
+      const named = this._pageTitle?.({ title: raw }) || "";
       // A title that is a template is a name only once the remote has state to
       // resolve it against, and the archive carries none: showing the template
       // itself reads as a broken page rather than as a page called that.

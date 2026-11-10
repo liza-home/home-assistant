@@ -22,6 +22,7 @@ from ..runtime import _get_store, entry_device_id
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ..shared.logs import device_logger
+from ..shared.i18n import get_ui_language, language_scope
 from ..shared.tokens import page_scope, substitute_device_token
 from ..state_icon import (
     IconStyle,
@@ -34,7 +35,7 @@ from .button_rendering import (
     _resolve_button_icon,
     _resolve_button_tooltip,
     library_names,
-    with_resolved_image,
+    with_resolved_icon,
 )
 from .const import step_service
 from .internal_commands import build_page_context
@@ -118,6 +119,9 @@ class SyncContext:
     #: The action library's names by id, so a label that is only its button's
     #: library name can still be told from one somebody chose.
     library_names: dict = field(default_factory=dict)
+    #: Button assignments by page id, for pages that are not in the store.
+    #: Left None, every page's buttons are read from the store as usual.
+    assignments: dict[int, dict] | None = None
 
     @property
     def theme(self):
@@ -150,6 +154,8 @@ async def build_sync_context(
     hass: HomeAssistant,
     entry: ConfigEntry,
     all_pages: list[dict] | None = None,
+    *,
+    assignments: dict[int, dict] | None = None,
 ) -> SyncContext:
     """Everything a page payload needs that is the same for every page.
 
@@ -166,6 +172,9 @@ async def build_sync_context(
     for the lifetime of the process would leave late-loading integrations with
     fallback icons until a reload. Holding it for the duration of one sync keeps
     that property: the next sync reads the registry again.
+
+    *assignments* carries the buttons of pages the store does not hold -- the
+    placeholders of :mod:`default_pages`.
     """
     store = _get_store(hass)
     device_id = entry_device_id(entry)
@@ -176,6 +185,7 @@ async def build_sync_context(
         style_options=read_icon_style_options(getattr(entry, "options", None)),
         service_icons=await _get_service_icons(hass),
         library_names=library_names(await store.async_get_action_library(device_id)),
+        assignments=assignments,
     )
 
 
@@ -190,7 +200,8 @@ async def build_page_payload(
 ) -> dict:
     """Build a set_page data payload, its tiles reading ``${_device}`` as the page has it."""
     template = page_config.get("template") if isinstance(page_config, dict) else None
-    with page_scope(template):
+    # `{translate: …}` is drawn in this remote's language.
+    with page_scope(template), language_scope(get_ui_language(hass, entry)):
         return await _build_page_payload_in_scope(
             hass, entry, page_id, page_config, all_pages, ctx=ctx,
         )
@@ -234,7 +245,12 @@ async def _build_page_payload_in_scope(
     toggles = ctx.toggles
 
     page_store_id = page_config.get("id", 1)
-    assignments = await store.async_get_assignments(device_id, page_store_id)
+    # A placeholder page is never in the store, so its buttons come with the
+    # context that asked for it.
+    assignments = (
+        ctx.assignments.get(page_store_id, {}) if ctx.assignments is not None
+        else await store.async_get_assignments(device_id, page_store_id)
+    )
 
     internal_context = ctx.internal_context
 
@@ -266,10 +282,10 @@ async def _build_page_payload_in_scope(
             # Nothing to run — still resolve per-button image and tooltip if
             # configured. These are the sliders and the decorative image/label
             # tiles; a button only acts once it carries a command step.
-            assign_image = with_resolved_image(assign, hass).get("image")
+            assign_icon = with_resolved_icon(assign, hass).get("icon")
             img_tile = (
-                resolve_icon_url(assign_image, color=page_color, theme=theme_id)
-                if assign_image else ""
+                resolve_icon_url(assign_icon, color=page_color, theme=theme_id)
+                if assign_icon else ""
             )
             buttons.append({
                 "name": button_name,
@@ -288,7 +304,7 @@ async def _build_page_payload_in_scope(
             continue
 
         # Resolve images — a button's own stored image is what the panel shows
-        # for it (`_resolveButtonIcon` returns `a.image` before deriving
+        # for it (`_resolveButtonIcon` returns `a.icon` before deriving
         # anything), so honouring it here is what keeps the two surfaces
         # showing the same glyph.
         #
@@ -395,13 +411,13 @@ async def _build_page_payload_in_scope(
     # Entity variables resolve as they do on a button; one with no value leaves
     # the title strip blank rather than drawing half a name.
     # `${_device}` first: what it names can itself hold no variable.
-    page_img_title = with_resolved_image(
-        {"image": substitute_device_token(
-            page_config.get("image", ""), hass, page_config.get("template"),
+    title = with_resolved_icon(
+        {"icon": substitute_device_token(
+            page_config.get("title", ""), hass, page_config.get("template"),
         )}, hass,
-    ).get("image") or ""
+    ).get("icon") or ""
     img_title = resolve_title_url(
-        page_img_title, page_color, text_settings["title"], theme_id,
+        title, page_color, text_settings["title"], theme_id,
     )
 
     page_data = {

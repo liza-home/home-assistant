@@ -44,10 +44,6 @@ export const STYLES_GUIDE = `
     --mdc-icon-size: 24px;
   }
   .guide-ext:hover { background: var(--secondary-background-color); }
-  .guide-ext:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: -2px;
-  }
   .guide-body {
     display: flex; flex-direction: column; gap: 8px;
     flex: 1 1 auto;
@@ -154,13 +150,6 @@ export const STYLES_GUIDE = `
   .guide-toc-count[hidden] { display: none; }
   .guide-toc-l3 { padding-left: 24px; font-size: var(--liza-font-12); }
   .guide-toc-item:hover { background: var(--secondary-background-color); }
-  /* One tab stop gets into the list and the arrows move inside it, so where
-     the focus is has to be obvious: it is the only thing telling a keyboard
-     reader which of twenty entries Enter will open. */
-  .guide-toc-item:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: -2px;
-  }
   /* Marked by weight and a bar as well as by colour (WCAG 1.4.1): which
      section is being read must survive a monochrome display. */
   .guide-toc-item.active {
@@ -187,7 +176,6 @@ export const STYLES_GUIDE = `
     font-size: var(--liza-font-m);
     line-height: 1.6;
   }
-  .guide-content:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
   .guide-content h2, .guide-content h3, .guide-content h4 {
     color: var(--primary-text-color, #fff);
     line-height: 1.3;
@@ -287,9 +275,6 @@ export const STYLES_GUIDE = `
     border: 1px solid var(--divider-color, #333);
     cursor: zoom-in;
   }
-  .guide-content img:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px;
-  }
   /* The picture, over everything, at whatever size the window allows. Pinned
      to the viewport rather than the drawer: a 1200px screenshot shown inside
      a 500px drawer is the problem, not the solution. */
@@ -339,9 +324,6 @@ export const STYLES_GUIDE = `
     -webkit-user-drag: none;
     user-select: none;
   }
-  .guide-lightbox-figure img:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px;
-  }
   /* Magnified. The caps have to come off entirely or the explicit width set
      on the image is overruled and the zoom does nothing -- which is exactly
      what the fit/actual-size version did on any screen wider than the 1200px
@@ -375,10 +357,6 @@ export const STYLES_GUIDE = `
   }
   .guide-lightbox-step:hover,
   .guide-lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
-  .guide-lightbox-step:focus-visible,
-  .guide-lightbox-close:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px;
-  }
   .guide-lightbox-step[hidden] { display: none; }
   .guide-content table {
     width: 100%;
@@ -582,8 +560,8 @@ export const STYLES_GUIDE = `
   .guide-resize:hover,
   .guide-resize:focus-visible {
     background: var(--primary-color, #03a9f4);
-    outline: none;
   }
+
   .guide-panel {
     flex: 1 1 auto;
     min-width: 0;

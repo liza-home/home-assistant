@@ -1,12 +1,14 @@
 """Service handlers for the lizaIP integration."""
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -78,6 +80,69 @@ def async_register_services(hass: HomeAssistant) -> None:
             _handle_clear_pages,
             schema=vol.Schema({
                 vol.Optional("config_entry_id"): cv.string,
+            }),
+        )
+
+    async def _handle_send_ir(call: ServiceCall) -> None:
+        """Have the targeted remotes, or every remote, transmit an IR code."""
+        ir_blob = call.data["ir_blob"].strip()
+        try:
+            if not base64.b64decode(ir_blob, validate=True):
+                raise ValueError("empty")
+        except (binascii.Error, ValueError):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="invalid_ir_blob",
+            ) from None
+        for entry in _target_entries(hass, call.data):
+            device_logger(_LOGGER, entry).debug("lizaip.send_ir: %d bytes", len(ir_blob))
+            await entry.runtime_data.send_ir(ir_blob)
+
+    if not hass.services.has_service(DOMAIN, "send_ir"):
+        hass.services.async_register(
+            DOMAIN,
+            "send_ir",
+            _handle_send_ir,
+            schema=vol.Schema({
+                vol.Required("ir_blob"): cv.string,
+                vol.Optional("config_entry_id"): cv.string,
+                # Non-entity services receive raw target keys in call.data.
+                **cv.TARGET_SERVICE_FIELDS,
+            }),
+        )
+
+    async def _handle_launch_app(call: ServiceCall) -> None:
+        """Start an app on a TV.
+
+        A Samsung TV from 2022 on drops the launch Home Assistant's integration
+        sends, so it is started over the TV's REST API; any other player gets
+        ``media_player.play_media`` with an ``app``.
+        """
+        from ..config.page_templates.samsung_tv import launch, samsung_host
+
+        app_id = call.data["app_id"]
+        for entity_id in call.data["entity_id"]:
+            if host := samsung_host(hass, entity_id):
+                if not await launch(hass, host, app_id):
+                    raise HomeAssistantError(
+                        translation_domain=DOMAIN,
+                        translation_key="app_not_started",
+                        translation_placeholders={"entity_id": entity_id, "app_id": app_id},
+                    )
+                continue
+            await hass.services.async_call(
+                "media_player", "play_media",
+                {"entity_id": entity_id, "media_content_id": app_id, "media_content_type": "app"},
+                blocking=True, context=call.context,
+            )
+
+    if not hass.services.has_service(DOMAIN, "launch_app"):
+        hass.services.async_register(
+            DOMAIN,
+            "launch_app",
+            _handle_launch_app,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                vol.Required("app_id"): cv.string,
             }),
         )
 

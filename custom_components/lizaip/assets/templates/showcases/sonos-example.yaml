@@ -1,15 +1,15 @@
 # Sonos example — tiles that follow the speaker through `${_device…}`
 #
 # `_device` is the page's own target, so every tile reads the speaker the page
-# was created for: the page image shows its name, button 1 its cover art, button
+# was created for: the page title shows its name, button 1 its cover art, button
 # 4 its volume, and the transport tiles what is playing.
 #
 # Taken from a page on the test remote, to try device variables in tiles,
 # tooltips and media pictures. Beta builds only.
 
+version: 2
 name: Sonos example
 icon: logo:sonos
-page_image: "logo:sonos + ${_device}"
 description: Device variables in tiles — cover art, volume and what's playing
 
 target_selector:
@@ -17,63 +17,66 @@ target_selector:
     integration: sonos
     primary_domain: media_player
 
-buttons:
-  button_1:
-    label: "media:${_device.entity_picture}?size=60x60"
-    image: "media:${_device.entity_picture}?size=120x120"
+pages:
+  sonos:
+    title: "logo:sonos + ${_device}"
+    buttons:
+      button_1:
+        icon: "media:${_device.entity_picture}?size=120x120"
+        tooltip: "media:${_device.entity_picture}?size=60x60"
 
-  button_4:
-    label: "Vol ${round(_device.volume_level*100)}%"
-    image: "text:${round(_device.volume_level*100)}%"
+      button_4:
+        icon: "text:${round(_device.volume_level*100)}%"
+        tooltip: "Vol ${round(_device.volume_level*100)}%"
 
-  button_9:
-    label: "${_device.media_title_prev}"
-    image: mdi:skip-previous
-    config:
-      - action: media_player.media_previous_track
+      button_9:
+        icon: mdi:skip-previous
+        tooltip: "${_device.media_title_prev}"
+        config:
+          - action: media_player.media_previous_track
 
-  button_10:
-    label: "${_device.media_title}"
-    image: mdi:play-pause
-    config:
-      - action: media_player.media_play_pause
+      button_10:
+        icon: mdi:play-pause
+        tooltip: "${_device.media_title}"
+        config:
+          - action: media_player.media_play_pause
 
-  button_11:
-    label: "${_device.media_title_next}"
-    image: mdi:skip-next
-    config:
-      - action: media_player.media_next_track
+      button_11:
+        icon: mdi:skip-next
+        tooltip: "${_device.media_title_next}"
+        config:
+          - action: media_player.media_next_track
 
-  button_12:
-    label: Mute
-    image: mdi:volume-mute
-    config:
-      - action: media_player.volume_mute
-        data:
-          is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
+      button_12:
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
+        config:
+          - action: media_player.volume_mute
+            data:
+              is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
 
-  button_volume_up:
-    label: Volume Up
-    repeat: true
-    image: mdi:volume-plus
-    config:
-      - action: media_player.volume_up
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: media_player.volume_up
 
-  button_volume_down:
-    label: Volume Down
-    repeat: true
-    image: mdi:volume-minus
-    config:
-      - action: media_player.volume_down
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: media_player.volume_down
 
-  slider_vertical:
-    label: Volume
-    image: mdi:volume-high
-    slider_actions:
-      mode: proportional
-      factor: 1.0
-      min: 0.0
-      max: 1.0
-      attribute: volume_level
-      service: media_player.volume_set
-      data_key: volume_level
+      slider_vertical:
+        icon: mdi:volume-high
+        tooltip: {translate: volume}
+        slider_actions:
+          mode: proportional
+          factor: 1.0
+          min: 0.0
+          max: 1.0
+          attribute: volume_level
+          service: media_player.volume_set
+          data_key: volume_level

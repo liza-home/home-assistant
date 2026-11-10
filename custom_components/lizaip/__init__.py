@@ -1,6 +1,6 @@
 """The lizaIP integration.
 
-Single HACS-installed integration that manages:
+Single installable integration that manages:
   - Device WebSocket connections (device/ sub-package)
   - Config panel and device sync (config/ sub-package)
   - Image server loaded as imgserv/ sub-package
@@ -40,10 +40,12 @@ from .config.panel import async_setup_panel, async_setup_config_entry, async_unl
 from .config.store import LizaRemoteStore
 from .config.restore import async_setup_config_restore
 from .config.diagnostics_bundle import async_setup_diagnostics_bundle
+from .config.entity_rename import async_setup_entity_rename
 from .imgserv import async_setup_imgserv
 from .shared.logs import device_logger
 from .shared.numbers import to_float
-from .runtime import find_store, install_store
+from .runtime import find_store, install_store, panel_language, renamed_device
+from .shared.i18n import set_default_language
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +72,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Action dispatch — single source of truth for button-press → action execution
     action_controller.setup(hass)
 
+    # A `{translate: …}` drawn for no remote in particular -- a panel preview --
+    # is in the panel's language, or Home Assistant's.
+    set_default_language(lambda: panel_language(hass) or hass.config.language)
+
     # Config panel (sidebar + WS commands)
     await async_setup_panel(hass)
 
@@ -79,13 +85,24 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # And where a downloaded configuration is posted back to.
     async_setup_config_restore(hass)
 
+    # A renamed entity keeps working: the stored pages follow the new id.
+    # The store is made here rather than in the first entry's setup, because
+    # the rename has to reach a remote that is disabled and never loaded one.
+    install_store(hass, LizaRemoteStore(hass))
+    async_setup_entity_rename(hass)
+
+    # And a renamed remote is called the same thing on both of its pages.
+    _async_setup_name_sync(hass)
+
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
 
     # The user's own templates, beside the remotes' configuration rather than
     # inside the integration, so an update leaves them alone.
     from .config.page_templates import set_user_templates_dir
+    from .config.page_templates.generate import preload_templates
     set_user_templates_dir(hass.config.path("lizaip", "templates"))
+    await hass.async_add_executor_job(preload_templates)
 
     # Themes, read the same way and from the same two places fonts are: the
     # ones shipped with the integration and the user's own. Module state,
@@ -130,6 +147,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
         # populated once the device reports it.
         hw_version=entry.data.get("hw_version"),
     )
+
+    # A remote renamed on its device page before this sync existed, or while
+    # its entry was unloaded, still has the two names apart. Settle them once.
+    _follow_device_name(hass, device, entry)
 
     # Add a "Visit" link on the device page pointing to the config panel.
     # Must be an absolute URL — HA rejects relative paths.
@@ -191,15 +212,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
     # A targeted resync rather than `async_reload`: the labels are the only
     # thing an option can change on the device, and reloading would drop the
     # websocket connection to a remote that is working fine.
+    entry.async_on_unload(entry.add_update_listener(_options_listener(device.id, entry)))
+    _watch_server_language(hass, entry)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _watch_queue_targets(hass, entry)
+    return True
+
+
+def _options_listener(device_id: str, entry: LizaIPConfigEntry):
+    """The entry's update listener: apply what changed, and only that.
+
+    Remembers the last options, title and demo settings it acted on, so each
+    update is compared with what the remote already has.
+    """
     last_demo_mode = bool(entry.options.get(CONF_DEMO_MODE, False))
     last_demo_dwell = to_float(entry.options.get(CONF_DEMO_MODE_DWELL_TIME))
     last_demo_swipe = to_float(entry.options.get(CONF_DEMO_MODE_SWIPE_TIME))
+    last_title = entry.title
+    last_options = dict(entry.options)
 
     async def _options_updated(hass: HomeAssistant, updated: LizaIPConfigEntry) -> None:
-        nonlocal last_demo_mode, last_demo_dwell, last_demo_swipe
+        nonlocal last_demo_mode, last_demo_dwell, last_demo_swipe, last_title, last_options
         from .config.device_sync import sync_config_to_device  # noqa: PLC0415
 
         log = device_logger(_LOGGER, updated)
+
+        if updated.title != last_title:
+            last_title = updated.title
+            _follow_entry_title(hass, device_id, updated.title)
+            # A rename alone changes nothing the remote is sent: its own name is
+            # on no page, so there is nothing to sync.
+            if dict(updated.options) == last_options:
+                return
+        last_options = dict(updated.options)
 
         demo_mode = bool(updated.options.get(CONF_DEMO_MODE, False))
         demo_dwell = to_float(updated.options.get(CONF_DEMO_MODE_DWELL_TIME))
@@ -239,12 +285,67 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
                 "Options resync failed; labels follow on next sync", exc_info=True,
             )
 
-    entry.async_on_unload(entry.add_update_listener(_options_updated))
-    _watch_server_language(hass, entry)
+    return _options_updated
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _watch_queue_targets(hass, entry)
-    return True
+
+def _follow_entry_title(hass: HomeAssistant, device_id: str, title: str) -> None:
+    """Carry an entry rename through to the device registry.
+
+    The device is registered under the entry's title, but that happens once,
+    at setup. Renaming the entry writes the title alone, so without this the
+    device page -- and every entity name Home Assistant resolves from it --
+    keeps the old name until the next reload.
+
+    ``name_by_user`` and not ``name``: that is the field the device page
+    writes, and the one :func:`_async_setup_name_sync` reads back, so the two
+    halves of a rename meet in the same place whichever end started it.
+    """
+    if not title:
+        return
+    registry = dr.async_get(hass)
+    device = registry.async_get(device_id)
+    if device is None or device.name_by_user == title:
+        return
+    registry.async_update_device(device_id, name_by_user=title)
+
+
+@callback
+def _follow_device_name(hass: HomeAssistant, device, entry: ConfigEntry) -> None:
+    """Carry a device rename back to the entry's title.
+
+    ``name_by_user`` is what the device page writes and ``name`` what the
+    integration registered, so that order is the name Home Assistant itself
+    shows. Nothing is written when the title already says it, which is what
+    keeps this and :func:`_follow_entry_title` from chasing each other.
+    """
+    name = (device.name_by_user or device.name or "").strip()
+    if not name or entry.title == name:
+        return
+    hass.config_entries.async_update_entry(entry, title=name)
+
+
+@callback
+def _async_setup_name_sync(hass: HomeAssistant) -> None:
+    """Keep ``entry.title`` saying what the device page says.
+
+    A lizaIP can be renamed in two places that do not know about each other:
+    the device page writes ``name_by_user``, the integrations card writes
+    ``entry.title``. Reading both everywhere would mean threading a ``hass``
+    through every log line and every label. Writing one from the other instead
+    leaves a single name, so ``entry.title`` stays the answer it always was.
+    """
+    @callback
+    def _renamed(event) -> None:
+        device = renamed_device(hass, event)
+        if device is None:
+            return
+        # `config_entry_id`, not the `config_entries` set: a device belongs to
+        # exactly one entry since HA 2026.8 and the set stops working in 2027.10.
+        entry = hass.config_entries.async_get_entry(device.config_entry_id)
+        if entry is not None and entry.domain == DOMAIN:
+            _follow_device_name(hass, device, entry)
+
+    hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _renamed)
 
 
 def _watch_queue_targets(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -356,3 +457,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     # Gestures and cycle positions are otherwise never evicted for a device
     # that no longer exists. Compiled scripts went with the connection above.
     action_controller.forget_remote(entry.entry_id)
+
+    # Somebody may have just lost their only remote, and with it their reason
+    # to see the panel at all.
+    from .config.access import (  # noqa: PLC0415
+        async_notify_assignments_changed,
+        async_reconcile_sidebar,
+    )
+    await async_reconcile_sidebar(hass)
+    async_notify_assignments_changed(hass)

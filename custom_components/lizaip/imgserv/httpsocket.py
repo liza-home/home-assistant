@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 from functools import partial
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+import aiohttp
 from aiohttp import web
 from multidict import MultiDict
 from yarl import URL
@@ -54,8 +55,8 @@ from ..shared import theme as theme_registry
 from ..shared.history import is_servable
 from . import media_refs
 from .const import (
+    parse_color,
     COLOR_NAMES,
-    LEGACY_COLOR_ALIASES,
     DEFAULT_BG_COLOR,
     DEFAULT_FG_COLOR,
     DEFAULT_SIZE,
@@ -65,9 +66,11 @@ from .const import (
     SIZE_IDS,
     TRANSPARENT,
     custom_icon_prefixes,
+    has_source_type,
+    is_address,
     split_source_parts,
 )
-from .fonts import user_fonts_dir
+from .fonts import www_fonts_dir
 from .render import finalize_png
 from .render_caption import compose_parts
 from .render_history import (
@@ -123,35 +126,9 @@ class _ImgservError(Exception):
         self.message = message
 
 
-def _try_parse_color(color_str: str | None, names: dict | None = None) -> tuple | None:
-    """Parse a color value and return RGBA, or None when invalid/missing.
-
-    *names* is the symbolic vocabulary to read, which a remote's theme may have
-    re-coloured. It only ever re-points a name, never removes one, so a button
-    configured with ``?fg=blue`` keeps drawing under every theme.
-    """
-    if not color_str:
-        return None
-    key = color_str.lower()
-    named = (names or COLOR_NAMES).get(LEGACY_COLOR_ALIASES.get(key, key))
-    if named:
-        return named
-    color_str = color_str.lstrip("#")
-    try:
-        if len(color_str) == 6:
-            r, g, b = int(color_str[0:2], 16), int(color_str[2:4], 16), int(color_str[4:6], 16)
-            return (r, g, b, 255)
-        if len(color_str) == 8:
-            r, g, b, a = int(color_str[0:2], 16), int(color_str[2:4], 16), int(color_str[4:6], 16), int(color_str[6:8], 16)
-            return (r, g, b, a)
-    except ValueError:
-        return None
-    return None
-
-
 def _parse_color(color_str: str | None, default: tuple, names: dict | None = None) -> tuple:
     """Parse 'FF0000', 'FF0000FF', or a symbolic name like 'yellow'."""
-    return _try_parse_color(color_str, names) or default
+    return parse_color(color_str, names) or default
 
 
 def _parse_size(size_str: str | None) -> tuple[int, int]:
@@ -321,7 +298,6 @@ def _first_param(query, *names: str) -> str | None:
 def _resolve_colors(
     mode: str,
     fg_raw: str | None,
-    color_raw: str | None,
     bg_raw: str | None,
     theme=None,
 ) -> tuple[tuple, tuple]:
@@ -343,7 +319,7 @@ def _resolve_colors(
         _parse_color("black", mode_fg, names) if mode == "light"
         else (theme.color("default") or mode_fg if theme is not None else mode_fg)
     )
-    fg = _parse_color(fg_raw or color_raw, fallback_fg, names)
+    fg = _parse_color(fg_raw, fallback_fg, names)
     bg = _parse_color(bg_raw, default_bg, names)
     return fg, bg
 
@@ -374,6 +350,8 @@ class _Options:
     #: How a `media:` picture meets the size: ``contain`` keeps its proportions
     #: (the default), ``fill`` stretches it to exactly that size.
     fit: str = "contain"
+    #: The emoji font: a font id, ``none`` for none, ``None`` to find one.
+    emoji: str | None = None
 
     @classmethod
     def from_query(cls, query) -> _Options:
@@ -381,8 +359,7 @@ class _Options:
         mode = query.get("mode", "").lower()
         theme = theme_registry.get_theme(query.get("theme"))
         fg, bg = _resolve_colors(
-            mode, _first_param(query, "fg", "color"), None,
-            _first_param(query, "bg"), theme,
+            mode, _first_param(query, "fg", "color"), _first_param(query, "bg"), theme,
         )
 
         try:
@@ -412,6 +389,7 @@ class _Options:
             explicit_font_size=_parse_font_size(query.get("font_size")) is not None,
             period=period,
             fit=_parse_fit(query.get("fit")),
+            emoji=query.get("emoji", "").strip().lower() or None,
         )
 
     def untinted(self) -> _Options:
@@ -459,21 +437,34 @@ def _split_parts(source: str) -> tuple[str, ...]:
 
 
 def _split_source(source: str) -> tuple[str, str]:
-    """Split ``type:value``."""
+    """Split ``type:value``.
+
+    A source written with no ``type:`` is words: ``hello`` and ``Küche 2``
+    are drawn as ``text:`` would draw them. In words, ``\\:`` is a colon that
+    starts nothing -- ``text\\:`` draws "text:". An unknown type stays an
+    error rather than words: it may be an icon set the panel has not
+    registered yet, and a picture of its name would be cached in its place.
+    """
     if not source:
         raise _ImgservError(400, "Provide a source (mdi:name, text:string, media:url)")
 
-    if ":" not in source:
-        raise _ImgservError(400, "Source must be type:value (e.g. mdi:home)")
+    if not has_source_type(source) and not is_address(source):
+        return "text", _unescaped(source)
 
     source_type, value = source.split(":", 1)
 
-    # Strip surrounding quotes from text values
-    if source_type == "text" and len(value) >= 2:
-        if (value[0] == value[-1]) and value[0] in ('"', "'"):
+    if source_type == "text":
+        # Strip surrounding quotes from text values
+        if len(value) >= 2 and (value[0] == value[-1]) and value[0] in ('"', "'"):
             value = value[1:-1]
+        value = _unescaped(value)
 
     return source_type, value
+
+
+def _unescaped(words: str) -> str:
+    """*words* with each ``\\:`` written as the colon it stands for."""
+    return words.replace("\\:", ":")
 
 
 def _source_def_for(source_type: str) -> _Source:
@@ -527,7 +518,7 @@ class LizaIPImageView(HomeAssistantView):
     Examples:
         /api/imgserv/mdi:play-circle?fg=FFFFFF&size=100x200
         /api/imgserv/mdi:battery?fg=green&percent=40&size=tile
-        /api/imgserv/text:22°C?fg=FF8800&size=64x64&font=filson-light&font_size=28
+        /api/imgserv/text:22°C?fg=FF8800&size=64x64&font=roboto-light&font_size=28
         /api/imgserv/logo:spotify?size=60
         /api/imgserv/history:sensor.outdoor_temperature?hours=24&size=title&fg=FF8800
         /api/imgserv/history:sensor.outdoor_temperature?days=7&size=title
@@ -587,7 +578,8 @@ class LizaIPImageView(HomeAssistantView):
                         options.fg,
                         options.font_size,
                         options.font_id,
-                        user_fonts_dir(hass),
+                        www_fonts_dir(hass),
+                        options.emoji,
                     )
                 )
             except Exception:
@@ -696,10 +688,10 @@ async def _handle_text(hass, value, options: _Options):
     # come out -- the device scrolls a title. Without one, the words are made
     # to fit the picture asked for: a tile does not scroll.
     draw = render_text if options.explicit_font_size else render_text_fitted
-    return await hass.async_add_executor_job(
+    return await hass.async_add_executor_job(partial(
         draw, value, options.width, options.height, options.fg,
-        options.font_size, options.font_id, user_fonts_dir(hass),
-    )
+        options.font_size, options.font_id, www_fonts_dir(hass), emoji=options.emoji,
+    ))
 
 
 async def _handle_history(hass, value, options: _Options):
@@ -789,19 +781,8 @@ def _check_outside_url(value: str) -> None:
         raise _ImgservError(400, "Ambiguous media URL")
 
 
-async def _handle_media(hass, value, options: _Options):
-    """Proxy and resize a media thumbnail HA can reach.
-
-    Usage:  /api/imgserv/media:<url-or-ha-path>?size=tile
-    """
-    if not value:
-        raise _ImgservError(400, "Missing media URL path")
-    # Deliberately open: imgserv answers anyone who can reach port 8123, and
-    # so fetches any http(s) address it is asked for -- the remote has no token
-    # to prove where a request came from, and every picture it shows passes
-    # through here. What is limited is what HA itself is asked for (picture
-    # paths only), how much is read and decoded, and that the answer is a PNG.
-    # See "imgserv is open by design" in the README before adding a gate.
+def _media_url(hass, value: str) -> tuple[str, bool]:
+    """The address a ``media:`` *value* is fetched from, and whether it is HA's own."""
     internal = value.startswith("/") and not value.startswith("//")
     if internal:
         _check_ha_path(value)
@@ -817,6 +798,29 @@ async def _handle_media(hass, value, options: _Options):
     url = f"{ha_base}{value}" if internal else value
     if urlsplit(url).scheme.lower() not in ("http", "https"):
         raise _ImgservError(400, "media: takes an http(s) URL or an HA path")
+    return url, internal
+
+
+async def async_fetch_media_bytes(hass, value: str) -> bytes:
+    """The bytes a ``media:`` *value* names, checked as imgserv checks them."""
+    url, internal = _media_url(hass, value)
+    return await _download(hass, url, value, internal=internal)
+
+
+async def _handle_media(hass, value, options: _Options):
+    """Proxy and resize a media thumbnail HA can reach.
+
+    Usage:  /api/imgserv/media:<url-or-ha-path>?size=tile
+    """
+    if not value:
+        raise _ImgservError(400, "Missing media URL path")
+    # Deliberately open: imgserv answers anyone who can reach port 8123, and
+    # so fetches any http(s) address it is asked for -- the remote has no token
+    # to prove where a request came from, and every picture it shows passes
+    # through here. What is limited is what HA itself is asked for (picture
+    # paths only), how much is read and decoded, and that the answer is a PNG.
+    # See "imgserv is open by design" in the README before adding a gate.
+    url, internal = _media_url(hass, value)
     key = (url, options.width, options.height, options.fit)
 
     cached = _media_cache.get(key)
@@ -868,6 +872,25 @@ async def _check_redirect(hass, current: str, target: str) -> None:
         raise _ImgservError(502, "Upstream redirected somewhere else")
 
 
+def _tls_check(url: str) -> bool:
+    """Whether to check *url*'s certificate: not for a device on the LAN.
+
+    A TV serves its app icons over HTTPS with a certificate it signed itself,
+    which no check can pass -- an LG webOS TV lists every app's picture as
+    ``https://<tv>:3001/...``. Home Assistant's own webOS integration fetches
+    them unchecked for that reason. Only private, link-local and ``.local``
+    addresses are spared; anything on the internet is still checked.
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    if host.endswith(".local"):
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (addr.is_private or addr.is_link_local or addr.is_loopback)
+
+
 async def _read_capped(resp) -> bytes:
     """The body of *resp*, refused once it outgrows ``_MEDIA_MAX_BYTES``."""
     if (resp.content_length or 0) > _MEDIA_MAX_BYTES:
@@ -880,17 +903,73 @@ async def _read_capped(resp) -> bytes:
     return bytes(body)
 
 
+#: How long a fetch may take, and how long of it may go on reaching the host.
+#: A device that is switched off -- a TV whose app icons are on a page --
+#: answers nothing at all, so without the shorter limit each of its pictures
+#: held the remote, which asks for one at a time, for the whole ten seconds.
+_MEDIA_TIMEOUT = aiohttp.ClientTimeout(total=10, sock_connect=3)
+
+#: A host that could not be reached is not asked again for this long: a page
+#: of twelve icons from a TV that is off costs one wait, not twelve.
+_UNREACHABLE_FOR = 60.0
+
+#: host -> when it may be tried again, for hosts that did not answer.
+_unreachable: dict[str, float] = {}
+
+
+def _host_of(url: str) -> str:
+    return (urlsplit(url).netloc or "").lower()
+
+
 async def _fetch_and_scale(
     hass, url: str, value: str, width: int, height: int, fit: str = "contain",
     *, internal: bool = False,
 ):
-    """The picture at *url* at *width*×*height*; always an image, or a 502."""
-    session = async_get_clientsession(hass)
+    """The picture at *url* at *width*×*height*; always an image, or a 502.
+
+    An app's icon is kept once fetched, and answered from what was kept while
+    its TV is off.
+    """
+    from ..config.page_templates import app_cache
+
     started = time.monotonic()
+    kept = False
+    try:
+        img_bytes = await _download(hass, url, value, internal=internal)
+    except _ImgservError:
+        img_bytes = await app_cache.async_load_icon(hass, value)
+        if img_bytes is None:
+            raise
+        kept = True
+    fetched = time.monotonic()
+
+    img = await hass.async_add_executor_job(_decode_and_scale, img_bytes, width, height, fit)
+    _LOGGER.debug(
+        "media: %s fetched in %d ms (%d bytes), scaled to %dx%d in %d ms",
+        _redacted(value), (fetched - started) * 1000, len(img_bytes), width, height,
+        (time.monotonic() - fetched) * 1000,
+    )
+    if img is None:
+        # imgserv answers with a PNG or not at all.
+        raise _ImgservError(502, "Upstream did not return a picture")
+    if not kept:
+        await app_cache.async_save_icon(hass, value, img_bytes)
+    return img
+
+
+async def _download(hass, url: str, value: str, *, internal: bool = False) -> bytes:
+    """The bytes at *url*, following only redirects imgserv allows."""
+    session = async_get_clientsession(hass)
     current = url
+    host = _host_of(url)
+    if _unreachable.get(host, 0.0) > _media_clock():
+        raise _ImgservError(502, "Upstream is not reachable")
     try:
         for _hop in range(_MEDIA_MAX_REDIRECTS + 1):
-            async with session.get(current, timeout=10, allow_redirects=False) as resp:
+            async with session.get(
+                current, timeout=_MEDIA_TIMEOUT, allow_redirects=False,
+                ssl=_tls_check(current),
+            ) as resp:
                 if resp.status in _REDIRECT_STATUSES:
                     location = resp.headers.get("Location")
                     if internal or not location:
@@ -909,20 +988,14 @@ async def _fetch_and_scale(
     except _ImgservError:
         raise
     except Exception as exc:
+        if isinstance(exc, (aiohttp.ClientConnectionError, TimeoutError)):
+            # Not answering at all, or not in time: off, asleep or gone.
+            _unreachable[host] = _media_clock() + _UNREACHABLE_FOR
+            if len(_unreachable) > 64:
+                del _unreachable[next(iter(_unreachable))]
         _LOGGER.warning("media: fetch failed for %s: %s", _redacted(value), exc)
         raise _ImgservError(502, "Failed to fetch media image") from exc
-    fetched = time.monotonic()
-
-    img = await hass.async_add_executor_job(_decode_and_scale, img_bytes, width, height, fit)
-    _LOGGER.debug(
-        "media: %s fetched in %d ms (%d bytes), scaled to %dx%d in %d ms",
-        _redacted(value), (fetched - started) * 1000, len(img_bytes), width, height,
-        (time.monotonic() - fetched) * 1000,
-    )
-    if img is None:
-        # imgserv answers with a PNG or not at all.
-        raise _ImgservError(502, "Upstream did not return a picture")
-    return img
+    return img_bytes
 
 
 def _decode_and_scale(img_bytes: bytes, width: int, height: int, fit: str = "contain"):

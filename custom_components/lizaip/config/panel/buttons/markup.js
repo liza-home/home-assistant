@@ -45,7 +45,7 @@ export const ButtonsMarkupMixin = {
     // Pages thumbnails
     const pagesHtml = this._pages.map((page, i) => {
       const isActive = i === this._currentPageIdx;
-      // `_pageLabel`, not `page.image`: `image` is a title-*image* spec, so a
+      // `_pageLabel`, not `page.title`: `title` is a picture spec, so a
       // reader announced the raw scheme -- "delete page mdi:sofa". The helper
       // strips it and falls back to a name rather than to the bare id.
       const displayName = this._pageLabel(page);
@@ -156,7 +156,7 @@ ${pagesHtml}
   _htmlPageSettingsPanel(bp) {
     if (!this._pages.length) return '';
     const page = this._pages[this._currentPageIdx];
-    const pageImgTitle = page.image || "";
+    const pageTitle = page.title || "";
     const pageDefaultColor = page.default_color || "";
     const pageCount = this._pages.length;
     const canMoveUp = this._currentPageIdx > 0;
@@ -240,18 +240,18 @@ ${pagesHtml}
           </div>
         </div>`;
     // Below the banner rather than inside it, exactly as the button card puts
-    // its Image field below its own header. The banner is a flex row holding
+    // its Icon field below its own header. The banner is a flex row holding
     // the page counter and the reorder arrows; a field wrapped into it pushed
     // those arrows onto a third line.
     const titleEditorHtml = this._pageTitleSelected ? `
           <div class="ps-title-editor" id="pageTitleEditor">
             <span class="title-icon-field">${this._htmlIconField({
-              label: this._t("image"),
+              label: this._t("settings_title"),
               // Previewed as the remote draws it, `${_device}` included; the
               // field itself keeps what the user typed.
-              value: this._pageTitleImage(page),
-              inputValue: pageImgTitle,
-              hint: this._pageTitleHint(page, pageImgTitle),
+              value: this._resolvedPageTitle(page),
+              inputValue: pageTitle,
+              hint: this._pageTitleHint(page, pageTitle),
               color: pageDefaultColor,
               shape: { size: "title", box: { w: TITLE_PREVIEW_W, h: TITLE_PREVIEW_H } },
               previewClass: "icon-preview-title",
@@ -350,7 +350,7 @@ ${pagesHtml}
   // asks first, and that is "what does it look like".
 
   _htmlConfigCardHeader(o) {
-    const fields = `${o.appearanceHostHtml || ''}${o.labelFieldHtml || ''}`;
+    const fields = `${o.appearanceHostHtml || ''}${o.tooltipFieldHtml || ''}`;
     const cycling = !!o.pressRowOneHeadHtml;
     // With a cycle on the button, the two fields above are press 1's and
     // belong in the list with the rest. The row *wraps* the hosts rather than
@@ -399,7 +399,7 @@ ${pagesHtml}
   //
   // The one place that answers it, because the field's first render and the
   // URL input's live preview both need it and a second copy of the expression
-  // is how those two drift apart. Asked with `image`/`image_pinned` blanked
+  // is how those two drift apart. Asked with `icon`/`icon_pinned` blanked
   // rather than reading `_resolveButtonIcon` straight: a stored image would
   // otherwise win and the answer would be "what it shows now", which is not the
   // question.
@@ -408,13 +408,13 @@ ${pagesHtml}
   // what must not be offered as the button's own icon, and the caller draws the
   // empty slot itself.
 
-  _derivedButtonImageIcon(selKey) {
+  _derivedButtonIcon(selKey) {
     const assign = this._editAssign(selKey) || {};
     const action = assign.action_id
       ? this._actions.find(a => a.id === assign.action_id) || null
       : null;
     return this._resolveButtonIcon(
-      { ...assign, image: "", image_pinned: false }, action, "") || "";
+      { ...assign, icon: "", icon_pinned: false }, action, "") || "";
   },
 
   _htmlButtonConfigPanel(bp, selBtn) {
@@ -437,13 +437,13 @@ ${pagesHtml}
     // A label the device could never show. Fixed buttons carry a firmware glyph
     // (PROTOCOL.md §12) — but that is equally true of the page default's card,
     // which has always offered the field, so the *page* card is left exactly as
-    // it is and only the write is guarded. `labelIsDead` is kept as a name so
+    // it is and only the write is guarded. `tooltipIsDead` is kept as a name so
     // there is one place to say "never offer it" if that decision is ever taken.
-    const labelIsDead = false;
+    const tooltipIsDead = false;
     // Under a context the field is offered but inert until the override has an
     // action of its own: a label-only override is dropped by the writers, so
     // accepting one would be a field that takes a value and loses it.
-    const labelNeedsAction = editingOverride && !this._isAssignedRecord(this._editAssign(selBtn.key) || {});
+    const tooltipNeedsAction = editingOverride && !this._isAssignedRecord(this._editAssign(selBtn.key) || {});
     // Only where the remote has long touch on, and not in a context: the
     // remote holds a click back for the long touch of the button itself, not
     // of an override the selection swaps in.
@@ -453,10 +453,10 @@ ${pagesHtml}
     // A proportional slider has no action_id and no library entry, so the shared
     // resolver cannot name it — its icon comes from the control it drives. An
     // explicit image still wins, matching _resolveButtonIcon's own precedence.
-    const selIcon = (selAssign.image ? "" : sliderIconFor(this._sliderControls, selAssign))
+    const selIcon = (selAssign.icon ? "" : sliderIconFor(this._sliderControls, selAssign))
       || this._resolveButtonIcon(selAssign, selAction, "mdi:radiobox-blank");
     const selDefault = capitalize(selBtn.key.replace(/_/g, " "));
-    const showImage = isGridBtn(selBtn.key);
+    const showButtonIcon = isGridBtn(selBtn.key);
 
     // The subtitle line, which is where the card says *which pair* it is. Under
     // a context it is the main defence against the accidental-override risk:
@@ -469,7 +469,7 @@ ${pagesHtml}
     // same button selected, so the card switches from the override to the
     // default in place.
     const contextName = this._liveContextKey()
-      ? (this._assignments[this._liveContextKey()]?.label
+      ? (this._assignments[this._liveContextKey()]?.tooltip
          || capitalize(this._liveContextKey().replace(/_/g, " ")))
       : "";
     // The slider is not in OVERRIDABLE_FIXED_BUTTONS — its per-button config is
@@ -518,7 +518,7 @@ ${pagesHtml}
     // what it falls back to, and where an edit lands. When it is null they are
     // the page's, exactly as before.
     const sliderIconFieldHtml = (hasEntity, ctx = null) => {
-      const storedIcon = ctx ? ctx.image : (selAssign.image || "");
+      const storedIcon = ctx ? ctx.icon : (selAssign.icon || "");
       const iconHidden = ctx ? ctx.iconHidden : !!selAssign[SLIDER_ICON_HIDDEN_KEY];
       // The sentinel is a stored choice, not a value to display: "no icon" and
       // "not set" both draw as an empty field, which is exactly right. They are
@@ -699,7 +699,7 @@ ${pagesHtml}
     // there is nothing left to drift from.
     const sliderCtx = (() => {
       if (!sliderCtxKey) return null;
-      const label = this._assignments[sliderCtxKey]?.label
+      const label = this._assignments[sliderCtxKey]?.tooltip
         || capitalize(sliderCtxKey.replace(/_/g, " "));
       // The device the button's own action already names. Offered, never
       // preselected: an untouched button must read as untouched, so the field
@@ -792,7 +792,7 @@ ${pagesHtml}
       const factorOverridden = typeof own === "number" && isFinite(own);
 
       return {
-        label, explicit, entity, derived, derivedName, derivedDrivable, derivedIcon,
+        explicit, entity, derived, derivedName, derivedDrivable, derivedIcon,
         retargets: sliderCtxState.retargets,
         entityHint: hint,
         available, shown, chosenId,
@@ -815,11 +815,11 @@ ${pagesHtml}
         // because the page's icon describes the page's entity and this button
         // has pointed the slider somewhere else. So the field starts by showing
         // the truth and only stores something once the user disagrees with it.
-        image: typeof sliderCtxAssign.slider_image === "string" ? sliderCtxAssign.slider_image : "",
+        icon: typeof sliderCtxAssign.slider_image === "string" ? sliderCtxAssign.slider_image : "",
         iconHidden: !!sliderCtxAssign[SLIDER_ICON_HIDDEN_KEY],
-        label: typeof sliderCtxAssign.slider_name === "string" ? sliderCtxAssign.slider_name : "",
+        tooltip: typeof sliderCtxAssign.slider_name === "string" ? sliderCtxAssign.slider_name : "",
         autoIcon: shown?.icon || "",
-        autoLabel: shown?.label || label,
+        autoTooltip: shown?.label || label,
         pageFactor,
         factorOverridden,
         factor: factorOverridden ? own : pageFactor,
@@ -871,10 +871,10 @@ ${pagesHtml}
       // holding the slider it shows that button's stored pair, falling back to
       // the live control the way the fields' placeholders do.
       const displayName = apprCtx
-        ? (apprCtx.label || apprCtx.autoLabel || selDefault)
-        : (selAssign.label || selDefault);
+        ? (apprCtx.tooltip || apprCtx.autoTooltip || selDefault)
+        : (selAssign.tooltip || selDefault);
       const headerIcon = apprCtx
-        ? (apprCtx.image || apprCtx.autoIcon || "mdi:radiobox-blank")
+        ? (apprCtx.icon || apprCtx.autoIcon || "mdi:radiobox-blank")
         : selIcon;
       const factor = sliderCtx ? sliderCtx.factor : num(sliderActions.factor, 1.0);
       const attribute = sliderActions.attribute || "volume_level";
@@ -1059,11 +1059,11 @@ ${pagesHtml}
         ${configFieldHtml({ label: this._t("control"), control: controlFieldHtml, hint: controlHint })}
         ${rangeWarning}`;
       const advancedHtml = !pageEntity ? "" : `
-        <details class="slider-advanced" ${advDrifted ? "open" : ""}>
-          <summary>${this._t("advanced")}${advDrifted ? ` <span class="slider-advanced-tag">${this._t("customised")}</span>` : ""}</summary>
+        <ha-expansion-panel class="slider-advanced" outlined ${advDrifted ? "expanded" : ""}>
+          <span slot="header">${this._t("advanced")}${advDrifted ? ` <span class="slider-advanced-tag">${this._t("customised")}</span>` : ""}</span>
           <div class="slider-advanced-body">
           ${sliderCtx ? `<span class="config-field-hint">${this._t("slider_page_mechanics_hint", {
-            name: this._esc(sliderCtx.label),
+            name: this._esc(sliderCtx.tooltip),
             page_default: this._esc(this._t("page_default")),
           })}</span>` : ""}
           <div class="config-field slider-range-row">
@@ -1089,7 +1089,7 @@ ${pagesHtml}
             ${this._esc(this._t("reset_control_defaults", { control: resetTarget.label }))}
           </ha-button>` : ""}
           </div>
-        </details>`;
+        </ha-expansion-panel>`;
 
       // --- What the rest of the page does to this slider ---
       // Nothing here writes; it is a statement of what will happen, in the same
@@ -1193,21 +1193,21 @@ ${pagesHtml}
             <h3 class="config-section-title">${this._t("appearance")}</h3>
             ${iconFieldHtml}
             ${(() => {
-              const sliderLabel = apprCtx ? apprCtx.label : (selAssign.label || selDefault);
+              const sliderTooltip = apprCtx ? apprCtx.tooltip : (selAssign.tooltip || selDefault);
               return this._htmlIconField({
                 label: this._t("label"),
-                value: sliderLabel || apprCtx?.autoLabel || "",
-                inputValue: sliderLabel,
-                inputClass: "config-label-input",
-                placeholder: apprCtx ? apprCtx.autoLabel : "",
+                value: sliderTooltip || apprCtx?.autoTooltip || "",
+                inputValue: sliderTooltip,
+                inputClass: "config-tooltip-input",
+                placeholder: apprCtx ? apprCtx.autoTooltip : "",
                 color: this._currentPageColor(),
                 shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
                 previewClass: "icon-preview-title",
-                slotId: "config-label-slot",
+                slotId: "config-tooltip-slot",
                 hint: apprCtx
                   ? this._t("label_own_hint", {
                       name: this._esc(contextName),
-                      auto: this._esc(apprCtx.autoLabel),
+                      auto: this._esc(apprCtx.autoTooltip),
                     })
                   : "",
               });
@@ -1222,39 +1222,39 @@ ${pagesHtml}
     // describe. `slider_horizontal` never reached it either — it is filtered
     // out of the button list upstream.
 
-    // `_labelEdited` is a session-only flag — `_saveAssignments` strips it before
+    // `_tooltipEdited` is a session-only flag — `_saveAssignments` strips it before
     // persisting — so keying the input off it meant that after a reload the panel
     // forgot a label was stored and offered a freshly derived one instead. Saving
     // then overwrote the stored label with that derivation, which is how an
     // Android TV `Home` button (stored "Home") could turn into "Send Command"
-    // on the remote. The input holds the stored text verbatim; `_resolveLabel`
+    // on the remote. The input holds the stored text verbatim; `_resolveTooltip`
     // says what the remote makes of it.
-    const currentLabel = selAssign.label || "";
-    const autoLabel = this._computeLabel(selAction, selEntity, selAssign.config);
+    const currentTooltip = selAssign.tooltip || "";
+    const autoTooltip = this._computeTooltip(selAction, selEntity, selAssign.config);
     // A stored name that merely repeats the action library's name is only
     // discarded by the remote when the state rung outranks it -- for a static
     // name like "Power" the remote still uses the stored text. So fall to the
     // derived template only when that template is a state placeholder, or
     // every Android TV button reads "Send Command" again.
-    const storedIsPlaceholder = this._labelIsAutoFilled(currentLabel, selAction, autoLabel, selAssign);
+    const storedIsPlaceholder = this._tooltipIsAutoFilled(currentTooltip, selAction, autoTooltip, selAssign);
     // Not `|| selDefault`: "Button 5" is a panel-only stand-in, and the remote
     // prints nothing at all for an unassigned button. Holding it as a *value*
     // made it look like a name that was already set, and one keystroke away
     // from being stored as one. It is the field's placeholder instead.
-    const labelFieldValue = (storedIsPlaceholder ? autoLabel : currentLabel) || autoLabel || "";
+    const tooltipFieldValue = (storedIsPlaceholder ? autoTooltip : currentTooltip) || autoTooltip || "";
     // The hint under the field explains a placeholder, so it is only shown when
     // the field actually holds one that resolves. "Home" is a plain name and
     // has nothing to explain.
-    const labelShowsState =
-      this._labelHasStateToken(labelFieldValue) &&
-      !!this._displayLabel("${_state}", selAction, selEntity, selAssign.config);
+    const tooltipShowsState =
+      this._tooltipHasStateToken(tooltipFieldValue) &&
+      !!this._displayTooltip("${_state}", selAction, selEntity, selAssign.config);
     // `${_name}` is only a token on a device-local command, so the hint is
     // gated on the button carrying one *and* on that command naming a target
     // -- a goto pointed at a page that no longer exists resolves to nothing,
     // and promising a replacement that never comes is worse than staying quiet.
-    const labelShowsName =
-      this._labelHasNameToken(labelFieldValue) &&
-      !!this._displayLabel("${_name}", selAction, selEntity, selAssign.config);
+    const tooltipShowsName =
+      this._tooltipHasNameToken(tooltipFieldValue) &&
+      !!this._displayTooltip("${_name}", selAction, selEntity, selAssign.config);
     // What the remote prints for this button *right now*.
     //
     // The field cannot show it. It holds the stored text verbatim, tokens and
@@ -1267,22 +1267,22 @@ ${pagesHtml}
     // -- true, and no help at all in telling whether it is working. Naming the
     // current answer is the difference between a field that looks broken and
     // one that is visibly live.
-    const labelShowsVariable = this._hasEntityToken(labelFieldValue);
+    const tooltipShowsVariable = this._hasEntityToken(tooltipFieldValue);
     // Discovery, not only explanation: the track tokens are worth a sentence
     // wherever they *could* be used, not just where they already are. On a
     // lamp the same sentence would be noise, so the target decides.
-    const labelHasMedia = this._labelHasMediaToken(labelFieldValue);
-    const labelShowsMedia = labelHasMedia
-      || (labelShowsState && this._targetsMediaPlayer(selAssign.config));
-    const labelResolved = (labelShowsState || labelShowsName || labelShowsVariable || labelShowsMedia)
-      ? this._resolveLabel(selAction, selEntity, selAssign.config, currentLabel, selAssign)
+    const tooltipHasMedia = this._tooltipHasMediaToken(tooltipFieldValue);
+    const tooltipShowsMedia = tooltipHasMedia
+      || (tooltipShowsState && this._targetsMediaPlayer(selAssign.config));
+    const tooltipResolved = (tooltipShowsState || tooltipShowsName || tooltipShowsVariable || tooltipShowsMedia)
+      ? this._resolveTooltip(selAction, selEntity, selAssign.config, currentTooltip, selAssign)
       : "";
     // A device-local command whose target the device cannot resolve is sent
     // disarmed. Surfaced here because the label deliberately still names the
     // target the user asked for, so it cannot also carry the bad news.
     const internalProblem = this._internalCommandProblem(selAssign.config, selAction?.service);
 
-    const imageVal = selAssign.image || "";
+    const buttonIconVal = selAssign.icon || "";
 
     const stateIcons = selAssign.state_icons || {};
     const iconDomain = selEntity ? selEntity.split(".")[0] : (selAction?.service || "").split(".")[0];
@@ -1310,7 +1310,7 @@ ${pagesHtml}
     }
 
     let stateIconsHtml = '';
-    const hasStateIcons = showImage && selAction && actionStates.length > 0;
+    const hasStateIcons = showButtonIcon && selAction && actionStates.length > 0;
     if (hasStateIcons) {
       // One field per state, built the same way as the Image field above it,
       // because it is the same question asked once per state. The row used to be
@@ -1346,16 +1346,16 @@ ${pagesHtml}
     // would be a fourth answer to a question the list has already answered three
     // times. They now live in different regions of the card, so the exclusion is
     // stated once here and both regions read it.
-    const showImageEditor = showImage && !hasStateIcons;
+    const showButtonIconEditor = showButtonIcon && !hasStateIcons;
     // The icon the device derives when nothing is stored, which is what the
     // preview stands in with.
-    const autoImageIcon = showImageEditor
-      ? this._derivedButtonImageIcon(selBtn.key)
+    const autoButtonIcon = showButtonIconEditor
+      ? this._derivedButtonIcon(selBtn.key)
       : "";
-    const imageFieldHtml = showImageEditor ? this._htmlIconField({
-      label: this._t("image"),
-      value: imageVal,
-      autoIcon: autoImageIcon,
+    const buttonIconFieldHtml = showButtonIconEditor ? this._htmlIconField({
+      label: this._t("icon"),
+      value: buttonIconVal,
+      autoIcon: autoButtonIcon,
       color: this._currentPageColor(),
       slotId: "config-icon-picker-slot",
     }) : '';
@@ -1424,7 +1424,7 @@ ${pagesHtml}
             // input now need them, and two copies of the expression is how
             // the box and the field it labels drift apart.
             const derivedIcon = this._getServiceIcon(rule.config?.[0]?.action || "", selEntity);
-            const derivedLabel = this._pressDefaultLabel(
+            const derivedTooltip = this._pressDefaultTooltip(
               rule,
               this._toggleRuleName(rule),
             );
@@ -1432,7 +1432,7 @@ ${pagesHtml}
             // and not the button's. A cycle exists because its steps differ,
             // often in what they point at, so reading every press's `${_state}`
             // off the button's declared action would phrase press 3 in terms
-            // of press 1. `resolve_rule_label` in `toggle.py` answers the same
+            // of press 1. `resolve_rule_tooltip` in `toggle.py` answers the same
             // question the same way, and a synthetic action carrying the step's
             // service is what keeps them agreeing: a press has no action-library
             // entry the backend can see, so the step's service is the only
@@ -1441,8 +1441,8 @@ ${pagesHtml}
             const pressAction = { service: pressService };
             const pressEntity = this._getTargetEntityFromConfig(rule.config || []) || selEntity;
             // What the remote prints for this press right now, tokens read.
-            const pressResolved = this._displayLabel(
-              rule.label || "", pressAction, pressEntity, rule.config, rule,
+            const pressResolved = this._displayTooltip(
+              rule.tooltip || "", pressAction, pressEntity, rule.config, rule,
             );
             // The same three lessons press 1's Tooltip offers, on the same
             // conditions. They used to be withheld here on the grounds that a
@@ -1451,26 +1451,25 @@ ${pagesHtml}
             // The tokens collapsed only because both backend producers passed
             // an empty value map, which is now fixed, so withholding the hint
             // would be hiding a feature that works.
-            const pressShowsState = this._labelHasStateToken(rule.label || "")
-              && !!this._displayLabel("${_state}", pressAction, pressEntity, rule.config);
-            const pressShowsName = this._labelHasNameToken(rule.label || "")
-              && !!this._displayLabel("${_name}", pressAction, pressEntity, rule.config);
-            const pressShowsVariable = this._hasEntityToken(rule.label || "");
+            const pressShowsState = this._tooltipHasStateToken(rule.tooltip || "")
+              && !!this._displayTooltip("${_state}", pressAction, pressEntity, rule.config);
+            const pressShowsName = this._tooltipHasNameToken(rule.tooltip || "")
+              && !!this._displayTooltip("${_name}", pressAction, pressEntity, rule.config);
+            const pressShowsVariable = this._hasEntityToken(rule.tooltip || "");
             // Same discovery rule as the Label field: the two track tokens are
             // only meaningful on a media player, so the press's own target
             // decides whether naming them is help or noise.
-            const pressHasMedia = this._labelHasMediaToken(rule.label || "");
+            const pressHasMedia = this._tooltipHasMediaToken(rule.tooltip || "");
             const pressShowsMedia = pressHasMedia
               || (pressShowsState && this._targetsMediaPlayer(rule.config));
             const pressNowReads = (pressShowsState || pressShowsName || pressShowsVariable || pressShowsMedia)
               ? pressResolved
               : "";
             // <details> rather than a div with a click handler, and native
-            // rather than `ha-expansion-panel`: it is the pattern the debug
-            // view already uses here, it is keyboard- and screen-reader-
-            // operable without a line of code, and a closed <details> keeps
-            // its contents in the DOM -- which the icon picker needs, because
-            // it is mounted into a slot inside a row that may be shut.
+            // rather than Home Assistant's `ha-expansion-panel`, which the
+            // panel's other foldable sections use: a button with one press
+            // shows this row's fields with no heading at all (`press-plain`),
+            // and ha-expansion-panel offers no way to leave its heading out.
             return `
             <details class="press-appearance-row" data-press-idx="${idx}" ${open ? "open" : ""}>
               ${this._pressRowHeadHtml({
@@ -1484,10 +1483,10 @@ ${pagesHtml}
                 ),
               })}
               ${this._htmlIconField({
-                // "Image", the same word press 1's field uses, and now said
+                // "Icon", the same word press 1's field uses, and now said
                 // only once -- `_htmlIconField` hands it to the picker, which
                 // floats it inside the box, instead of also printing it above.
-                label: this._t("image"),
+                label: this._t("icon"),
                 value: rule.icon || "",
                 // What the device draws when the press names no icon of its
                 // own: the backend derives the same glyph from the step's
@@ -1522,16 +1521,16 @@ ${pagesHtml}
                 //
                 // The preview reads the tokens; the input keeps what was
                 // typed. Resolved through the twin of the backend's
-                // `clean_label_text(substitute_label_tokens(...))`, so the
+                // `clean_tooltip_text(substitute_tooltip_tokens(...))`, so the
                 // preview and the device agree.
                 // Falls back to the derived caption for the same reason the
                 // Image field falls back to the derived glyph: blank, the
                 // preview drew `mdi:image-off-outline` -- "nothing here" --
                 // beside a field promising a name, while the device prints the
                 // derived caption perfectly well.
-                value: pressResolved || derivedLabel,
-                inputValue: rule.label || derivedLabel,
-                inputClass: "toggle-press-label",
+                value: pressResolved || derivedTooltip,
+                inputValue: rule.tooltip || derivedTooltip,
+                inputClass: "toggle-press-tooltip",
                 // What the device draws when this press names no tooltip:
                 // the subject the step points at, read the same way press 1's
                 // field reads it, with the service's name when there is no
@@ -1541,11 +1540,11 @@ ${pagesHtml}
                 // Still set, for the one case the prefill does not cover:
                 // a user who clears the field is shown what clearing it buys
                 // them rather than an empty box.
-                placeholder: derivedLabel,
+                placeholder: derivedTooltip,
                 color: this._currentPageColor(),
                 shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
                 previewClass: "icon-preview-title",
-                slotAttrs: `data-toggle-label-idx="${idx}"`,
+                slotAttrs: `data-toggle-tooltip-idx="${idx}"`,
                 // Press 1's three lessons, chosen by the same ladder and in
                 // the same order, so the two fields teach one syntax rather
                 // than two dialects of it.
@@ -1581,37 +1580,37 @@ ${pagesHtml}
     // What the remote prints, tokens read. A value that reads as nothing is
     // nothing -- not the field's raw `${…}` text drawn as a picture of words;
     // only a picture value (`mdi:…`) stands for itself.
-    const labelPreview = labelFieldValue
-      ? (this._resolveLabel(selAction, selEntity, selAssign.config, currentLabel, selAssign)
-        || (this._isMediaSource?.(labelFieldValue) ? labelFieldValue : ""))
+    const tooltipPreview = tooltipFieldValue
+      ? (this._resolveTooltip(selAction, selEntity, selAssign.config, currentTooltip, selAssign)
+        || (this._isMediaSource?.(tooltipFieldValue) ? tooltipFieldValue : ""))
       : "";
     const pressOneTitle = (
-      (labelFieldValue && !this._isMediaSource?.(labelFieldValue) ? labelPreview : "")
+      (tooltipFieldValue && !this._isMediaSource?.(tooltipFieldValue) ? tooltipPreview : "")
       || selDefault || pressTitles[0] || ""
     );
-    const labelFieldHtml = labelIsDead ? '' : this._htmlIconField({
+    const tooltipFieldHtml = tooltipIsDead ? '' : this._htmlIconField({
       label: this._t("tooltip"),
       // The preview draws what the remote prints, tokens read; the field
       // holds the stored text, tokens and all.
-      value: labelPreview,
-      inputValue: labelFieldValue,
-      inputClass: "config-label-input",
+      value: tooltipPreview,
+      inputValue: tooltipFieldValue,
+      inputClass: "config-tooltip-input",
       placeholder: selDefault,
-      disabled: labelNeedsAction,
+      disabled: tooltipNeedsAction,
       color: this._currentPageColor(),
       shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
       previewClass: "icon-preview-title",
-      slotId: "config-label-slot",
-      action: (!labelNeedsAction && currentLabel && currentLabel !== autoLabel)
-        ? `<ha-icon-button class="config-label-reset" data-a11y-focus-after=".config-label-input" label="${this._esc(this._t("reset_tooltip"))}"><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></ha-icon-button>`
+      slotId: "config-tooltip-slot",
+      action: (!tooltipNeedsAction && currentTooltip && currentTooltip !== autoTooltip)
+        ? `<ha-icon-button class="config-tooltip-reset" data-a11y-focus-after=".config-tooltip-input" label="${this._esc(this._t("reset_tooltip"))}"><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></ha-icon-button>`
         : '',
-      hint: labelNeedsAction
+      hint: tooltipNeedsAction
         ? this._t("tooltip_needs_action")
-        : this._tokenHint(labelResolved, {
-          state: labelShowsState,
-          name: labelShowsName,
-          variable: labelShowsVariable,
-          media: labelShowsMedia,
+        : this._tokenHint(tooltipResolved, {
+          state: tooltipShowsState,
+          name: tooltipShowsName,
+          variable: tooltipShowsVariable,
+          media: tooltipShowsMedia,
         }),
     });
 
@@ -1621,8 +1620,8 @@ ${pagesHtml}
         ${this._htmlConfigCardHeader({
           subtitleHtml: cardKeyHtml,
           // One host, one question -- "what does this button look like?" -- with
-          // two mutually exclusive answers. `showImageEditor` is defined as
-          // `showImage && !hasStateIcons`, so exactly one of these is ever
+          // two mutually exclusive answers. `showButtonIconEditor` is defined as
+          // `showButtonIcon && !hasStateIcons`, so exactly one of these is ever
           // non-empty and concatenating them cannot show both.
           //
           // Emitted unconditionally even when both are empty:
@@ -1631,8 +1630,8 @@ ${pagesHtml}
           // not. Make this conditional and the field stops following the entity,
           // silently.
           appearanceHostHtml:
-            `<div id="config-card-appearance">${imageFieldHtml}${stateIconsHtml}</div>`,
-          labelFieldHtml,
+            `<div id="config-card-appearance">${buttonIconFieldHtml}${stateIconsHtml}</div>`,
+          tooltipFieldHtml,
           // A second host, after the Tooltip rather than inside the first.
           //
           // The press rows have to follow press 1's *pair* of fields, not sit
@@ -1679,8 +1678,8 @@ ${pagesHtml}
                 // heading and the field under it actually means.
                 name: pressOneTitle,
                 glyphHtml: this._configImagePreviewHtml(
-                  this._resolveImageVariables(imageVal) || "",
-                  autoImageIcon,
+                  this._resolveImageVariables(buttonIconVal) || "",
+                  autoButtonIcon,
                   this._currentPageColor(),
                   PRESS_GLYPH_SHAPE,
                 ),

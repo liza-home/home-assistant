@@ -1,11 +1,11 @@
 # Showcase group — the add-page option that shows off what a tile can do.
 #
 # A folder directly under `presets/` is offered on the add-page dialog's first
-# screen; nesting it would make it a card inside the picker instead. The `_key`
-# names point at the panel's translation table
+# screen; nesting it would make it a card inside the picker instead. The `translate:`
+# keys point at the panel's translation table
 # (`config/panel/lizaip-i18n.js`), so the option keeps its five translations
 # instead of spelling one language here.
 
-name_key: showcase_pages
-description_key: showcase_pages_desc
+name: {translate: showcase_pages}
+description: {translate: showcase_pages_desc}
 icon: mdi:star-shooting-outline

@@ -1,3 +1,21 @@
+# Apple TV Template — pre-configured remote control
+#
+# Keys go through the Apple TV integration's `remote.send_command`
+# (up, select, menu, home, play_pause, volume_up, …).
+#
+# The remote page follows the LG webOS TV template: the arrow keys around OK,
+# Home below them, and the TV's further pages on the right-hand column --
+# Apps (button 4), Digits (button 8) and Inputs (button 12) where the TV has
+# them. They are subpages: not in the remote's page order, only reached from
+# those buttons; on each, the remote's Back button leads back.
+#   - Apps: the Apple TV's apps, each opening with `media_player.play_media`;
+#     more than twelve get more Apps pages, button 12 leading on.
+#   An Apple TV has no digit keys and no inputs, so it has neither page; their
+#   buttons hold Skip forward instead, and nothing.
+#
+# Reference: https://www.home-assistant.io/integrations/apple_tv
+
+version: 2
 name: Apple TV
 icon: mdi:apple
 description: Control your Apple TV
@@ -9,135 +27,201 @@ target_selector:
     integration: apple_tv
     primary_domain: remote
 
-# Button mappings (Liza button_key → HA action), written the way a stored
-# page writes a button. Leave one out for a slot that should do nothing.
-buttons:
-  button_power:
-    label: Power
-    image: mdi:power
-    config:
-      - action: remote.send_command
-        data:
-          command: wakeup
+# The `apps` kind of the favourites source reads the apps the player lists:
+# its `apps` browse folder where it has one, else its `source_list`.
+placeholders:
+  app:
+    source: favorites
+    spec:
+      category: apps
 
-  # --- button grid, row 1 ---
-  button_1:
-    label: Home
-    image: mdi:home
-    config:
-      - action: remote.send_command
-        data:
-          command: home
+pages:
+  remote:
+    title: "logo:appletv ${_device.area_name}"
+    buttons:
+      button_1:
+        icon: mdi:menu
+        tooltip: {translate: top_menu}
+        config:
+          - action: remote.send_command
+            data:
+              command: top_menu
 
-  button_2:
-    label: Up
-    repeat: true
-    image: mdi:arrow-up
-    config:
-      - action: remote.send_command
-        data:
-          command: up
+      button_2:
+        icon: mdi:arrow-up-bold-outline
+        tooltip: {translate: up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: up
 
-  button_3:
-    label: Menu
-    image: mdi:menu
-    config:
-      - action: remote.send_command
-        data:
-          command: menu
+      button_3:
+        icon: mdi:play-pause
+        tooltip: {translate: play_pause}
+        config:
+          - action: remote.send_command
+            data:
+              command: play_pause
 
-  button_4:
-    label: Top Menu
-    image: mdi:dots-grid
-    config:
-      - action: remote.send_command
-        data:
-          command: top_menu
+      button_4:
+        icon: mdi:apps
+        tooltip: {translate: apps}
+        goto_page: apps
 
-  # --- button grid, row 2 ---
-  button_5:
-    label: Left
-    repeat: true
-    image: mdi:arrow-left
-    config:
-      - action: remote.send_command
-        data:
-          command: left
+      button_5:
+        icon: mdi:arrow-left-bold-outline
+        tooltip: {translate: left}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: left
 
-  button_6:
-    label: Select
-    image: mdi:checkbox-marked-circle
-    config:
-      - action: remote.send_command
-        data:
-          command: select
+      button_6:
+        icon: mdi:circle-outline
+        tooltip: {translate: select}
+        config:
+          - action: remote.send_command
+            data:
+              command: select
 
-  button_7:
-    label: Right
-    repeat: true
-    image: mdi:arrow-right
-    config:
-      - action: remote.send_command
-        data:
-          command: right
+      button_7:
+        icon: mdi:arrow-right-bold-outline
+        tooltip: {translate: right}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: right
 
-  button_8:
-    label: Volume Up
-    repeat: true
-    image: mdi:volume-plus
-    config:
-      - action: remote.send_command
-        data:
-          command: volume_up
+      button_9:
+        icon: mdi:skip-backward
+        tooltip: {translate: previous}
+        config:
+          - action: remote.send_command
+            data:
+              command: skip_backward
 
-  # --- button grid, row 3 ---
-  button_9:
-    label: Previous
-    image: mdi:skip-previous
-    config:
-      - action: remote.send_command
-        data:
-          command: skip_backward
+      button_10:
+        icon: mdi:arrow-down-bold-outline
+        tooltip: {translate: down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: down
 
-  button_10:
-    label: Down
-    repeat: true
-    image: mdi:arrow-down
-    config:
-      - action: remote.send_command
-        data:
-          command: down
+      button_11:
+        icon: mdi:home-outline
+        tooltip: {translate: home}
+        config:
+          - action: remote.send_command
+            data:
+              command: home
 
-  button_11:
-    label: Next
-    image: mdi:skip-next
-    config:
-      - action: remote.send_command
-        data:
-          command: skip_forward
+      button_12:
+        icon: mdi:skip-forward
+        tooltip: {translate: next}
+        config:
+          - action: remote.send_command
+            data:
+              command: skip_forward
 
-  button_12:
-    label: Play / Pause
-    image: mdi:play-pause
-    config:
-      - action: remote.send_command
-        data:
-          command: play_pause
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: wakeup
 
-  # --- back & voice ---
-  button_back:
-    label: Back / Menu
-    image: mdi:arrow-left-circle
-    config:
-      - action: remote.send_command
-        data:
-          command: menu
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_up
 
-  button_voice:
-    label: Siri
-    image: mdi:microphone
-    config:
-      - action: remote.send_command
-        data:
-          command: siri
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_down
 
+      button_voice:
+        icon: mdi:microphone
+        tooltip: Siri
+        config:
+          - action: remote.send_command
+            data:
+              command: siri
+
+      button_back:
+        icon: mdi:keyboard-return
+        tooltip: {translate: back_menu}
+        config:
+          - action: remote.send_command
+            data:
+              command: menu
+
+  apps:
+    subpage: true
+    paginate: app
+    max_parts: 3
+    title: "mdi:apps ${_device.area_name}"
+    buttons:
+      button_1: "@app[1]"
+      button_2: "@app[2]"
+      button_3: "@app[3]"
+      button_4: "@app[4]"
+      button_5: "@app[5]"
+      button_6: "@app[6]"
+      button_7: "@app[7]"
+      button_8: "@app[8]"
+      button_9: "@app[9]"
+      button_10: "@app[10]"
+      button_11: "@app[11]"
+
+      button_12:
+        placeholder: "@app[12]"
+        more_parts:
+          icon: mdi:dots-horizontal
+          tooltip: {translate: more}
+          goto_page: next
+
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: power}
+        config:
+          - action: remote.send_command
+            data:
+              command: wakeup
+
+      button_volume_up:
+        icon: mdi:volume-plus
+        tooltip: {translate: volume_up}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_up
+
+      button_volume_down:
+        icon: mdi:volume-minus
+        tooltip: {translate: volume_down}
+        key_repeat: true
+        config:
+          - action: remote.send_command
+            data:
+              command: volume_down
+
+      button_back:
+        icon: mdi:arrow-left
+        tooltip: {translate: back}
+        goto_page: [previous, remote]

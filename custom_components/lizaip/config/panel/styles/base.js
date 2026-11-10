@@ -42,11 +42,12 @@ export const STYLES_BASE = `
        raises contrast. Non-text uses of --secondary-text-color stay raw. */
     --liza-muted-text: color-mix(in srgb, var(--secondary-text-color, #727272) 75%, var(--primary-text-color, #212121));
 
-    /* Keyboard focus ring. Fixed grey, not a theme variable: a theme-tracking
-       colour moves toward one background and away from another. #808080 clears
-       1.4.11's 3:1 on the panel's surfaces but NOT in .toolbar (1.24:1 on the
-       accent fill), which overrides this token for its own subtree. */
-    --liza-focus: #808080;
+    /* Keyboard focus ring: Home Assistant's own (--wa-focus-ring-color, a
+       fixed neutral grey in every theme), so focus looks the same here as
+       everywhere else in HA. The fallback clears 1.4.11's 3:1 on the panel's
+       surfaces but NOT in .toolbar (1.24:1 on the accent fill), which
+       overrides this token for its own subtree. */
+    --liza-focus: var(--wa-focus-ring-color, #808080);
 
     /* Selected-state cue: 1.4.11 asks the same 3:1 as a focus ring, and
        --primary-color cannot carry it (#03a9f4 is 2.63:1 on the light theme).
@@ -284,14 +285,39 @@ export const STYLES_BASE = `
   .device-icon-wrap ha-icon { color: #fff; --mdc-icon-size: 20px; }
   .device-info { flex: 1; min-width: 0; }
   .device-title { font-weight: 600; font-size: var(--liza-font-m); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .device-meta { font-size: var(--liza-font-s); color: var(--liza-muted-text); margin-top: 2px; }
+  .device-meta {
+    font-size: var(--liza-font-s); color: var(--liza-muted-text); margin-top: 2px;
+    /* One line rather than a stack: the version and the assignment are both
+       secondary, and two rows of muted text made the row three lines tall. */
+    display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px;
+  }
+  /* A separator only between pieces, so a device with no version does not
+     open on a stray dot. */
+  .device-meta > * + * { display: flex; align-items: center; gap: 6px; }
+  .device-meta > * + *::before {
+    content: ""; width: 3px; height: 3px; border-radius: 50%;
+    background: currentColor; opacity: .6;
+  }
+  .device-assigned { overflow-wrap: anywhere; min-width: 0; }
+  .device-assigned-names { min-width: 0; overflow-wrap: anywhere; }
+  /* The faces overlap the way a group of people is drawn everywhere else;
+     the ring keeps the one behind from bleeding into the one in front. */
+  .device-faces { display: inline-flex; align-items: center; flex-shrink: 0; }
+  .device-face {
+    width: 20px; height: 20px; flex-shrink: 0;
+    border-radius: 50%; overflow: hidden;
+    box-shadow: 0 0 0 2px var(--secondary-background-color, #2a2a2a);
+    --ha-font-size-s: 9px;
+  }
+  .device-face + .device-face { margin-left: -6px; }
+  /* The ones past the stack, as a count rather than a fourth face. */
+  .device-face-more {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--secondary-background-color, #2a2a2a);
+    color: var(--liza-muted-text);
+    font-size: 9px; font-weight: 500;
+  }
 
-  /* The empty state is the only place the panel renders a link. A shadow root
-     inherits no link colour from the frontend, so without this the anchor
-     lands in browser-default blue next to Home Assistant's palette. */
-  .empty-state { padding: 16px; color: var(--liza-muted-text); }
-  .empty-state a { color: var(--liza-accent-text); text-decoration: none; font-weight: 500; }
-  .empty-state a:hover, .empty-state a:focus-visible { text-decoration: underline; }
   .status-badge { display: flex; align-items: center; gap: 6px; font-size: var(--liza-font-s); font-weight: 500; flex-shrink: 0; margin-left: 12px; }
   .status-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
   .status-badge.online .dot { background: #4caf50; box-shadow: 0 0 4px #4caf50; }

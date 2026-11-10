@@ -17,7 +17,7 @@ def fire_config_changed(
     config panel; each reads what it needs from the store. ``order_only`` marks
     a reorder the device has already received, so the sync can skip it, and
     ``sync_handled`` a caller that rebuilds the device itself. ``refreshed``
-    marks a dynamic refresh (an Overview filling a slot for a page just added),
+    marks a dynamic refresh (a Table of contents filling a slot for a page just added),
     which the panel must not drop while its own page operation is in flight.
     """
     data: dict = {"entry_id": entry_id}

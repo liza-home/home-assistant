@@ -138,8 +138,8 @@ export const ButtonsPressesMixin = {
     const assign = this._editAssign(selBtn.key) || {};
     const apprRead = this._sliderAppearanceTarget(selBtn.key);
     const pickedFrom = apprRead?.scoped
-      ? (this._assignments[apprRead.key]?.[apprRead.imageKey] || "")
-      : (assign.image || "");
+      ? (this._assignments[apprRead.key]?.[apprRead.iconKey] || "")
+      : (assign.icon || "");
     // Stored icon first, then the derived one — the pattern every icon field
     // here uses. Without the fallback this field sat empty next to a preview
     // showing the glyph and a face drawing it, which read as the icon having
@@ -166,21 +166,21 @@ export const ButtonsPressesMixin = {
         // note on SLIDER_ICON_HIDDEN_KEY.
         const isSlider = selBtn.key === SLIDER_VERTICAL_KEY;
         if (isSlider && appr) {
-          // No `image_pinned` in the scoped case: that flag ranks an explicit
+          // No `icon_pinned` in the scoped case: that flag ranks an explicit
           // icon above a payload thumbnail on the *button's tile*, and this is
           // the slider's glyph. Setting it would change what the device is sent
           // for a tile the user was not editing.
           const rec = this._writeSliderIcon(appr, picked);
           if (!appr.scoped) {
-            if (picked) rec.image_pinned = true;
-            else delete rec.image_pinned;
+            if (picked) rec.icon_pinned = true;
+            else delete rec.icon_pinned;
           }
         } else {
           const target = this._editAssignEnsure(selBtn.key);
-          target.image = picked;
+          target.icon = picked;
           // An explicitly picked icon outranks the payload thumbnail.
-          if (picked) target.image_pinned = true;
-          else delete target.image_pinned;
+          if (picked) target.icon_pinned = true;
+          else delete target.icon_pinned;
         }
         this._scheduleAutoSave();
         this._render();
@@ -299,7 +299,7 @@ export const ButtonsPressesMixin = {
   //
   // The user's own wording is deliberately *not* consulted here. Both callers
   // reach this only after the label has already been tried and found empty
-  // (see `_pressHeadings` and `_pressDefaultLabel`), so reading it again would
+  // (see `_pressHeadings` and `_pressDefaultTooltip`), so reading it again would
   // be a branch that cannot be taken.
   //
   // Home Assistant's name outranks the library's on purpose. The action cards
@@ -331,8 +331,8 @@ export const ButtonsPressesMixin = {
    *
    * Blank falls through to the same default the field offers, so an untouched
    * press is headed by what it will draw rather than by nothing. Resolved the
-   * way the device resolves it -- `_substituteLabelTokens` is the twin of the
-   * backend's `substitute_label_tokens` -- so the heading says the words the
+   * way the device resolves it -- `_substituteTooltipTokens` is the twin of the
+   * backend's `substitute_tooltip_tokens` -- so the heading says the words the
    * remote will actually print.
    */
 
@@ -342,7 +342,7 @@ export const ButtonsPressesMixin = {
       // now, so a press captioned with a glyph would put `mdi:battery-50` up
       // as its heading -- a filename read as a sentence. That caption is
       // already drawn, as the glyph; the heading falls through instead.
-      const raw = rule?.label || "";
+      const raw = rule?.tooltip || "";
       // Through the same resolver the field below the heading uses, against
       // the press's own target. An empty value map was passed here, which
       // *stripped* a stored `${_state}` instead of reading it -- so a press
@@ -351,14 +351,14 @@ export const ButtonsPressesMixin = {
       // "Schreibtisch On".
       const tip = this._isMediaSource?.(raw)
         ? ""
-        : this._displayLabel(
+        : this._displayTooltip(
             raw,
             { service: rule?.config?.[0]?.action || "" },
             this._getTargetEntityFromConfig(rule?.config || []),
             rule?.config,
             rule,
           );
-      return tip || this._pressDefaultLabel(rule, this._toggleRuleName(rule));
+      return tip || this._pressDefaultTooltip(rule, this._toggleRuleName(rule));
     });
   },
 
@@ -366,7 +366,7 @@ export const ButtonsPressesMixin = {
    * What a press's Tooltip field offers when it is left blank.
    *
    * The same question press 1's field answers, so it has to be answered the
-   * same way. Press 1 shows `_computeLabel`, which reads the subject the step
+   * same way. Press 1 shows `_computeTooltip`, which reads the subject the step
    * points at; a press row showed `_toggleRuleName`, which is the service's
    * name and nothing else. Two rows apart, the same empty field promised
    * "Turn on" in one place and "Desk lamp" in the other, and only one of them
@@ -374,27 +374,27 @@ export const ButtonsPressesMixin = {
    *
    * Falls back to the row's heading, which is what it used to show outright.
    *
-   * `_computeLabel` returns a *template* for a two-way service -- a bare
+   * `_computeTooltip` returns a *template* for a two-way service -- a bare
    * `${_state}`, which the caller persists and the device resolves per press.
    * Correct to store, unreadable to show: a press duplicated from a
    * `light.toggle` was headed `${_state}` and offered it as its placeholder,
    * next to a sibling reading "Apagado".
    *
    * So the template is resolved the way the device resolves it. Not
-   * `_resolveLabel`, which re-derives the whole ladder from the *entity's*
+   * `_resolveTooltip`, which re-derives the whole ladder from the *entity's*
    * state and so heads every press of a media button "Pause" whatever its own
-   * service is; `_displayLabel` fills the token against this press's service
+   * service is; `_displayTooltip` fills the token against this press's service
    * and target.
    */
 
-  _pressDefaultLabel(rule, fallback = "") {
+  _pressDefaultTooltip(rule, fallback = "") {
     const action = rule?.action_id
       ? (this._actions || []).find(a => a.id === rule.action_id) || null
       : null;
     const entity = this._getTargetEntityFromConfig?.(rule?.config) || "";
-    const derived = this._computeLabel(action, entity, rule?.config);
+    const derived = this._computeTooltip(action, entity, rule?.config);
     if (!derived) return fallback;
-    return this._displayLabel(derived, action, entity, rule?.config) || fallback;
+    return this._displayTooltip(derived, action, entity, rule?.config) || fallback;
   },
 
   /**
@@ -470,9 +470,9 @@ export const ButtonsPressesMixin = {
     // Wired as the media input it now is, not on `change`: that gives a press
     // the suggestion list, commit-on-Enter and commit-on-blur that press 1's
     // Tooltip has, from the one helper that defines what those mean.
-    root.querySelectorAll(".icon-picker-slot[data-toggle-label-idx]").forEach(slot => {
-      const idx = Number(slot.dataset.toggleLabelIdx);
-      const input = slot.querySelector(".toggle-press-label");
+    root.querySelectorAll(".icon-picker-slot[data-toggle-tooltip-idx]").forEach(slot => {
+      const idx = Number(slot.dataset.toggleTooltipIdx);
+      const input = slot.querySelector(".toggle-press-tooltip");
       if (!input) return;
       this._wireMediaInput(
         input,
@@ -482,7 +482,7 @@ export const ButtonsPressesMixin = {
           this._toggleUpdate(key, (block) => {
             const rule = block.rules[idx];
             if (!rule) return;
-            if (text) rule.label = text; else delete rule.label;
+            if (text) rule.tooltip = text; else delete rule.tooltip;
           });
         },
         {
@@ -490,7 +490,7 @@ export const ButtonsPressesMixin = {
           // The press's own config decides, exactly as `pressShowsMedia` above
           // decides whether to explain these tokens: a cycle step pointed at a
           // speaker gets the track tokens, one pointed at a lamp does not.
-          ...this._labelTokenOptions((this._toggleRules(key)[idx] || {}).config),
+          ...this._tooltipTokenOptions((this._toggleRules(key)[idx] || {}).config),
         },
       );
     });

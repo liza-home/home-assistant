@@ -44,8 +44,8 @@ colors:
 
 # The title font is also what any text is drawn in when no ?font= is given.
 text:
-  title: { font: filsonsoft-light, font_size: 48 }
-  tooltip: { font: filsonsoft-light, font_size: 24 }
+  title: { font: roboto-light, font_size: 48 }
+  tooltip: { font: roboto-light, font_size: 24 }
 
 # The default glyphs. Icon format: mdi:<icon-name> (Material Design Icons),
 # browse them at https://pictogrammers.com/library/mdi/

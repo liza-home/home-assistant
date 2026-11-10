@@ -3,6 +3,7 @@
 One module per area of the panel:
 
 - ``devices``          -- device list, blueprint, goto/clear pages, diagnostics
+- ``people``           -- who a remote is assigned to
 - ``assignments``      -- the action library and what each button does
 - ``pages``            -- the page list: reorder, edit, duplicate
 - ``settings``         -- text style, icon options and the editors' lookups
@@ -21,19 +22,25 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import debug_available
-from . import assignments, devices, dynamic, page_device, templates, pages, settings
+from . import (
+    assignments, devices, dynamic, page_device, people, templates, pages, settings,
+)
 
 
 def register_commands(hass: HomeAssistant) -> None:
     """Register every ``lizaip_config/*`` command with Home Assistant."""
     for handler in (
         devices.ws_list_devices,
+        devices.ws_subscribe_devices,
         devices.ws_get_blueprint,
         devices.ws_get_features,
         devices.ws_goto_page,
         devices.ws_clear_device_pages,
         devices.ws_build_diagnostics_bundle,
         devices.ws_restore_config,
+        people.ws_list_persons,
+        people.ws_set_device_users,
+        people.ws_set_user_devices,
         assignments.ws_get_actions,
         assignments.ws_save_actions,
         assignments.ws_get_assignments,
@@ -56,17 +63,17 @@ def register_commands(hass: HomeAssistant) -> None:
         settings.ws_delete_theme,
         settings.ws_export_theme,
         settings.ws_import_theme,
-        settings.ws_get_action_labels,
+        settings.ws_get_button_tooltips,
         settings.ws_get_slider_controls,
         settings.ws_get_internal_commands,
         templates.ws_list_templates,
+        templates.ws_options_fit,
         templates.ws_list_template_devices,
         templates.ws_list_template_config_entries,
         templates.ws_add_template_page,
         templates.ws_retarget_template_page,
         page_device.ws_list_all_devices,
         page_device.ws_assign_page_device,
-        page_device.ws_save_page_as_template,
         dynamic.ws_browse_media,
         dynamic.ws_list_dynamic_sources,
         dynamic.ws_preview_dynamic_source,

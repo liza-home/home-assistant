@@ -59,7 +59,7 @@ def schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
         )
 
 
-EMPTY_BUTTON = {"action_id": None, "config": [], "label": None, "image": None, "image_pinned": False, "state_icons": {}}
+EMPTY_BUTTON = {"action_id": None, "config": [], "tooltip": None, "icon": None, "icon_pinned": False, "state_icons": {}}
 
 
 def send_failure(

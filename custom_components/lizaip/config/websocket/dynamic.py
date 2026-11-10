@@ -26,6 +26,7 @@ from .common import (
     schedule_push_rescan,
     send_failure,
 )
+from ..access import require_any_device_access, require_device_access
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ _LOGGER = logging.getLogger(__name__)
     vol.Optional("media_content_type", default=""): str,
     vol.Optional("media_content_id", default=""): str,
 })
-@websocket_api.require_admin
+@require_any_device_access
 @websocket_api.async_response
 async def ws_browse_media(hass: HomeAssistant, connection, msg: dict) -> None:
     """Browse media and return plain JSON for button assignments."""
@@ -115,7 +116,7 @@ async def ws_browse_media(hass: HomeAssistant, connection, msg: dict) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "lizaip_config/list_dynamic_sources",
 })
-@websocket_api.require_admin
+@require_any_device_access
 @websocket_api.callback
 def ws_list_dynamic_sources(hass: HomeAssistant, connection, msg: dict) -> None:
     connection.send_result(msg["id"], {
@@ -129,7 +130,7 @@ def ws_list_dynamic_sources(hass: HomeAssistant, connection, msg: dict) -> None:
     vol.Required("source"): str,
     vol.Optional("spec", default=dict): dict,
 })
-@websocket_api.require_admin
+@require_any_device_access
 @websocket_api.async_response
 async def ws_preview_dynamic_source(hass: HomeAssistant, connection, msg: dict) -> None:
     """Preview dynamic-source items without storing a binding."""
@@ -155,7 +156,7 @@ async def ws_preview_dynamic_source(hass: HomeAssistant, connection, msg: dict) 
     vol.Required("entry_id"): str,
     vol.Optional("page_id"): PAGE_ID_SCHEMA,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 async def ws_refresh_dynamic(hass: HomeAssistant, connection, msg: dict) -> None:
     try:
@@ -181,7 +182,7 @@ async def ws_refresh_dynamic(hass: HomeAssistant, connection, msg: dict) -> None
     vol.Required("button"): str,
     vol.Required("binding"): vol.Any(dict, None),
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_set_dynamic_binding(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:

@@ -24,7 +24,7 @@ from .base import InternalCommand, InternalCommandError
 from .goto_page import GOTO_PAGE, build_page_context, page_label, page_title
 from .registry import (
     INTERNAL_COMMANDS,
-    command_label,
+    command_tooltip,
     command_target_name,
     enabled_commands,
     get_internal_command,
@@ -40,7 +40,7 @@ __all__ = [
     "InternalCommand",
     "InternalCommandError",
     "build_page_context",
-    "command_label",
+    "command_tooltip",
     "command_target_name",
     "enabled_commands",
     "get_internal_command",

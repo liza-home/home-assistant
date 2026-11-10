@@ -1,0 +1,158 @@
+# Hue Lamp Options — everything one lamp can be set to, on one page
+#
+# Made for **Add options…**: a button that toggles a lamp gets a subpage behind
+# its long touch, and that subpage is this. It binds to a device, not to a
+# bridge, so the lamp the button already acts on answers the question and the
+# page is created without asking anything.
+#
+#   1       what the lamp is doing now, read live
+#   2-5     brightness, each icon pre-filled to the level it sets
+#   6-9     colour temperature, each icon tinted the white it gives
+#   10      a very dim, very warm night light
+#   11      the colour temperature the lamp is on, as big text
+#   12      off
+#
+# Scenes are deliberately absent: the scene source is filtered by area or
+# label, and a lamp names neither, so the page would have offered every scene
+# in the house rather than this lamp's.
+#
+# Reference: https://www.home-assistant.io/integrations/hue
+
+version: 2
+name: Hue Lamp Options
+icon: logo:hue
+description: Brightness, colour temperature and presets for one Hue lamp
+
+target_selector:
+  device:
+    integration: hue
+    primary_domain: light
+
+pages:
+  options:
+    title: "logo:hue + ${_device}"
+    buttons:
+      button_1:
+        icon: mdi:lightbulb
+        tooltip: "${_device} ${_state}"
+        config:
+          - action: light.toggle
+
+      button_2:
+        icon: mdi:lightbulb-on?percent=25
+        tooltip: "{translate: brightness} 25 %"
+        config:
+          - action: light.turn_on
+            data:
+              brightness_pct: 25
+      button_3:
+        icon: mdi:lightbulb-on?percent=50
+        tooltip: "{translate: brightness} 50 %"
+        config:
+          - action: light.turn_on
+            data:
+              brightness_pct: 50
+      button_4:
+        icon: mdi:lightbulb-on?percent=75
+        tooltip: "{translate: brightness} 75 %"
+        config:
+          - action: light.turn_on
+            data:
+              brightness_pct: 75
+      button_5:
+        icon: mdi:lightbulb-on?percent=100
+        tooltip: "{translate: brightness} 100 %"
+        config:
+          - action: light.turn_on
+            data:
+              brightness_pct: 100
+
+      # `?fg=` tints the mark the white the preset gives, so the row of four reads
+      # as the warm-to-cool run it is.
+      button_6:
+        icon: mdi:white-balance-sunny?fg=ff9329
+        tooltip: "{translate: candle} 2200 K"
+        config:
+          - action: light.turn_on
+            data:
+              color_temp_kelvin: 2200
+      button_7:
+        icon: mdi:white-balance-sunny?fg=ffb46b
+        tooltip: "{translate: warm_white} 2700 K"
+        config:
+          - action: light.turn_on
+            data:
+              color_temp_kelvin: 2700
+      button_8:
+        icon: mdi:white-balance-sunny?fg=ffd6b1
+        tooltip: "{translate: neutral_white} 4000 K"
+        config:
+          - action: light.turn_on
+            data:
+              color_temp_kelvin: 4000
+      button_9:
+        icon: mdi:white-balance-sunny?fg=ffefe4
+        tooltip: "{translate: cool_white} 5500 K"
+        config:
+          - action: light.turn_on
+            data:
+              color_temp_kelvin: 5500
+
+      button_10:
+        icon: mdi:weather-night
+        tooltip: {translate: night_light}
+        config:
+          - action: light.turn_on
+            data:
+              brightness_pct: 1
+              color_temp_kelvin: 2200
+
+      button_11:
+        icon: "text:${_device.color_temp_kelvin}K?font_size=20"
+        tooltip: "{translate: colour_temperature} ${_device.color_temp_kelvin} K"
+
+      button_12:
+        icon: mdi:lightbulb-off
+        tooltip: {translate: "off"}
+        config:
+          - action: light.turn_off
+
+      # The hardware keys, where a lamp has something to say with them. Back is
+      # left alone: an options page is given its way out when it is created.
+      button_power:
+        icon: mdi:power
+        tooltip: {translate: "off"}
+        config:
+          - action: light.turn_off
+
+      button_volume_up:
+        icon: mdi:brightness-7
+        tooltip: {translate: brighter}
+        key_repeat: true
+        config:
+          - action: light.turn_on
+            data:
+              brightness_step_pct: 10
+
+      button_volume_down:
+        icon: mdi:brightness-5
+        tooltip: {translate: dimmer}
+        key_repeat: true
+        config:
+          - action: light.turn_on
+            data:
+              brightness_step_pct: -10
+
+      # Spelled out rather than following the selected button: this page is about
+      # one lamp, so the slider is always that lamp's brightness, 0-255.
+      slider_vertical:
+        icon: mdi:brightness-6
+        tooltip: {translate: brightness}
+        slider_actions:
+          mode: proportional
+          attribute: brightness
+          service: light.turn_on
+          data_key: brightness
+          factor: 1.0
+          min: 0
+          max: 255

@@ -21,10 +21,11 @@ from ..action_controller import (
     setup_state_listener,
 )
 from ..const import DOMAIN, SIGNAL_ICON_UPDATE
-from ..shared.i18n import action_labels
+from ..shared.i18n import button_tooltips, page_titles
 from ..shared.icon_urls import resolve_tooltip_url
 from ..shared.logs import device_logger
 from ..runtime import entry_connection, _get_store
+from .access import async_notify_assignments_changed, async_reconcile_sidebar
 from .const import CONFIG_CHANGED_EVENT
 from .icon_push import GATHER_WINDOW, IconPushQueue
 from .panel_entry import add_panel_entry, pop_panel_entry
@@ -214,7 +215,8 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
     # Before anything can ask for a label: the ladder that builds tooltips is
     # synchronous and cannot await, so its translations are read here, once,
     # off the loop.
-    await action_labels.async_preload(hass)
+    await button_tooltips.async_preload(hass)
+    await page_titles.async_preload(hass)
 
     hass.http.register_view(LizaIPPanelView)
     hass.http.register_view(LizaIPGuideImageView)
@@ -222,6 +224,11 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
     await async_register_frontend_panel(hass)
 
     register_commands(hass)
+
+    # The sidebar item is hidden per user, so it has to be put right once at
+    # start-up: assignments may have changed, or users been added, while Home
+    # Assistant was down.
+    await async_reconcile_sidebar(hass)
 
     hass.data[DOMAIN]["_panel_registered"] = True
 
@@ -244,7 +251,12 @@ async def async_register_frontend_panel(hass: HomeAssistant) -> None:
         module_url=f"{PANEL_URL_BASE}/{version}/lizaip-panel.js",
         sidebar_title="lizaIP",
         sidebar_icon="mdi:remote",
-        require_admin=True,
+        # Not administrators only any more: a remote can be assigned to
+        # somebody who is not one. Home Assistant filters the sidebar by this
+        # flag alone, so visibility for everyone else is kept by
+        # `access.async_reconcile_sidebar`, and the commands behind the panel
+        # refuse anyone the remote was not assigned to either way.
+        require_admin=False,
     )
     _LOGGER.debug("lizaIP panel registered at asset version %s", version)
 
@@ -402,6 +414,11 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     # Initial device sync (best-effort; device likely not connected yet on first boot)
     hass.async_create_task(_device_sync_mod.sync_config_to_device(hass, entry))
+
+    # A remote that has just appeared belongs in every open panel's list.
+    # Scheduled rather than called: the entry is marked LOADED only after this
+    # returns, and `device_list` skips one that is not.
+    hass.loop.call_soon(async_notify_assignments_changed, hass)
 
 
 async def async_unload_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

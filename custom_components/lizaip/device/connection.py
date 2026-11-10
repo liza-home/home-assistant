@@ -485,6 +485,10 @@ class LizaIPConnection:
             "goto_page", {"page_id": validate_page_id(page_id)}
         )
 
+    async def send_ir(self, ir_blob: str) -> dict[str, Any]:
+        """Have the remote transmit an IR code, given as a base64 blob."""
+        return await self._protocol.send_request("send_ir", {"ir_blob": ir_blob})
+
     async def get_pages(self, *, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> list[dict[str, Any]]:
         """Every page the device holds, with its content hash.
 

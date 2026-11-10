@@ -27,7 +27,7 @@ from .base import InternalCommand, InternalCommandError
 # ---------------------------------------------------------------------------
 
 
-#: ``image`` is an image spec first and a page name second.
+#: ``title`` is a picture spec first and a page name second.
 _TITLE_SCHEMES = (
     "text:", "mdi:", "logo:", "phu:", "media:",
     "imgserv://", "http://", "https://", "data:",
@@ -54,14 +54,14 @@ def _looks_opaque(text: str) -> bool:
 
 
 def page_title(page: dict) -> str:
-    """A readable page name from ``image``, or ``""`` if none.
+    """A readable page name from ``title``, or ``""`` if none.
 
     Schemes, imgserv query strings and percent-encoding are plumbing; ``+`` is
     left literal because imgserv reads the URL path. Icon/logo/file/URL specs
     may still name a page after humanising. Data blobs and opaque ids do not;
     :func:`page_label` supplies "Page N" for those.
     """
-    raw = page.get("image") or ""
+    raw = page.get("title") or ""
     if not isinstance(raw, str):
         return ""
     raw = raw.strip()
@@ -74,7 +74,7 @@ def page_title(page: dict) -> str:
     value = raw[len(scheme):]
     # imgserv:// wraps another whole spec; read the inner scheme.
     if scheme == "imgserv://":
-        return page_title({"image": value})
+        return page_title({"title": value})
 
     if scheme == "data:":
         return ""
@@ -231,7 +231,7 @@ def _goto_page_params(data: Any, context: dict) -> dict:
     return {"page_id": matches[0]}
 
 
-def _goto_page_label(params: dict, context: dict) -> str:
+def _goto_page_tooltip(params: dict, context: dict) -> str:
     """Name the page a ``goto_page`` button opens.
 
     A device-local command has no entity to borrow a name from, so without this
@@ -275,7 +275,7 @@ GOTO_PAGE = InternalCommand(
         # Non-entity services receive raw target keys in call.data.
         **cv.TARGET_SERVICE_FIELDS,
     }),
-    build_label=_goto_page_label,
+    build_tooltip=_goto_page_tooltip,
     is_available=_goto_page_available,
     target_params=(
         {"key": "page", "type": "page_name"},

@@ -20,6 +20,7 @@ from .icon_defaults import IconDefaults, clean_section
 from .theme import (
     BUNDLED_THEMES_DIR,
     DEFAULT_THEME_ID,
+    EMOJI_NONE,
     STATE_COLOR_NAMES,
     state_colors_given,
     TEXT_KINDS,
@@ -120,6 +121,12 @@ def _text(raw: Any, font_ids: set[str]) -> dict:
             raise ValueError(
                 f"{kind} font size must be between {MIN_FONT_SIZE} and {ceiling}")
         out[kind] = {"font": font, "font_size": size} if font else {"font_size": size}
+    emoji = raw.get("emoji")
+    font = str((emoji or {}).get("font") or "").strip().lower() if isinstance(emoji, dict) else ""
+    if font:
+        if font != EMOJI_NONE and font_ids and font not in font_ids:
+            raise ValueError(f"the emoji font is not installed: {font}")
+        out["emoji"] = {"font": font}
     return out
 
 
@@ -245,7 +252,8 @@ def import_user_theme(
         document["text"] = {
             kind: ({k: v for k, v in given.items() if k != "font"}
                    if isinstance(given, dict) and given.get("font")
-                   and given["font"] not in installed else given)
+                   and given["font"] not in installed
+                   and given["font"] != EMOJI_NONE else given)
             for kind, given in document["text"].items()
         }
     document["name"] = _free_name(user_dir, name, taken or set())

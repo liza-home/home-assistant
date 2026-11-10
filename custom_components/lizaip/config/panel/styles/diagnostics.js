@@ -34,13 +34,6 @@ export const STYLES_DIAGNOSTICS = `
     border-radius: 50%;
   }
   .toolbar .guide-btn { color: var(--primary-text-color, #fff); }
-  /* The device list has no tabs to take up the slack, so the help button sat
-     against the title and read as part of the name rather than as a control
-     of its own. Last-child is exactly that toolbar -- in the configuration
-     view the menu follows the button -- so the slack goes in front of it
-     there and only there, and both toolbars end up with help in the same
-     corner. */
-  .toolbar > .guide-btn:last-child { margin-left: auto; }
 
   .toolbar .diag-menu-btn {
     color: inherit;
@@ -87,10 +80,6 @@ export const STYLES_DIAGNOSTICS = `
   }
   .diag-pill.running ha-icon { color: var(--primary-color, #03a9f4); }
   .diag-pill.error ha-icon { color: var(--error-color, #db4437); }
-  .diag-pill:focus-visible {
-    outline: 2px solid var(--primary-color, #03a9f4);
-    outline-offset: 2px;
-  }
 
   .diag-dialog {
     text-align: left;

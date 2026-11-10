@@ -153,6 +153,20 @@
         }
       }
     },
+    "launch_app": {
+      "name": "Launch app",
+      "description": "Start an app on a TV. A Samsung TV is started over its own API, because it ignores the launch Home Assistant's Samsung integration sends; any other player gets media_player.play_media.",
+      "fields": {
+        "entity_id": {
+          "name": "TV",
+          "description": "The media players to start the app on."
+        },
+        "app_id": {
+          "name": "App",
+          "description": "The app's id on that TV, e.g. 3201907018807 for Netflix on a Samsung TV."
+        }
+      }
+    },
     "refresh_dynamic_sources": {
       "name": "Refresh dynamic sources",
       "description": "Re-resolve dynamic template bindings and push any changes to the affected remotes. Pages whose content did not change produce no device traffic.",
@@ -180,6 +194,16 @@
         "config_entry_id": {
           "name": "Device",
           "description": "Device to rebuild. If omitted, all lizaIP devices are rebuilt."
+        }
+      }
+    },
+    "send_ir": {
+      "name": "Send IR",
+      "description": "Have a remote transmit an infrared code. Without a target, every lizaIP remote sends it.",
+      "fields": {
+        "ir_blob": {
+          "name": "IR code",
+          "description": "The infrared code to transmit, base64 encoded."
         }
       }
     }
@@ -250,22 +274,45 @@
     },
     "log_reset_no_modules": {
       "message": "The device did not report any modules to reset."
+    },
+    "app_not_started": {
+      "message": "{entity_id} did not start the app {app_id}."
+    },
+    "invalid_ir_blob": {
+      "message": "The IR code is not valid base64."
     }
   },
-  "action_labels": {
+  "button_tooltips": {
+    "albums": "Albums",
+    "apps": "Apps",
+    "audiobooks": "Audiobooks",
     "back": "Back",
     "back_menu": "Back / Menu",
+    "brighter": "Brighter",
+    "brightness": "Brightness",
+    "candle": "Candle",
     "close": "Close",
+    "colour_temperature": "Colour temperature",
+    "cool_white": "Cool white",
+    "daylight": "Daylight",
+    "digits": "Digits",
+    "dimmer": "Dimmer",
     "down": "Down",
+    "exit": "Exit",
     "forward": "Forward",
     "home": "Home",
     "input": "Input",
+    "inputs": "Inputs",
     "instant_replay": "Instant Replay",
     "left": "Left",
     "lock": "Lock",
     "menu": "Menu",
+    "more": "More",
     "mute": "Mute",
+    "neutral_white": "Neutral white",
     "next": "Next",
+    "night_light": "Night light",
+    "now_playing": "Now Playing",
     "off": "Off",
     "ok": "OK",
     "on": "On",
@@ -276,8 +323,12 @@
     "pause": "Pause",
     "play": "Play",
     "play_pause": "Play / Pause",
+    "playlists": "Playlists",
+    "podcasts": "Podcasts",
     "power": "Power",
     "previous": "Previous",
+    "radio": "Radio",
+    "remote": "Remote",
     "repeat_all": "Repeat all",
     "repeat_off": "Repeat off",
     "repeat_one": "Repeat one",
@@ -285,19 +336,27 @@
     "right": "Right",
     "search": "Search",
     "select": "Select",
+    "shuffle": "Shuffle",
     "shuffle_off": "Shuffle off",
     "shuffle_on": "Shuffle on",
+    "sleep_in": "Sleep in",
+    "sleep_timer_off": "Sleep timer off",
     "source": "Source",
     "stop": "Stop",
     "toggle": "Toggle",
     "tools_more": "Tools / More",
     "top_menu": "Top Menu",
+    "tracks": "Tracks",
     "unlock": "Unlock",
     "unmute": "Unmute",
     "up": "Up",
     "voice_assistant": "Voice Assistant",
     "volume": "Volume",
     "volume_down": "Volume Down",
-    "volume_up": "Volume Up"
+    "volume_up": "Volume Up",
+    "warm_white": "Warm white"
+  },
+  "page_titles": {
+    "welcome": "welcome!"
   }
 }

@@ -31,10 +31,12 @@ from ...const import DOMAIN
 from ...shared.assignment import (
     name_is_user_written,
     ASSIGNMENT_DYNAMIC_KEY,
-    ASSIGNMENT_LABEL_EDITED_KEY,
+    ASSIGNMENT_TOOLTIP_EDITED_KEY,
 )
 from ...device.const import LIZAIP_EVENT
 from ...config.const import ASSIGNMENT_BLANKED_KEY
+from .generate import _GENERIC_SERVICE_DOMAINS
+from .paginate import async_paginate
 from .resolver import ASSIGNMENT_FIELD_MAP, field_value, resolve_binding
 from .sources import bound_specs, get_source
 from ...runtime import entry_device_id, find_store, _resolve_device_id
@@ -72,10 +74,10 @@ def _apply_field(assignment: dict[str, Any], field: str, value: Any) -> bool:
     dest = ASSIGNMENT_FIELD_MAP.get(field)
     if not dest:
         return False
-    # Refill/blanking takes back a user-written label claim from the old item.
+    # Refill/blanking takes back a user-written tooltip claim from the old item.
     dropped_claim = False
-    if field == "label":
-        dropped_claim = bool(assignment.pop(ASSIGNMENT_LABEL_EDITED_KEY, False))
+    if field == "tooltip":
+        dropped_claim = bool(assignment.pop(ASSIGNMENT_TOOLTIP_EDITED_KEY, False))
     key, sub = dest
     if sub is None:
         if assignment.get(key) == value:
@@ -158,6 +160,42 @@ def _retarget_subject(assignment: dict[str, Any], identity: str, source_id: str)
     return changed
 
 
+def _target_a_filled_step(assignment: dict[str, Any], binding: dict[str, Any]) -> bool:
+    """Give a step the refresh filled the device it acts on, if it has none.
+
+    A slot that was empty when its page was made -- a TV's apps, added while
+    the TV was off -- has no step to keep a target in; the refresh writes its
+    action and data into a new one. An app's `select_source` then went out
+    with no entity at all, and Home Assistant refused it. The target is what
+    the generator would have given it: the player the source reads, or the
+    page's device. Services that are addressed by their payload, or that run
+    a script or scene, keep going without one, as they are generated.
+    """
+    # Only a step whose action the source writes: one the template or the
+    # user wrote says itself what it acts on.
+    if "action" not in (binding.get("fields") or []):
+        return False
+    config = assignment.get("config")
+    step = config[0] if isinstance(config, list) and config else None
+    if not isinstance(step, dict) or step.get("target"):
+        return False
+    action = step.get("action")
+    if not isinstance(action, str) or "." not in action:
+        return False
+    domain = action.split(".", 1)[0]
+    if domain == DOMAIN or domain in _GENERIC_SERVICE_DOMAINS:
+        return False
+    data = step.get("data")
+    if isinstance(data, dict) and data.get("entity_id"):
+        return False
+    spec = binding.get("spec")
+    entity = (spec.get("entity") if isinstance(spec, dict) else None) or binding.get("target_entity")
+    if not isinstance(entity, str) or "." not in entity:
+        return False
+    step["target"] = {"entity_id": entity}
+    return True
+
+
 def _slider_subject_block(assignment: dict[str, Any]) -> dict[str, Any] | None:
     """The stored slider block, in place and writable, or None if there is none.
 
@@ -186,19 +224,19 @@ def _blank_fields(
     :data:`ASSIGNMENT_FIELD_MAP`, so they are stashed for ``_restore_action``.
     A deleted item must not stay pressable, but a recovered one must work.
 
-    ``keep_user_edits`` spares a pinned image and a typed label: on a slot that
+    ``keep_user_edits`` spares a pinned icon and a typed tooltip: on a slot that
     was already empty they were written by the user, not left by an item.
     """
     changed = False
     for field in fields:
-        if field == "label":
+        if field == "tooltip":
             if not (keep_user_edits and name_is_user_written(assignment)):
-                changed |= _apply_field(assignment, "label", "")
+                changed |= _apply_field(assignment, "tooltip", "")
         elif field == "icon":
-            if keep_user_edits and assignment.get("image_pinned"):
+            if keep_user_edits and assignment.get("icon_pinned"):
                 continue
             changed |= _apply_field(assignment, "icon", "")
-            changed |= _drop_image_pin(assignment)
+            changed |= _drop_icon_pin(assignment)
 
     action_id = assignment.get("action_id")
     config = assignment.get("config")
@@ -226,9 +264,9 @@ def _blank_fields(
     return changed
 
 
-def _drop_image_pin(assignment: dict[str, Any]) -> bool:
-    """Forget a pinned image: it belonged to the item the slot no longer shows."""
-    return bool(assignment.pop("image_pinned", False))
+def _drop_icon_pin(assignment: dict[str, Any]) -> bool:
+    """Forget a pinned icon: it belonged to the item the slot no longer shows."""
+    return bool(assignment.pop("icon_pinned", False))
 
 
 def _restore_action(assignment: dict[str, Any], binding: dict[str, Any]) -> bool:
@@ -343,7 +381,7 @@ async def _refresh_assignment(
     # Restore first so resolved action/data keep the template-owned target.
     changed |= _restore_action(assignment, binding)
 
-    # Read old identity before writes so user labels survive same-item refresh.
+    # Read old identity before writes so user tooltips survive same-item refresh.
     identity = item.identity or item.title
     same_item = bool(binding.get("identity")) and binding.get("identity") == identity
 
@@ -359,15 +397,17 @@ async def _refresh_assignment(
         value = field_value(item, field_map.get(field, field))
         if value is None:
             continue
-        if field == "label" and same_item and name_is_user_written(assignment):
+        if field == "tooltip" and same_item and name_is_user_written(assignment):
             continue
-        if field == "icon" and same_item and assignment.get("image_pinned"):
+        if field == "icon" and same_item and assignment.get("icon_pinned"):
             continue
         if field == "data":
             value = _payload_without_subject(value, assignment)
         changed |= _apply_field(assignment, field, value)
         if field == "icon" and not same_item:
-            changed |= _drop_image_pin(assignment)
+            changed |= _drop_icon_pin(assignment)
+
+    changed |= _target_a_filled_step(assignment, binding)
 
     if binding.get("identity") != identity:
         binding["identity"] = identity
@@ -427,8 +467,8 @@ def _needs_action_id(assignment: Any) -> str:
 
     A slot that was empty when its page was made stores no ``action_id``; the
     refresh fills its action and data, but without an id the remote is sent a
-    bare event and the panel cannot tell what the button does -- an Overview
-    button for a newly added page went nowhere.
+    bare event and the panel cannot tell what the button does -- a Table of
+    contents button for a newly added page went nowhere.
     """
     if not isinstance(assignment, dict) or assignment.get("action_id"):
         return ""
@@ -502,15 +542,17 @@ async def async_refresh_entry(
 
     async with _refresh_lock(hass, entry_id):
         if page_id is not None:
-            return await async_refresh_page(hass, device_id, page_id)
-
-        pages = await store.async_get_pages(device_id)
-        changed = False
-        for page in pages:
-            pid = page.get("id")
-            if pid is None:
-                continue
-            changed |= await async_refresh_page(hass, device_id, pid)
+            changed = await async_refresh_page(hass, device_id, page_id)
+        else:
+            pages = await store.async_get_pages(device_id)
+            changed = False
+            for page in pages:
+                pid = page.get("id")
+                if pid is None:
+                    continue
+                changed |= await async_refresh_page(hass, device_id, pid)
+        # After the buttons: a part whose items have all gone is empty by now.
+        changed |= await async_paginate(hass, entry_id, device_id, store, page_id=page_id)
         return changed
 
 

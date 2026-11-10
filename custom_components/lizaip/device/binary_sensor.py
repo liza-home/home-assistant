@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .connection import LizaIPConnection
 from .entity import LizaIPEntity
@@ -70,10 +71,12 @@ class LizaIPInHandSensor(LizaIPEntity, BinarySensorEntity):
         self.async_write_ha_state()
 
 
-class LizaIPChargingSensor(LizaIPEntity, BinarySensorEntity):
+class LizaIPChargingSensor(LizaIPEntity, BinarySensorEntity, RestoreEntity):
     """Whether the remote is currently charging.
 
-    The device sends ``diag`` events with ``diag=charging`` and ``value=0|1``.
+    The device sends ``diag`` events with ``diag=charging`` and ``value=0|1``,
+    only when it changes, so the last one is restored when Home Assistant
+    starts rather than reading "unknown" until the next.
     """
 
     _attr_translation_key = "charging"
@@ -90,6 +93,9 @@ class LizaIPChargingSensor(LizaIPEntity, BinarySensorEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        if self._attr_is_on is None and (last := await self.async_get_last_state()):
+            if last.state in ("on", "off"):
+                self._attr_is_on = last.state == "on"
         self._connection.register_sensor("charging", self._handle_update)
 
     async def async_will_remove_from_hass(self) -> None:

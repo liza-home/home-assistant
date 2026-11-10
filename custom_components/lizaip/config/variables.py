@@ -34,7 +34,7 @@ from ..action_controller.helpers import (
     _resolve_device_id,
     resolve_target_entities,
 )
-from ..action_controller.toggle import rule_icon, rule_label, toggle_rules
+from ..action_controller.toggle import rule_icon, rule_tooltip, toggle_rules
 from ..shared.variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
@@ -58,6 +58,7 @@ from ..shared.tokens import (
     page_scope,
 )
 from .const import CONFIG_CHANGED_EVENT
+from .default_pages import async_effective_pages
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ _LOGGER = logging.getLogger(__name__)
 # the remote's own setting (gear tab); this is its default.
 VARIABLE_THROTTLE_SECONDS = DEFAULT_VARIABLES_INTERVAL / 1000
 
-_VARIABLE_FIELDS = ("label", "image")
+_VARIABLE_FIELDS = ("tooltip", "icon")
 
 #: What a variable reads off its entity: an attribute's name, or ``None`` for
 #: the state -- which in text comes with its unit, so the unit counts too.
@@ -123,7 +124,7 @@ def _merge(into: _Reads, more: _Reads) -> _Reads:
 
 
 def _queue_subjects(config, hass) -> tuple[str, ...]:
-    """The speakers a step points at, whose queue sensors its label may read."""
+    """The speakers a step points at, whose queue sensors its tooltip may read."""
     if hass is None or not isinstance(config, list) or not config:
         return ()
     return tuple(
@@ -170,14 +171,14 @@ def _assignment_reads_in_scope(assign: dict, subjects: tuple[str, ...], hass) ->
     # already render the current step, so the only piece that was absent is
     # the subscription.
     #
-    # `icon`/`label` rather than `image`/`label`: a rule names its glyph the
-    # way an action does, not the way an assignment does.
+    # `icon`/`tooltip`, the same names a button stores its own picture and text
+    # under.
     for rule in toggle_rules(assign):
         # A rule's own target, not the button's: a cycle step may point at a
-        # different speaker, and its label reads that one's queue.
+        # different speaker, and its tooltip reads that one's queue.
         rule_subjects = _queue_subjects(rule.get("config"), hass)
         _merge(found, _token_reads(rule_icon(rule), rule_subjects))
-        _merge(found, _token_reads(rule_label(rule), rule_subjects))
+        _merge(found, _token_reads(rule_tooltip(rule), rule_subjects))
     return found
 
 
@@ -199,11 +200,17 @@ class VariableUse:
     pages: set[int] = field(default_factory=set)
 
 
-async def async_variable_uses(hass: HomeAssistant, device_id: str) -> dict[str, VariableUse]:
+async def async_variable_uses(
+    hass: HomeAssistant, device_id: str, entry: ConfigEntry | None = None,
+) -> dict[str, VariableUse]:
     """Every entity named by a variable on the device's pages, and where.
 
     The page title counts as well as every button, and the icons of every
     action a button runs -- on the page of the button that runs it.
+
+    *entry* lets a remote with no pages of its own be watched too: the
+    placeholders it shows read its battery and addresses, and without this
+    their tiles would freeze at whatever the last sync drew.
     """
     store = _get_store(hass)
     uses: dict[str, VariableUse] = {}
@@ -216,15 +223,24 @@ async def async_variable_uses(hass: HomeAssistant, device_id: str) -> dict[str, 
 
     actions_by_page: dict[int, set[str]] = {}
     templates: dict[int, Any] = {}
-    for page in await store.async_get_pages(device_id):
+    pages = await store.async_get_pages(device_id)
+    stand_in: dict[int, dict] | None = None
+    if not pages and entry is not None:
+        effective = await async_effective_pages(hass, entry)
+        pages = effective.pages
+        stand_in = effective.assignments
+    for page in pages:
         if not isinstance(page, dict):
             continue
         page_id = page.get("id", 1)
         templates[page_id] = page.get("template")
-        assignments = await store.async_get_assignments(device_id, page_id)
+        assignments = (
+            stand_in.get(page_id, {}) if stand_in is not None
+            else await store.async_get_assignments(device_id, page_id)
+        )
         # `${_device.attr}` is the page's own entity under another name.
         with page_scope(templates[page_id]):
-            _note(_token_reads(page.get("image")), page_id)
+            _note(_token_reads(page.get("title")), page_id)
             for assign in (assignments or {}).values():
                 _note(_assignment_reads(assign, hass), page_id)
                 if isinstance(assign, dict) and assign.get("action_id"):
@@ -302,7 +318,7 @@ async def async_device_title_targets(
         template = page.get("template")
         if not isinstance(template, dict):
             continue
-        named = _names_device(page.get("image"))
+        named = _names_device(page.get("title"))
         if not named:
             assignments = (await store.async_get_assignments(device_id, page.get("id", 1))) or {}
             named = _names_device(assignments)
@@ -386,7 +402,7 @@ async def async_setup_variable_listener(
         try:
             device_id = _resolve_device_id(hass, entry.entry_id)
             if device_id:
-                uses.update(await async_variable_uses(hass, device_id))
+                uses.update(await async_variable_uses(hass, device_id, entry))
                 title_targets.update(await async_device_title_targets(hass, device_id))
             for key in title_targets:
                 hub = hass.config_entries.async_get_entry(key)

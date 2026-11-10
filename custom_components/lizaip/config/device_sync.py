@@ -26,9 +26,10 @@ from homeassistant.core import HomeAssistant
 
 from ..const import DOMAIN
 from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError, is_valid_page_id
-from ..runtime import entry_connection, entry_device_id, _get_store
+from ..runtime import entry_connection, entry_device_id
 from ..shared.logs import device_logger
 from .const import is_subpage
+from .default_pages import async_effective_pages
 from .events import fire_device_synced
 from .page_payload import build_page_payload, build_sync_context, compute_page_hash
 from .panel_entry import get_panel_entry
@@ -319,13 +320,14 @@ async def _sync_config_to_device(
     Uses the protocol commands: get_pages, clear_all/add_page/set_page/set_main_pages.
     """
     log = device_logger(_LOGGER, entry)
-    # Load pages from store
     device_id = entry_device_id(entry)
     if not device_id:
         log.debug("No device_id for this entry")
         return False
-    store = _get_store(hass)
-    pages = await store.async_get_pages(device_id)
+    effective = await async_effective_pages(hass, entry)
+    pages = effective.pages
+    if effective.placeholder:
+        log.debug("The remote has no pages of its own; sending the placeholders")
 
     # Use cached device state if available; otherwise query the device (first sync after connect)
     if conn.page_cache.pages is None:
@@ -366,7 +368,10 @@ async def _sync_config_to_device(
     # Built once: every input here is the same for all pages, and
     # `build_page_context` walks the whole list, so building it per page made
     # this loop O(N²).
-    page_ctx = await build_sync_context(hass, entry, pages)
+    page_ctx = await build_sync_context(
+        hass, entry, pages,
+        assignments=effective.assignments,
+    )
     for page_config in pages:
         # page_id is a 32-bit unsigned integer, 1…4294967295 (PROTOCOL.md §3).
         # Skip anything invalid (e.g. a hand-edited YAML file) rather than letting
@@ -822,8 +827,13 @@ async def _push_variable_pages(
         await sync_config_to_device(hass, entry)
         return
 
-    pages = await _get_store(hass).async_get_pages(device_id)
+    effective = await async_effective_pages(hass, entry)
+    pages = effective.pages
     by_id = {p.get("id", 1): p for p in pages if isinstance(p, dict)}
+    ctx = await build_sync_context(
+        hass, entry, pages,
+        assignments=effective.assignments,
+    )
     pushed = False
     for page_id in sorted(page_ids):
         page_config = by_id.get(page_id)
@@ -835,7 +845,7 @@ async def _push_variable_pages(
         if sent is None:
             await sync_config_to_device(hass, entry)
             return
-        built = await build_page_payload(hass, entry, page_id, page_config, pages)
+        built = await build_page_payload(hass, entry, page_id, page_config, pages, ctx=ctx)
         changes = _live_button_changes(sent, built)
         if changes is None:
             await sync_config_to_device(hass, entry)

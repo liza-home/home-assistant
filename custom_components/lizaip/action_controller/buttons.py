@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Mapping
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import Context, HomeAssistant, State
@@ -30,11 +31,11 @@ from ..shared.services import (
 )
 from ..shared.tokens import (
     button_scope,
-    clean_label_text,
+    clean_tooltip_text,
     page_scope,
     resolve_image_tokens,
 )
-from ..shared.i18n import action_labels, get_ui_language
+from ..shared.i18n import button_tooltips, get_ui_language, language_scope
 from ..shared.logs import device_id_logger, device_logger
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url
@@ -51,7 +52,7 @@ from .overrides import resolve_fixed_action
 from .toggle import (
     MODE_CYCLE,
     TOGGLE_KEY,
-    resolve_rule_label,
+    resolve_rule_tooltip,
     rule_steps,
     runtime_assign,
     toggle_mode,
@@ -312,11 +313,40 @@ def _inferred_verification(
     expected = flat.get("media_content_id")
     if not expected or not isinstance(expected, str):
         return [], []
+    if _launch_step(hass, step) is not None:
+        # Started over the TV's own API, and a Samsung reports no ``app_id``.
+        return [], []
 
     return (
         [build_launch_capture(entity_id)],
         build_launch_verification(entity_id, expected, retry_steps),
     )
+
+
+def _launch_step(hass: HomeAssistant, step: Any) -> dict | None:
+    """``lizaip.launch_app`` for an app launch on a Samsung TV, else ``None``.
+
+    Such a TV drops the launch ``media_player.play_media`` sends, so the step
+    is rerouted when the button runs; the button keeps its ``play_media``.
+    """
+    from ..config.page_templates.samsung_tv import samsung_host
+
+    if not isinstance(step, dict):
+        return None
+    if (step.get("action") or step.get("service")) != "media_player.play_media":
+        return None
+    flat = normalise_payload(step.get("data") or step.get("service_data") or {})
+    app_id = flat.get("media_content_id")
+    if flat.get("media_content_type") != _APP_LAUNCH_CONTENT_TYPE or not isinstance(app_id, str):
+        return None
+    entity_id = resolve_step_entity(step, hass)
+    if not isinstance(entity_id, str) or not app_id or not samsung_host(hass, entity_id):
+        return None
+    return {"action": f"{DOMAIN}.launch_app", "data": {"entity_id": entity_id, "app_id": app_id}}
+
+
+def _reroute_launches(hass: HomeAssistant, actions: list) -> list:
+    return [_launch_step(hass, step) or step for step in actions]
 
 
 def _is_optimistic(hass: HomeAssistant, entry_id: str) -> bool:
@@ -347,7 +377,9 @@ async def _fire_cycle_update(
             break
     with page_scope(template), button_scope(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
-    ):
+    ), language_scope(get_ui_language(
+        hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
+    )):
         await _fire_cycle_update_in_scope(
             hass, device_id, page_id, button_key, assign, entry_id,
         )
@@ -408,20 +440,20 @@ async def _fire_cycle_update_in_scope(
     # phrase and an IR command is a key code, not a sentence. Falling back to
     # the button's own label keeps the tooltip truthful rather than blank.
 
-    # Resolved, not merely cleaned: `clean_label_text` *strips* a `${sensor.x}`
+    # Resolved, not merely cleaned: `clean_tooltip_text` *strips* a `${sensor.x}`
     # instead of filling it in, so a press tooltip read "Battery" where press
     # 1's own -- via `icons.py` -- read "Battery 87 %".
 
-    # Both halves now go through `resolve_rule_label`, which fills them from
+    # Both halves now go through `resolve_rule_tooltip`, which fills them from
     # the target of whichever config it is handed: the step's for a rule, the
     # button's own for this fallback.
 
     # The device's own language option, so a press resolving `${_state}` reads
     # the same word the rest of its tile does. Only `entry_id` reaches here.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
-    tooltip = clean_label_text(
-        resolve_rule_label(rules[index], hass, entry)
-        or resolve_rule_label(assign, hass, entry)
+    tooltip = clean_tooltip_text(
+        resolve_rule_tooltip(rules[index], hass, entry)
+        or resolve_rule_tooltip(assign, hass, entry)
     )
 
     device_id_logger(_LOGGER, hass, device_id).debug(
@@ -533,7 +565,9 @@ async def _fire_optimistic_update(
 
     with page_scope(template), button_scope(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
-    ):
+    ), language_scope(get_ui_language(
+        hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
+    )):
         icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
     if not icon:
         log.debug("Optimistic: predicted icon has no value — skipping")
@@ -562,12 +596,12 @@ async def _fire_optimistic_update(
 
     # Same entry as the style above; the correcting state listener uses it too.
     lang = get_ui_language(hass, entry)
-    tooltip_label = action_labels.get(predicted_action_key, lang)
+    action_word = button_tooltips.get(predicted_action_key, lang)
     entity_name = (
         state.attributes.get("friendly_name", "")
         or entity_id.split(".")[-1].replace("_", " ").title()
     )
-    tooltip = f"{entity_name} {tooltip_label}" if entity_name else tooltip_label
+    tooltip = f"{entity_name} {action_word}" if entity_name else action_word
 
     log.debug(
         "Optimistic update: %s/%s → predicted %s → icon=%s tooltip=%s",
@@ -660,7 +694,7 @@ async def execute_longtouch(
         log.debug("execute_longtouch: no long touch for %s/%s", page_id, button_key)
         return
     before = _inferred_prelude(hass, actions[0])
-    actions = _bind_internal_steps(actions, entry_id)
+    actions = _bind_internal_steps(_reroute_launches(hass, actions), entry_id)
     script = await _get_script(
         hass, entry_id, page_id, button_key,
         (before or []) + actions, gesture="longtouch",
@@ -793,7 +827,7 @@ async def execute_action(
             )
 
     # Order: wake, capture, button action, check; non-list siblings are ignored.
-    actions = _bind_internal_steps(own_actions, entry_id)
+    actions = _bind_internal_steps(_reroute_launches(hass, own_actions), entry_id)
     if capture:
         actions = capture + actions
     if isinstance(before, list) and before:

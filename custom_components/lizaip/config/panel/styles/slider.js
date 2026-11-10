@@ -117,12 +117,12 @@ export const STYLES_SLIDER = `
     font-size: var(--liza-font-s);
     line-height: 1.4;
   }
-  /* The details itself is padding-free so the summary background can reach its
-     edges; the body carries the inset. */
+  /* The expansion panel insets its content at the sides; the body adds only
+     the space above and below. */
   .slider-advanced-body {
     display: flex;
     flex-direction: column;
-    padding: 14px 12px;
+    padding: 8px 0;
   }
   .slider-advanced-body > .config-field { margin-bottom: 12px; }
   /* Separates the safe tunables above from the plumbing below, which silently

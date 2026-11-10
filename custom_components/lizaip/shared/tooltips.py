@@ -1,11 +1,11 @@
-"""``${_state}`` and ``${_name}`` placeholders in button labels."""
+"""``${_state}`` and ``${_name}`` placeholders in button tooltips."""
 
 from __future__ import annotations
 
 import re
 from typing import Any, Final
 
-from .i18n import action_labels
+from .i18n import button_tooltips
 from .services import (
     ATTR_VALUE_ACTION_MAP,
     NEXT_STATE_MAP,
@@ -23,7 +23,7 @@ from .services import (
 # ``\w*`` and not ``\w+``: an empty or blank token (``${}``, ``${ }``) must also
 # be consumed. Anything left behind would reach ``resolve_icon_url("text:…")``
 # and put a brace into the imgserv URL.
-LABEL_TOKEN_RE = re.compile(r"\$\{\s*(\w*)\s*\}")
+TOOLTIP_TOKEN_RE = re.compile(r"\$\{\s*(\w*)\s*\}")
 
 #: Characters that only ever join two halves of a label, never name anything
 #: by themselves. Decides whether a label is nothing but placeholders, and
@@ -35,7 +35,7 @@ _SEPARATORS_ONLY_RE = re.compile(rf"[{SEPARATOR_CHARS}]+")
 # The spelling the panel writes into a label it fills in for the user.
 STATE_TOKEN: Final = "${_state}"
 
-# Out of ``LABEL_TOKEN_RE`` because its ``\w`` excludes the dot, and widening
+# Out of ``TOOLTIP_TOKEN_RE`` because its ``\w`` excludes the dot, and widening
 # that would swallow ``${media_player.kitchen.volume_level}``. Named rather
 # than a general ``_namespace.key``, which would strip real entity variables.
 DOTTED_TOKEN_RE = re.compile(
@@ -48,7 +48,7 @@ DOTTED_TOKEN_RE = re.compile(
 # same as any name this substituter does not know.
 NAME_TOKEN: Final = "${_name}"
 
-def is_token_only_label(text: str) -> bool:
+def is_token_only_tooltip(text: str) -> bool:
     """True when *text* is nothing but placeholders — no words of its own.
 
     Such a label is a shape, not a name: ``"${_state}"`` says "print the state
@@ -62,9 +62,9 @@ def is_token_only_label(text: str) -> bool:
     and the dash only has something to join once both tokens resolve.
 
     ``${_queue.next_song}`` and ``${_device.media_title}`` count as placeholders
-    too, though their dot keeps them out of :data:`LABEL_TOKEN_RE`.
+    too, though their dot keeps them out of :data:`TOOLTIP_TOKEN_RE`.
 
-    This decides tooltips only — :func:`is_token_only_label` is called from the
+    This decides tooltips only — :func:`is_token_only_tooltip` is called from the
     label ladders in ``button_rendering.py`` and ``icons.py`` and from nowhere
     else. A page title is never classified, so what ``${_device.x}`` means
     there is untouched.
@@ -72,12 +72,12 @@ def is_token_only_label(text: str) -> bool:
     if not text or "${" not in text:
         return False
     # Leftover braces are wreckage, not words: "${_state}}" is still a shape.
-    stripped = DOTTED_TOKEN_RE.sub("", LABEL_TOKEN_RE.sub("", text))
+    stripped = DOTTED_TOKEN_RE.sub("", TOOLTIP_TOKEN_RE.sub("", text))
     remainder = stripped.replace("{", "").replace("}", "")
     return not _SEPARATORS_ONLY_RE.sub("", remainder).strip()
 
 
-def state_token_label(
+def state_token_tooltip(
     svc: str,
     current_state: str,
     lang: str,
@@ -123,20 +123,20 @@ def state_token_label(
                 attr_str(data.get(attribute, ""))
             )
             if target:
-                return action_labels.get(target, lang)
+                return button_tooltips.get(target, lang)
         # Otherwise the entity's current value names the next one, the same way
         # `attribute_icons:` already picks the icon for this button.
         if isinstance(attributes, dict):
             next_key = cycle.get(attr_str(attributes.get(attribute, "")))
             if next_key:
-                return action_labels.get(next_key, lang)
+                return button_tooltips.get(next_key, lang)
 
     if svc in SERVICE_ACTION_MAP:
-        return action_labels.get(SERVICE_ACTION_MAP[svc], lang)
+        return button_tooltips.get(SERVICE_ACTION_MAP[svc], lang)
     if is_state_toggle_service(svc) and current_state:
         next_key = NEXT_STATE_MAP.get(current_state)
         if next_key:
-            return action_labels.get(next_key, lang)
+            return button_tooltips.get(next_key, lang)
     return ""
 
 

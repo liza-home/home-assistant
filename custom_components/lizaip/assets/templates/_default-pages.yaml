@@ -1,0 +1,37 @@
+# Default pages — what a remote shows while it has none of its own.
+#
+# An ordinary template, read only by `config/default_pages.py`,
+# which resolves it into pages that exist in memory and never reach the store.
+# The leading underscore keeps it out of the add-page dialog: `list_templates`
+# skips a `_`-prefixed file and a `_`-prefixed id is not a template id at all.
+
+version: 2
+placeholders:
+  battery:
+    source: entities
+    spec: {config_entry: "@remote_entry", translation_key: battery}
+  rcu_address:
+    source: entities
+    spec: {config_entry: "@remote_entry", translation_key: ip_address}
+  ha_address:
+    source: entities
+    spec: {config_entry: "@remote_entry", translation_key: ha_address}
+  firmware:
+    source: entities
+    spec: {config_entry: "@remote_entry", translation_key: firmware}
+
+pages:
+  welcome:
+    title: "mdi:home-assistant text:{translate: welcome}"
+    buttons:
+      button_1:
+        tooltip: "RCU ${{@rcu_address[1].entity_id}}"
+      button_4:
+        tooltip: "Firmware ${{@firmware[1].entity_id}.installed_version}"
+
+      button_5:
+        tooltip: "HA ${{@ha_address[1].entity_id}}"
+
+      button_12:
+        icon: "mdi:circle-slice-${max(1, min(8, 1 + round({@battery[1].entity_id} * 7 / 100)))}"
+        tooltip: "Battery ${{@battery[1].entity_id}}"

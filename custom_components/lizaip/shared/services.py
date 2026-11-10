@@ -283,7 +283,7 @@ SERVICE_ACTION_MAP: dict[str, str] = {
 # with the action key naming *arriving at* that value. The two maps below are
 # derived from this.
 #
-# Also the **allowlist** for both attribute rungs of ``state_token_label``:
+# Also the **allowlist** for both attribute rungs of ``state_token_tooltip``:
 # without the gate, every service whose data names an attribute value literally
 # (``select_source``, ``set_hvac_mode``, ...) would print raw HA values. Only
 # cyclable attributes — where "the next value" has one answer — belong here.

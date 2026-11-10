@@ -53,8 +53,7 @@ export const STYLES_DEBUG = `
     cursor: pointer;
   }
   /* Where the stream's output actually goes. A shadow root does not inherit
-     the document's link colour, so the anchor has to be told -- the same
-     reason .empty-state a exists. */
+     the document's link colour, so the anchor has to be told. */
   .debug-traffic-subtitle {
     margin: 14px 0 6px;
     font-size: var(--liza-font-13);
@@ -105,20 +104,11 @@ export const STYLES_DEBUG = `
     font-size: var(--liza-font-m);
     overflow-wrap: anywhere;
   }
-  .debug-section summary {
-    cursor: pointer;
-    font-size: var(--liza-font-m);
-    padding: 4px 0;
-    /* The heading and its one control share the line. Kept as list-item: a
-       flex summary drops the disclosure triangle, and the triangle is what
-       says the row can be opened at all. */
-    display: list-item;
-  }
+  /* Home Assistant's expansion panel draws the heading row and its chevron;
+     the Raw/Pretty button sits at its right edge, so the buttons line up down
+     the list whatever the length of each endpoint's name. */
+  .debug-section { display: block; margin-bottom: 8px; font-size: var(--liza-font-m); }
   .debug-section-name { margin-right: 8px; }
-  /* Pushed to the right edge of the summary line rather than placed after the
-     text, so the buttons line up down the list instead of stepping in and out
-     with the length of each endpoint's name. */
-  .debug-section summary .debug-pretty-btn { float: right; }
   .debug-dump {
     /* A device dump is arbitrary length and arbitrary width; bound both so one
        long line cannot stretch the panel sideways. */

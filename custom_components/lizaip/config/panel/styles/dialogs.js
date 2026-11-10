@@ -17,7 +17,23 @@ export const STYLES_DIALOGS = `
      white box) so it can go on being the full-viewport scrim it has always
      been visually, while the platform supplies the focus trap, Escape,
      inertness and top-layer stacking underneath. */
-  .add-page-overlay {
+  /* Home Assistant's dialog draws the scrim and the surface; the card inside
+     it is only the content's padding and rhythm. The rest of this block is
+     for the native <dialog> used until HA has loaded ha-dialog. */
+  ha-dialog.add-page-overlay {
+    --dialog-content-padding: 0;
+  }
+  ha-dialog.add-page-overlay .add-page-dialog {
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
+  }
+  dialog.add-page-overlay {
     position: fixed;
     inset: 0;
     border: 0;
@@ -34,10 +50,10 @@ export const STYLES_DIALOGS = `
   }
   /* Scoped to [open]: an unconditional flex display would override the UA's
      "display: none" for a closed dialog and paint it over the panel. */
-  .add-page-overlay[open] { display: flex; }
+  dialog.add-page-overlay[open] { display: flex; }
   /* The element itself paints the scrim, so the UA's own backdrop would only
      darken it a second time. */
-  .add-page-overlay::backdrop { background: transparent; }
+  dialog.add-page-overlay::backdrop { background: transparent; }
   .add-page-dialog {
     background: var(--card-background-color, #1e1e1e);
     border-radius: 16px;
@@ -98,7 +114,20 @@ export const STYLES_DIALOGS = `
     gap: 3px;
     padding: 4px 0 6px;
   }
-  .template-row {
+  /* Home Assistant's list and rows draw themselves -- height, hover, focus,
+     the chosen option. They only take the gap and the rounded corners the
+     walk's rows have always had. */
+  ha-list-base.template-list,
+  ha-list-selectable.template-list {
+    --ha-list-gap: 3px;
+  }
+  ha-list-item-button.template-row,
+  ha-list-item-option.template-row {
+    --ha-list-item-focus-radius: 11px;
+    border-radius: 11px;
+  }
+  /* The walk's own buttons, until HA's list is loaded. */
+  button.template-row {
     display: flex;
     align-items: center;
     gap: 13px;
@@ -112,18 +141,13 @@ export const STYLES_DIALOGS = `
     font: inherit;
     cursor: pointer;
   }
-  .template-row:hover {
+  button.template-row:hover {
     background: rgba(255,255,255,.055);
     border-color: var(--divider-color, #333);
   }
-  .template-row.is-chosen {
+  button.template-row.is-chosen {
     background: rgba(3,169,244,.1);
     border-color: var(--primary-color, #03a9f4);
-  }
-  .template-row:focus-visible {
-    outline: none;
-    border-color: var(--primary-color, #03a9f4);
-    box-shadow: 0 0 0 3px rgba(3,169,244,.3);
   }
   /* The heading over each half of the first screen. Home Assistant labels
      such a group rather than ruling an unexplained line between two, and the
@@ -229,6 +253,11 @@ export const STYLES_DIALOGS = `
     background: rgba(255,255,255,.08);
     border: 1px solid rgba(255,255,255,.08);
   }
+  /* A template's mark is not a picture the remote shows: it sits on the plate,
+     not on the remote's black screen. */
+  :host(.liza-dark) .tile-plate .liza-dev-img { background: none; }
+  /* "(3 pages)" after a template's name: part of the name, quieter. */
+  .template-pages { color: var(--liza-muted-text); font-weight: 400; }
 
   /* ── The add-page walk's own chrome ──────────────────────────────────
      Scoped to the walk's host, because .add-page-dialog and .template-dialog
@@ -661,4 +690,66 @@ export const STYLES_DIALOGS = `
   /* Cancel sits in a flex row beside the commit, so it must not carry the
      auto margin that would centre it and strand its partner at the edge. */
   .confirm-cancel-btn { flex: 0 0 auto; }
+
+  /* Who a remote is assigned to. Rows carry the panel's own list look -- the
+     12px surface the device list uses -- and the whole row is the control. */
+  .people-hint {
+    font-size: var(--liza-font-m);
+    line-height: 1.5;
+    margin: 0 0 12px;
+    color: var(--liza-muted-text);
+  }
+  .people-listhead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 8px;
+  }
+  .people-section {
+    font-size: var(--liza-font-12);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--liza-muted-text);
+  }
+  .people-count {
+    font-size: var(--liza-font-12);
+    color: var(--liza-muted-text);
+  }
+  .people-search { display: block; margin: 0 0 10px; }
+  .people-empty,
+  .people-no-match {
+    font-size: var(--liza-font-m);
+    margin: 0 0 20px;
+    color: var(--liza-muted-text);
+  }
+  .people-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-height: 48vh;
+    overflow-y: auto;
+    margin-bottom: 20px;
+  }
+  /* Home Assistant's own row: a badge, a name and a switch, with nothing
+     drawn around it. The switch is the state, so no second selected look. */
+  .person-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 4px;
+    min-height: 48px;
+    box-sizing: border-box;
+  }
+  .person-row[hidden] { display: none; }
+  .person-avatar { width: 40px; height: 40px; flex: 0 0 auto; }
+  .person-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  .person-row-pick .person-info { cursor: pointer; }
+  .person-name {
+    font-size: var(--liza-font-m);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+  .person-switch { flex: 0 0 auto; }
 `;

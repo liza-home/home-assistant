@@ -25,13 +25,12 @@ from .const import (
     EMOJI_FONT,
     EMOJI_NATIVE_SIZE,
     FALLBACK_EMOJI_PATHS,
-    FALLBACK_FONT_PATHS,
-    FONTS_DIR,
     MAX_SIZE,
     TEXT_BAND_INFO,
     TRANSPARENT,
     find_font,
     font_has_all_glyphs,
+    open_font,
 )
 from .fonts import resolve_font_path
 
@@ -55,8 +54,39 @@ _font_has_all_glyphs = font_has_all_glyphs
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _resolve_fonts(font_id: str | None, user_fonts_dir: str | None = None):
+#: What ``?emoji=`` says: no emoji font at all, emoji drawn in the text font.
+EMOJI_NONE = "none"
+
+#: The bitmap sizes colour emoji fonts are built at, most common first: a
+#: CBDT font opens at one of its own sizes or not at all.
+_BITMAP_EMOJI_SIZES = (EMOJI_NATIVE_SIZE, 136, 128, 160, 96, 72, 64, 32)
+
+
+@lru_cache(maxsize=32)
+def _bitmap_emoji_size(path: str) -> int | None:
+    """The size a colour bitmap font (Noto Color Emoji) opens at; ``None``
+    for an outline font, which opens at any size."""
+    try:
+        open_font(path, 20, layout_engine=_LAYOUT_ENGINE)
+        return None
+    except OSError:
+        pass
+    for size in _BITMAP_EMOJI_SIZES:
+        try:
+            open_font(path, size, layout_engine=_LAYOUT_ENGINE)
+            return size
+        except OSError:
+            continue
+    return None
+
+
+def _resolve_fonts(font_id: str | None, fonts_dir: str | None = None, emoji: str | None = None):
     """Return ``(primary_path, emoji_path, color_emoji_path)``.
+
+    *emoji* is the theme's emoji font: ``none`` for none -- emoji are drawn in
+    the text font, as far as it has them -- or a font id. A colour bitmap
+    font becomes *color_emoji_path*, any other *emoji_path*. Unset, or naming
+    a font that is not installed, the emoji fonts are found as before.
 
     A font id that names no font draws in the default font, not in the system
     fallback: a font file removed from the user's font folder should leave its
@@ -66,33 +96,29 @@ def _resolve_fonts(font_id: str | None, user_fonts_dir: str | None = None):
     used for rendering emoji in their original colours at the native bitmap
     size and then scaling to the target height.
     """
-    font_path = resolve_font_path(font_id, user_fonts_dir) or find_font(DEFAULT_FONT)
-    if not font_path:
-        for p in FALLBACK_FONT_PATHS:
-            if os.path.exists(p):
-                font_path = p
-                break
+    font_path = resolve_font_path(font_id, fonts_dir) or resolve_font_path(DEFAULT_FONT, fonts_dir)
 
+    if emoji == EMOJI_NONE:
+        return font_path, None, None
+    chosen = resolve_font_path(emoji, fonts_dir) if emoji else None
+    if chosen:
+        if _bitmap_emoji_size(chosen):
+            return font_path, None, chosen
+        return font_path, chosen, None
+
+    # The emoji fonts are not shipped: the user may supply them by dropping
+    # them into their font folder, else a system NotoEmoji is used.
     emoji_font_path = None
-    emoji_path = os.path.join(FONTS_DIR, EMOJI_FONT)
-    if os.path.exists(emoji_path):
-        emoji_font_path = emoji_path
-    else:
-        for p in FALLBACK_EMOJI_PATHS:
-            if os.path.exists(p):
-                emoji_font_path = p
-                break
+    for p in ((os.path.join(fonts_dir, EMOJI_FONT),) if fonts_dir else ()) + FALLBACK_EMOJI_PATHS:
+        if os.path.exists(p):
+            emoji_font_path = p
+            break
 
-    # The colour emoji font is too large to ship in a release, so the user may
-    # supply it by dropping it into their font folder; a bundled copy wins.
     color_emoji_path = None
-    for directory in (FONTS_DIR, user_fonts_dir):
-        if not directory:
-            continue
-        color_path = os.path.join(directory, COLOR_EMOJI_FONT)
+    if fonts_dir:
+        color_path = os.path.join(fonts_dir, COLOR_EMOJI_FONT)
         if os.path.exists(color_path):
             color_emoji_path = color_path
-            break
 
     return font_path, emoji_font_path, color_emoji_path
 
@@ -107,7 +133,7 @@ _LAYOUT_ENGINE = (
 def _load_font(path: str | None, size: int) -> ImageFont.FreeTypeFont:
     """Load a TrueType font, falling back to Pillow's built-in default."""
     if path:
-        return ImageFont.truetype(path, size, layout_engine=_LAYOUT_ENGINE)
+        return open_font(path, size, layout_engine=_LAYOUT_ENGINE)
     try:
         return ImageFont.load_default(size=size)
     except TypeError:
@@ -269,11 +295,11 @@ def text_line(
     height: int,
     font_size: int | None = None,
     font_id: str | None = None,
-    user_fonts_dir: str | None = None,
+    fonts_dir: str | None = None,
 ) -> tuple[int, int, int]:
     """``(top, baseline, bottom)`` of what ``render_text`` draws at *height*."""
     height = min(height, MAX_SIZE)
-    path = _resolve_fonts(font_id, user_fonts_dir)[0]
+    path = _resolve_fonts(font_id, fonts_dir)[0]
     return _line(path, height, font_size or height)[1:]
 
 
@@ -284,7 +310,8 @@ def render_text(
     fg_color: tuple = DEFAULT_FG_COLOR,
     font_size: int | None = None,
     font_id: str | None = None,
-    user_fonts_dir: str | None = None,
+    fonts_dir: str | None = None,
+    emoji: str | None = None,
 ) -> Image.Image:
     """Render *text* onto a transparent canvas and return the image.
 
@@ -305,7 +332,7 @@ def render_text(
     """
     height = min(height, MAX_SIZE)
 
-    primary_path, emoji_path, color_emoji_path = _resolve_fonts(font_id, user_fonts_dir)
+    primary_path, emoji_path, color_emoji_path = _resolve_fonts(font_id, fonts_dir, emoji)
     font_size, top, baseline, bottom = _line(primary_path, height, font_size or height)
     primary_font = _load_font(primary_path, font_size)
     emoji_font = _load_font(emoji_path, font_size) if emoji_path else primary_font
@@ -314,8 +341,9 @@ def render_text(
     color_emoji_font = None
     if color_emoji_path:
         try:
-            color_emoji_font = ImageFont.truetype(
-                color_emoji_path, EMOJI_NATIVE_SIZE, layout_engine=_LAYOUT_ENGINE,
+            color_emoji_font = open_font(
+                color_emoji_path, _bitmap_emoji_size(color_emoji_path) or EMOJI_NATIVE_SIZE,
+                layout_engine=_LAYOUT_ENGINE,
             )
         except Exception:
             pass  # fall back to monochrome
@@ -379,9 +407,15 @@ def render_text(
                 img.paste(emoji_img, (int(cursor_x), baseline - up), emoji_img)
                 cursor_x += emoji_img.width
                 continue
-            font = emoji_font if _char_needs_emoji(cl, primary_path) else primary_font
+            is_emoji = _char_needs_emoji(cl, primary_path)
+            font = emoji_font if is_emoji else primary_font
             bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
-            draw.text((cursor_x - bb[0], baseline), cl, font=font, fill=fg_color, anchor="ls")
+            # A colour outline font (COLR, as Twemoji) draws in its own
+            # colours; a monochrome one in the text's, as before.
+            draw.text(
+                (cursor_x - bb[0], baseline), cl, font=font, fill=fg_color, anchor="ls",
+                embedded_color=is_emoji,
+            )
             cursor_x += bb[2] - bb[0]
 
     img.info[TEXT_BAND_INFO] = (top, baseline, bottom)
@@ -393,10 +427,10 @@ def text_baseline(
     height: int,
     font_size: int | None = None,
     font_id: str | None = None,
-    user_fonts_dir: str | None = None,
+    fonts_dir: str | None = None,
 ) -> int:
     """The line *text* sits on in what `render_text` draws; the same for any text."""
-    return text_line(height, font_size, font_id, user_fonts_dir)[1]
+    return text_line(height, font_size, font_id, fonts_dir)[1]
 
 
 def render_text_fitted(
@@ -406,8 +440,9 @@ def render_text_fitted(
     fg_color: tuple = DEFAULT_FG_COLOR,
     font_size: int | None = None,
     font_id: str | None = None,
-    user_fonts_dir: str | None = None,
+    fonts_dir: str | None = None,
     min_size: int = MIN_FIT_FONT_SIZE,
+    emoji: str | None = None,
 ) -> Image.Image:
     """*text* drawn no wider than *width*, by shrinking the font to suit.
 
@@ -422,11 +457,11 @@ def render_text_fitted(
     keep the same lettering. Shrinking stops at *min_size*: past that the
     words would be unreadable, and staying wide is the better failure.
     """
-    img = render_text(text, width, height, fg_color, font_size, font_id, user_fonts_dir)
+    img = render_text(text, width, height, fg_color, font_size, font_id, fonts_dir, emoji)
     size = font_size or height
     while width > 0 and img.width > width and size > min_size:
         # Aim straight at the ratio that would fit, but always move by at
         # least one step: rounding could otherwise stand still forever.
         size = max(min_size, min(size - 1, int(size * width / img.width)))
-        img = render_text(text, width, height, fg_color, size, font_id, user_fonts_dir)
+        img = render_text(text, width, height, fg_color, size, font_id, fonts_dir, emoji)
     return img

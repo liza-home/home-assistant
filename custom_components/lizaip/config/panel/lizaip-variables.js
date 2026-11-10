@@ -10,13 +10,24 @@
  * which the view is drawn again. A change to an entity an answer read asks again.
  *
  * Only the words `${_state}`, `${_name}` and `${_cmd}` are still resolved here
- * (`_substituteLabelTokens`): they depend on the button being edited, not on
+ * (`_substituteTooltipTokens`): they depend on the button being edited, not on
  * Home Assistant.
  */
 
 // A `${…}` that is more than one word: an entity, a calculation. Those belong
 // to the backend; `${_state}` and friends are a single word.
 const BACKEND_TOKEN = /\$\{(?!\s*\w*\s*\})[^{}$]*\}/;
+// `{translate: volume}`: words in the remote's language, from the backend's
+// translation tables, so the backend fills them in too.
+const TRANSLATE_TOKEN = "{translate:";
+// The same, whole, for the fallback: until the backend answers, the words as
+// written stand in (`{translate: Volume Up}` reads "Volume Up").
+const TRANSLATE_RE = /\{translate:\s*([^{}]+?)\s*\}/g;
+
+/** *text* as shown before the backend has answered for it. */
+function unanswered(text) {
+  return text.replace(new RegExp(BACKEND_TOKEN.source, "g"), "").replace(TRANSLATE_RE, "$1");
+}
 // Entries kept before the cache starts over, so a long session cannot grow it.
 const CACHE_LIMIT = 2000;
 // Asking again after an entity changes waits this long, so a sensor reporting
@@ -56,22 +67,22 @@ export const VariablesMixin = {
    */
   _resolveImageVariables(image, page) {
     if (typeof image !== "string") return image;
-    if (!image.includes("${") && !image.startsWith("history:")) return image;
+    if (!image.includes("${") && !image.startsWith("history:") && !image.includes(TRANSLATE_TOKEN)) return image;
     // `${_device}` is the device of the page the picture sits on -- not the
     // page being edited, which a thumbnail of another page is not.
     image = (page ? this._expandPageDevice?.(image, page) : this._expandPageDevice?.(image)) ?? image;
-    if (!image.includes("${") && !image.startsWith("history:")) return image;
+    if (!image.includes("${") && !image.startsWith("history:") && !image.includes(TRANSLATE_TOKEN)) return image;
     const r = this._variableValue("image", image);
     return r.found ? r.value : null;
   },
 
   /** A tooltip's or title's entity variables filled in; unknown ones read as nothing until answered. */
   _substituteEntityTokens(text) {
-    if (typeof text !== "string" || !text.includes("${")) return text;
+    if (typeof text !== "string" || !(text.includes("${") || text.includes(TRANSLATE_TOKEN))) return text;
     text = this._expandPageDevice?.(text) ?? text;
-    if (!text.includes("${")) return text;
+    if (!(text.includes("${") || text.includes(TRANSLATE_TOKEN))) return text;
     const r = this._variableValue("text", text);
-    return r.found ? r.value : text.replace(new RegExp(BACKEND_TOKEN.source, "g"), "");
+    return r.found ? r.value : unanswered(text);
   },
 
   _queueVariables(keys, delay) {
@@ -108,7 +119,7 @@ export const VariablesMixin = {
       v.items.set(key, { kind, text });
     };
     for (const text of texts) {
-      remember("text", text, answer ? (answer.texts?.[text] ?? "") : text.replace(new RegExp(BACKEND_TOKEN.source, "g"), ""));
+      remember("text", text, answer ? (answer.texts?.[text] ?? "") : unanswered(text));
     }
     for (const image of images) remember("image", image, answer ? (answer.images?.[image] ?? null) : null);
     // A failed request is remembered as the fallback so it is not asked again

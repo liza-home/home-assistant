@@ -36,6 +36,7 @@ from .common import (
     reserved_page_ids,
     schedule_push_rescan,
 )
+from ..access import require_device_access
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,8 +48,11 @@ async def _empty_page_assignments(
     return {btn["key"]: dict(EMPTY_BUTTON) for btn in bp.get("buttons", [])}
 
 
-@websocket_api.websocket_command({"type": "lizaip_config/get_pages", "entry_id": str})
-@websocket_api.require_admin
+@websocket_api.websocket_command({
+    "type": "lizaip_config/get_pages",
+    vol.Required("entry_id"): str,
+})
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_get_pages(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -69,6 +73,11 @@ def _deliverable_main_pages(conn, pages: list) -> list[int] | None:
     order down to the pages that actually landed and sends it from there,
     which is what lets a remote with one unstorable page still be reordered.
     """
+    if not pages:
+        # The user deleted their last page, so the placeholders are about to
+        # take its place. Pushing an empty order first would blank the remote
+        # for as long as the sync behind this takes.
+        return None
     if not _device_holds_every_page(conn, pages):
         return None
     return [p["id"] for p in pages if not is_subpage(p)]
@@ -179,17 +188,17 @@ async def _reorder_pages_fast(
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/set_pages",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("pages"): PAGES_SCHEMA,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
     """Replace the ordered page list.
 
     Request payload:
-      {type, entry_id, pages: [{id?, image, hash, ...}]}
+      {type, entry_id, pages: [{id?, title, hash, ...}]}
     Response:
       {success: true, pages}
     """
@@ -230,10 +239,23 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
     for p, fresh in zip(pages, is_new):
         base = {} if fresh else dict(stored_by_id.get(p["id"], {}))
         base.update(p)
-        page = {"id": base["id"], "image": base.get("image", ""), "hash": base.get("hash", 0)}
+        page = {"id": base["id"], "title": base.get("title", ""), "hash": base.get("hash", 0)}
         page.update({k: v for k, v in base.items() if k not in page})
         merged.append(page)
     pages = merged
+
+    # A template may bring pages behind its own. When the panel deletes the
+    # page the user sees, the ones it brought go with it; they are reachable
+    # only from it.
+    kept_ids = {p["id"] for p in pages}
+    orphaned = {
+        p["id"] for p in stored_pages
+        if isinstance(p, dict) and isinstance(p.get("template"), dict)
+        and p["template"].get("instance") not in (None, p["id"])
+        and p["template"]["instance"] not in kept_ids
+    }
+    if orphaned:
+        pages = [p for p in pages if p["id"] not in orphaned]
 
     # A pure reorder: the same pages with the same content in new positions.
     # Decided here, while the store still holds the previous list -- once
@@ -304,7 +326,7 @@ def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
     A long touch, a fixed control's override or a toggle step that opens a
     removed page goes; a click that opens one empties the button, keeping a
     long touch that still leads somewhere. A button filled by a dynamic source
-    (an Overview tile) is left to that source's own refresh.
+    (a Table of contents tile) is left to that source's own refresh.
     """
     if not isinstance(assign, dict) or isinstance(assign.get(ASSIGNMENT_DYNAMIC_KEY), dict):
         return None
@@ -421,20 +443,20 @@ async def _push_page_list(
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/update_page",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("page_id"): PAGE_ID_SCHEMA,
-    vol.Optional("image"): str,
+    vol.Optional("title"): str,
     vol.Optional("default_color"): str,
     vol.Optional(PAGE_SUBPAGE_KEY): bool,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
     """Update page metadata while preserving other stored page fields.
 
     Request payload:
-      {type, entry_id, page_id, image?, default_color?}
+      {type, entry_id, page_id, title?, default_color?}
     Response:
       {success: true, pages}
     """
@@ -448,8 +470,8 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
         connection.send_error(msg["id"], "page_not_found", f"Page {page_id} not found")
         return
 
-    if "image" in msg:
-        page["image"] = msg["image"]
+    if "title" in msg:
+        page["title"] = msg["title"]
     if "default_color" in msg:
         page["default_color"] = msg["default_color"]
     if PAGE_SUBPAGE_KEY in msg:
@@ -463,18 +485,18 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
     fire_config_changed(hass, msg["entry_id"])
 
     device_id_logger(_LOGGER, hass, device_id).debug(
-        "Updated page %s: image=%s, default_color=%s",
-        page_id, page.get("image", ""), page.get("default_color", ""),
+        "Updated page %s: title=%s, default_color=%s",
+        page_id, page.get("title", ""), page.get("default_color", ""),
     )
     connection.send_result(msg["id"], {"success": True, "pages": pages})
 
 
 @websocket_api.websocket_command({
     "type": "lizaip_config/duplicate_page",
-    "entry_id": str,
+    vol.Required("entry_id"): str,
     vol.Required("page_id"): PAGE_ID_SCHEMA,
 })
-@websocket_api.require_admin
+@require_device_access
 @websocket_api.async_response
 @requires_device
 async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
@@ -508,6 +530,11 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
     new_page = copy.deepcopy(pages[source_idx])
     new_page["id"] = new_page_id
     new_page["hash"] = 0
+    # The copy is its own page: it stays a template page, but it does not
+    # belong to the set the original came from, so deleting that set leaves
+    # the copy alone.
+    if isinstance(new_page.get("template"), dict):
+        new_page["template"].pop("instance", None)
     pages.insert(source_idx + 1, new_page)
 
     assignments = copy.deepcopy(await store.async_get_assignments(device_id, source_id))

@@ -1,0 +1,42 @@
+# Table of contents — a button for every main page of this remote. `01_` puts
+# it first in the template list; the id is `toc`.
+#
+# Bound to nothing: when the page is added it lists the pages of the remote it
+# is added to (`@remote_entry`), and buttons 1–12 each go to one of them, in
+# the order the pages have. The list is live: add, remove, rename or reorder a
+# page and the table of contents follows. Subpages are not listed, and neither
+# is a table of contents itself.
+#
+# A button shows the picture from its page's title -- the logo, icon or cover
+# there -- or, when the title is words alone, a short text of the page's name;
+# its tooltip is the page's name. Delete a button and it stays empty: the
+# table of contents no longer fills that slot.
+#
+# Only twelve pages fit; a thirteenth has no button.
+
+version: 2
+name: Table of contents
+icon: mdi:view-grid-outline
+description: A button for every main page of this remote, kept up to date
+
+placeholders:
+  page:
+    source: pages
+    spec: {remote: "@remote_entry"}
+
+pages:
+  toc:
+    title: "mdi:view-grid-outline text:Table of contents"
+    buttons:
+      button_1: "@page[1]"
+      button_2: "@page[2]"
+      button_3: "@page[3]"
+      button_4: "@page[4]"
+      button_5: "@page[5]"
+      button_6: "@page[6]"
+      button_7: "@page[7]"
+      button_8: "@page[8]"
+      button_9: "@page[9]"
+      button_10: "@page[10]"
+      button_11: "@page[11]"
+      button_12: "@page[12]"
