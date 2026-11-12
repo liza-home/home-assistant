@@ -16,10 +16,9 @@ from .. import optimistic
 from ..config.text_style import settings_theme, toggle_enabled
 from ..const import SIGNAL_ICON_UPDATE, SIGNAL_PREDICTED_UPDATE
 from ..config.const import step_service
-from ..shared.services import catchall_state_icon
 from ..shared.logs import device_logger
 from ..shared.i18n import get_ui_language, language_scope
-from ..shared.tokens import button_scope, page_scope, resolve_image_tokens
+from ..shared.tokens import button_scope, page_scope
 from ..shared.icon_urls import resolve_icon_url
 from ..state_icon import (
     icon_style_for_entities,
@@ -31,27 +30,21 @@ from ._state import (
     _STATE_DEBOUNCE_SECONDS,
     _STATE_MAX_WAIT_SECONDS,
 )
-from .helpers import (
-    _get_assignments,
-    _get_store,
-    _noop,
-    _resolve_device_id,
-    resolve_target_entities,
-)
+from ..runtime import get_assignments, get_store, resolve_device_id
+from .helpers import _noop, resolve_target_entities
 from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
-from .toggle import runtime_assign, toggle_rules
+from .toggle import representative_steps, runtime_assign
 
 _LOGGER = logging.getLogger(__name__)
 
 # One button, with everything about it that a flush would otherwise have to
 # recompute per state event: which page it sits on, the assignment as it will
 # actually run, and the entities that can move it.
-_IndexedButton = tuple[int, str, Any, str, dict, str, set[str]]
+_IndexedButton = tuple[int, str, Any, str, dict, str, list[str]]
 
 
 async def _index_buttons_by_entity(
     hass: HomeAssistant,
-    store: Any,
     device_id: str,
     pages: list[dict],
     toggles: bool,
@@ -80,7 +73,7 @@ async def _index_buttons_by_entity(
         # scope has to be open while the targets are worked out, exactly as it
         # was when this happened inside the flush loop.
         with page_scope(template):
-            for btn_key, assign in await _get_assignments(hass, device_id, pid):
+            for btn_key, assign in await get_assignments(hass, device_id, pid):
                 assign = runtime_assign(assign, toggles)
                 config = assign.get("config", [])
                 step = config[0] if isinstance(config, list) and config else {}
@@ -91,7 +84,13 @@ async def _index_buttons_by_entity(
                 entry: _IndexedButton = (
                     pid, page_color, template, btn_key, assign, service, targets,
                 )
-                for eid in targets:
+                # A cycle rule may point at a different entity from the
+                # assignment it sits on, and its label reads that one.
+                movers = set(targets)
+                for rep in representative_steps(assign):
+                    if rep is not step:
+                        movers.update(resolve_target_entities(rep, hass))
+                for eid in movers:
                     index.setdefault(eid, []).append(entry)
     return index
 
@@ -108,29 +107,18 @@ async def setup_state_listener(
     Returns a cleanup callable.
     """
     log = device_logger(_LOGGER, entry)
-    device_id = _resolve_device_id(hass, entry.entry_id)
+    device_id = resolve_device_id(hass, entry.entry_id)
     if not device_id:
         return _noop
 
-    store = _get_store(hass)
+    store = get_store(hass)
     pages = await store.async_get_pages(device_id)
 
-    watched_entities: set[str] = set()
-    for page in pages:
-        page_id = page.get("id", _DEFAULT_PAGE_ID)
-        for _btn, assign in await _get_assignments(hass, device_id, page_id):
-            config = assign.get("config", [])
-            step = config[0] if isinstance(config, list) and config else {}
-            watched_entities.update(resolve_target_entities(step, hass))
-            # A cycle rule may point at a different entity from the assignment
-            # it sits on, and its label reads that one. Unwatched, the tooltip
-            # would be computed once and never repainted.
-            for rule in toggle_rules(assign):
-                rule_config = rule.get("config")
-                if isinstance(rule_config, list) and rule_config:
-                    watched_entities.update(
-                        resolve_target_entities(rule_config[0], hass),
-                    )
+    # The index's own keys, with every rule included (toggles on): the watch
+    # set and what a flush can repaint cannot drift apart.
+    watched_entities = set(
+        await _index_buttons_by_entity(hass, device_id, pages, True),
+    )
 
     if not watched_entities:
         log.debug("State listener: nothing to watch")
@@ -184,6 +172,7 @@ async def setup_state_listener(
             _get_service_icons,
             _resolve_button_icon,
             library_names,
+            live_button_icon,
         )
 
         current_pages = await store.async_get_pages(device_id)
@@ -212,7 +201,7 @@ async def setup_state_listener(
         # event costs a dict lookup instead of a walk over every page x
         # button. Flush-stable: the store cannot change under the flush lock.
         buttons_by_entity = await _index_buttons_by_entity(
-            hass, store, device_id, current_pages, toggles,
+            hass, device_id, current_pages, toggles,
         )
         for eid in entities:
             state = hass.states.get(eid)
@@ -256,22 +245,11 @@ async def setup_state_listener(
                     # even when the glyph never changes.
                     dynamic_tooltip = "${" in str(assign.get("tooltip") or "")
                     if rule_glyph or action_icon:
-                        state_icons = assign.get("state_icons") or {}
-                        override = state_icons.get(state.state) or catchall_state_icon(
-                            state_icons,
-                            eid.split(".")[0],
-                            state.state,
-                            service,
-                        )
-                        # A rule glyph outranks the rest and arrives
-                        # already resolved from `toggle_icon`. The other
-                        # two read their variables as the sync reads them;
-                        # one with no value falls back to the action's own
-                        # icon.
-                        icon = (
-                            rule_glyph
-                            or resolve_image_tokens(override, hass)
-                            or resolve_image_tokens(action_icon, hass)
+                        # The sync's order: a rule glyph (already resolved
+                        # by `toggle_icon`), then what `live_button_icon`
+                        # gives.
+                        icon = rule_glyph or live_button_icon(
+                            assign, state, service, action_icon, hass,
                         )
                         if not icon:
                             continue
@@ -319,6 +297,7 @@ async def setup_state_listener(
                         color=tile_style.color,
                         percent=tile_style.percent,
                         theme=flush_theme.theme_id,
+                        radius=style_options.radius,
                     )
                     updates.append({
                         "page_id": pid,
@@ -399,9 +378,24 @@ async def setup_state_listener(
         if eid in watched_entities:
             _mark_dirty(eid)
 
+    @callback
+    def _on_pushed(updates: list[dict]) -> None:
+        # A press paints its tile straight away (an optimistic guess, a cycle
+        # step) without passing through here. Unless `last_sent` hears of it,
+        # the confirming state reads as "unchanged since my last push" and is
+        # dropped: a wrong guess is never corrected, and a label the press
+        # replaced is never put back. Our own pushes echo back here harmlessly.
+        for upd in updates:
+            key = (upd.get("page_id"), upd.get("button_key"))
+            tooltip = upd.get("tooltip")
+            if tooltip is None:
+                tooltip = (last_sent.get(key) or (None, None))[1]
+            last_sent[key] = (upd.get("icon"), tooltip)
+
     unsubs = [
         async_track_state_change_event(hass, watched_entities, _on_state_change),
         async_dispatcher_connect(hass, SIGNAL_PREDICTED_UPDATE, _on_predicted),
+        async_dispatcher_connect(hass, SIGNAL_ICON_UPDATE.format(device_id), _on_pushed),
     ]
 
     def _cleanup():

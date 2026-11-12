@@ -12,7 +12,7 @@ from yarl import URL
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -20,7 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .connection import LizaIPConnection
 from ..const import DOMAIN
 from ..shared.logs import device_logger
-from .const import MODEL_ID
+from .const import LIZAIP_HELLO_EVENT, MODEL_ID
 from .entity import LizaIPEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,13 +85,26 @@ def _normalize_version(version: str | None) -> str | None:
     return ".".join(segments)
 
 
+def _firmware_asset_url(release: dict) -> str | None:
+    """The OTA image of a release: its .bin asset, or else its .tar one."""
+    fallback: str | None = None
+    for asset in release.get("assets", []):
+        name = asset.get("name", "")
+        url = asset.get("browser_download_url") or asset.get("url")
+        if name.endswith(".bin"):
+            return url
+        if name.endswith(".tar") and not fallback:
+            fallback = url
+    return fallback
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up lizaIP firmware update entity."""
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
     async_add_entities([LizaIPFirmwareUpdate(entry, connection)])
 
 
@@ -104,6 +117,8 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
                         release since the installed version (`?since=`).
     Install:            POSTs to the device's HTTP management API (/Device/OTA);
                         the device downloads, verifies, and applies the update then reboots.
+    Specific version:   `update.install` with a `version` asks the server for that
+                        release (`?version=`), which is how a device is rolled back.
     """
 
     _attr_translation_key = "firmware"
@@ -114,6 +129,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         UpdateEntityFeature.INSTALL
         | UpdateEntityFeature.PROGRESS
         | UpdateEntityFeature.RELEASE_NOTES
+        | UpdateEntityFeature.SPECIFIC_VERSION
     )
     _attr_should_poll = True
 
@@ -125,6 +141,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         super().__init__(connection, entry)
         self._logger = device_logger(_LOGGER, entry)
         self._attr_unique_id = f"{entry.entry_id}_firmware"
+        self._entry_id = entry.entry_id
         self._latest_version: str | None = None
         self._release_url: str | None = None
         self._release_notes: str | None = None
@@ -217,12 +234,12 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         installed = self.installed_version
         return url.update_query(since=installed) if installed else url
 
-    async def async_update(self) -> None:
-        """Fetch the latest firmware version from the release server."""
+    async def _fetch_json(self, url: URL) -> Any | None:
+        """GET *url* as JSON, or None when the server cannot be reached."""
         try:
             session = async_get_clientsession(self.hass)
             async with session.get(
-                self._release_check_url(),
+                url,
                 timeout=aiohttp.ClientTimeout(total=10),
                 headers={"Accept": "application/json"},
             ) as resp:
@@ -231,10 +248,16 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
                         "Firmware release check returned HTTP %s — skipping",
                         resp.status,
                     )
-                    return
-                release = await resp.json()
+                    return None
+                return await resp.json()
         except Exception as err:
-            self._logger.warning("Failed to fetch firmware release info from %s: %s", FIRMWARE_RELEASE_API, err)
+            self._logger.warning("Failed to fetch firmware release info from %s: %s", url, err)
+            return None
+
+    async def async_update(self) -> None:
+        """Fetch the latest release from the release server."""
+        release = await self._fetch_json(self._release_check_url())
+        if not isinstance(release, dict):
             return
 
         tag = str(release.get("tag_name", "")).strip()
@@ -244,19 +267,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         body = release.get("body")
         self._release_notes = (body.strip() or None) if isinstance(body, str) else None
 
-        # Find the OTA firmware asset: prefer .bin, fall back to .tar.
-        self._firmware_url = None
-        fallback_url: str | None = None
-        for asset in release.get("assets", []):
-            name = asset.get("name", "")
-            url = asset.get("browser_download_url") or asset.get("url")
-            if name.endswith(".bin"):
-                self._firmware_url = url
-                break
-            if name.endswith(".tar") and not fallback_url:
-                fallback_url = url
-        if not self._firmware_url:
-            self._firmware_url = fallback_url
+        self._firmware_url = _firmware_asset_url(release)
 
         self._logger.debug(
             "Firmware update check: installed=%s latest=%s url=%s",
@@ -267,6 +278,32 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
 
     # ── Install ───────────────────────────────────────────────────────────
 
+    async def _install_url(self, version: str | None) -> str:
+        """The firmware image to install: a named version, or the latest release.
+
+        A named version is asked of the server (`?version=`), so an older one
+        can be installed to roll the device back.
+        """
+        if version is None:
+            if not self._firmware_url:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="no_firmware_url",
+                )
+            return self._firmware_url
+
+        release = await self._fetch_json(
+            URL(FIRMWARE_RELEASE_API).update_query(version=_normalize_version(version) or "")
+        )
+        url = _firmware_asset_url(release) if isinstance(release, dict) else None
+        if not url:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_firmware_version",
+                translation_placeholders={"version": version},
+            )
+        return url
+
     async def async_install(
         self, version: str | None, backup: bool, **kwargs: Any
     ) -> None:
@@ -276,13 +313,9 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
                 translation_domain=DOMAIN,
                 translation_key="not_connected",
             )
-        url = self._firmware_url
-        if not url:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="no_firmware_url",
-            )
+        url = await self._install_url(version)
         self._logger.info("Triggering firmware update → %s", url)
+        version_before = self._connection.device_version
 
         # The device reports stages, not a percentage: the card shows an
         # indeterminate bar, and the dialog heading the stage (see `title`).
@@ -318,7 +351,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         # in_progress the moment it returns, which made the card drop the
         # "installing" state between the request and the first poll.
         try:
-            await self._poll_ota_completion(previous)
+            await self._poll_ota_completion(previous, version_before)
         finally:
             # Unconditional: a cancellation (reload, HA stop) or an unexpected
             # failure during polling must not leave the card stuck on
@@ -327,13 +360,18 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             self._ota_status = None
             self._attr_in_progress = False
 
-    async def _poll_ota_completion(self, previous: str | None = None) -> None:
+    async def _poll_ota_completion(
+        self, previous: str | None = None, version_before: str | None = None,
+    ) -> None:
         """Poll OTA status until commit, disconnect or timeout.
 
         Each new status goes into the dialog heading. *previous* is the reply
         from before the update; while the device still answers with it, it is
-        not this update's report.
+        not this update's report. *version_before* is the firmware version the
+        device ran before it (default: the one it reports now).
         """
+        if version_before is None:
+            version_before = self._connection.device_version
         self._logger.debug("Starting OTA status polling")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _OTA_POLL_TIMEOUT
@@ -390,31 +428,34 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         # back and has reported its new version via hello — otherwise the card
         # briefly flips back to "Update available" (old version vs. new tag)
         # before settling, and the more-info dialog closes on stale data.
-        await self._await_reconnect()
+        await self._await_reconnect(version_before)
 
         self._ota_status = None
         self._attr_in_progress = False
         self.async_write_ha_state()
 
-    async def _await_reconnect(self) -> None:
-        """Wait for the device to come back after the post-OTA reboot.
+    async def _await_reconnect(self, version_before: str | None) -> None:
+        """Wait for the device to say hello again after the post-OTA reboot.
 
-        Returns as soon as the WebSocket is up again, or after
-        ``_OTA_REBOOT_TIMEOUT`` seconds so a device that fails to return never
-        leaves the entity stuck "installing".
+        The socket coming back is not enough: availability fires before the
+        hello that reports the new version, and when polling ends the device
+        has often not even dropped yet. Returns once a hello arrives (or the
+        new version is already known), or after ``_OTA_REBOOT_TIMEOUT``
+        seconds so a device that fails to return never leaves the entity
+        stuck "installing".
         """
-        if self._connection.connected:
+        if self._connection.device_version != version_before:
             return
 
         self._logger.debug("Waiting for the device to reboot after OTA")
         back = asyncio.Event()
 
-        def _on_availability(available: bool) -> None:
-            if available:
+        @callback
+        def _on_hello(event: Event) -> None:
+            if event.data.get("entry_id") == self._entry_id:
                 back.set()
 
-        # Woken by the connection itself rather than by checking on a timer.
-        self._connection.register_availability(_on_availability)
+        unsubscribe = self.hass.bus.async_listen(LIZAIP_HELLO_EVENT, _on_hello)
         try:
             await asyncio.wait_for(back.wait(), _OTA_REBOOT_TIMEOUT)
         except TimeoutError:
@@ -424,7 +465,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
             )
             return
         finally:
-            self._connection.unregister_availability(_on_availability)
+            unsubscribe()
         self._logger.info(
             "Reconnected after OTA (version %s)", self._connection.device_version,
         )

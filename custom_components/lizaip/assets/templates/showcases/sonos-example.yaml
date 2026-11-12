@@ -52,8 +52,6 @@ pages:
         tooltip: {translate: mute}
         config:
           - action: media_player.volume_mute
-            data:
-              is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
 
       button_volume_up:
         icon: mdi:volume-plus

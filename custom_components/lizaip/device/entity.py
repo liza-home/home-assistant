@@ -21,10 +21,7 @@ class LizaIPEntity:
         return self._connection.connected
 
     async def async_added_to_hass(self) -> None:
-        self._connection.register_availability(self._handle_availability)
-
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_availability(self._handle_availability)
+        self.async_on_remove(self._connection.register_availability(self._handle_availability))
 
     def _handle_availability(self, available: bool) -> None:
         self.async_write_ha_state()

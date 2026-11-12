@@ -17,7 +17,6 @@ from homeassistant.helpers.target import (
 )
 
 from ..const import DOMAIN
-from ..runtime import _get_store, _resolve_device_id  # noqa: F401
 from ..state_color import ABSENT_STATES, INACTIVE_STATES
 from ._state import _DEFAULT_PAGE_ID, get_current_page
 
@@ -109,11 +108,6 @@ def _normalize_position(raw_position) -> float | None:
         return None
 
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _noop() -> None:
     """No-op cleanup callable, returned when there is nothing to tear down."""
 
@@ -153,9 +147,16 @@ def resolve_target_entities(
     the service layer uses, so a button resolves the way its call will. Sorted
     because those are sets and the first element is stored as the button's name.
     """
-    eid = get_entity_from_step(step)
-    if eid:
-        return [eid]
+    # Named entities answer directly, every one of them: a button on
+    # ``[light.a, light.b]`` is styled and repainted from both.
+    for source in (step.get("target") or {}, step.get("data") or {}):
+        named = source.get("entity_id") if isinstance(source, dict) else None
+        if isinstance(named, list):
+            named = [eid for eid in named if isinstance(eid, str) and eid]
+            if named:
+                return list(dict.fromkeys(named))
+        elif named and isinstance(named, str):
+            return [named]
 
     target = step.get("target") or {}
     if not target:
@@ -213,13 +214,9 @@ def target_subject_name(step: dict, hass: HomeAssistant) -> str:
     return ""
 
 
-#: Shared with the theme's state colours, so a tile drawn "off" and a group
-#: read as off agree on what off is. One member outside the deny-list speaks
-#: for the group, the way a light group is on if any lamp is.
-_ABSENT_STATES = ABSENT_STATES
-_INACTIVE_STATES = INACTIVE_STATES
-
-
+# The states are shared with the theme's state colours, so a tile drawn "off"
+# and a group read as off agree on what off is. One member outside the
+# deny-list speaks for the group, the way a light group is on if any lamp is.
 def resolve_group_state(
     entity_ids: list[str], hass: HomeAssistant,
 ) -> State | None:
@@ -229,9 +226,9 @@ def resolve_group_state(
     for a room whose other six are reachable.
     """
     states = [state for eid in entity_ids if (state := hass.states.get(eid))]
-    present = [state for state in states if state.state not in _ABSENT_STATES]
+    present = [state for state in states if state.state not in ABSENT_STATES]
     for state in present:
-        if state.state not in _INACTIVE_STATES:
+        if state.state not in INACTIVE_STATES:
             return state
     if present:
         return present[0]
@@ -277,17 +274,6 @@ def subject_for_assign(
         target_subject_name(step, hass),
         resolve_step_state(step, hass) or fallback_state,
     )
-
-
-async def _get_assignments(
-    hass: HomeAssistant, device_id: str, page_id: int,
-) -> list[tuple[str, dict]]:
-    """Return (button_key, assignment_dict) pairs for every button on *page_id*."""
-    assignments = await _get_store(hass).async_get_assignments(device_id, page_id)
-    return [
-        (key, assign) for key, assign in assignments.items()
-        if isinstance(assign, dict)
-    ]
 
 
 def _attrs(state: State | None) -> Mapping[str, Any]:

@@ -14,6 +14,7 @@ describing how it was resolved, so stored assignments can be re-resolved later.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from copy import deepcopy
@@ -24,6 +25,7 @@ from homeassistant.core import HomeAssistant
 from .sources import (
     DEFAULT_MAX_ITEMS,
     DynamicItem,
+    ResolveResult,
     async_resolve_source,
     get_source,
     spec_key,
@@ -301,6 +303,28 @@ def button_tokens(btn_def: Any) -> dict[str, tuple[str, int, str | None]]:
     return found
 
 
+def _binding_owner(
+    tokens: dict[str, tuple[str, int, str | None]],
+) -> tuple[str, int, list[str]]:
+    """``(source, index, fields)``: the item a button's binding names, and
+    which of its fields that binding maintains.
+
+    The whole-button shorthand binds :data:`BOUND_FIELDS`. Otherwise the first
+    token in author order owns the binding, so adding or renaming fields does
+    not move ownership; fields bound to a *different* item are substituted once
+    and never refreshed, so they are not part of this binding either.
+    *tokens* is :func:`button_tokens`' answer, never empty.
+    """
+    if "" in tokens:
+        source_id, index, _ = tokens[""]
+        return source_id, index, list(BOUND_FIELDS)
+    source_id, index, _ = next(iter(tokens.values()))
+    return source_id, index, [
+        field for field, (src, idx, _f) in tokens.items()
+        if (src, idx) == (source_id, index)
+    ]
+
+
 def scan_requirements(buttons: dict) -> dict[str, int]:
     """Highest 1-based index each source needs across *buttons*.
 
@@ -390,7 +414,25 @@ def spec_for_source(
     templates name an integration instance, not a target entity; ``@remote_entry``
     names the remote the page is for (the ``pages`` source lists its pages).
     """
-    raw = _placeholder_spec(template, source_id)
+    return normalize_spec(
+        _placeholder_spec(template, source_id), source_id, target_entity,
+        domain_entities, target_config_entry, remote_entry,
+    )
+
+
+def normalize_spec(
+    raw: Any,
+    source_id: str,
+    target_entity: str,
+    domain_entities: dict[str, str] | None = None,
+    target_config_entry: str = "",
+    remote_entry: str = "",
+) -> dict[str, Any]:
+    """A placeholder's declared ``spec:`` as its source reads it.
+
+    Shared by the page's sources (:func:`spec_for_source`) and the inline
+    tokens, so both accept the same shorthand and fill the same defaults.
+    """
     if isinstance(raw, str):
         raw = {"entity": raw}
     spec = dict(raw) if isinstance(raw, dict) else {}
@@ -503,12 +545,31 @@ def _inline_fill(value: Any, items: dict[str, list[DynamicItem]], missing: list[
 REMOTE_ENTRY_TOKEN = "@remote_entry"
 
 
+async def _async_resolve_all(
+    hass: HomeAssistant, asks: list[tuple[str, dict[str, Any], int]],
+) -> list[ResolveResult]:
+    """``async_resolve_source`` for each ``(source, spec, max_items)``, concurrently.
+
+    Answers come back in the order asked; a question asked twice is read once.
+    """
+    distinct: dict[tuple[str, str, int], tuple[str, dict[str, Any], int]] = {}
+    for source_id, spec, max_items in asks:
+        distinct.setdefault((source_id, spec_key(source_id, spec), max_items), (source_id, spec, max_items))
+    answers = await asyncio.gather(*(
+        async_resolve_source(hass, source_id, spec, max_items=max_items)
+        for source_id, spec, max_items in distinct.values()
+    ))
+    by_key = dict(zip(distinct, answers, strict=True))
+    return [by_key[(s, spec_key(s, spec), m)] for s, spec, m in asks]
+
+
 async def resolve_inline_tokens(
     hass: HomeAssistant,
     template: dict,
     target_entity: str = "",
     target_config_entry: str = "",
     remote_entry: str = "",
+    domain_entities: dict[str, str] | None = None,
 ) -> dict:
     """Write ``{@<placeholder>[N].<field>}`` out across a template's buttons.
 
@@ -533,6 +594,7 @@ async def resolve_inline_tokens(
         return template
 
     items: dict[str, list[DynamicItem]] = {}
+    asks: dict[str, tuple[str, dict[str, Any], int]] = {}
     for name, max_index in wanted.items():
         ph = placeholders.get(name)
         source_id = str((ph or {}).get("source") or "").strip() if isinstance(ph, dict) else ""
@@ -540,17 +602,14 @@ async def resolve_inline_tokens(
             _LOGGER.warning("inline token names %r, which is no placeholder with a source", name)
             items[name] = []
             continue
-        spec = substitute_tokens(
-            dict(ph.get("spec") or {}),
-            {
-                TARGET_TOKEN: target_entity,
-                TARGET_ENTRY_TOKEN: target_config_entry,
-                REMOTE_ENTRY_TOKEN: remote_entry,
-            },
+        spec = normalize_spec(
+            ph.get("spec"), source_id, target_entity,
+            domain_entities, target_config_entry, remote_entry,
         )
-        result = await async_resolve_source(
-            hass, source_id, spec, max_items=max(max_index, DEFAULT_MAX_ITEMS),
-        )
+        asks[name] = (source_id, spec, max(max_index, DEFAULT_MAX_ITEMS))
+    # The sources are read side by side: each may be a speaker on the network.
+    results = await _async_resolve_all(hass, list(asks.values()))
+    for name, result in zip(asks, results, strict=True):
         items[name] = list(result.items)
 
     for key in list(buttons):
@@ -586,6 +645,7 @@ async def resolve_template_variables(
     """
     await resolve_inline_tokens(
         hass, template, target_entity, target_config_entry, remote_entry,
+        domain_entities,
     )
     buttons = template.get("buttons") or {}
     overflow_defs = expand_placeholders(template)
@@ -596,15 +656,17 @@ async def resolve_template_variables(
     resolved: dict[str, tuple[list[DynamicItem], str | None]] = {}
     specs: dict[str, dict[str, Any]] = {}
 
-    for source_id, max_index in needed.items():
+    for source_id in needed:
         spec = spec_for_source(
             template, source_id, target_entity, domain_entities, target_config_entry,
             remote_entry,
         )
         specs[source_id] = spec
-        result = await async_resolve_source(
-            hass, source_id, spec, max_items=max(max_index, DEFAULT_MAX_ITEMS)
-        )
+    results = await _async_resolve_all(hass, [
+        (source_id, specs[source_id], max(max_index, DEFAULT_MAX_ITEMS))
+        for source_id, max_index in needed.items()
+    ])
+    for source_id, result in zip(needed, results, strict=True):
         resolved[source_id] = (result.items, result.error)
         _LOGGER.debug(
             "Resolved %d items from %r for %s%s",
@@ -618,11 +680,10 @@ async def resolve_template_variables(
         if not tokens:
             continue
 
+        bound_source, bound_index, owned_fields = _binding_owner(tokens)
         if "" in tokens:
-            source_id, idx, _ = tokens[""]
-            items, error = resolved.get(source_id, ([], "unresolved"))
-            item = items[idx] if 0 <= idx < len(items) else None
-            fields = ["tooltip", "icon", "action", "data"]
+            items, error = resolved.get(bound_source, ([], "unresolved"))
+            item = items[bound_index] if 0 <= bound_index < len(items) else None
             if item is not None:
                 buttons[btn_key] = {
                     "tooltip": item.button_tooltip,
@@ -630,8 +691,8 @@ async def resolve_template_variables(
                     "action": item.action,
                     "data": dict(item.data),
                     DYNAMIC_KEY: _binding(
-                        source_id, idx, specs.get(source_id, {}), target_entity,
-                        fields, item, stale=bool(error), error=error,
+                        bound_source, bound_index, specs.get(bound_source, {}), target_entity,
+                        owned_fields, item, stale=bool(error), error=error,
                     ),
                 }
             else:
@@ -639,8 +700,8 @@ async def resolve_template_variables(
                     "tooltip": "",
                     "action": "null",
                     DYNAMIC_KEY: _binding(
-                        source_id, idx, specs.get(source_id, {}), target_entity,
-                        fields, None, stale=True,
+                        bound_source, bound_index, specs.get(bound_source, {}), target_entity,
+                        owned_fields, None, stale=True,
                         error=error or "index out of range",
                     ),
                 }
@@ -652,14 +713,6 @@ async def resolve_template_variables(
         out: dict[str, Any] = {}
         bound_fields: list[str] = []
         bound_item: DynamicItem | None = None
-        # A binding names one item, chosen by the first token in author order so
-        # adding or renaming fields does not move ownership.
-        bound_source, bound_index, _ = next(iter(tokens.values()))
-        owned_fields = [
-            field
-            for field, (source_id, idx, _f) in tokens.items()
-            if (source_id, idx) == (bound_source, bound_index)
-        ]
         if len(owned_fields) != len(tokens):
             # Mixed-item fields are substituted once but left out of refresh;
             # one bound item must not overwrite fields from another.
@@ -772,19 +825,7 @@ def template_bindings(
         tokens = button_tokens(btn_def)
         if not tokens:
             continue
-        if "" in tokens:
-            source_id, index, _ = tokens[""]
-            fields = list(BOUND_FIELDS)
-        else:
-            # The first token in author order owns the binding, matching how
-            # `resolve_template_variables` picks; fields bound to a *different*
-            # item are substituted once and never refreshed, so they are not
-            # part of this binding either.
-            source_id, index, _ = next(iter(tokens.values()))
-            fields = [
-                field for field, (src, idx, _f) in tokens.items()
-                if (src, idx) == (source_id, index)
-            ]
+        source_id, index, fields = _binding_owner(tokens)
         if source_id not in specs:
             specs[source_id] = spec_for_source(
                 template, source_id, target_entity, domain_entities, target_config_entry,
@@ -829,14 +870,42 @@ async def resolve_binding(
         return BindingResolution(None, "invalid binding")
 
     max_items = max(index + 1, DEFAULT_MAX_ITEMS)
-    key = (source_id, spec_key(source_id, spec), max_items)
-    if cache is not None and key in cache:
-        result = cache[key]
-    else:
-        result = await async_resolve_source(
-            hass, source_id, spec, max_items=max_items
-        )
-        if cache is not None:
-            cache[key] = result
+    result = await async_cached_resolve(hass, source_id, spec, max_items, cache)
     item = result.items[index] if index < len(result.items) else None
     return BindingResolution(item, result.error)
+
+
+async def async_cached_resolve(
+    hass: HomeAssistant,
+    source_id: str,
+    spec: dict[str, Any],
+    max_items: int,
+    cache: dict[Any, Any] | None,
+) -> ResolveResult:
+    """`async_resolve_source`, answered from *cache* when it already knows.
+
+    The same question is answered once. A read for a different *max_items*
+    stands in only when it was not cut short: fewer items than either read
+    asks for is every item there is, so the other read would give the same
+    list. A read that was cut short is not reused for another length -- a
+    source may order what it kept (a TV's inputs), so a wider read is not
+    always the narrower one plus more.
+    """
+    if cache is None:
+        return await async_resolve_source(hass, source_id, spec, max_items=max_items)
+    skey = spec_key(source_id, spec)
+    key = (source_id, skey, max_items)
+    result = cache.get(key)
+    if result is None:
+        result = next(
+            (
+                r for (src, k, fetched), r in cache.items()
+                if src == source_id and k == skey and not r.error
+                and len(r.items) < min(fetched, max_items)
+            ),
+            None,
+        )
+    if result is None:
+        result = await async_resolve_source(hass, source_id, spec, max_items=max_items)
+    cache[key] = result
+    return result

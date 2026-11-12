@@ -125,6 +125,14 @@ pages:
             data:
               button: RIGHT
 
+      button_9:
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
+        config:
+          - action: webostv.button
+            data:
+              button: MUTE
+
       button_10:
         icon: mdi:arrow-down-bold-outline
         tooltip: {translate: down}

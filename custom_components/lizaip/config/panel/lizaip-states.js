@@ -90,25 +90,6 @@ export const StatesMixin = {
     return { attribute: attrName, states: [] };
   },
 
-  _serviceToAttribute(serviceName) {
-    const irregulars = {
-      volume_mute: "is_volume_muted",
-      oscillate: "oscillating",
-    };
-    if (irregulars[serviceName]) return irregulars[serviceName];
-
-    let m = serviceName.match(/^set_(.+)$/);
-    if (m) return m[1];
-
-    m = serviceName.match(/^(.+)_set$/);
-    if (m) return m[1];
-
-    m = serviceName.match(/^select_(.+)$/);
-    if (m) return m[1];
-
-    return null;
-  },
-
   _isStateToggleService(svc) {
     const toggles = [
       "turn_on", "turn_off", "toggle",
@@ -232,7 +213,7 @@ export const StatesMixin = {
   /**
    * Does this service read the state table at all, under a narrowed row list?
    *
-   * Mirrors the guard in `catchall_state_icon` (const.py). An unscoped service
+   * Mirrors `state_icon_override` (shared/services.py). An unscoped service
    * still shows every row, so a missing entry there is a choice, not a gap.
    */
   _isScopedStateService(svc) {
@@ -258,114 +239,5 @@ export const StatesMixin = {
       return d?.attribute_icons?.[attribute] || { true: "mdi:check-circle", false: "mdi:close-circle" };
     }
     return d?.domain_state_icons?.[domain] || { on: "mdi:check-circle", off: "mdi:close-circle" };
-  },
-
-  _setStateIcon(stateVal, icon, attribute) {
-    if (this._editingActionIdx < 0) return;
-    const action = this._actions[this._editingActionIdx];
-    if (!action.states) action.states = [];
-    const existing = action.states.find(s => s.state === stateVal);
-    if (existing) {
-      existing.icon = icon;
-      if (attribute) existing.attribute = attribute;
-    } else {
-      const entry = { state: stateVal, icon };
-      if (attribute) entry.attribute = attribute;
-      action.states.push(entry);
-    }
-    this._scheduleAutoSave();
-  },
-
-  /**
-   * The action editor's icon list: one field per state the action can report,
-   * or a single field when it reports none.
-   *
-   * Built from `_htmlIconField`, the same control the button card offers for a
-   * button's Image and for its per-state overrides. These rows used to be their
-   * own thing — a 24px preview, a help glyph standing in for "empty", an
-   * Icon/Image toggle and a raw URL box beside the picker — which made the same
-   * decision look like a different one depending on which tab it was made from.
-   * The picker takes a custom value, so the box and the toggle it needed are
-   * gone with it.
-   */
-  _renderStatesSection() {
-    const container = this.shadowRoot.querySelector("#states-container");
-    if (!container) return;
-
-    const action = this._actions[this._editingActionIdx];
-    if (!action.service) {
-      container.innerHTML = `<p class="hint-text">${this._t("no_service_defined")}</p>`;
-      return;
-    }
-
-    const domain = action.service.split(".")[0] || "";
-    const { attribute, states: possibleStates } = this._getStatesForAction(action);
-    const savedStates = action.states || [];
-    const defaults = this._getDefaultIcons(domain, attribute);
-
-    // Stateless actions: one field, labelled for the action rather than for a
-    // state it does not have. The service's own glyph stands in behind it, so
-    // an untouched action previews what the device will draw.
-    if (possibleStates.length === 0) {
-      container.innerHTML = this._htmlIconField({
-        label: this._t("icon"),
-        value: action.icon || "",
-        autoIcon: this._getServiceIcon(action.service) || "",
-        slotAttrs: 'data-state="__icon__"',
-      });
-      this._wireStateIconField(container, "__icon__", action.icon || "", (picked) => {
-        action.icon = picked || undefined;
-        this._scheduleAutoSave();
-      });
-      return;
-    }
-
-    container.innerHTML = possibleStates.map(stateVal => {
-      const saved = savedStates.find(s => s.state === stateVal);
-      // Saved first, then the shipped default. Resolved before the field sees
-      // it rather than passed as `autoIcon`, because the default is written
-      // down below the moment the row is drawn: showing it as a stand-in would
-      // claim the row is empty while the store says otherwise.
-      const iconVal = saved?.icon || defaults[stateVal] || "";
-      const label = attribute
-        ? `${attribute}: ${this._localizeState(stateVal, domain + ".x", attribute)}`
-        : this._localizeState(stateVal, domain + ".x");
-      return this._htmlIconField({
-        label,
-        value: iconVal,
-        slotAttrs: `data-state="${this._esc(stateVal)}"`,
-      });
-    }).join("");
-
-    possibleStates.forEach(stateVal => {
-      const saved = savedStates.find(s => s.state === stateVal);
-      const iconVal = saved?.icon || defaults[stateVal] || "";
-      this._wireStateIconField(container, stateVal, iconVal, (picked) => {
-        this._setStateIcon(stateVal, picked, attribute);
-      });
-
-      // Persist the shipped default the first time the row is shown, so the
-      // action carries the icon it is already being drawn with rather than
-      // relying on the table being the same next time it is read.
-      if (!saved && iconVal) this._setStateIcon(stateVal, iconVal, attribute);
-    });
-  },
-
-  /**
-   * Mount one row's picker and keep the preview beside it in step.
-   *
-   * The preview is redrawn here rather than by re-rendering the section: a full
-   * re-render would rebuild every picker in the list, and rebuilding the one the
-   * user is typing into takes the focus with it.
-   */
-  _wireStateIconField(container, stateVal, value, onPicked) {
-    const slot = container.querySelector(`.icon-picker-slot[data-state="${stateVal}"]`);
-    if (!slot) return;
-    const field = slot.closest(".config-field");
-    this._mountIconPicker(slot, value, (picked) => {
-      onPicked(picked);
-      const preview = field?.querySelector(".icon-preview");
-      if (preview) preview.innerHTML = this._configImagePreviewHtml(this._resolveImageVariables(picked) || "", "");
-    });
   },
 };

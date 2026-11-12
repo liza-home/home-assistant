@@ -9,9 +9,6 @@ import {
   gotoLinkEnd,
   gotoLinkPath,
 } from "./shared.js";
-import {
-  drawSVG,
-} from "../lizaip-svg.js";
 import { NON_BUTTON_KEYS } from "../lizaip-helpers.js";
 
 /** The line's width in px; must match `.goto-link-path { stroke-width }`. */
@@ -23,6 +20,36 @@ const GOTO_LINK_STROKE = 2.5;
 const GOTO_LINK_HEAD_INSET = 1.5;
 
 export const ButtonsGotoLinksMixin = {
+  // --- Goto links ------------------------------------------------------------
+  //
+  // A button that opens another page is the one assignment whose *target* is
+  // also on screen, and nothing said so: the card named the page in words, but
+  // finding it in a strip of lookalike thumbnails was still a reading exercise.
+  // The link draws the relation the user already configured.
+  //
+  // It is drawn from both ends, because the two questions a user asks about
+  // navigation are opposites of each other. Hovering a button, the question is
+  // "where does this go", and one link answers it. Hovering a page, the
+  // question becomes "how is this page reached", which only the whole set of
+  // buttons pointing at it can answer. A page nothing points at draws nothing,
+  // which is the honest and useful answer: that page is unreachable from the
+  // remote.
+  //
+  // Hover and nothing else. Selection does not draw links: a selected button
+  // keeps its card open while the user works elsewhere, and a link left
+  // standing for that long reads as part of the template rather than as an
+  // answer to a question just asked.
+
+  /**
+   * The page an assignment opens, or null when it opens none.
+   *
+   * `_internalTargetPage` is the single owner of "which page does this name",
+   * and it answers null for everything that is not a resolvable page: a plain
+   * HA service call, a command targeting something else, a deleted page, a name
+   * two pages share. Each of those is a case where there is no one page to
+   * point at, so each correctly draws nothing.
+   */
+
   _gotoPageOf(assign) {
     if (!assign?.action_id) return null;
     const action = (this._actions || []).find(a => a.id === assign.action_id);
@@ -204,11 +231,38 @@ export const ButtonsGotoLinksMixin = {
     const thumb = target ? thumbFor(target.id) : null;
     if (!thumb) return [];
 
+    // Read from an index of every link on the remote, kept until the face is
+    // next drawn: this runs each time the pointer crosses onto another page,
+    // and building the answer walks every button of every page.
     const specs = [];
+    for (const [pageId, btnKey] of this._gotoIncomingIndex().get(target.id) || []) {
+      const source = thumbFor(pageId);
+      const shape = source?.querySelector(`.button[data-key="${CSS.escape(btnKey)}"]`);
+      if (shape) specs.push({ shape, thumb });
+    }
+    return specs;
+  },
+
+  /**
+   * Target page id to `[sourcePageId, buttonKey]` for every button that opens
+   * it, in page then button order.
+   *
+   * Kept while nothing it was read from can have changed: the face epoch moves
+   * on every redraw of the faces (`_invalidateFaceCaches`), which every edit
+   * that changes what a button opens ends in, and the collections it walks are
+   * compared by identity. Elements are not kept -- the shapes are looked up
+   * when drawn, since a redraw replaces them.
+   */
+  _gotoIncomingIndex() {
     const openId = this._pages?.[this._currentPageIdx]?.id;
-    for (const page of this._pages) {
-      const source = thumbFor(page.id);
-      if (!source) continue;
+    const key = [
+      this._faceEpoch, this._pages, this._pages?.length, openId, this._pageCache, this._actions,
+      this._assignments, this._blueprint, this._contextKey, !!this._longtouchEnabled?.(),
+    ];
+    const kept = this._gotoIncomingCache;
+    if (kept && kept.key.every((v, i) => v === key[i])) return kept.index;
+    const index = new Map();
+    for (const page of this._pages || []) {
       // Read exactly the way the face is drawn, so a line never starts on a
       // shape that is showing something else.
       //
@@ -237,23 +291,16 @@ export const ButtonsGotoLinksMixin = {
         // Same two non-buttons as in `_gotoLinkKey`, refused for the same
         // reason: their records can hold steps, but no press runs them.
         if (NON_BUTTON_KEYS.has(btnKey)) continue;
-        if (!this._gotoPagesOf(assign).some((p) => p.id === target.id)) continue;
-        const shape = source.querySelector(`.button[data-key="${CSS.escape(btnKey)}"]`);
-        if (shape) specs.push({ shape, thumb });
+        for (const to of this._gotoPagesOf(assign)) {
+          if (!index.has(to.id)) index.set(to.id, []);
+          index.get(to.id).push([page.id, btnKey]);
+        }
       }
     }
-    return specs;
+    this._gotoIncomingCache = { key, index };
+    return index;
   },
 
-  /**
-   * Paint the current links, or clear the overlay when there are none.
-   *
-   * Everything is measured rather than derived from the blueprint: the face is
-   * scaled to its container, thumbnails are shifted by drags and by the subpage
-   * offset, and the strip scrolls. `getBoundingClientRect` is the only answer
-   * that survives all of that, and the overlay is measured the same way so the
-   * readings share one coordinate space.
-   */
   /**
    * Drop the link outlines from whatever currently carries them.
    *
@@ -268,6 +315,15 @@ export const ButtonsGotoLinksMixin = {
       .forEach((el) => el.removeAttribute("goto-link"));
   },
 
+  /**
+   * Paint the current links, or clear the overlay when there are none.
+   *
+   * Everything is measured rather than derived from the blueprint: the face is
+   * scaled to its container, thumbnails are shifted by drags and by the subpage
+   * offset, and the strip scrolls. `getBoundingClientRect` is the only answer
+   * that survives all of that, and the overlay is measured the same way so the
+   * readings share one coordinate space.
+   */
   _drawGotoLink() {
     const layer = this.shadowRoot?.querySelector(".goto-link-layer");
     if (!layer) return;

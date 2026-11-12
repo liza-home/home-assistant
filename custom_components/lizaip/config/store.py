@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import shutil
 import tempfile
 from contextlib import suppress
@@ -38,18 +39,20 @@ from ..shared.assignment import (
     ASSIGNMENT_DYNAMIC_KEY,
     ASSIGNMENT_TOOLTIP_EDITED_KEY,
     ASSIGNMENT_REPEAT_KEY,
+    name_is_user_written,
 )
 from .const import PAGE_SUBPAGE_KEY, is_subpage
+from ..shared.i18n import button_tooltips, translate_ref
+from ..shared.tooltips import STATE_TOOLTIP, TRANSLATE_STATE_RE
 from ..config.page_templates import async_load_template, template_bindings, load_template
-from ..config.page_templates.generate import (
+from ..config.page_templates.catalog import (
     TEMPLATE_PAGES_KEY,
     TEMPLATE_VERSION_KEY,
     template_version,
     page_definition,
     page_source,
-    paginated_placeholder,
-    part_buttons,
 )
+from ..config.page_templates.parts import paginated_placeholder, part_buttons
 from .text_style import TEXT_KINDS, normalize_settings
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,7 +74,7 @@ YAML_DIR = "lizaip"
 
 
 #: Template format 1 -> 2 (see ``TEMPLATE_VERSION`` in
-#: ``page_templates/generate.py``). The page each shipped template made
+#: ``page_templates/catalog.py``). The page each shipped template made
 #: before templates named their pages: ``old id -> (id now, page name)``. ``sonos`` is now the three-page Sonos;
 #: the one page it used to make is ``sonos-single``'s. Templates bound to
 #: nothing stored no ``template:`` and need nothing here.
@@ -123,6 +126,74 @@ def _rename_key(holder: dict, old: str, new: str) -> None:
         holder.setdefault(new, value)
 
 
+#: An icon the panel used to copy onto a library action, before the command's
+#: default changed.
+_SEEDED_COMMAND_ICONS: Final[dict[str, str]] = {
+    "lizaip.goto_page": "mdi:page-next",
+}
+
+
+#: A page file's format. 2: only ``{translate: …}`` is translated, so a
+#: ``${_state}`` written before then reads ``{translate: ${_state}}``.
+PAGE_FORMAT_KEY: Final = "format"
+PAGE_FORMAT: Final = 2
+
+_BARE_STATE_RE: Final = re.compile(r"\$\{\s*_state\s*\}", re.IGNORECASE)
+
+
+def _explicit_state(text: Any) -> Any:
+    """*text* with each bare ``${_state}`` written ``{translate: ${_state}}``.
+
+    Kept as a migration: both spellings read the same now, and the explicit
+    one is what the panel writes.
+    """
+    if not isinstance(text, str) or "${" not in text:
+        return text
+    parts = TRANSLATE_STATE_RE.split(text)
+    return STATE_TOOLTIP.join(_BARE_STATE_RE.sub(STATE_TOOLTIP, p) for p in parts)
+
+
+def _explicit_wording(text: Any) -> Any:
+    """An English preset wording ("Volume Up") as ``{translate: volume_up}``.
+
+    Such a name used to be translated without saying so; now nothing is.
+    """
+    if not isinstance(text, str):
+        return text
+    key = button_tooltips.wording_key(text)
+    return translate_ref(key) if key else text
+
+
+def _migrate_tooltip(holder: dict, *, explicit_state: bool) -> None:
+    """A stored tooltip, translated the way it was before format 2."""
+    tooltip = holder.get("tooltip")
+    if explicit_state:
+        tooltip = _explicit_state(tooltip)
+    if not name_is_user_written(holder):
+        tooltip = _explicit_wording(tooltip)
+    if tooltip is not None:
+        holder["tooltip"] = tooltip
+
+
+def _migrate_action_library(actions: list) -> None:
+    """Bring a library written by an earlier release up to date, in memory.
+
+    - An icon the panel seeded from a command's old default is shed: a stored
+      icon outranks the command, so every go-to-page button would keep
+      `mdi:page-next` instead of the current default.
+    - A preset name is ``{translate: <key>}``, as the button that carries it.
+    """
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if "name" in action:
+            action["name"] = _explicit_wording(action["name"])
+        service = action.get("service")
+        seeded = _SEEDED_COMMAND_ICONS.get(service) if isinstance(service, str) else None
+        if seeded and action.get("icon") == seeded:
+            action.pop("icon")
+
+
 def _migrate_binding(binding: dict) -> None:
     """A dynamic binding's field names, as they are spelt now."""
     fields = binding.get("fields")
@@ -148,7 +219,7 @@ def _migrate_binding(binding: dict) -> None:
             binding.pop("field_map")
 
 
-def _migrate_button(button: dict) -> None:
+def _migrate_button(button: dict, *, explicit_state: bool = False) -> None:
     """A stored button's keys, as this release spells them."""
     if _OLD_REPEAT_KEY in button:
         if button.pop(_OLD_REPEAT_KEY) is True:
@@ -157,11 +228,14 @@ def _migrate_button(button: dict) -> None:
     _rename_key(button, _OLD_TOOLTIP_EDITED_KEY, ASSIGNMENT_TOOLTIP_EDITED_KEY)
     _rename_key(button, _OLD_ICON_KEY, "icon")
     _rename_key(button, _OLD_ICON_PINNED_KEY, "icon_pinned")
+    _migrate_tooltip(button, explicit_state=explicit_state)
     toggle = button.get(TOGGLE_KEY)
     rules = toggle.get("rules") if isinstance(toggle, dict) else None
     for rule in rules if isinstance(rules, list) else ():
         if isinstance(rule, dict):
             _rename_key(rule, _OLD_TOOLTIP_KEY, "tooltip")
+            if explicit_state and "tooltip" in rule:
+                rule["tooltip"] = _explicit_state(rule["tooltip"])
     binding = button.get(ASSIGNMENT_DYNAMIC_KEY)
     if isinstance(binding, dict):
         _migrate_binding(binding)
@@ -173,6 +247,7 @@ def _migrate_button(button: dict) -> None:
                 _rename_key(override, _OLD_TOOLTIP_EDITED_KEY, ASSIGNMENT_TOOLTIP_EDITED_KEY)
                 _rename_key(override, _OLD_ICON_KEY, "icon")
                 _rename_key(override, _OLD_ICON_PINNED_KEY, "icon_pinned")
+                _migrate_tooltip(override, explicit_state=explicit_state)
 
 
 def _migrate_page_file(raw: dict) -> None:
@@ -194,6 +269,9 @@ def _migrate_page_file(raw: dict) -> None:
       ``tooltip``; a button's ``image`` is its ``icon`` and ``image_pinned``
       its ``icon_pinned``, on a fixed button's override too.
     - ``repeat: true`` on a button is ``key_repeat: true`` now.
+    - Before format 2 (:data:`PAGE_FORMAT`) a tooltip's ``${_state}`` and a
+      preset's English name were translated without saying so; they are
+      written ``{translate: …}`` now, so they read as they did.
     """
     if "template" not in raw and isinstance(raw.get("layout"), dict):
         raw["template"] = raw.pop("layout")
@@ -207,11 +285,12 @@ def _migrate_page_file(raw: dict) -> None:
 
     _rename_key(raw, _OLD_TITLE_KEY, "title")
 
+    explicit_state = raw.pop(PAGE_FORMAT_KEY, 1) != PAGE_FORMAT
     buttons = raw.get("buttons")
     if isinstance(buttons, dict):
         for button in buttons.values():
             if isinstance(button, dict):
-                _migrate_button(button)
+                _migrate_button(button, explicit_state=explicit_state)
 
 
 class LizaRemoteStore:
@@ -219,7 +298,6 @@ class LizaRemoteStore:
 
     Disk template:
       <ha_config>/lizaip/<device_id>/action_library.yaml
-      <ha_config>/lizaip/<device_id>/main_pages.yaml   main pages, in order
       <ha_config>/lizaip/<device_id>/page_order.yaml   every page, in editor order
       <ha_config>/lizaip/<device_id>/pages/<page_id>.yaml
       <ha_config>/lizaip/<device_id>/settings.yaml     title/tooltip font and size
@@ -265,37 +343,25 @@ class LizaRemoteStore:
     def _action_library_path(self, device_id: str) -> str:
         return os.path.join(self._device_dir(device_id), "action_library.yaml")
 
-    def _main_pages_path(self, device_id: str) -> str:
-        return os.path.join(self._device_dir(device_id), "main_pages.yaml")
-
     def _settings_path(self, device_id: str) -> str:
         return os.path.join(self._device_dir(device_id), "settings.yaml")
 
     def _page_order_path(self, device_id: str) -> str:
         return os.path.join(self._device_dir(device_id), "page_order.yaml")
 
-    async def _async_write_page_lists(self, device_id: str, pages: list) -> None:
-        """Write ``main_pages.yaml`` (main pages only) and ``page_order.yaml``.
+    async def _async_write_page_order(self, device_id: str, pages: list) -> None:
+        """Write ``page_order.yaml``: every page, subpages included.
 
-        A subpage is not a main page, so it has no place in ``main_pages.yaml``;
-        ``page_order.yaml`` keeps where it sits among the others in the editor,
-        and is what tells a subpage's file from an orphan on the next read.
+        It keeps where a subpage sits among the others in the editor, and is
+        what tells a subpage's file from an orphan on the next read. Which pages
+        are main pages is read from each page's own file.
         """
         listed = [p for p in pages if isinstance(p, dict) and "id" in p]
-        main_path = self._main_pages_path(device_id)
         order_path = self._page_order_path(device_id)
-        wrote_main = await self._hass.async_add_executor_job(
-            self._write_yaml, main_path,
-            [p["id"] for p in listed if not is_subpage(p)],
-        )
-        wrote_order = await self._hass.async_add_executor_job(
+        if not await self._hass.async_add_executor_job(
             self._write_yaml, order_path, [p["id"] for p in listed],
-        )
-        # Both are attempted before raising: the order file is what the remote
-        # pages off, so a failure on the main list must not skip writing it.
-        unwritten = [p for p, ok in ((main_path, wrote_main), (order_path, wrote_order)) if not ok]
-        if unwritten:
-            raise StoreWriteError(", ".join(unwritten))
+        ):
+            raise StoreWriteError(order_path)
 
 
     async def _async_read_id_list(self, path: str) -> list[int] | None:
@@ -523,7 +589,6 @@ class LizaRemoteStore:
 
     # Page YAML contract:
     #   title: <string>
-    #   hash: <int>
     #   default_color: <hex color>       (optional)
     #   template: {...}                    (optional template provenance)
     #   buttons:
@@ -672,7 +737,7 @@ class LizaRemoteStore:
                          for k, v in assignments.items()
                          if not self._is_empty_button(v)}
         self._strip_template_stated_keys(page_meta, clean_buttons)
-        data: dict[str, Any] = {}
+        data: dict[str, Any] = {PAGE_FORMAT_KEY: PAGE_FORMAT}
         template = page_meta.get("template")
         if template and isinstance(template, dict):
             data["template"] = template
@@ -682,9 +747,6 @@ class LizaRemoteStore:
         default_color = page_meta.get("default_color", "")
         if default_color:
             data["default_color"] = default_color
-        page_hash = page_meta.get("hash", 0)
-        if page_hash:
-            data["hash"] = page_hash
         if is_subpage(page_meta):
             data[PAGE_SUBPAGE_KEY] = True
         if clean_buttons:
@@ -697,11 +759,10 @@ class LizaRemoteStore:
         Blocking: consults the page's template. Call via ``async_add_executor_job``.
         """
         title = raw.get("title", "")
-        page_hash = raw.get("hash", 0)
         default_color = raw.get("default_color", "")
         template = raw.get("template")
         buttons = raw.get("buttons", {})
-        meta: dict[str, Any] = {"title": title, "hash": page_hash}
+        meta: dict[str, Any] = {"title": title}
         if default_color:
             meta["default_color"] = default_color
         if is_subpage(raw):
@@ -725,6 +786,7 @@ class LizaRemoteStore:
         if await self._hass.async_add_executor_job(os.path.isfile, lib_path):
             lib = await self._hass.async_add_executor_job(self._read_yaml, lib_path)
             data["action_library"] = lib if isinstance(lib, list) else []
+            _migrate_action_library(data["action_library"])
         else:
             data["action_library"] = []
 
@@ -782,7 +844,7 @@ class LizaRemoteStore:
         """Write page YAML files; skip malformed page entries.
 
         Callers hand over the whole page list because page files carry metadata
-        and hashes as well as button assignments, and a caller rarely knows
+        as well as button assignments, and a caller rarely knows
         which of those a change touched. `_async_write_page` decides per page
         whether anything moved, so handing over everything costs one payload
         build per page rather than one disk write per page. One malformed page
@@ -949,7 +1011,7 @@ class LizaRemoteStore:
             library_error = err
 
         pages = data.get("pages", [])
-        await self._async_write_page_lists(device_id, pages)
+        await self._async_write_page_order(device_id, pages)
 
         assignments = data.get("assignments", {})
         pages_dir = self._pages_dir(device_id)
@@ -983,6 +1045,11 @@ class LizaRemoteStore:
         if device_id in self._loaded:
             return
         raw = await self._read_device_from_disk(device_id)
+        # Readers load without the device lock: a concurrent load may have
+        # finished first and a locked writer changed the data since. This
+        # older read must not overwrite it.
+        if device_id in self._loaded:
+            return
         if raw and isinstance(raw, dict):
             self._data[device_id] = raw
         self._loaded.add(device_id)
@@ -1041,160 +1108,168 @@ class LizaRemoteStore:
         return self._data[device_id]
 
     async def async_get_pages(self, device_id: str) -> list[dict]:
+        """The remote's pages, in order.
+
+        A new list of shallow page copies: a caller editing a page or the list
+        changes nothing here until it hands the result back to a setter.
+        """
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
-        return data.get("pages", [])
+        return [dict(p) if isinstance(p, dict) else p for p in data.get("pages", [])]
 
     async def async_set_page_order(self, device_id: str, pages: list[dict]) -> None:
         """Persist a new page order without rewriting the page files.
 
-        Order lives entirely in ``main_pages.yaml`` and ``page_order.yaml``,
-        both of which are flat lists of page ids. A page's own file carries its
-        metadata and button assignments, none of which a reorder touches.
+        Order lives entirely in ``page_order.yaml``, a flat list of page ids. A
+        page's own file carries its metadata and button assignments, none of
+        which a reorder touches.
 
         :meth:`async_set_pages` rewrites every page file because it also has to
         handle edits, additions and deletions; for a pure move that is N file
-        writes to persist what is really two lists of integers, and the panel
+        writes to persist what is really a list of integers, and the panel
         waits on all of them before the thumbnail visibly lands.
         """
         async with self.device_lock(device_id):
             await self._ensure_loaded(device_id)
             entry = self._ensure_device(device_id)
+            await self._async_write_page_order(device_id, pages)
             entry["pages"] = pages
-            await self._async_write_page_lists(device_id, pages)
 
     async def async_set_pages(self, device_id: str, pages: list[dict]) -> None:
         async with self.device_lock(device_id):
-            await self._ensure_loaded(device_id)
-            entry = self._ensure_device(device_id)
-            old_page_ids = {p["id"] for p in entry.get("pages", []) if isinstance(p, dict) and "id" in p}
-            entry["pages"] = pages
-            page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
-            await self._async_write_page_lists(device_id, pages)
-            assignments = entry.get("assignments", {})
-            for rid in old_page_ids - set(page_ids):
-                assignments.pop(rid, None)
-            await self._write_page_files(device_id, pages, assignments)
-            # Sweep the directory rather than deleting only the ids this call
-            # happens to have dropped. The in-memory diff can see a page file
-            # only while the page is still listed in memory, and
-            # `_async_write_page_lists` above has already dropped the removed
-            # ids from `page_order.yaml`: if the process stops between those
-            # two points the file is left behind and becomes invisible to every
-            # later diff, so it can never be deleted. Listing the directory and
-            # removing whatever is not an active page is authoritative, costs
-            # one executor job instead of two per removal, and heals orphans
-            # left by earlier interruptions.
-            await self._hass.async_add_executor_job(
-                self._cleanup_stale_pages, self._pages_dir(device_id), set(page_ids),
-            )
-            self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
+            await self.async_set_pages_locked(device_id, pages)
 
-    @staticmethod
-    def compute_page_hash(title: str, assignments: dict[str, dict]) -> int:
-        """Digest of fields the device renders for cache validation.
-
-        PROTOCOL.md describes page hashes as "for cache validation" and says a
-        reconnect "writes only what differs", so only page title, image
-        fields, and top-level state icons are hashed. Overrides are deliberately
-        excluded: PROTOCOL.md §12 fixes physical fixed-button glyphs in
-        firmware, and ``device_sync`` builds the device's ``buttons[]`` from the
-        top-level assignment only. Override edits change behavior, not pixels.
-
-        Toggle rule icons are the exception that proves the rule: unlike
-        overrides they are glyphs this page can display, so editing one has to
-        invalidate the device's cached copy. Rule order is part of the digest
-        because it decides which glyph comes next.
-        """
-        parts = [title or ""]
-        for btn_key in sorted(assignments.keys()):
-            assign = assignments[btn_key]
-            if not isinstance(assign, dict):
-                continue
-            for field in sorted(f for f in assign if f.startswith("img_") or f == "icon"):
-                parts.append(f"{btn_key}.{field}={assign[field] or ''}")
-            state_icons = assign.get("state_icons")
-            if isinstance(state_icons, dict) and state_icons:
-                for state_key in sorted(state_icons.keys()):
-                    parts.append(f"{btn_key}.si.{state_key}={state_icons[state_key] or ''}")
-            toggle = assign.get(TOGGLE_KEY)
-            if isinstance(toggle, dict) and toggle:
-                rules = toggle.get("rules")
-                rules = rules if isinstance(rules, list) else []
-                for pos, rule in enumerate(rules):
-                    if not isinstance(rule, dict):
-                        continue
-                    # Position and icon only: a step's position is what selects
-                    # it, and its icon is what the device draws. Its action
-                    # and tooltip are resolved on press and on render, so
-                    # changing them must not resync every page that has a
-                    # toggle.
-                    parts.append(f"{btn_key}.tg.{pos}={rule.get('icon') or ''}")
-        raw = "\n".join(parts)
-        digest = hashlib.md5(raw.encode()).hexdigest()
-        return int(digest[:8], 16)
-
-    async def async_recompute_page_hash(self, device_id: str, page_id: int) -> int:
-        async with self.device_lock(device_id):
-            await self._ensure_loaded(device_id)
-            data = self._data.get(device_id, {})
-            pages = data.get("pages", [])
-            assignments = data.get("assignments", {}).get(page_id, {})
-            page = next((p for p in pages if p.get("id") == page_id), None)
-            if not page:
-                return 0
-            new_hash = self.compute_page_hash(page.get("title", ""), assignments)
-            if page.get("hash") != new_hash:
-                page["hash"] = new_hash
-                page_path = self._page_path(device_id, page_id)
-                await self._async_write_page(page_path, page, assignments)
-            return new_hash
+    async def async_set_pages_locked(self, device_id: str, pages: list[dict]) -> None:
+        """`async_set_pages` for a caller already holding `device_lock`."""
+        await self._ensure_loaded(device_id)
+        entry = self._ensure_device(device_id)
+        old_page_ids = {p["id"] for p in entry.get("pages", []) if isinstance(p, dict) and "id" in p}
+        page_ids = [p["id"] for p in pages if isinstance(p, dict) and "id" in p]
+        assignments = entry.get("assignments", {})
+        # Written before the cache is updated, like the other setters.
+        await self._async_write_page_order(device_id, pages)
+        await self._write_page_files(device_id, pages, assignments)
+        entry["pages"] = pages
+        for rid in old_page_ids - set(page_ids):
+            assignments.pop(rid, None)
+        # Sweep the directory rather than deleting only the ids this call
+        # happens to have dropped. The in-memory diff can see a page file
+        # only while the page is still listed in memory, and
+        # `_async_write_page_order` above has already dropped the removed
+        # ids from `page_order.yaml`: if the process stops between those
+        # two points the file is left behind and becomes invisible to every
+        # later diff, so it can never be deleted. Listing the directory and
+        # removing whatever is not an active page is authoritative, costs
+        # one executor job instead of two per removal, and heals orphans
+        # left by earlier interruptions.
+        await self._hass.async_add_executor_job(
+            self._cleanup_stale_pages, self._pages_dir(device_id), set(page_ids),
+        )
+        self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
 
     async def async_get_action_library(self, device_id: str) -> list[dict]:
+        """The remote's action library, as a new list a caller may change."""
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
         lib = data.get("action_library")
-        return lib if isinstance(lib, list) else []
+        return list(lib) if isinstance(lib, list) else []
 
     async def async_set_action_library(self, device_id: str, actions: list[dict]) -> None:
         async with self.device_lock(device_id):
-            await self._ensure_loaded(device_id)
-            entry = self._ensure_device(device_id)
-            path = self._action_library_path(device_id)
-            # Written before the cache is updated, like `async_set_settings`:
-            # caching a library the disk refused would have the panel read back
-            # entries that vanish on the next restart.
-            await self._async_write_yaml(path, self._clean_action_library(actions))
-            entry["action_library"] = actions
+            await self.async_set_action_library_locked(device_id, actions)
+
+    async def async_set_action_library_locked(self, device_id: str, actions: list[dict]) -> None:
+        """`async_set_action_library` for a caller already holding `device_lock`."""
+        await self._ensure_loaded(device_id)
+        entry = self._ensure_device(device_id)
+        path = self._action_library_path(device_id)
+        # Written before the cache is updated, like `async_set_settings`:
+        # caching a library the disk refused would have the panel read back
+        # entries that vanish on the next restart.
+        await self._async_write_yaml(path, self._clean_action_library(actions))
+        entry["action_library"] = actions
+
+    async def async_merge_actions(self, device_id: str, actions: list[dict]) -> None:
+        """Add *actions* to the library, replacing any with the same id."""
+        async with self.device_lock(device_id):
+            library = await self.async_get_action_library(device_id)
+            index = {a["id"]: i for i, a in enumerate(library) if "id" in a}
+            for action in actions:
+                if action["id"] in index:
+                    library[index[action["id"]]] = action
+                else:
+                    index[action["id"]] = len(library)
+                    library.append(action)
+            await self.async_set_action_library_locked(device_id, library)
 
     async def async_get_assignments(self, device_id: str, page_id: int) -> dict[str, dict]:
+        """*page_id*'s buttons, as a new dict a caller may change."""
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
-        return data.get("assignments", {}).get(page_id, {})
+        return dict(data.get("assignments", {}).get(page_id, {}))
 
     async def async_set_assignments(self, device_id: str, page_id: int, assignments: dict[str, dict]) -> None:
         async with self.device_lock(device_id):
-            await self._ensure_loaded(device_id)
-            entry = self._ensure_device(device_id)
-            entry.setdefault("assignments", {})[page_id] = assignments
-            pages = entry.get("pages", [])
-            page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
-            if page_meta is None:
-                page_meta = {"id": page_id}
-            else:
-                # In the same write: every caller wants the hash to follow, and
-                # a second write of the page just for it doubled what a save
-                # cost on a slow card. `async_recompute_page_hash` then finds
-                # nothing to change.
-                page_meta["hash"] = self.compute_page_hash(page_meta.get("title", ""), assignments)
-            path = self._page_path(device_id, page_id)
-            if not await self._async_write_page(path, page_meta, assignments):
-                raise StoreWriteError(path)
+            await self.async_set_assignments_locked(device_id, page_id, assignments)
+
+    async def async_set_assignments_locked(
+        self, device_id: str, page_id: int, assignments: dict[str, dict]
+    ) -> None:
+        """`async_set_assignments` for a caller already holding `device_lock`.
+
+        For a read-modify-write that must not lose a save made in between.
+        """
+        await self._ensure_loaded(device_id)
+        entry = self._ensure_device(device_id)
+        pages = entry.get("pages", [])
+        page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
+        if page_meta is None:
+            page_meta = {"id": page_id}
+        path = self._page_path(device_id, page_id)
+        # Written before the cache is updated, like the other setters.
+        if not await self._async_write_page(path, page_meta, assignments):
+            raise StoreWriteError(path)
+        entry.setdefault("assignments", {})[page_id] = assignments
+
+    async def async_update_page(
+        self, device_id: str, page_id: int, fields: dict[str, Any],
+    ) -> list[dict] | None:
+        """Set *fields* on one page; the pages as stored, or None if it is gone.
+
+        Read and written under the device lock, so an edit made meanwhile is
+        built on rather than overwritten.
+        """
+        async with self.device_lock(device_id):
+            pages = await self.async_get_pages(device_id)
+            page = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
+            if page is None:
+                return None
+            page.update(fields)
+            await self.async_set_pages_locked(device_id, pages)
+            return await self.async_get_pages(device_id)
+
+    async def async_insert_page(
+        self, device_id: str, page: dict, assignments: dict[str, dict], *, after: int,
+    ) -> None:
+        """Add *page* with its *assignments* directly after the page *after*.
+
+        At the end when *after* is no longer there.
+        """
+        async with self.device_lock(device_id):
+            pages = await self.async_get_pages(device_id)
+            at = next(
+                (i + 1 for i, p in enumerate(pages) if isinstance(p, dict) and p.get("id") == after),
+                len(pages),
+            )
+            pages.insert(at, page)
+            await self.async_set_assignments_locked(device_id, page["id"], assignments)
+            await self.async_set_pages_locked(device_id, pages)
 
     async def async_get_all_assignments(self, device_id: str) -> dict[int, dict[str, dict]]:
+        """Every page's buttons by page id, as a new dict a caller may change."""
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
-        return data.get("assignments", {})
+        return dict(data.get("assignments", {}))
 
     async def async_get_settings(self, device_id: str) -> dict[str, dict[str, Any]]:
         """The remote's title/tooltip text settings, defaults filled in.

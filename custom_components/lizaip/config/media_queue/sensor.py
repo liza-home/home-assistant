@@ -26,6 +26,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from ...const import DOMAIN
+from ...data import find_lizaip_data, lizaip_data
 from .alias import queue_entity_id
 from .queue import NEXT_SONG, async_fetch, blank, reads_queue, resolve
 
@@ -35,13 +36,6 @@ _LOGGER = logging.getLogger(__name__)
 #: queue is a round trip to the speaker, and a busy player can change state
 #: many times a second.
 MIN_REFRESH_INTERVAL = 30.0
-
-#: Where the live sensors (speaker -> sensor) and each loaded entry's
-#: ``AddEntitiesCallback`` live in ``hass.data[DOMAIN]``. Underscore-prefixed
-#: because the other keys there are config entry ids.
-SENSORS_KEY = "_queue_sensors"
-ADDERS_KEY = "_queue_adders"
-
 
 class LizaIPQueueSensor(SensorEntity):
     """One speaker's queue, reduced to the tracks either side of the current."""
@@ -183,11 +177,11 @@ class LizaIPQueueSensor(SensorEntity):
 
 async def async_sync(hass: HomeAssistant, speakers: set[str]) -> None:
     """Make the live queue sensors match the Sonos speakers in *speakers*."""
-    store = hass.data.get(DOMAIN, {})
-    adders: dict = store.get(ADDERS_KEY) or {}
+    data = find_lizaip_data(hass)
+    adders = data.queue_adders if data is not None else {}
     if not adders:
         return
-    sensors: dict[str, LizaIPQueueSensor] = store.setdefault(SENSORS_KEY, {})
+    sensors = data.queue_sensors
     wanted = {s for s in speakers if reads_queue(hass, s)}
     for speaker in [s for s in sensors if s not in wanted]:
         await sensors.pop(speaker).async_remove(force_remove=True)
@@ -205,13 +199,15 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Let *entry* add queue sensors; they are added once the targets are known."""
-    hass.data.setdefault(DOMAIN, {}).setdefault(ADDERS_KEY, {})[entry.entry_id] = async_add_entities
+    lizaip_data(hass).queue_adders[entry.entry_id] = async_add_entities
 
 
 def async_release(hass: HomeAssistant, entry_id: str) -> None:
     """Forget *entry*: its platform unload has just removed the sensors it added."""
-    store = hass.data.get(DOMAIN, {})
-    (store.get(ADDERS_KEY) or {}).pop(entry_id, None)
-    sensors = store.get(SENSORS_KEY) or {}
+    data = find_lizaip_data(hass)
+    if data is None:
+        return
+    data.queue_adders.pop(entry_id, None)
+    sensors = data.queue_sensors
     for speaker in [s for s, sensor in sensors.items() if sensor.entry_id == entry_id]:
         sensors.pop(speaker)

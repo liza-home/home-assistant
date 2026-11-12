@@ -148,18 +148,6 @@ class ButtonTooltips(TranslationSection):
         slug = wording_slug(name)
         return slug if slug and slug in self.load(FALLBACK_LANGUAGE) else ""
 
-    def localize(self, name: str, lang: str, user_named: bool = False) -> str:
-        """Translate an English name a template wrote; a user's own name stays as is."""
-        if not name or user_named:
-            return name
-        key = self.wording_key(name)
-        if not key:
-            return name
-        translated = self.get(key, lang)
-        # A wording that only respells the template's English ("Play/Pause" vs
-        # "Play / Pause") must not replace it.
-        return name if self.wording_key(translated) == key else translated
-
     def for_service(self, svc: str, lang: str) -> str:
         """A readable label for a service name such as ``media_play_pause``."""
         if svc in SERVICE_ACTION_MAP:
@@ -171,12 +159,28 @@ class ButtonTooltips(TranslationSection):
                 break
         return name.replace("_", " ").title()
 
+    def service_ref(self, svc: str) -> str:
+        """What a button stores to name *svc*: ``{translate: <key>}`` when it has a wording."""
+        if svc in SERVICE_ACTION_MAP:
+            return translate_ref(SERVICE_ACTION_MAP[svc])
+        return self.for_service(svc, FALLBACK_LANGUAGE)
+
+
+def translate_ref(key: str) -> str:
+    """``{translate: <key>}``: the stored form of a word drawn in the reader's language."""
+    return f"{{{TRANSLATE_KEY}: {key}}}"
+
 
 button_tooltips = ButtonTooltips(TRANSLATIONS_DIR)
 
 #: Page-level wordings this integration writes onto a remote by itself, such as
 #: the title of the welcome page a remote with no pages is given.
 page_titles = TranslationSection(TRANSLATIONS_DIR, "page_titles")
+
+#: How a state word reads inside a sentence, per language: lowercase, except
+#: where the language keeps it capitalised (German nouns: "Pause",
+#: "Wiedergabe"). See ``state_word``.
+state_words = TranslationSection(TRANSLATIONS_DIR, "state_words")
 
 
 #: ``{translate: <key>}`` in place of a text in a template: the words come
@@ -216,7 +220,9 @@ def translate_fallback(value: Any, default: str) -> str:
 #: wordings (``button_tooltips``) first, then the page titles (``page_titles``);
 #: the key may be the English words themselves (``{translate: Volume Up}``).
 #: Filled in each time the text is drawn, so a change of language follows.
-INLINE_TRANSLATE_RE = re.compile(r"\{translate:\s*([^{}]+?)\s*\}")
+#: The key may be a variable (``{translate: ${_state}}``): its value is looked
+#: up once filled in, and reads as it is when no table knows it.
+INLINE_TRANSLATE_RE = re.compile(r"\{translate:\s*((?:\$\{[^{}]*\}|[^{}])*?)\s*\}")
 
 #: The language the text being drawn is for: the remote's, while its pages
 #: are drawn (:func:`language_scope`). Outside one, *default_language*.
@@ -258,7 +264,9 @@ def translate_inline(text: Any, language: str | None = None) -> Any:
     """*text* with every ``{translate: <key>}`` written out in *language*.
 
     *language* defaults to :func:`current_language`. A key neither table knows
-    reads as written. Anything that is not a string is returned unchanged.
+    reads as written. A key still holding a variable is left for the pass
+    after the variable is filled in. Anything that is not a string is returned
+    unchanged.
     """
     if not isinstance(text, str) or "{translate:" not in text:
         return text
@@ -266,6 +274,8 @@ def translate_inline(text: Any, language: str | None = None) -> Any:
 
     def _words(match: re.Match) -> str:
         written = match.group(1).strip()
+        if "${" in written:
+            return match.group(0)
         key = wording_slug(written)
         return (
             TranslationSection.get(button_tooltips, key, lang)

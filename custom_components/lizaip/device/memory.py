@@ -29,10 +29,9 @@ from typing import Any
 
 import aiohttp
 from aiohttp import ClientTimeout
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..shared.logs import device_logger
-from .http import device_base_url
+from .http import device_base_url, device_session
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,7 +107,7 @@ def parse_file_flash(nvm: Any) -> dict[str, Any] | None:
 
 
 async def _fetch_json(hass, base: str, endpoint: str) -> Any:
-    session = async_get_clientsession(hass)
+    session = device_session(hass)
     async with session.get(f"{base}{endpoint}", timeout=_TIMEOUT) as resp:
         if resp.status != 200:
             raise aiohttp.ClientResponseError(

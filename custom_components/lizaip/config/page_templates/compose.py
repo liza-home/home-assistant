@@ -24,16 +24,9 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from ...shared.i18n import get_ui_language, page_titles, translate_fallback, translate_key
-from .generate import (
-    async_load_template,
-    generate_assignments,
-    page_source,
-    page_buttons,
-    NEXT_PART,
-    paginated_placeholder,
-    part_buttons,
-    template_pages,
-)
+from .catalog import async_load_template, page_source, template_pages
+from .generate import generate_assignments, page_buttons
+from .parts import NEXT_PART, paginated_placeholder, part_buttons
 from .resolver import resolve_template_variables
 
 _LOGGER = logging.getLogger(__name__)

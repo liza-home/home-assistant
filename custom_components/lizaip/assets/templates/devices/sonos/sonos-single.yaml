@@ -63,14 +63,9 @@ pages:
 
       button_12:
         icon: mdi:volume-mute
-        tooltip: "${_state}"
+        tooltip: "{translate: ${_state}}"
         config:
           - action: media_player.volume_mute
-            data:
-              # volume_mute is a setter, not a toggle: reading the target's current
-              # state and inverting it is what makes this button behave like one.
-              # `@target` is the bound entity, substituted when the page is created.
-              is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
 
       button_volume_up:
         icon: mdi:volume-plus

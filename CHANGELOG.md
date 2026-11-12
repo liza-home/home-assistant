@@ -11,6 +11,48 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
+## [2026.11.2b2] - 2026-11-12
+
+### Added
+
+- **Put a remote back on an older firmware.** The **Install update** action
+  now takes a version: `version: "11.4.1"` installs that release instead of
+  the newest one, so a remote can be rolled back. A version the server does
+  not have is refused with a list of the ones it has. The firmware card still
+  offers only the newest release.
+- **A toggle button drives the page slider by itself.** Give a button a
+  toggle action for a dimmable lamp or a fan, and the slider on that page
+  controls it while the button is selected -- as on the Hue template's lamp
+  tiles. A device you picked for the slider yourself is never replaced.
+- **Rounded album covers.** The new **Corner radius** setting rounds whole
+  pictures such as album covers, from square (0 %) to round (100 %).
+
+### Changed
+
+- **Button 9 of every TV template is Mute.** The Android TV, Fire TV, Hisense,
+  LG webOS, Philips, Roku, Samsung and Sony Bravia templates now have a mute
+  toggle there.
+
+### Removed
+
+- **The hover card on the panel's remote picture**, and the setting that
+  switched it off.
+- **The page icon colour swatches** in the theme editor.
+
+### Fixed
+
+- **A Sony Bravia's or Philips TV's Apps page shows its apps** rather than
+  its HDMI inputs, including for a Bravia that was in standby.
+- **A second Apps page appears in the panel as soon as it is added**, without
+  reloading.
+- **Deleting a button's last action clears the button** instead of the action
+  coming back.
+- **A held key stops repeating** when it comes up with a finger still resting
+  on it.
+- **A pinned icon or custom tooltip stays when the button is pressed.**
+- **A remote set up for HTTPS or another port is reached on it** for firmware
+  updates and diagnostics.
+
 ## [2026.11.2b1] - 2026-11-10
 
 ### ⚠ Breaking changes

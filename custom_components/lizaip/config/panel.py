@@ -21,14 +21,15 @@ from ..action_controller import (
     setup_state_listener,
 )
 from ..const import DOMAIN, SIGNAL_ICON_UPDATE
-from ..shared.i18n import button_tooltips, page_titles
+from ..shared.i18n import button_tooltips, page_titles, state_words
 from ..shared.icon_urls import resolve_tooltip_url
 from ..shared.logs import device_logger
-from ..runtime import entry_connection, _get_store
+from ..runtime import entry_connection, get_store
 from .access import async_notify_assignments_changed, async_reconcile_sidebar
 from .const import CONFIG_CHANGED_EVENT
 from .icon_push import GATHER_WINDOW, IconPushQueue
-from .panel_entry import add_panel_entry, pop_panel_entry
+from .panel_entry import add_panel_entry, get_panel_entry, pop_panel_entry
+from ..data import lizaip_data
 from .text_style import settings_theme
 from . import device_sync as _device_sync_mod
 from ..config.page_templates import refresh as _template_refresh
@@ -42,7 +43,7 @@ PANEL_DIR = os.path.join(os.path.dirname(__file__), "panel")
 GUIDE_IMAGE_DIR = os.path.join(os.path.dirname(__file__), "docs", "images")
 PANEL_URL_BASE = "/lizaip_config_panel"
 # The only subdirectories of PANEL_DIR the asset route serves from, one level deep.
-PANEL_SUBDIRS = frozenset({"styles", "buttons", "actions"})
+PANEL_SUBDIRS = frozenset({"styles", "buttons", "actions", "settings"})
 FRONTEND_URL_PATH = "lizaip"
 
 
@@ -207,16 +208,16 @@ def needs_device_sync(event_data: dict, entry_id: str) -> bool:
 
 async def async_setup_panel(hass: HomeAssistant) -> None:
     """One-time setup: register the sidebar panel and WS commands."""
-    if hass.data.get(DOMAIN, {}).get("_panel_registered"):
+    data = lizaip_data(hass)
+    if data.panel_registered:
         return
-
-    hass.data.setdefault(DOMAIN, {})
 
     # Before anything can ask for a label: the ladder that builds tooltips is
     # synchronous and cannot await, so its translations are read here, once,
     # off the loop.
     await button_tooltips.async_preload(hass)
     await page_titles.async_preload(hass)
+    await state_words.async_preload(hass)
 
     hass.http.register_view(LizaIPPanelView)
     hass.http.register_view(LizaIPGuideImageView)
@@ -230,7 +231,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
     # Assistant was down.
     await async_reconcile_sidebar(hass)
 
-    hass.data[DOMAIN]["_panel_registered"] = True
+    data.panel_registered = True
 
 
 async def async_register_frontend_panel(hass: HomeAssistant) -> None:
@@ -272,6 +273,15 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     panel_entry = add_panel_entry(hass, entry.entry_id)
 
+    # Runs on unload and also when a later setup step fails, which skips
+    # `async_unload_entry`. Closing twice is harmless.
+    def _release_panel_entry() -> None:
+        if get_panel_entry(hass, entry.entry_id) is panel_entry:
+            pop_panel_entry(hass, entry.entry_id)
+        panel_entry.close()
+
+    entry.async_on_unload(_release_panel_entry)
+
     # Resolve device_id once via the device registry for all closures
     dev_reg = dr.async_get(hass)
     device_id: str | None = None
@@ -282,7 +292,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     # The live icon-update callback below cannot await; read the text settings
     # now so it finds them kept rather than falling back to the defaults.
-    store = _get_store(hass)
+    store = get_store(hass)
     if device_id is not None:
         await store.async_get_settings(device_id)
 
@@ -314,19 +324,9 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         remote answers -4 until its hello is done, and the sync that follows
         the hello sends the current icons anyway.
         """
-        conn = entry_connection(entry)
-        if not _device_sync_mod.is_ready(conn):
-            return
-        fields: dict = {"buttons": buttons} if buttons else {}
-        if img_title is not None:
-            fields["img_title"] = img_title
-        # The page's new hash goes with the change, so the device's copy says
-        # what it now shows (see `patched_page`).
-        patched = _device_sync_mod.patched_page(conn, page_id, buttons, img_title)
-        if patched is not None:
-            fields["hash"] = patched["hash"]
-        await conn.set_page(page_id, **fields)
-        _device_sync_mod.note_partial_page(conn, page_id, buttons, img_title)
+        await _device_sync_mod.async_send_partial_page(
+            entry_connection(entry), page_id, buttons, img_title,
+        )
 
     push_queue = IconPushQueue(
         _send_page,
@@ -413,7 +413,10 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
         log.debug("Dynamic push triggers unavailable: %s", err)
 
     # Initial device sync (best-effort; device likely not connected yet on first boot)
-    hass.async_create_task(_device_sync_mod.sync_config_to_device(hass, entry))
+    entry.async_create_background_task(
+        hass, _device_sync_mod.sync_config_to_device(hass, entry),
+        f"lizaip initial sync {entry.entry_id}",
+    )
 
     # A remote that has just appeared belongs in every open panel's list.
     # Scheduled rather than called: the entry is marked LOADED only after this
@@ -434,7 +437,7 @@ async def async_unload_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     if panel_entry is not None:
         panel_entry.close()
 
-    # NOTE: the button listener ("_button_unsub") is deliberately NOT torn down here.
+    # NOTE: the button listener (`LizaIPData.button_unsub`) is deliberately NOT torn down here.
     # It is integration-scoped — registered by action_controller.setup() from
     # async_setup, which Home Assistant runs only once per process. This function
     # runs on every entry *unload*, and an unload is not a removal: a plain config

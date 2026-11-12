@@ -84,10 +84,10 @@ export const DiscoveryMixin = {
       setTimeout(resolve, DISCOVERY_OPENING_TIMEOUT_MS);
     });
     try {
-      this._discoveryUnsub = await this._hass.connection.subscribeMessage(
+      await this._holdSubscription("_discoveryUnsub", () => this._hass.connection.subscribeMessage(
         (msg) => this._onDiscoveryMessage(msg),
         { type: "config_entries/flow/subscribe" },
-      );
+      ));
     } catch (e) {
       console.debug("[lizaIP] discovery subscription failed:", e);
       this._discoveryOpenedResolve?.();

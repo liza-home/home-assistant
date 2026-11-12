@@ -4,6 +4,9 @@
 
 **Sources** — ``mdi:``, ``logo:``, ``text:``, ``media:``, ``history:``, and any
 icon set the browser registered, ``phu:`` among them (``render_custom.py``).
+A ``media:`` picture shown whole (no ``box``) is cut round (``radius=``, percent,
+0 square, 100 circle, the default); with ``box`` it stays
+square so the tiles meet.
 
 **Options**, all optional, all shared by every source:
 
@@ -18,6 +21,7 @@ icon set the browser registered, ``phu:`` among them (``render_custom.py``).
 ``alpha``               keep the alpha channel instead of flattening to black
 ``percent``             0–100 fill level via alpha: bottom stays opaque,
                         upper remainder is dimmed to ``PERCENT_TINT_ALPHA``
+``radius``              0–100 corner radius of a whole ``media:`` picture, 100 = round (default)
 ``font``                font ID, ``text:`` only
 ``font_size``           size in pixels, ``text:`` only (default: the symbolic
                         ``size``'s font size, else the image height)
@@ -49,7 +53,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
 from ..shared import theme as theme_registry
 from ..shared.history import is_servable
@@ -65,12 +69,14 @@ from .const import (
     MODE_DEFAULTS,
     SIZE_IDS,
     TRANSPARENT,
+)
+from .fonts import www_fonts_dir
+from .source_parse import (
     custom_icon_prefixes,
     has_source_type,
     is_address,
     split_source_parts,
 )
-from .fonts import www_fonts_dir
 from .render import finalize_png
 from .render_caption import compose_parts
 from .render_history import (
@@ -124,11 +130,6 @@ class _ImgservError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
-
-
-def _parse_color(color_str: str | None, default: tuple, names: dict | None = None) -> tuple:
-    """Parse 'FF0000', 'FF0000FF', or a symbolic name like 'yellow'."""
-    return parse_color(color_str, names) or default
 
 
 def _parse_size(size_str: str | None) -> tuple[int, int]:
@@ -197,6 +198,13 @@ def _default_font_size(size_str: str | None) -> int | None:
     """The font size a symbolic ``size`` names; ``None`` leaves it to the canvas."""
     named = SIZE_IDS.get((size_str or "").strip().lower())
     return named.font_size if named else None
+
+
+def _parse_radius(raw: str | None) -> int:
+    """Parse the optional corner radius (0..100 %); anything else is the default."""
+    if raw is None or not raw.strip().isdigit():
+        return _MEDIA_CORNER_PERCENT
+    return min(int(raw), 100)
 
 
 def _parse_percent(raw: str | None) -> int | None:
@@ -316,11 +324,11 @@ def _resolve_colors(
     # Only ``light`` names a colour of its own; ``dark`` and no mode at all
     # mean "whatever this remote draws in", which is the theme's.
     fallback_fg = (
-        _parse_color("black", mode_fg, names) if mode == "light"
+        parse_color("black", names) or mode_fg if mode == "light"
         else (theme.color("default") or mode_fg if theme is not None else mode_fg)
     )
-    fg = _parse_color(fg_raw, fallback_fg, names)
-    bg = _parse_color(bg_raw, default_bg, names)
+    fg = parse_color(fg_raw, names) or fallback_fg
+    bg = parse_color(bg_raw, names) or default_bg
     return fg, bg
 
 
@@ -352,15 +360,17 @@ class _Options:
     fit: str = "contain"
     #: The emoji font: a font id, ``none`` for none, ``None`` to find one.
     emoji: str | None = None
+    #: Corner radius of a whole `media:` picture, percent of its shorter side.
+    radius: int = 100
 
     @classmethod
     def from_query(cls, query) -> _Options:
         """Parse a query mapping. Raises ``_ImgservError`` (400) on bad input."""
         mode = query.get("mode", "").lower()
         theme = theme_registry.get_theme(query.get("theme"))
-        fg, bg = _resolve_colors(
-            mode, _first_param(query, "fg", "color"), _first_param(query, "bg"), theme,
-        )
+        fg_raw = _first_param(query, "fg", "color")
+        fg, bg = _resolve_colors(mode, fg_raw, _first_param(query, "bg"), theme)
+        font_size = _parse_font_size(query.get("font_size"))
 
         try:
             percent = _parse_percent(query.get("percent"))
@@ -380,16 +390,14 @@ class _Options:
             keep_alpha=_parse_flag(query.get("alpha"), False),
             percent=percent,
             font_id=query.get("font", "").lower() or None,
-            font_size=(
-                _parse_font_size(query.get("font_size"))
-                or _default_font_size(query.get("size"))
-            ),
+            font_size=font_size or _default_font_size(query.get("size")),
             mode=mode,
-            explicit_fg=bool(_first_param(query, "fg", "color")),
-            explicit_font_size=_parse_font_size(query.get("font_size")) is not None,
+            explicit_fg=bool(fg_raw),
+            explicit_font_size=font_size is not None,
             period=period,
             fit=_parse_fit(query.get("fit")),
             emoji=query.get("emoji", "").strip().lower() or None,
+            radius=_parse_radius(query.get("radius")),
         )
 
     def untinted(self) -> _Options:
@@ -428,10 +436,12 @@ def _split_parts(source: str) -> tuple[str, ...]:
     if sum(p.startswith("media:") for p in parts) > _MAX_MEDIA_PARTS:
         raise _ImgservError(400, f"at most {_MAX_MEDIA_PARTS} pictures")
     for part in parts:
-        if part.startswith("text:") and len(part) - len("text:") > _MAX_TEXT_LENGTH:
-            # The same cap as a lone `text:`, and for the same reason: the
-            # words are laid out by the very same renderer, repeatedly, as
-            # they are shrunk to fit.
+        # Read as it will be rendered, so bare words (no `text:`) are held to
+        # the cap too. The same cap as a lone `text:`, and for the same
+        # reason: the words are laid out by the very same renderer,
+        # repeatedly, as they are shrunk to fit.
+        stype, value = _split_source(part)
+        if stype == "text" and len(value) > _MAX_TEXT_LENGTH:
             raise _ImgservError(400, f"text exceeds {_MAX_TEXT_LENGTH} characters")
     return parts
 
@@ -682,8 +692,6 @@ async def _handle_logo(hass, value, options: _Options):
 async def _handle_text(hass, value, options: _Options):
     if not value:
         raise _ImgservError(400, "Missing text (e.g. text:Hello)")
-    if len(value) > _MAX_TEXT_LENGTH:
-        raise _ImgservError(400, f"text exceeds {_MAX_TEXT_LENGTH} characters")
     # A font size the caller named is theirs to keep, however wide the words
     # come out -- the device scrolls a title. Without one, the words are made
     # to fit the picture asked for: a tile does not scroll.
@@ -827,7 +835,7 @@ async def _handle_media(hass, value, options: _Options):
     if cached is not None and cached[0] > _media_clock():
         # A copy: what follows crops and mounts, and the next tile needs the
         # same picture untouched.
-        return cached[1].copy()
+        return _round_unless_boxed(cached[1].copy(), options)
 
     result = await _fetch_and_scale(
         hass, url, value, options.width, options.height, options.fit, internal=internal,
@@ -838,7 +846,34 @@ async def _handle_media(hass, value, options: _Options):
     _media_cache[key] = (_media_clock() + _MEDIA_CACHE_TTL, result)
     if len(_media_cache) > _MEDIA_CACHE_SIZE:
         del _media_cache[next(iter(_media_cache))]
-    return result.copy()
+    return _round_unless_boxed(result.copy(), options)
+
+
+#: Corner radius of a whole `media:` picture unless ``radius=`` says otherwise: 100 = half of its shorter side, a circle.
+_MEDIA_CORNER_PERCENT = 100
+
+
+def _round_unless_boxed(image, options: _Options):
+    """*image* with rounded corners, unless a ``box=`` cuts it into pieces.
+
+    A cover shown whole gets a round cut; the tiles of one cut by ``box=`` must
+    meet edge to edge, so those stay square.
+    """
+    if options.box:
+        return image
+    radius = round(min(image.size) * options.radius / 200)
+    if radius < 1:
+        return image
+    # Drawn at 4x and shrunk, so the curve is smooth rather than stair-stepped.
+    scale = 4
+    mask = Image.new("L", (image.width * scale, image.height * scale), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, mask.width - 1, mask.height - 1), radius=radius * scale, fill=255,
+    )
+    mask = mask.resize(image.size, Image.LANCZOS)
+    image = image.convert("RGBA")
+    image.putalpha(ImageChops.multiply(image.getchannel("A"), mask))
+    return image
 
 
 #: Scaled media pictures by (url, width, height, fit): (expiry, image), oldest first.
@@ -1093,6 +1128,7 @@ class _Source:
     crop: str = "full"
 
 
+#: One entry per ``source_parse.SOURCE_TYPES``; a test keeps the two in step.
 _SOURCES: dict[str, _Source] = {
     "mdi": _Source(_handle_mdi),
     "logo": _Source(_handle_logo),

@@ -68,11 +68,16 @@ import logging
 from typing import Any
 
 from ..shared.icon_defaults import icon_defaults
-from ..shared.tokens import clean_tooltip_text, substitute_tooltip_tokens
-from ..shared.i18n import get_ui_language
-from ..shared.services import service_fixed_icon, service_name
-from ..shared.tooltips import state_token_tooltip
-from .helpers import subject_for_assign
+from ..shared.tokens import clean_tooltip_text
+from ..shared.services import (
+    ATTR_PREVIOUS_VALUE,
+    attr_str,
+    is_attribute_state_service,
+    is_two_way_service,
+    service_fixed_icon,
+    service_name,
+    service_to_attribute,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -169,6 +174,21 @@ def toggle_rules(assign: Any) -> list[dict]:
     ]
 
 
+def representative_steps(assign: Any) -> list[dict]:
+    """The first step of *assign*, then the first step of each cycle rule.
+
+    Each names what one face of the button is about. A rule may point at a
+    different entity from the assignment it sits on, and its label reads that
+    one, so whatever watches a button's entities has to look at all of them.
+    """
+    steps: list[dict] = []
+    config = assign.get("config") if isinstance(assign, dict) else None
+    if isinstance(config, list) and config and isinstance(config[0], dict):
+        steps.append(config[0])
+    steps.extend(rule_steps(rule)[0] for rule in toggle_rules(assign))
+    return steps
+
+
 def rule_steps(rule: Any) -> list[dict]:
     """The script steps *rule* runs, or ``[]`` when it has none.
 
@@ -200,6 +220,20 @@ def rule_icon(rule: Any) -> str | None:
     if not isinstance(icon, str):
         return None
     return icon.strip() or None
+
+
+def rule_state_icons(rule: Any) -> dict[str, str]:
+    """The per-state glyphs *rule* asks for, keyed as a button's are."""
+    if not isinstance(rule, dict):
+        return {}
+    table = rule.get("state_icons")
+    if not isinstance(table, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, icon in table.items():
+        if isinstance(key, str) and isinstance(icon, str) and icon.strip():
+            out[key] = icon.strip()
+    return out
 
 
 def rule_service(rule: Any) -> str | None:
@@ -253,12 +287,35 @@ def step_icon(
     if override:
         return override
 
+    attr_icon = _attribute_step_icon(rule, svc_name, icons)
+    if attr_icon:
+        return attr_icon
+
     if service_icons:
         svc_icon = service_icons.get(svc_domain, {}).get(svc_name, {}).get("service")
         if svc_icon:
             return svc_icon
 
     return (icons or icon_defaults).domain_icons.get(svc_domain)
+
+
+def _attribute_step_icon(rule: Any, svc_name: str, icons=None) -> str | None:
+    """The ``attribute_icons`` glyph for a step that sets an attribute.
+
+    No service-icon table names `volume_mute`, so an iconless mute press used
+    to fall through to its domain's glyph. The table the button reads has the
+    answer, read under the value this press moves on from.
+    """
+    attribute = service_to_attribute(svc_name)
+    table = (icons or icon_defaults).attribute_icons.get(attribute, {}) if attribute else {}
+    if not table:
+        return None
+
+    steps = rule_steps(rule)
+    data = (steps[0] if steps else {}).get("data") or {}
+    value = attr_str(data.get(attribute)) if isinstance(data, dict) else ""
+    previous = ATTR_PREVIOUS_VALUE.get(attribute, {}).get(value)
+    return table.get(previous) if previous else next(iter(table.values()), None)
 
 
 def rule_action_id(rule: Any) -> str | None:
@@ -301,59 +358,56 @@ def rule_tooltip(rule: Any) -> str | None:
     return tooltip or None
 
 
+def _rule_assign(rule: Any) -> dict:
+    """*rule* in assignment shape, so a button's own ladders can read it.
+
+    A press already carries the keys those ladders ask about, so this is a
+    view, not a copy. ``_press`` marks it as a cycle face, whose stored value
+    is a direction the user chose rather than one a setter's form demands.
+    """
+    rule = rule if isinstance(rule, dict) else {}
+    config = rule.get("config")
+    assign = {"config": config if isinstance(config, list) else [], "_press": True}
+    if rule.get("action_id"):
+        assign["action_id"] = rule["action_id"]
+    return assign
+
+
 def resolve_rule_tooltip(rule: Any, hass, entry=None) -> str:
     """The words a press prints, with its ``${...}`` placeholders filled in.
 
-    A press's Tooltip field offers the same syntax press 1's does, so it has to
-    mean the same thing. It did not: the two producers of a cycle tooltip
-    handed this text to ``substitute_tooltip_tokens`` with an *empty* value map
-    (``buttons.py``) or did not substitute at all (:func:`toggle_tooltip`), so
-    ``${_state}`` and ``${_name}`` collapsed to nothing on a press while reading
-    "Off" on the button above it -- one field, one syntax, two
-    behaviours, and the one that silently printed less was the one the panel
-    offered no warning about.
-
-    The subject is the *press's own* target, not the button's. A cycle exists
-    precisely because its steps do different things, and often to different
-    entities; reading every press's ``${_state}`` off the button's declared
-    action would phrase step three in terms of step one. ``state_token_tooltip``
-    is then asked about this press's service, which is what makes a
-    ``turn_on`` press read "On" and the ``turn_off`` press under it "Off"
-    rather than both reading the lamp's current state.
-
-    Returns "" when the press stores no tooltip, which is the caller's signal to
-    fall back -- same as :func:`rule_tooltip` returning ``None``.
+    Filled by `_fill_tooltip_tokens`, the one every button label goes
+    through, asked about this press's own target -- a cycle's steps often
+    point at different entities. "" means the caller should fall back.
     """
     text = rule_tooltip(rule) or ""
     if not text:
         return ""
 
-    config = rule.get("config") if isinstance(rule, dict) else None
-    if not isinstance(config, list):
-        config = []
-    step = config[0] if config and isinstance(config[0], dict) else {}
-    svc = service_name(step.get("action") or step.get("service") or "")
+    # Imported here: `button_rendering` imports this module.
+    from ..config.button_rendering import _fill_tooltip_tokens
 
-    # Built from the press's config alone. `subject_for_assign` asks only for
-    # `config`, so a rule is already assignment-shaped for this purpose and
-    # there is nothing to keep in step with the real assignment.
-    _name, state_obj = subject_for_assign({"config": config}, hass)
-    attrs = dict(state_obj.attributes or {}) if state_obj else None
-
-    values = {
-        "_state": state_token_tooltip(
-            svc,
-            state_obj.state if state_obj else "",
-            get_ui_language(hass, entry) if hass else "en",
-            attrs,
-            step.get("data") or {},
-        ),
-    }
     return clean_tooltip_text(
-        substitute_tooltip_tokens(
-            text, values, hass, getattr(state_obj, "entity_id", None),
-        )
+        _fill_tooltip_tokens(text, _rule_assign(rule), hass, entry)
     )
+
+
+def step_tooltip(rule: Any, hass, entry=None) -> str:
+    """Words for *rule* derived from the step it runs, or "" to fall back.
+
+    The twin of :func:`step_icon`: the button's own ladder asked about this
+    press, so a mute cycle reads "Mute" then "Unmute". Gated on the services
+    that name a state, since a key code has no words of its own.
+    """
+    if hass is None:
+        return ""
+    svc = service_name(rule_service(rule) or "")
+    if not (is_two_way_service(svc) or is_attribute_state_service(svc)):
+        return ""
+
+    from ..config.button_rendering import _resolve_button_tooltip
+
+    return _resolve_button_tooltip(_rule_assign(rule), hass, entry)
 
 
 def sanitize_toggle(value: Any) -> dict:
@@ -376,6 +430,10 @@ def sanitize_toggle(value: Any) -> dict:
     * the whole block once it has no rules left, because a mode with nothing to
       pick from is an ordinary button with a key on it.
 
+    An empty ``state_icons`` table is dropped with them: the panel prunes it
+    when the last override goes, and a stored ``{}`` would fold into the config
+    hash and resync the device for an edit that changed nothing.
+
     ``state`` and ``attribute`` are dropped wherever they appear. A cycle rule
     carries no condition by definition, and storing one would be a field the
     user can fill in and watch do nothing -- which is also what keeps a block
@@ -397,6 +455,9 @@ def sanitize_toggle(value: Any) -> dict:
         icon = rule_icon(raw)
         if icon:
             rule["icon"] = icon
+        state_icons = rule_state_icons(raw)
+        if state_icons:
+            rule["state_icons"] = state_icons
         tooltip = rule_tooltip(raw)
         if tooltip:
             rule["tooltip"] = tooltip

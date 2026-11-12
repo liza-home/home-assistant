@@ -26,9 +26,8 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from aiohttp import ClientTimeout
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .http import device_base_url, error_detail
+from .http import device_base_url, device_session, error_detail
 
 if TYPE_CHECKING:
     from .connection import LizaIPConnection
@@ -115,7 +114,7 @@ async def async_probe_reachability(
         return {"reachable": False, "reason": "no_port", "peer_ip": conn.peer_ip}
 
     url = f"{device_base_url(conn)}/api/info"
-    session = async_get_clientsession(conn.hass)
+    session = device_session(conn.hass)
     started = time.monotonic()
     try:
         async with session.get(url, timeout=ClientTimeout(total=5)) as resp:
@@ -166,7 +165,7 @@ async def async_fetch_section(conn: LizaIPConnection, endpoint: str) -> dict[str
     "this endpoint timed out" is an answer about the device, and losing it would
     leave the reader unable to tell a broken endpoint from one never asked.
     """
-    session = async_get_clientsession(conn.hass)
+    session = device_session(conn.hass)
     base = device_base_url(conn)
     try:
         async with session.get(

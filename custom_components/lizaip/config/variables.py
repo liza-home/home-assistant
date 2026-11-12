@@ -29,12 +29,9 @@ from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
-from ..action_controller.helpers import (
-    _get_store,
-    _resolve_device_id,
-    resolve_target_entities,
-)
-from ..action_controller.toggle import rule_icon, rule_tooltip, toggle_rules
+from ..action_controller.helpers import resolve_target_entities
+from ..runtime import get_store, resolve_device_id
+from ..action_controller.toggle import toggle_rules
 from ..shared.variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
@@ -170,15 +167,13 @@ def _assignment_reads_in_scope(assign: dict, subjects: tuple[str, ...], hass) ->
     # moved. Both live repaint paths (``state_listener`` and ``device_sync``)
     # already render the current step, so the only piece that was absent is
     # the subscription.
-    #
-    # `icon`/`tooltip`, the same names a button stores its own picture and text
-    # under.
     for rule in toggle_rules(assign):
         # A rule's own target, not the button's: a cycle step may point at a
         # different speaker, and its tooltip reads that one's queue.
         rule_subjects = _queue_subjects(rule.get("config"), hass)
-        _merge(found, _token_reads(rule_icon(rule), rule_subjects))
-        _merge(found, _token_reads(rule_tooltip(rule), rule_subjects))
+        # Read as a button is: a press stores its picture and text under the
+        # same names (`icon`, `state_icons`, `tooltip`).
+        _merge(found, _button_reads(rule, rule_subjects))
     return found
 
 
@@ -212,7 +207,7 @@ async def async_variable_uses(
     placeholders it shows read its battery and addresses, and without this
     their tiles would freeze at whatever the last sync drew.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     uses: dict[str, VariableUse] = {}
 
     def _note(reads: _Reads, page_id: int) -> None:
@@ -309,7 +304,7 @@ async def async_device_title_targets(
     room and the labels it draws are the entity's own, and the repaint that
     follows a rename of either reaches only the pages this map holds.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     targets: dict[str, set[int]] = {}
     library: dict | None = None
     for page in await store.async_get_pages(device_id):
@@ -390,6 +385,9 @@ async def async_setup_variable_listener(
     pending: set[int] = set()
     timer: list[asyncio.TimerHandle | None] = [None]
     stop_tracking: list[Callable[[], None]] = [lambda: None]
+    # Set by the cleanup: a refresh still reading the store when the entry
+    # unloads must not subscribe afterwards, with nothing left to unsubscribe.
+    closed = [False]
 
     log = device_logger(_LOGGER, entry)
 
@@ -400,7 +398,7 @@ async def async_setup_variable_listener(
         # Resolved on every refresh: on a first boot the device may only be
         # registered after this listener was set up.
         try:
-            device_id = _resolve_device_id(hass, entry.entry_id)
+            device_id = resolve_device_id(hass, entry.entry_id)
             if device_id:
                 uses.update(await async_variable_uses(hass, device_id, entry))
                 title_targets.update(await async_device_title_targets(hass, device_id))
@@ -410,6 +408,8 @@ async def async_setup_variable_listener(
                     hub_titles[key] = hub.title
         except Exception as err:  # noqa: BLE001 - live values must never break setup
             log.debug("Variable listener: cannot read pages: %s", err)
+        if closed[0]:
+            return
         log.debug("Variable listener: watching %s", sorted(uses))
         # Subscribe to exactly the entities read now; HA skips all others.
         stop_tracking[0]()
@@ -493,7 +493,9 @@ async def async_setup_variable_listener(
             # bridge that is replaced leaves the old id listening and the new
             # one unheard. Ask again, or the next rename goes nowhere.
             _queue(stale)
-            hass.async_create_task(_refresh_watched())
+            entry.async_create_background_task(
+                hass, _refresh_watched(), "lizaip variable listener refresh",
+            )
 
     def _repaint_every_titled_page() -> None:
         # Neither the area nor the label registry says in its event which
@@ -534,11 +536,16 @@ async def async_setup_variable_listener(
             _queue(pages)
 
     async def _on_config_changed(event: Event) -> None:
-        if event.data.get("entry_id") == entry.entry_id:
-            # The config sync that the same event starts rebuilds every page,
-            # so a refresh still waiting would only repeat it.
-            pending.clear()
-            await _refresh_watched()
+        if event.data.get("entry_id") != entry.entry_id:
+            return
+        if event.data.get("order_only"):
+            # The same pages with the same content, in a new order: no use
+            # moved, and no sync follows to send what is still pending.
+            return
+        # The config sync that the same event starts rebuilds every page,
+        # so a refresh still waiting would only repeat it.
+        pending.clear()
+        await _refresh_watched()
 
     await _refresh_watched()
     unsubs = [
@@ -551,7 +558,9 @@ async def async_setup_variable_listener(
     ]
 
     def _cleanup() -> None:
+        closed[0] = True
         stop_tracking[0]()
+        stop_tracking[0] = lambda: None
         for unsub in unsubs:
             unsub()
         if timer[0] is not None:

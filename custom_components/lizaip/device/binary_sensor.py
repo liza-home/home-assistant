@@ -22,7 +22,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
     async_add_entities([
         LizaIPInHandSensor(connection, entry),
         LizaIPChargingSensor(connection, entry),
@@ -60,11 +60,8 @@ class LizaIPInHandSensor(LizaIPEntity, BinarySensorEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._connection.register_sensor("in_hand", self._handle_update)
+        self.async_on_remove(self._connection.register_sensor("in_hand", self._handle_update))
 
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_sensor("in_hand")
-        await super().async_will_remove_from_hass()
 
     def _handle_update(self, value: float) -> None:
         self._attr_is_on = bool(value)
@@ -96,11 +93,8 @@ class LizaIPChargingSensor(LizaIPEntity, BinarySensorEntity, RestoreEntity):
         if self._attr_is_on is None and (last := await self.async_get_last_state()):
             if last.state in ("on", "off"):
                 self._attr_is_on = last.state == "on"
-        self._connection.register_sensor("charging", self._handle_update)
+        self.async_on_remove(self._connection.register_sensor("charging", self._handle_update))
 
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_sensor("charging")
-        await super().async_will_remove_from_hass()
 
     def _handle_update(self, value: float) -> None:
         self._attr_is_on = bool(value)

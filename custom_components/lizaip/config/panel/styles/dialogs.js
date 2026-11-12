@@ -94,10 +94,6 @@ export const STYLES_DIALOGS = `
     color: var(--liza-muted-text);
     margin: -8px 0 16px 0;
   }
-  .template-name-input {
-    display: block;
-    width: 100%;
-  }
 
   /* A form step carries its own rhythm, so the gaps between its fields do not
      depend on whatever margin the input component leaves behind. */

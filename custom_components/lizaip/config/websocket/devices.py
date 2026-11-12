@@ -39,7 +39,7 @@ from ..diagnostics_bundle import (
     steps_for_scope,
 )
 from ...runtime import (
-    _resolve_device_id,
+    resolve_device_id,
     debug_available,
     entry_connection,
     find_store,
@@ -60,7 +60,8 @@ from ..blueprint import async_get_blueprint
 from ..const import PAGE_ID_SCHEMA
 from ..device_sync import sync_config_to_device
 from ..events import fire_config_changed
-from .common import live_connection, refresh_state_listener
+from ..listeners import refresh_state_listener
+from .common import live_connection, send_failure
 from .settings import async_reload_themes
 
 _LOGGER = logging.getLogger(__name__)
@@ -275,7 +276,7 @@ def device_list(hass: HomeAssistant, user) -> list[dict]:
         available = bool(conn and conn.connected)
         dev = entry_devices[0]
         device_name = (dev.name_by_user or dev.name or "").strip()
-        device_id = conn._device_id if available else (entry.unique_id or entry.data.get("device_id"))
+        device_id = conn.device_id if available else (entry.unique_id or entry.data.get("device_id"))
         title = device_name or (entry.title or "").strip() or device_id or entry.entry_id or "lizaIP"
         row = {
             "entry_id": entry.entry_id,
@@ -414,9 +415,22 @@ async def ws_goto_page(hass: HomeAssistant, connection, msg: dict) -> None:
         return
     try:
         await conn.goto_page(msg["page_id"])
-        connection.send_result(msg["id"], {"success": True})
-    except Exception as err:
-        connection.send_error(msg["id"], "failed", str(err))
+    except Exception as err:  # noqa: BLE001
+        send_failure(hass, connection, msg, "failed", err, logger=_LOGGER, what="Opening the page")
+        return
+    connection.send_result(msg["id"], {"success": True})
+
+
+async def _wipe_pages(conn) -> None:
+    """Empty the remote under the sync lock, ready to be rebuilt from scratch.
+
+    `clear_all` only forgets the page list; the pages the device refused
+    before (for lack of room) are retried too, because a remote with nothing on
+    it has no reason to refuse them.
+    """
+    async with conn.page_cache.lock:
+        await conn.clear_all()
+        conn.page_cache.reset()
 
 
 @websocket_api.websocket_command({
@@ -442,10 +456,11 @@ async def ws_clear_device_pages(hass: HomeAssistant, connection, msg: dict) -> N
     if conn is None:
         return
     try:
-        async with conn.page_cache.lock:
-            await conn.clear_all()
+        await _wipe_pages(conn)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "failed", str(err))
+        send_failure(
+            hass, connection, msg, "failed", err, logger=_LOGGER, what="Clearing the device's pages",
+        )
         return
 
     # Outside the lock: `sync_config_to_device` takes it itself.
@@ -477,7 +492,7 @@ async def ws_restore_config(hass: HomeAssistant, connection, msg: dict) -> None:
     restored at that point, and the user is told the device will catch up rather
     than that nothing happened.
     """
-    device_id = _resolve_device_id(hass, msg["entry_id"])
+    device_id = resolve_device_id(hass, msg["entry_id"])
     if not device_id:
         connection.send_error(msg["id"], "not_found", "Device not found")
         return
@@ -491,7 +506,7 @@ async def ws_restore_config(hass: HomeAssistant, connection, msg: dict) -> None:
 
     # The upload view refuses these too; this is the gate that counts, because
     # a theme lands in the library every remote draws from.
-    if not connection.user.is_admin and archive_carries_themes(parsed["files"]):
+    if not is_admin_user(connection.user) and archive_carries_themes(parsed["files"]):
         connection.send_error(
             msg["id"], "unauthorized",
             "This archive carries a theme, which every remote shares. "
@@ -547,16 +562,12 @@ async def _apply_restore(
     if conn is not None and conn.connected:
         async def _resync() -> None:
             try:
-                async with conn.page_cache.lock:
-                    await conn.clear_all()
-                    # `forget` keeps the pages the device refused before, and a
-                    # remote with nothing on it has no reason to refuse them.
-                    conn.page_cache.reset()
+                await _wipe_pages(conn)
                 await sync_config_to_device(hass, entry)
             except Exception as err:  # noqa: BLE001 — the files are already restored
                 log.warning("Re-syncing after a restore failed: %s", err)
 
-        hass.async_create_task(_resync(), f"lizaip restore re-sync {device_id}")
+        entry.async_create_background_task(hass, _resync(), f"lizaip restore re-sync {device_id}")
 
     connection.send_result(msg["id"], {
         "success": True,

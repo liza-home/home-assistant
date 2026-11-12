@@ -25,7 +25,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
 
     # Brightness is HA → device direction (static entity, always present)
     async_add_entities([LizaIPBrightness(connection, entry)])
@@ -43,7 +43,7 @@ async def async_setup_entry(
             known.update(s._slider_id for s in new)
             async_add_entities(new)
 
-    connection.register_discovery(on_discovery)
+    entry.async_on_unload(connection.register_discovery(on_discovery))
 
 
 
@@ -72,11 +72,8 @@ class LizaIPBrightness(LizaIPEntity, NumberEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._connection.register_brightness(self._handle_brightness_state)
+        self.async_on_remove(self._connection.register_brightness(self._handle_brightness_state))
 
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_brightness(self._handle_brightness_state)
-        await super().async_will_remove_from_hass()
 
     def _handle_brightness_state(self, value: float, automatic: bool) -> None:
         self._automatic = automatic
@@ -140,10 +137,9 @@ class LizaIPSlider(LizaIPEntity, NumberEntity):
             immediate=True,
             function=self._write_now,
         )
-        self._connection.register_button(self._slider_id, self._handle_event)
+        self.async_on_remove(self._connection.register_button(self._slider_id, self._handle_event))
 
     async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_button(self._slider_id)
         if self._debouncer is not None:
             # Without this a pending trailing call would fire against a removed
             # entity and raise on `async_write_ha_state`.

@@ -111,14 +111,7 @@ _WRITE_LOCK_KEY = f"{DOMAIN}_llm_write_lock"
 
 
 def _write_lock(hass: HomeAssistant) -> asyncio.Lock:
-    data = getattr(hass, "data", None)
-    if isinstance(data, dict):
-        return data.setdefault(_WRITE_LOCK_KEY, asyncio.Lock())
-    lock = getattr(hass, "_lizaip_llm_write_lock", None)
-    if lock is None:
-        lock = asyncio.Lock()
-        setattr(hass, "_lizaip_llm_write_lock", lock)
-    return lock
+    return hass.data.setdefault(_WRITE_LOCK_KEY, asyncio.Lock())
 
 
 def _serialized(call):
@@ -140,17 +133,17 @@ def _serialized(call):
 
 
 def _entries(hass: HomeAssistant) -> list:
-    from .runtime import _resolve_device_id
+    from .runtime import resolve_device_id
 
     return [
         entry for entry in hass.config_entries.async_entries(DOMAIN)
-        if _resolve_device_id(hass, entry.entry_id)
+        if resolve_device_id(hass, entry.entry_id)
     ]
 
 
 def _remote(hass: HomeAssistant, wanted: str | None) -> tuple[Any, str]:
     """``(entry, device_id)`` for the remote named by *wanted*, or the only one."""
-    from .runtime import _resolve_device_id
+    from .runtime import resolve_device_id
 
     entries = _entries(hass)
     if not entries:
@@ -170,7 +163,7 @@ def _remote(hass: HomeAssistant, wanted: str | None) -> tuple[Any, str]:
             else f"No single remote matches {wanted!r}; remotes: {names}"
         )
     entry = matches[0]
-    return entry, _resolve_device_id(hass, entry.entry_id)
+    return entry, resolve_device_id(hass, entry.entry_id)
 
 
 async def _require_admin(hass: HomeAssistant, llm_context: llm.LLMContext) -> None:
@@ -318,55 +311,11 @@ def _generate(page_key: str, buttons: dict, hass: HomeAssistant):
 
 async def _notify(hass: HomeAssistant, entry_id: str) -> None:
     from .config.events import fire_config_changed
-    from .config.websocket.common import refresh_state_listener, schedule_push_rescan
+    from .config.listeners import refresh_state_listener, schedule_push_rescan
 
     await refresh_state_listener(hass, entry_id)
     fire_config_changed(hass, entry_id)
     schedule_push_rescan(hass, entry_id)
-
-
-def _is_picture_part(part: str) -> bool:
-    from .imgserv.const import PART_SOURCE_TYPES, is_address
-
-    if is_address(part):
-        return True
-    m = re.match(r"^([a-z][a-z0-9_]*):", part)
-    return bool(m) and m.group(1) not in ("text", "ref") and (
-        m.group(1) in PART_SOURCE_TYPES or ":" in part
-    )
-
-
-def _title_parts(title: str) -> tuple[list[str], str]:
-    """The words and the first picture of a page's title.
-
-    Variables are left out (they would be read against the wrong page), and so
-    are a part's options (``text:demo?percent=47``).
-    """
-    from .imgserv.const import split_source_parts
-
-    words: list[str] = []
-    picture = ""
-    for part in split_source_parts(re.sub(r"\$\{[^}]*\}", "", title or "").strip()):
-        part = part.split("?", 1)[0].strip()
-        if not part or part in ("+", "-"):
-            continue
-        if part.startswith("text:"):
-            words.append(part[len("text:"):].strip())
-        elif _is_picture_part(part):
-            picture = picture or part
-        else:
-            words.append(part)
-    return [w for w in words if w and w not in ("+", "-")], picture
-
-
-def _page_name(title: str, page_id: Any = None) -> str:
-    """A page's name: the words of its title, else the name of its picture."""
-    words, picture = _title_parts(title)
-    name = " ".join(words).strip(" +-")
-    if not name and picture and ":" in picture and not picture.startswith(("media:", "/", "http")):
-        slug = picture.split(":", 1)[1]
-        name = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_]+", slug) if w)
-    return name or (f"Page {page_id}" if page_id is not None else "")
 
 
 def _page_title(name: str, icon: str | None) -> str:
@@ -383,9 +332,10 @@ class ListRemotesTool(llm.Tool):
     parameters = vol.Schema({})
 
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .runtime import _get_store
+        from .config.page_templates.sources import page_name
+        from .runtime import get_store
 
-        store = _get_store(hass)
+        store = get_store(hass)
         remotes = []
         for entry in _entries(hass):
             _, device_id = _remote(hass, entry.entry_id)
@@ -396,7 +346,7 @@ class ListRemotesTool(llm.Tool):
                 "pages": [
                     {
                         "page_id": p["id"],
-                        "name": _page_name(str(p.get("title") or ""), p["id"]),
+                        "name": page_name(str(p.get("title") or ""), p["id"]),
                         "title": p.get("title") or "",
                         "subpage": bool(p.get("subpage")),
                     }
@@ -418,7 +368,7 @@ class DescribeRemoteTool(llm.Tool):
     })
 
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .runtime import _get_store
+        from .runtime import get_store
 
         args = tool_input.tool_args
         entry, device_id = _remote(hass, args.get("remote"))
@@ -442,7 +392,7 @@ class DescribeRemoteTool(llm.Tool):
             pages = await store_pages(hass, device_id)
             if page_id not in {p.get("id") for p in pages}:
                 raise LizaIPToolError(f"The remote has no page {page_id}")
-            assignments = await _get_store(hass).async_get_assignments(device_id, page_id) or {}
+            assignments = await get_store(hass).async_get_assignments(device_id, page_id) or {}
             result["page"] = {
                 "page_id": page_id,
                 "buttons": [
@@ -454,9 +404,9 @@ class DescribeRemoteTool(llm.Tool):
 
 
 async def store_pages(hass: HomeAssistant, device_id: str) -> list[dict]:
-    from .runtime import _get_store
+    from .runtime import get_store
 
-    return [p for p in await _get_store(hass).async_get_pages(device_id) if isinstance(p, dict)]
+    return [p for p in await get_store(hass).async_get_pages(device_id) if isinstance(p, dict)]
 
 
 class FindEntitiesTool(llm.Tool):
@@ -521,7 +471,7 @@ class CreatePageTool(llm.Tool):
 
     @_serialized
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.websocket.templates import TemplatePageError, async_add_template_page
+        from .config.template_pages import TemplatePageError, async_add_template_page
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -594,8 +544,8 @@ class UpdateButtonTool(llm.Tool):
 
     @_serialized
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.websocket.common import EMPTY_BUTTON
-        from .runtime import _get_store
+        from .config.const import EMPTY_BUTTON
+        from .runtime import get_store
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -604,7 +554,7 @@ class UpdateButtonTool(llm.Tool):
         if page_id not in {p.get("id") for p in await store_pages(hass, device_id)}:
             raise LizaIPToolError(f"The remote has no page {page_id}")
 
-        store = _get_store(hass)
+        store = get_store(hass)
         assignments = dict(await store.async_get_assignments(device_id, page_id) or {})
         if args.get("delete", False):
             assignments[slot] = dict(EMPTY_BUTTON)
@@ -628,19 +578,11 @@ class UpdateButtonTool(llm.Tool):
             actions, generated = _generate(f"ai_page_{page_id}", buttons_def, hass)
             if not _assigned(generated.get(slot)):
                 raise LizaIPToolError(f"{slot}: the action does not fit the entity")
-            library = await store.async_get_action_library(device_id)
-            by_id = {a.get("id"): i for i, a in enumerate(library)}
-            for action in actions:
-                if action["id"] in by_id:
-                    library[by_id[action["id"]]] = action
-                else:
-                    library.append(action)
-            await store.async_set_action_library(device_id, library)
+            await store.async_merge_actions(device_id, actions)
             assignments[slot] = generated[slot]
             result = _summary(slot, generated[slot])
 
         await store.async_set_assignments(device_id, page_id, assignments)
-        await store.async_recompute_page_hash(device_id, page_id)
         await _notify(hass, entry.entry_id)
         _LOGGER.info("[%s] An assistant changed %s on page %s", entry.title, slot, page_id)
         return {"success": True, "page_id": page_id, "button": result}
@@ -660,9 +602,10 @@ class DeletePageTool(llm.Tool):
 
     @_serialized
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.websocket.common import schedule_push_rescan
-        from .config.websocket.pages import _push_page_list, async_drop_links_to
-        from .runtime import _get_store
+        from .config.page_templates.sources import page_name
+        from .config.listeners import schedule_push_rescan
+        from .config.page_list import async_drop_links_to, push_page_list
+        from .runtime import get_store
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -671,7 +614,7 @@ class DeletePageTool(llm.Tool):
         page = next((p for p in pages if p.get("id") == args["page_id"]), None)
         if page is None:
             raise LizaIPToolError(f"The remote has no page {args['page_id']}")
-        name = _page_name(str(page.get("title") or ""), page["id"])
+        name = page_name(str(page.get("title") or ""), page["id"])
         if name.casefold() != args["name"].strip().casefold():
             raise LizaIPToolError(
                 f"Page {page['id']} is named {name!r}, not {args['name']!r}; nothing deleted"
@@ -680,12 +623,12 @@ class DeletePageTool(llm.Tool):
         if not remaining:
             raise LizaIPToolError("The last page of a remote cannot be deleted")
 
-        store = _get_store(hass)
+        store = get_store(hass)
         await store.async_set_pages(device_id, remaining)
         # Links to the deleted page go with it, as when the panel deletes one.
         await async_drop_links_to(hass, entry.entry_id, store, device_id, {page["id"]})
         schedule_push_rescan(hass, entry.entry_id)
-        await _push_page_list(hass, entry.entry_id, remaining, False)
+        await push_page_list(hass, entry.entry_id, remaining, False)
         _LOGGER.info("[%s] An assistant deleted page %s (%r)", entry.title, page["id"], name)
         return {"success": True, "deleted": {"page_id": page["id"], "name": name}}
 
@@ -696,7 +639,7 @@ _TARGET_LIMIT = 40
 def _template_targets(hass: HomeAssistant, template: dict) -> tuple[str, list[dict]]:
     """``(kind, targets)`` a template can be bound to: devices, hubs, or nothing."""
     from .config.page_templates import is_unbound
-    from .config.websocket.templates import _eligible_devices, selector_integrations
+    from .config.template_targets import eligible_devices, selector_integrations
 
     if is_unbound(template):
         return "none", []
@@ -713,7 +656,7 @@ def _template_targets(hass: HomeAssistant, template: dict) -> tuple[str, list[di
         areas = ar.async_get(hass)
         devices = dr.async_get(hass)
         targets = []
-        for found in _eligible_devices(hass, selector["device"]):
+        for found in eligible_devices(hass, selector["device"]):
             device = devices.async_get(found["id"])
             area = areas.async_get_area(device.area_id) if device and device.area_id else None
             targets.append({
@@ -735,11 +678,11 @@ class ListTemplatesTool(llm.Tool):
 
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
         from .config.page_templates import list_templates, load_template
-        from .config.websocket.templates import _template_has_target
+        from .config.template_targets import template_has_target
 
         result = []
         for meta in await hass.async_add_executor_job(list_templates):
-            if not _template_has_target(hass, meta):
+            if not template_has_target(hass, meta):
                 continue
             template = await hass.async_add_executor_job(load_template, meta["id"]) or {}
             kind, targets = _template_targets(hass, template)
@@ -775,7 +718,7 @@ class AddTemplatePageTool(llm.Tool):
     @_serialized
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
         from .config.page_templates import load_template
-        from .config.websocket.templates import (
+        from .config.template_pages import (
             TemplatePageError,
             async_create_page_from_template,
             template_set_page_ids,
@@ -847,8 +790,8 @@ class MoveButtonTool(llm.Tool):
 
     @_serialized
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.websocket.common import EMPTY_BUTTON
-        from .runtime import _get_store
+        from .config.const import EMPTY_BUTTON
+        from .runtime import get_store
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -859,7 +802,7 @@ class MoveButtonTool(llm.Tool):
         if page_id not in {p.get("id") for p in await store_pages(hass, device_id)}:
             raise LizaIPToolError(f"The remote has no page {page_id}")
 
-        store = _get_store(hass)
+        store = get_store(hass)
         assignments = dict(await store.async_get_assignments(device_id, page_id) or {})
         if not _assigned(assignments.get(source)):
             raise LizaIPToolError(f"{source} is empty; there is nothing to move")
@@ -870,7 +813,6 @@ class MoveButtonTool(llm.Tool):
         assignments[target] = moving
 
         await store.async_set_assignments(device_id, page_id, assignments)
-        await store.async_recompute_page_hash(device_id, page_id)
         await _notify(hass, entry.entry_id)
         _LOGGER.info("[%s] An assistant moved %s to %s on page %s",
                      entry.title, source, target, page_id)
@@ -901,8 +843,9 @@ class UpdatePageTool(llm.Tool):
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
         from .config.const import PAGE_SUBPAGE_KEY
         from .config.events import fire_config_changed
-        from .config.websocket.pages import _push_page_list
-        from .runtime import _get_store
+        from .config.page_templates.sources import page_name, title_parts
+        from .config.page_list import push_page_list
+        from .runtime import get_store
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -910,7 +853,7 @@ class UpdatePageTool(llm.Tool):
         if not any(k in args for k in ("name", "title_icon", "position", "subpage")):
             raise LizaIPToolError("Say what changes: name, title_icon, position or subpage")
 
-        store = _get_store(hass)
+        store = get_store(hass)
         pages = await store_pages(hass, device_id)
         page = next((p for p in pages if p.get("id") == args["page_id"]), None)
         if page is None:
@@ -919,8 +862,8 @@ class UpdatePageTool(llm.Tool):
         content_changed = False
         if "name" in args or "title_icon" in args:
             current = str(page.get("title") or "")
-            name = args.get("name", _page_name(current, page["id"]))
-            icon = args.get("title_icon", _title_parts(current)[1])
+            name = args.get("name", page_name(current, page["id"]))
+            icon = args.get("title_icon", title_parts(current)[1])
             page["title"] = _page_title(name, icon)
             content_changed = True
         if "subpage" in args:
@@ -936,17 +879,15 @@ class UpdatePageTool(llm.Tool):
             moved = True
 
         await store.async_set_pages(device_id, pages)
-        if content_changed:
-            await store.async_recompute_page_hash(device_id, page["id"])
         if moved:
-            await _push_page_list(hass, entry.entry_id, pages, not content_changed)
+            await push_page_list(hass, entry.entry_id, pages, not content_changed)
         else:
             fire_config_changed(hass, entry.entry_id)
         pages = await store_pages(hass, device_id)
         _LOGGER.info("[%s] An assistant changed page %s", entry.title, page["id"])
         return {
             "success": True, "page_id": page["id"],
-            "name": _page_name(str(page.get("title") or ""), page["id"]),
+            "name": page_name(str(page.get("title") or ""), page["id"]),
             "title": page.get("title") or "",
             "position": [p.get("id") for p in pages].index(page["id"]) + 1,
             "subpage": bool(page.get(PAGE_SUBPAGE_KEY)),

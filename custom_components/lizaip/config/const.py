@@ -110,8 +110,8 @@ def generate_page_id(existing_ids: set[int] | None = None) -> int:
 
 # A page the remote keeps but does not show in its swipeable main-page list.
 # Reachable only through a `goto_page` action, so the page still has to exist on
-# the device. It is left out of `main_pages.yaml` and of `set_main_pages`;
-# `page_order.yaml` keeps it, and is what decides its file is not an orphan.
+# the device. It is left out of `set_main_pages`; `page_order.yaml` keeps it,
+# and is what decides its file is not an orphan.
 PAGE_SUBPAGE_KEY = "subpage"
 
 
@@ -313,3 +313,7 @@ def payload_display(assign: dict) -> tuple[str, str]:
         thumb = f"media:{thumb}" if thumb.startswith(("http", "/")) else ""
 
     return str(title), str(thumb)
+
+
+#: A button with nothing on it, as the store and the panel spell it.
+EMPTY_BUTTON = {"action_id": None, "config": [], "tooltip": None, "icon": None, "icon_pinned": False, "state_icons": {}}

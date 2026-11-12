@@ -126,6 +126,8 @@ export const STYLES_SETTINGS = `
   .settings-field-row .config-field-hint { white-space: nowrap; }
   .settings-subheading {
     margin: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--divider-color);
     font-size: var(--liza-font-s);
     font-weight: 500;
     text-transform: uppercase;
@@ -199,6 +201,15 @@ export const STYLES_SETTINGS = `
     border-radius: 8px;
     background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
     font-size: var(--liza-font-s);
+  }
+  .settings-radius-row { display: flex; align-items: center; gap: 16px; }
+  .settings-radius-control { flex: 1 1 auto; min-width: 0; }
+  .settings-radius-control label { display: block; font-weight: 500; }
+  .settings-radius-sample {
+    flex: 0 0 auto; width: 64px; height: 64px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
+    --mdc-icon-size: 32px;
   }
   .settings-sample-source { font-family: monospace; color: var(--liza-muted-text); }
   .settings-sample-arrow { --mdc-icon-size: 16px; color: var(--liza-muted-text); }
@@ -417,27 +428,6 @@ export const STYLES_SETTINGS = `
     display: grid;
     gap: 1px;
   }
-  /* What the section holds, so a shut row can be read. It stays on one line:
-     a wrapped palette would push the rows to different heights. */
-  .theme-edit-value {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    font-size: var(--liza-font-s);
-    color: var(--liza-muted-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .theme-edit-value:empty { display: none; }
-  .theme-edit-dots { display: inline-flex; gap: 3px; }
-  .theme-edit-dots i {
-    display: block;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-  }
   .theme-edit-body { overflow: hidden; }
   .theme-edit-slot {
     display: grid;
@@ -464,12 +454,6 @@ export const STYLES_SETTINGS = `
     font-size: var(--liza-font-s);
   }
   .theme-edit-block { display: grid; gap: 6px; }
-  .theme-edit-block + .theme-edit-block {
-    margin-top: 14px;
-    padding-top: 13px;
-    border-top: 1px solid var(--divider-color, rgba(127,127,127,.18));
-  }
-  .theme-edit-block-head { font-size: var(--liza-font-m); font-weight: 600; }
   .theme-edit-block .theme-edit-colors { margin-top: 2px; }
   .theme-edit-swatch {
     width: 100%;

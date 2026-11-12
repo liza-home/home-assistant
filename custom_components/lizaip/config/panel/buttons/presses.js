@@ -10,10 +10,50 @@ import {
   isGridBtn,
   num,
   SLIDER_VERTICAL_KEY,
-  SLIDER_ICON_HIDDEN_KEY,
 } from "./shared.js";
 
 export const ButtonsPressesMixin = {
+  // The host `_refreshButtonEntitySections` rebuilds: everything on the button
+  // card derived from the button's *entity*, which is chosen inside the action
+  // editor. That editor reports changes through value-changed, but a full
+  // _render() would tear it down mid-edit (`_mountEditor` clears its container
+  // and builds a new ha-automation-action), so this subtree is rebuilt on its
+  // own instead. A stable id, not a class, because the refresh has to find
+  // exactly one of them.
+  //
+  // The Button image and the per-state icon list share this one host. They are
+  // alternatives to each other, and while they briefly lived in separate
+  // regions with a host each, refreshing one without the other could show both
+  // at once. One host makes that unstateable rather than merely handled.
+  //
+  // The Label input is deliberately *not* in the host. It is a sibling, so an
+  // entity change cannot discard a name that has been typed but not yet
+  // confirmed.
+  ENTITY_SECTION_HOST: "#config-card-appearance",
+
+  // The press list's host. A second one, not a second region of the first: the
+  // rows render after the Tooltip and the Tooltip is deliberately not inside a
+  // host at all (see above), so the only way for the list to follow it is to
+  // have a host of its own. Refreshed alongside the first because each row's
+  // derived glyph is resolved against the button's entity domain.
+  PRESS_SECTION_HOST: "#config-card-presses",
+
+  // The button's entity lives inside the action editor, so it changes without
+  // anything on the card being touched. `_onSequenceChanged` cannot answer that
+  // with `_render()`: `_renderDeviceConfig` replaces the whole shadow root and
+  // `_mountEditor` then clears its container and constructs a *new*
+  // `ha-automation-action` — asynchronously, behind `_loadHaComponents()`. The
+  // editor would collapse and lose focus on every change event, which is why
+  // the original only refreshed the SVG and why the entity-derived sections
+  // never appeared until the button was reselected.
+  //
+  // So rebuild only that subtree. The HTML comes from `_htmlButtonConfigPanel`
+  // itself rather than a second builder: every gate those sections have —
+  // `pageSliderFollows`, `isSliderBtn`, an empty `available`, `showButtonIcon`,
+  // `actionStates.length` — is therefore evaluated by the same code that
+  // evaluates it on a full render, and cannot drift into resurrecting a section
+  // that should stay hidden. The rest of the produced markup is discarded; it
+  // is string building, and the editor in it is never mounted.
   _refreshButtonEntitySections() {
     const host = this.shadowRoot?.querySelector(this.ENTITY_SECTION_HOST);
     if (!host) return;
@@ -41,7 +81,12 @@ export const ButtonsPressesMixin = {
     // The press rows, from the same scratch render. Same contract as above,
     // and the same reason for the `: ""` arm.
     const pressHost = this.shadowRoot.querySelector(this.PRESS_SECTION_HOST);
+    // A press's tooltip commits on Enter or blur, so one being typed when the
+    // entity changes is held only by the input the rebuild is about to throw
+    // away. Carried across to its replacement, caret and all.
+    let typing = null;
     if (pressHost) {
+      typing = this._pressFieldInProgress(pressHost);
       const freshPresses = scratch.querySelector(this.PRESS_SECTION_HOST);
       pressHost.innerHTML = freshPresses ? freshPresses.innerHTML : "";
     }
@@ -58,6 +103,28 @@ export const ButtonsPressesMixin = {
     this._syncPressSection(this.shadowRoot, scratch);
 
     this._wireButtonEntitySections(bp, selBtn);
+    // After the wiring, which reads each field's stored value as the one to
+    // compare a commit against: the carried text is then still uncommitted.
+    if (typing) this._restorePressField(pressHost, typing);
+  },
+
+  /** The field inside *host* being typed in, by position, with its text. */
+  _pressFieldInProgress(host) {
+    const active = this.shadowRoot?.activeElement;
+    if (!active || !host.contains?.(active)) return null;
+    const at = [...host.querySelectorAll("input, textarea")].indexOf(active);
+    if (at < 0) return null;
+    return { at, value: active.value, start: active.selectionStart, end: active.selectionEnd };
+  },
+
+  _restorePressField(host, { at, value, start, end }) {
+    const field = host.querySelectorAll("input, textarea")[at];
+    if (!field) return;
+    field.value = value;
+    field.focus?.();
+    try {
+      if (start != null) field.setSelectionRange?.(start, end ?? start);
+    } catch (_) { /* not a text field after all */ }
   },
 
   /**
@@ -188,26 +255,13 @@ export const ButtonsPressesMixin = {
       this._pageDeviceOption(),
     );
 
-    // State icon fields
-    this._wireStateIconPickers(selBtn);
+    // Per-state and per-press icon fields
+    this._wireIconPickers(selBtn);
 
     // Toggle rules
     this._wireToggleSection(selBtn);
   },
 
-  /**
-   * The per-state icon fields under Button icons.
-   *
-   * One picker per row and nothing else. The ✎ that revealed an editor, the ✕
-   * that reset it and the Icon/URL toggle inside it are all gone: the picker is
-   * always visible, takes a custom value, and clearing it *is* the reset.
-   *
-   * The stored value is what the picker shows, not the derived one. That is the
-   * opposite of the Image field above and deliberate: here an empty picker has
-   * to mean "this row inherits the action's icon", and preselecting that icon
-   * would leave no way to say so — every row would read as overridden and the
-   * preview beside it already shows what the device will draw.
-   */
   // ── Virtual toggle button ─────────────────────────────────────────────
   //
   // One button, several steps. The block is a sibling of `config`, never a
@@ -216,10 +270,9 @@ export const ButtonsPressesMixin = {
   // backend derive meaning from `config[0]`, so the editor must never let a
   // toggle empty it.
   //
-  // Two modes, one shape. `state` picks the rule whose `state` matches what the
-  // subject entity reports; `cycle` ignores state and runs the next rule in
-  // order, which is the only thing that works for a device that reports nothing
-  // back (IR blasters, one-way RF).
+  // One mode, `cycle`: each press runs the next rule in order, ignoring state,
+  // which is the only thing that works for a device that reports nothing back
+  // (IR blasters, one-way RF).
 
   // The rules currently stored, always an array so callers can map over it.
   // Defensive rather than trusting: the block round-trips through YAML that a
@@ -266,7 +319,6 @@ export const ButtonsPressesMixin = {
       target.toggle = block;
     }
     this._scheduleAutoSave();
-    this._refreshSVG();
     this._render();
   },
 
@@ -357,6 +409,7 @@ export const ButtonsPressesMixin = {
             this._getTargetEntityFromConfig(rule?.config || []),
             rule?.config,
             rule,
+            true,
           );
       return tip || this._pressDefaultTooltip(rule, this._toggleRuleName(rule));
     });
@@ -374,10 +427,10 @@ export const ButtonsPressesMixin = {
    *
    * Falls back to the row's heading, which is what it used to show outright.
    *
-   * `_computeTooltip` returns a *template* for a two-way service -- a bare
-   * `${_state}`, which the caller persists and the device resolves per press.
+   * `_computeTooltip` returns a *template* for a two-way service --
+   * `{translate: ${_state}}`, which the caller persists and the device resolves per press.
    * Correct to store, unreadable to show: a press duplicated from a
-   * `light.toggle` was headed `${_state}` and offered it as its placeholder,
+   * `light.toggle` was headed `{translate: ${_state}}` and offered it as its placeholder,
    * next to a sibling reading "Apagado".
    *
    * So the template is resolved the way the device resolves it. Not
@@ -394,7 +447,7 @@ export const ButtonsPressesMixin = {
     const entity = this._getTargetEntityFromConfig?.(rule?.config) || "";
     const derived = this._computeTooltip(action, entity, rule?.config);
     if (!derived) return fallback;
-    return this._displayTooltip(derived, action, entity, rule?.config) || fallback;
+    return this._displayTooltip(derived, action, entity, rule?.config, rule, true) || fallback;
   },
 
   /**
@@ -445,7 +498,7 @@ export const ButtonsPressesMixin = {
       : "";
     if (haName) return haName;
     const act = (this._actions || []).find(a => a.id === rule?.action_id);
-    if (act?.name) return act.name;
+    if (act?.name) return this._displayName(act.name);
     return svc ? svc.replace(/_/g, " ") : this._t("toggle_pick_action");
   },
 
@@ -492,30 +545,6 @@ export const ButtonsPressesMixin = {
           // speaker gets the track tokens, one pointed at a lamp does not.
           ...this._tooltipTokenOptions((this._toggleRules(key)[idx] || {}).config),
         },
-      );
-    });
-
-    const entity = this._editAssign(key)?.config
-      ? this._getTargetEntityFromConfig(this._editAssign(key).config)
-      : null;
-    root.querySelectorAll(".icon-picker-slot[data-toggle-idx]").forEach(slot => {
-      const idx = Number(slot.dataset.toggleIdx);
-      const rule = this._toggleRules(key)[idx] || {};
-      // The derived glyph when the press stores none, matching what the render
-      // put in the markup. `_mountIconPicker` assigns `input.value`, so
-      // leaving the fallback out here would blank the prefill a moment after
-      // it was drawn -- and it is what press 1's picker is mounted with.
-      this._mountIconPicker(
-        slot,
-        rule.icon || this._getServiceIcon(rule.config?.[0]?.action || "", entity),
-        (picked) => {
-        this._toggleUpdate(key, (block) => {
-          const row = block.rules[idx];
-          if (!row) return;
-          if (picked) row.icon = picked; else delete row.icon;
-          });
-        },
-        this._pageDeviceOption(),
       );
     });
 
@@ -572,6 +601,10 @@ export const ButtonsPressesMixin = {
     };
 
     rows.forEach(row => {
+      // The same guard as the toggle listener above, for the same reason: a
+      // row that survives `_refreshButtonEntitySections` is wired already.
+      if (row.dataset.pressHighlightBound) return;
+      row.dataset.pressHighlightBound = "1";
       const idx = Number(row.dataset.pressIdx);
       row.addEventListener("focusin", () => mark(idx));
       row.addEventListener("mouseenter", () => mark(idx));
@@ -607,27 +640,85 @@ export const ButtonsPressesMixin = {
     }));
   },
 
-  _wireStateIconPickers(selBtn) {
-    this.shadowRoot.querySelectorAll(".icon-picker-slot[data-state]").forEach(slot => {
-      const state = slot.dataset.state;
-      const assign = this._editAssign(selBtn.key) || {};
-      this._mountIconPicker(slot, (assign.state_icons || {})[state] || "", (picked) => {
-        const target = this._editAssignEnsure(selBtn.key);
-        if (!target.state_icons) target.state_icons = {};
-        if (picked) {
-          target.state_icons[state] = picked;
-        } else {
-          delete target.state_icons[state];
+  /**
+   * Every icon picker the card draws for a step -- the button's per-state rows
+   * and each press row's fields, which are the same fields.
+   *
+   * One picker per row and nothing else: it is always visible, takes a custom
+   * value, and clearing it *is* the reset.
+   *
+   * A state row shows the stored value, not the derived one. That is the
+   * opposite of the plain Icon field and deliberate: here an empty picker has
+   * to mean "this row inherits the action's icon", and preselecting that icon
+   * would leave no way to say so — every row would read as overridden and the
+   * preview beside it already shows what the device will draw.
+   */
+  _wireIconPickers(selBtn) {
+    const key = selBtn.key;
+    // A press slot only exists on a grid button with the feature on. Asking
+    // for them anyway lets a slider's panel bind the grid editor's pickers --
+    // the two live in one shadow root.
+    const sel = isGridBtn(key) && this._toggleFeatureEnabled?.()
+      ? ".icon-picker-slot[data-state], .icon-picker-slot[data-toggle-idx]"
+      : ".icon-picker-slot[data-state]";
+    this.shadowRoot.querySelectorAll(sel).forEach(slot => {
+      // Two attributes say everything: which step (`data-toggle-idx`, absent
+      // for the button) and which state (`data-state`, absent when the action
+      // has none).
+      const { state, toggleIdx } = slot.dataset;
+      const idx = toggleIdx === undefined ? null : Number(toggleIdx);
+      const step = idx === null
+        ? (this._editAssign(key) || {})
+        : (this._toggleRules(key)[idx] || {});
+      const stored = state ? (step.state_icons || {})[state] || "" : step.icon || "";
+      // The plain field needs the derived glyph: `_mountIconPicker` assigns
+      // `input.value`, so without it the prefill is blanked right after it is
+      // drawn. A state row shows what is stored and nothing else.
+      const mounted = state ? stored : stored || this._stepDerivedIcon(step, key);
+      this._mountIconPicker(slot, mounted, (picked) => {
+        if (idx !== null) {
+          this._toggleUpdate(key, (block) => {
+            if (block.rules[idx]) this._writeStepIcon(block.rules[idx], state, picked);
+          });
+          return;
         }
-        // Prune the table when the last override goes. Only the old ✕ did this,
-        // so clearing through the picker left `{}` behind — and `store.py` folds
-        // `state_icons` into the config hash, which made an edit that changed
-        // nothing look like a change and resynced the device for it.
-        if (Object.keys(target.state_icons).length === 0) delete target.state_icons;
+        this._writeStepIcon(this._editAssignEnsure(key), state, picked);
         this._scheduleAutoSave();
-        this._refreshSVG();
         this._render();
       }, this._pageDeviceOption());
     });
+  },
+
+  _writeStepIcon(step, state, picked) {
+    if (!state) {
+      if (picked) step.icon = picked; else delete step.icon;
+      return;
+    }
+    if (!step.state_icons) step.state_icons = {};
+    if (picked) step.state_icons[state] = picked;
+    else delete step.state_icons[state];
+    // Prune the table when the last override goes: `store.py` folds
+    // `state_icons` into the config hash, so `{}` would make an edit that
+    // changed nothing look like a change and resync the device for it.
+    if (Object.keys(step.state_icons).length === 0) delete step.state_icons;
+  },
+
+  // The subject a step speaks about: its own target, or the button's when the
+  // step names none.
+  _stepEntity(step, key) {
+    const assign = this._editAssign(key) || {};
+    return this._getTargetEntityFromConfig(step.config || [])
+      || this._getTargetEntityFromConfig(assign.config || []);
+  },
+
+  // What the device draws for a step that stores no icon of its own: the one
+  // for the state its target is in, or the step's service icon.
+  _stepDerivedIcon(step, key) {
+    const service = step.config?.[0]?.action || "";
+    return this._getDisplayIconForState(
+        { service },
+        this._stepEntity(step, key),
+        step.state_icons,
+      );
   },
 };

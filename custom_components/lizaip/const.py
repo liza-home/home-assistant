@@ -19,6 +19,9 @@ from typing import Final
 
 DOMAIN: Final = "lizaip"
 
+#: Pages are 1-based; a page dict missing "id" is treated as the first page.
+DEFAULT_PAGE_ID: Final = 1
+
 # Config entry option key for optimistic icon updates
 CONF_OPTIMISTIC_UPDATES: Final = "optimistic_updates"
 

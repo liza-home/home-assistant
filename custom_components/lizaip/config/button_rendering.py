@@ -46,10 +46,11 @@ from ..shared.services import (
     service_name,
     NEXT_STATE_MAP,
     attr_str,
-    catchall_state_icon,
+    state_icon_override,
     is_attribute_state_service,
     is_state_toggle_service,
     is_two_way_service,
+    toggles_attribute,
     icon_varies_with_state,
     is_stateless_service,
     scope_action_states,
@@ -61,8 +62,10 @@ from ..shared.history import history_entities
 from ..shared.icon_defaults import icon_defaults
 from ..shared.i18n import button_tooltips, get_ui_language, translate_inline
 from ..shared.tooltips import (
-    STATE_TOKEN,
-    state_token_tooltip,
+    STATE_TOOLTIP,
+    state_token_key,
+    translate_state,
+    state_label,
 )
 from ..shared.assignment import (
     name_is_user_written,
@@ -82,6 +85,7 @@ from ..action_controller import (
     subject_for_assign,
 )
 from ..action_controller.icons import toggle_icon, toggle_tooltip
+from ..action_controller.toggle import MODE_CYCLE, toggle_mode
 from .internal_commands import (
     command_tooltip as internal_command_tooltip,
     command_target_name as internal_command_target_name,
@@ -214,12 +218,18 @@ def _fill_tooltip_tokens(
     current_state = state_obj.state if state_obj else ""
     attributes = dict(state_obj.attributes or {}) if state_obj else None
 
-    # The step's own service data: a button that names a literal value for the
-    # attribute it sets (`is_volume_muted: true`) says its own direction.
     step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
     data = step.get("data") or {}
 
-    values = {"_state": state_token_tooltip(svc, current_state, lang, attributes, data)}
+    # A cycle and a value setter both run what they store, so the label names
+    # that value. A boolean setter flips the attribute, so it names nothing.
+    as_press = bool(assign.get("_press")) or toggle_mode(assign) == MODE_CYCLE
+    names_direction = as_press or not toggles_attribute(svc, data)
+    state_key = state_token_key(
+        svc, current_state, attributes, data if names_direction else None,
+    )
+    text = translate_state(text, state_key, lang)
+    values = {"_state": state_key}
 
     # `${_name}` is a device-local command's token and nobody else's. The key
     # is only added when the button carries one, so on a plain HA action the
@@ -298,8 +308,6 @@ def _resolve_button_tooltip_ladder(
     # name it was merely given must not shadow the payload; one the user typed
     # still wins. Stripped first, as `action_controller` does.
     stored_name = (assign.get("tooltip") or "").strip()
-    # The panel records who wrote the name.
-    user_named = name_is_user_written(assign)
     # A stored tooltip is printed as it reads, its placeholders filled -- empty
     # included: `${_device.media_title_prev}` with nothing before it reads as
     # nothing, not as a derived "Previous". It is what the panel's Tooltip field
@@ -309,13 +317,9 @@ def _resolve_button_tooltip_ladder(
         stored_name, assign, hass, state, library_name,
     ):
         if "${" not in stored_name:
-            # As the panel's `_displayTooltip`: a preset's English name in the
-            # remote's language, a name the user typed as typed;
-            # `{translate: brightness} 25 %` in the remote's language.
+            # Printed as written; only `{translate: …}` is translated.
             lang = get_ui_language(hass, entry)
-            return clean_tooltip_text(
-                button_tooltips.localize(translate_inline(stored_name, lang), lang, user_named)
-            )
+            return clean_tooltip_text(translate_inline(stored_name, lang))
         return clean_tooltip_text(
             _fill_tooltip_tokens(
                 stored_name, assign, hass, entry, internal_context, state
@@ -334,18 +338,15 @@ def _resolve_button_tooltip_ladder(
             internal_context,
             _internal_target_hint(assign),
         )
-        return tooltip or stored_name or internal_cmd.name
+        return tooltip or clean_tooltip_text(translate_inline(stored_name, get_ui_language(hass, entry))) or internal_cmd.name
 
     payload_title, _ = payload_display(assign)
     if payload_title:
         return payload_title
 
-    static_name = stored_name
-
     # The device's own language option first, then the panel/HA language.
     lang = get_ui_language(hass, entry)
-    # Presets hardcode English here ("Power", "Volume Up").
-    static_name = button_tooltips.localize(static_name, lang, user_named)
+    static_name = clean_tooltip_text(translate_inline(stored_name, lang))
 
     if not svc:
         return static_name
@@ -359,7 +360,7 @@ def _resolve_button_tooltip_ladder(
     # read a frozen "Mute" while its own icon already showed the opposite.
     if is_attribute_state_service(svc):
         attr_tooltip = _fill_tooltip_tokens(
-            STATE_TOKEN, assign, hass, entry, state=state,
+            STATE_TOOLTIP, assign, hass, entry, state=state,
         )
         if attr_tooltip:
             return attr_tooltip
@@ -368,7 +369,7 @@ def _resolve_button_tooltip_ladder(
     if is_state_toggle_service(svc) and current_state:
         next_key = NEXT_STATE_MAP.get(current_state)
         if next_key:
-            return button_tooltips.get(next_key, lang)
+            return state_label(next_key, lang, True)
 
     # Stateless services with a predefined name — use the button name as tooltip
     # (e.g., template buttons: "CH+", "Up", "OK" instead of generic "Send Command")
@@ -393,10 +394,14 @@ def button_icon_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> 
     derives instead, the two surfaces disagree -- the user picks an icon in the
     button config view and the device shows something else.
 
-    The device may only overrule the stored image when it has something better
-    to say, which is the *current state*. That is exactly a service whose icon
-    varies with state: `toggle` shows Pause while playing, and a frozen image
-    could not. Every other service has one face, so the stored image stands.
+    An image the user picked (`icon_pinned`) always stands, as it does in the
+    panel: a play/pause button the user gave a picture keeps it when pressed.
+
+    Otherwise the device may only overrule the stored image when it has
+    something better to say, which is the *current state*. That is exactly a
+    service whose icon varies with state: `toggle` shows Pause while playing,
+    and a frozen image could not. Every other service has one face, so the
+    stored image stands.
 
     It used to ask `is_stateless_service`, a strictly narrower set:
     `media_player.turn_off` is one-way rather than stateless, so its stored
@@ -409,12 +414,44 @@ def button_icon_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> 
     icon = assign.get("icon")
     if not icon:
         return False
+    if assign.get("icon_pinned"):
+        return True
     if svc_name and icon_varies_with_state(svc_name):
         return False
-    return bool(
-        assign.get("icon_pinned") or not payload_thumb or icon == payload_thumb
-    )
+    return not payload_thumb or icon == payload_thumb
 
+
+def button_identity_icon(assign: dict, svc_name: str) -> str | None:
+    """The button's own image or payload thumbnail, if either applies.
+
+    Shared by the sync's ladder and the live repaints, so a press or a state
+    change cannot swap the user's picture for the state glyph the sync withheld.
+    """
+    _, payload_thumb = payload_display(assign)
+    if button_icon_wins(assign, svc_name, payload_thumb):
+        return assign["icon"]
+    return payload_thumb or None
+
+
+
+def live_button_icon(
+    assign: dict, state: Any, service: str, fallback: str | None, hass: Any,
+) -> str | None:
+    """The glyph a live repaint sends, in the sync's order.
+
+    The button's own row for *state*, then its own image, then *fallback*
+    (the theme's glyph for the state). Each reads its variables; one with
+    no value falls to the next. Shared by the press and the state listener.
+    """
+    return (
+        resolve_image_tokens(
+            state_icon_override(assign.get("state_icons") or {}, state, service), hass,
+        )
+        or resolve_image_tokens(
+            button_identity_icon(with_resolved_icon(assign, hass), service_name(service)), hass,
+        )
+        or resolve_image_tokens(fallback, hass)
+    )
 
 @dataclass(frozen=True)
 class _IconSubject:
@@ -524,25 +561,9 @@ def _icon_from_toggle_rule(s: _IconSubject) -> str | None:
 def _icon_from_button_overrides(s: _IconSubject) -> str | None:
     """Rung 1: the per-button state_icons the user set on this button alone."""
     state_icons = s.state_icons
-    if state_icons and s.current_state:
-        matched = state_icons.get(s.current_state.state)
-        if matched:
-            return matched
-        for key, icon in state_icons.items():
-            if icon and ":" in key:
-                attr_name, attr_val = key.split(":", 1)
-                if attr_str(s.current_state.attributes.get(attr_name, "")) == attr_val:
-                    return icon
-        # A state with no row of its own (idle, buffering) wears the face of the
-        # state that stands in for it, so a custom icon keeps applying.
-        catchall = catchall_state_icon(
-            state_icons,
-            s.current_state.entity_id.split(".")[0],
-            s.current_state.state,
-            s.svc_name,
-        )
-        if catchall:
-            return catchall
+    matched = state_icon_override(state_icons, s.current_state, s.svc_name)
+    if matched:
+        return matched
     if state_icons:
         return next((v for v in state_icons.values() if v), None)
     return None
@@ -557,10 +578,7 @@ def _icon_from_button_identity(s: _IconSubject) -> str | None:
     silently would not have. The button's own media identity beats the shared,
     service-keyed action-library icon, which may belong to a different item.
     """
-    _, payload_thumb = payload_display(s.assign)
-    if button_icon_wins(s.assign, s.svc_name, payload_thumb):
-        return s.assign["icon"]
-    return payload_thumb or None
+    return button_identity_icon(s.assign, s.svc_name)
 
 
 def _icon_for_unresolvable(s: _IconSubject) -> str | None:

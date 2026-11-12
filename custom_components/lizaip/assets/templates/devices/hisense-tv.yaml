@@ -125,13 +125,13 @@ pages:
         goto_page: digits
 
       button_9:
-        icon: mdi:rewind
-        tooltip: {translate: previous}
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
         config:
           - action: mqtt.publish
             data:
               topic: hisense/remoteapp/tv/remote_service/HomeAssistant/actions/sendkey
-              payload: KEY_BACK
+              payload: KEY_MUTE
 
       button_10:
         icon: mdi:arrow-down-bold-outline

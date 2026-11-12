@@ -5,23 +5,7 @@
  * slices into a single object, so these methods still run with `this` bound
  * to the panel element and may call any other method on it.
  */
-import {
-  isConfigured,
-} from "./shared.js";
-
 export const ButtonsPageStripMixin = {
-  _pageFillCounts(page, bp) {
-    const currentPageId = this._pages[this._currentPageIdx]?.id;
-    const pageAssigns = (page.id === currentPageId)
-      ? this._assignments
-      : (this._pageCache[page.id] || {});
-    const allBtnKeys = bp.buttons.map(b => b.key);
-    return {
-      filled: allBtnKeys.filter(k => isConfigured(pageAssigns[k])).length,
-      total: allBtnKeys.length,
-    };
-  },
-
   /**
    * Move the page thumbnails into `this._pages` order without re-rendering.
    *
@@ -68,6 +52,20 @@ export const ButtonsPageStripMixin = {
   },
 
   /**
+   * The current index of the page a thumbnail element belongs to.
+   *
+   * Listeners outlive a reorder (`_reorderPageDom` moves the nodes and keeps
+   * their wiring), so an index captured when they were attached can name a
+   * neighbour by the time they fire. The page id is what stays true; -1 when
+   * that page is gone.
+   */
+  _pageIdxOf(el) {
+    const id = el?.closest?.("[data-page-id]")?.dataset?.pageId ?? el?.dataset?.pageId;
+    if (id == null) return parseInt(el?.dataset?.pageIdx);
+    return this._pages.findIndex(p => String(p.id) === String(id));
+  },
+
+  /**
    * Rewrite the position-derived bits of each thumb after a move.
    *
    * `data-page-idx` is an index into `_pages`, and the spoken name carries
@@ -102,34 +100,21 @@ export const ButtonsPageStripMixin = {
     });
   },
 
-  // --- Goto links ------------------------------------------------------------
-  //
-  // A button that opens another page is the one assignment whose *target* is
-  // also on screen, and nothing said so: the card named the page in words, but
-  // finding it in a strip of lookalike thumbnails was still a reading exercise.
-  // The link draws the relation the user already configured.
-  //
-  // It is drawn from both ends, because the two questions a user asks about
-  // navigation are opposites of each other. Hovering a button, the question is
-  // "where does this go", and one link answers it. Hovering a page, the
-  // question becomes "how is this page reached", which only the whole set of
-  // buttons pointing at it can answer. A page nothing points at draws nothing,
-  // which is the honest and useful answer: that page is unreachable from the
-  // remote.
-  //
-  // Hover and nothing else. Selection does not draw links: a selected button
-  // keeps its card open while the user works elsewhere, and a link left
-  // standing for that long reads as part of the template rather than as an
-  // answer to a question just asked.
-
   /**
-   * The page an assignment opens, or null when it opens none.
+   * Where a dragged page would land, as an index into the reordered list.
    *
-   * `_internalTargetPage` is the single owner of "which page does this name",
-   * and it answers null for everything that is not a resolvable page: a plain
-   * HA service call, a command targeting something else, a deleted page, a name
-   * two pages share. Each of those is a case where there is no one page to
-   * point at, so each correctly draws nothing.
+   * Measured against the thumbs' midpoints rather than asking which thumb is
+   * under the pointer. "Which thumb" cannot answer the only question a reorder
+   * asks -- before it or after it -- which is why the old blue tint on the
+   * hovered thumb told the user nothing they could act on.
+   *
+   * Reading rects instead of elements is also what makes the slot *after the
+   * last page* addressable. There is no element there to hover, so the old
+   * handler could only ever drop onto the final thumb and let splice decide.
+   *
+   * `rects` is in page order and excludes the add button, which shares the
+   * strip but is not a page. Returns an index in the list as it will be once
+   * the move is applied, which is what `_reorderPage` takes.
    */
 
   _pageDropIndex(clientX, rects, dragIdx) {

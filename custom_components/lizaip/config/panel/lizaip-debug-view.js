@@ -43,6 +43,52 @@ export const TEMPLATE_ACTIONS = { random_pages: "_showRandomPagesDialog" };
 
 export const DebugViewMixin = {
   /**
+   * Forget every debug reading: at construction, and whenever the device
+   * changes. Every one belongs to the device being left. A probe result or a
+   * log-port state carried across would describe the wrong remote -- and the
+   * port toggle would offer to switch off a stream on a device it was never
+   * started for.
+   *
+   * Lives here rather than in the panel because a stable release strips this
+   * file, and with it every field below; the panel calls it optionally.
+   */
+  _resetDebugState() {
+    this._debugProbe = null;
+    this._debugReport = null;
+    // Loaded by the debug tab itself when it is opened, rather than on demand:
+    // null means "not read yet", which is what triggers that first read. Cleared
+    // to null rather than kept: these are one device's log levels, and showing
+    // them under another would invite a change aimed at the wrong remote.
+    this._debugLogging = null;
+    this._debugLoggingError = null;
+    // Which report sections the reader has indented, by endpoint.
+    this._debugPretty = {};
+    // Which report sections are expanded, and which are being read right now.
+    // Kept here rather than left to the `<details>` elements: every render
+    // rebuilds them, so an expansion that lived only in the DOM would close
+    // itself the moment the section it asked for arrived.
+    this._debugOpen = {};
+    this._debugSectionBusy = {};
+    // "off" is where the switch starts, not what the device is: the port is
+    // read from `/Device/Control` when the tab opens. `_known` says whether
+    // that read has happened, `_following` whether we are reading the port --
+    // an open port outlives a restart of Home Assistant, the task reading it
+    // does not.
+    this._debugPortOn = false;
+    this._debugPortKnown = false;
+    this._debugPortFollowing = null;
+    // One error slot per action, not one shared one: a shared slot showed a
+    // failed report inside the reachability card. The matching busy flags are
+    // not reset -- a call still running belongs to the device it started on,
+    // and each one checks for itself whether that is still the one shown.
+    this._debugProbeError = null;
+    this._debugReportError = null;
+    this._debugPortError = null;
+    this._debugTraffic = null;
+    this._debugTrafficError = null;
+  },
+
+  /**
    * Ask for the numbers behind a batch of random test pages, then add them.
    *
    * The last step of the add-page walk, drawn into the dialog already open and
@@ -79,10 +125,11 @@ export const DebugViewMixin = {
           ${field("liza-random-tooltip", "random_pages_tooltip",
                   'autocomplete="off" value="Test"')}
         </div>
-        <div class="add-page-foot is-form-foot">
-          <ha-button appearance="plain" class="add-page-cancel">${this._t("cancel")}</ha-button>
-          <ha-button variant="brand" class="template-confirm-btn">${this._t("random_pages_create")}</ha-button>
-        </div>`;
+        ${this._htmlDialogActions({
+          row: "add-page-foot is-form-foot",
+          dismiss: { cls: "add-page-cancel", label: this._t("cancel") },
+          commit: { cls: "template-confirm-btn", label: this._t("random_pages_create") },
+        })}`;
 
     this._wireAddPageBack(host, () => back());
     host.querySelector(".add-page-cancel").addEventListener("click", close);
@@ -119,40 +166,35 @@ export const DebugViewMixin = {
   _htmlDebugView() {
     return `
       <div class="debug-view">
+        <!-- First: how full the remote's memories are, as bars in the header.
+             NB: no backticks in this comment; it sits in a template. -->
+        ${this._htmlDebugMemoryCard?.() || ""}
+
         <ha-card outlined class="debug-card">
-          <div class="actions-card-header">
-            <h2 class="actions-card-title">${this._t("debug_reachability")}</h2>
-          </div>
+          ${this._htmlCardHeader("debug_reachability")}
           <div class="debug-body">
             ${this._htmlDebugProbeResult()}
             ${this._debugProbeError ? `<p class="debug-error">${this._esc(this._debugProbeError)}</p>` : ""}
             <div class="debug-actions">
               <ha-button variant="brand" class="debug-btn primary debug-probe-btn" ${this._debugProbeBusy ? "disabled" : ""}>
-                ${this._debugProbeBusy ? "Ping…" : "Ping"}
+                ${this._esc(this._t(this._debugProbeBusy ? "debug_pinging" : "debug_ping"))}
               </ha-button>
             </div>
           </div>
         </ha-card>
 
-        <!-- Second: how the WebSocket link behaves once it is up -- round
+        <!-- Then: how the WebSocket link behaves once it is up -- round
              trips, answers that came late or never. Read-only, like the
              probe above it.
              NB: no backticks in this comment; it sits in a template. -->
         ${this._htmlDebugTrafficCard()}
 
-        <!-- How full the remote's memories are, as bars in the header.
-             NB: no backticks in this comment; it sits in a template. -->
-        ${this._htmlSettingsMemoryCard?.() || ""}
-
         <ha-card outlined class="debug-card">
-          <div class="actions-card-header">
-            <h2 class="actions-card-title">${this._t("debug_report")}</h2>
-            ${!this._debugReport ? "" : `
+          ${this._htmlCardHeader("debug_report", { action: !this._debugReport ? "" : `
             <ha-button appearance="outlined" class="debug-btn debug-report-copy" title="${this._esc(this._t("debug_report_copy"))}" aria-label="${this._esc(this._t("debug_report_copy"))}">
               <ha-icon slot="start" icon="mdi:content-copy" style="--mdc-icon-size:18px" aria-hidden="true"></ha-icon>
               ${this._esc(this._t("debug_report_copy"))}
-            </ha-button>`}
-          </div>
+            </ha-button>` })}
           <div class="debug-body">
             <p class="hint-text">${this._esc(this._t("debug_report_hint"))}</p>
             ${this._debugReportBusy ? `<p class="hint-text">${this._esc(this._t("debug_report_fetching"))}</p>` : ""}
@@ -161,7 +203,7 @@ export const DebugViewMixin = {
           </div>
         </ha-card>
 
-        <!-- Third, and still a read: which modules were logging and at what
+        <!-- Next, and still a read: which modules were logging and at what
              level. It sits above the log-port card because that one changes
              the device, and below the report because it is a detail of it --
              but it loads by itself rather than waiting for a press, since it
@@ -169,9 +211,7 @@ export const DebugViewMixin = {
              collect.
              NB: no backticks in this comment; it sits in a template. -->
         <ha-card outlined class="debug-card">
-          <div class="actions-card-header">
-            <h2 class="actions-card-title">${this._t("debug_logging")}</h2>
-          </div>
+          ${this._htmlCardHeader("debug_logging")}
           <div class="debug-body">
             <p class="hint-text">${this._esc(this._t("debug_logging_hint"))}</p>
             ${this._htmlDebugLogging()}
@@ -191,9 +231,7 @@ export const DebugViewMixin = {
              also the order someone actually troubleshooting works through.
              NB: no backticks in this comment; it sits in a template. -->
         <ha-card outlined class="debug-card">
-          <div class="actions-card-header">
-            <h2 class="actions-card-title">${this._t("debug_log_port")}</h2>
-          </div>
+          ${this._htmlCardHeader("debug_log_port")}
           <div class="debug-body">
             <p class="hint-text">${this._esc(this._t("debug_log_port_hint"))}</p>
             ${this._debugPortError ? `<p class="debug-error">${this._esc(this._debugPortError)}</p>` : ""}
@@ -274,27 +312,36 @@ export const DebugViewMixin = {
    * error shown beside it, so the list never claims a change that did not take.
    */
   async _setDebugLogLevel(module, level) {
-    if (!this._currentEntry || this._debugLoggingBusy) return;
-    const entry = this._currentEntry;
-    this._debugLoggingBusy = true;
-    this._debugLoggingError = null;
-    this._render();
-    try {
-      const setup = await this._hass.callWS({
+    await this._runDebug("_debugLoggingBusy", "_debugLoggingError",
+      (entry) => this._hass.callWS({
         type: "lizaip_config/set_log_level",
         entry_id: entry,
         module,
         level,
-      });
+      }),
+      (setup) => { if (setup?.modules) this._debugLogging = setup; });
+  },
+
+  /**
+   * One read or write against the selected remote, the way every tool on this
+   * tab makes it: skipped without a remote or while *busyField* is set, which
+   * is held for the duration; *errorField* cleared before and set from a
+   * failure (`apply` may throw to report one); `onError` undoes what a failure
+   * leaves stale. An answer, or a failure, arriving after the selection moved
+   * is dropped: it describes the device that was asked, and posting it under
+   * another one is worse than showing nothing. The guard, the flag and the
+   * inline error are `_runBusy`'s; this adds the tab's quiet start and the
+   * check that the answer is still wanted.
+   */
+  async _runDebug(busyField, errorField, request, apply, onError = null) {
+    // Read before the first await: `_enterDebugTab` sets it only while it
+    // starts its loads, and draws for all of them itself.
+    const quiet = this._debugQuiet === true;
+    await this._runBusy(busyField, async (entry) => {
+      const result = await request(entry);
       if (this._currentEntry !== entry) return;
-      if (setup?.modules) this._debugLogging = setup;
-    } catch (e) {
-      if (this._currentEntry !== entry) return;
-      this._debugLoggingError = this._wsErrorText(e);
-    } finally {
-      this._debugLoggingBusy = false;
-      this._render();
-    }
+      apply(result);
+    }, { errorField, onError, render: !quiet });
   },
 
   /**
@@ -311,28 +358,20 @@ export const DebugViewMixin = {
    * itself would hammer an already-struggling device on every render.
    */
   async _loadDebugLogging() {
-    if (!this._currentEntry || this._debugLoggingBusy) return;
-    const entry = this._currentEntry;
-    this._debugLoggingBusy = true;
-    this._debugLoggingError = null;
-    this._render();
-    try {
-      const setup = await this._hass.callWS({
+    await this._runDebug("_debugLoggingBusy", "_debugLoggingError",
+      (entry) => this._hass.callWS({
         type: "lizaip_config/debug_logging",
         entry_id: entry,
-      });
-      if (this._currentEntry !== entry) return;
-      if (setup?.error) throw new Error(setup.error);
-      this._debugLogging = setup?.modules ? setup : null;
-      if (!this._debugLogging) this._debugLoggingError = this._t("debug_logging_empty");
-    } catch (e) {
-      if (this._currentEntry !== entry) return;
-      this._debugLogging = null;
-      this._debugLoggingError = this._wsErrorText(e);
-    } finally {
-      this._debugLoggingBusy = false;
-      this._render();
-    }
+      }),
+      (setup) => this._takeDebugLogging(setup),
+      () => { this._debugLogging = null; });
+  },
+
+  /** A whole logging setup read back from the device, or why there is none. */
+  _takeDebugLogging(setup) {
+    if (setup?.error) throw new Error(setup.error);
+    this._debugLogging = setup?.modules ? setup : null;
+    if (!this._debugLogging) this._debugLoggingError = this._t("debug_logging_empty");
   },
 
   /**
@@ -352,9 +391,10 @@ export const DebugViewMixin = {
     // Busy only counts for this remote: a read still in flight for the one
     // just left must not stop the new one from being read.
     if (this._debugPortBusy && this._debugPortBusyFor === entry) return;
+    const quiet = this._debugQuiet === true;
     this._debugPortBusy = true;
     this._debugPortBusyFor = entry;
-    this._render();
+    if (!quiet) this._render();
     try {
       const state = await this._hass.callWS({
         type: "lizaip_config/debug_port_state",
@@ -373,7 +413,7 @@ export const DebugViewMixin = {
       this._debugPortError = this._wsErrorText(e);
     } finally {
       if (this._debugPortBusyFor === entry) this._debugPortBusy = false;
-      this._render();
+      if (!quiet) this._render();
     }
   },
 
@@ -422,10 +462,23 @@ export const DebugViewMixin = {
     this._debugReport = null;
     this._debugTraffic = null;
     this._debugTrafficError = null;
-    this._loadDebugTraffic();
-    this._loadDebugLogging();
-    this._loadDebugPortState();
-    this._fetchDebugReport();
+    // The four reads each drew the tab on the way in and again on the way
+    // out. Started quiet, they raise their busy flags, the tab is drawn once
+    // with all of them, and once more when the last has answered.
+    let loads;
+    this._debugQuiet = true;
+    try {
+      loads = [
+        this._loadDebugTraffic(),
+        this._loadDebugLogging(),
+        this._loadDebugPortState(),
+        this._fetchDebugReport(),
+      ];
+    } finally {
+      this._debugQuiet = false;
+    }
+    this._render();
+    Promise.allSettled(loads).then(() => this._render());
   },
 
   /**
@@ -436,27 +489,12 @@ export const DebugViewMixin = {
    * disagree, and the one that wrote is the one that knows.
    */
   async _resetDebugLogging() {
-    if (!this._currentEntry || this._debugLoggingBusy) return;
-    const entry = this._currentEntry;
-    this._debugLoggingBusy = true;
-    this._debugLoggingError = null;
-    this._render();
-    try {
-      const setup = await this._hass.callWS({
+    await this._runDebug("_debugLoggingBusy", "_debugLoggingError",
+      (entry) => this._hass.callWS({
         type: "lizaip_config/reset_log_levels",
         entry_id: entry,
-      });
-      if (this._currentEntry !== entry) return;
-      if (setup?.error) throw new Error(setup.error);
-      this._debugLogging = setup?.modules ? setup : null;
-      if (!this._debugLogging) this._debugLoggingError = this._t("debug_logging_empty");
-    } catch (e) {
-      if (this._currentEntry !== entry) return;
-      this._debugLoggingError = this._wsErrorText(e);
-    } finally {
-      this._debugLoggingBusy = false;
-      this._render();
-    }
+      }),
+      (setup) => this._takeDebugLogging(setup));
   },
 
   _htmlDebugProbeResult() {
@@ -512,7 +550,7 @@ export const DebugViewMixin = {
       // answers with something other than JSON, has no pretty form and must
       // not get a button that silently does nothing.
       const json = section && !section.error
-        ? this._jsonHtml(section.body || "")
+        ? this._sectionJsonHtml(section)
         : null;
 
       let state = "";
@@ -679,43 +717,34 @@ export const DebugViewMixin = {
    * reader expands one -- see `_toggleDebugSection`.
    */
   async _fetchDebugReport() {
-    if (!this._currentEntry || this._debugReportBusy) return;
-    const entry = this._currentEntry;
-    this._debugReportBusy = true;
-    this._debugReportError = null;
-    this._render();
-    try {
-      const plan = await this._hass.callWS({
+    await this._runDebug("_debugReportBusy", "_debugReportError",
+      (entry) => this._hass.callWS({
         type: "lizaip_config/debug_report",
         entry_id: entry,
-      });
-      if (this._currentEntry !== entry) return;
-      if (!plan.available) {
-        this._debugReport = plan;
-        return;
-      }
+      }),
+      (plan) => this._takeDebugReport(plan),
+      () => { this._debugReport = null; });
+  },
 
-      // A row that has not been read is null, which is what tells the renderer
-      // it has nothing to show yet. Seeding them all keeps the list in the
-      // device's order rather than in the order the reader happens to open
-      // them.
-      const sections = {};
-      for (const endpoint of plan.endpoints) sections[endpoint] = null;
-      this._debugReport = { ...plan, sections };
-      // A second run starts from a clean slate: these describe rows of the
-      // report just replaced, and an expansion carried over would re-read an
-      // endpoint the reader did not ask for again.
-      this._debugOpen = {};
-      this._debugSectionBusy = {};
-      this._debugPretty = {};
-    } catch (e) {
-      if (this._currentEntry !== entry) return;
-      this._debugReport = null;
-      this._debugReportError = this._wsErrorText(e);
-    } finally {
-      this._debugReportBusy = false;
-      this._render();
+  _takeDebugReport(plan) {
+    if (!plan.available) {
+      this._debugReport = plan;
+      return;
     }
+
+    // A row that has not been read is null, which is what tells the renderer
+    // it has nothing to show yet. Seeding them all keeps the list in the
+    // device's order rather than in the order the reader happens to open
+    // them.
+    const sections = {};
+    for (const endpoint of plan.endpoints) sections[endpoint] = null;
+    this._debugReport = { ...plan, sections };
+    // A second run starts from a clean slate: these describe rows of the
+    // report just replaced, and an expansion carried over would re-read an
+    // endpoint the reader did not ask for again.
+    this._debugOpen = {};
+    this._debugSectionBusy = {};
+    this._debugPretty = {};
   },
 
   /**
@@ -762,20 +791,6 @@ export const DebugViewMixin = {
   },
 
   /**
-   * Indent a JSON body so it can be read, leaving anything else untouched.
-   *
-   * Decided by whether it parses rather than by which endpoint it came from:
-   * the device's log is not JSON and must survive verbatim, a body cut off by
-   * the size limit is no longer valid JSON and would be mangled by any
-   * formatter willing to guess, and a firmware that changes what an endpoint
-   * returns cannot make this wrong. Only the whitespace differs from what the
-   * device sent -- keys keep their order, because `JSON.parse` preserves
-   * insertion order for string keys and the device's order is information.
-   *
-   * The opening-brace check decides nothing that the parse does not already
-   * decide; it is there to keep 20 KB of log off `JSON.parse` on every render.
-   */
-  /**
    * The body as indented, coloured HTML -- or null when it is not JSON.
    *
    * Built by walking the *parsed* value rather than by running a regex over the
@@ -799,6 +814,22 @@ export const DebugViewMixin = {
       return null;
     }
     return this._jsonNode(value, "");
+  },
+
+  /**
+   * `_jsonHtml` of a section's body, worked out once per answer rather than
+   * on every render of the tab. Kept beside the section object, which is
+   * replaced whenever a new answer arrives, and checked against the body too,
+   * so an answer can never be shown in the pretty form of an older one.
+   */
+  _sectionJsonHtml(section) {
+    const cache = (this._debugJsonCache ||= new WeakMap());
+    const body = section.body || "";
+    const hit = cache.get(section);
+    if (hit && hit.body === body) return hit.html;
+    const html = this._jsonHtml(body);
+    cache.set(section, { body, html });
+    return html;
   },
 
   _jsonNode(value, pad) {
@@ -829,6 +860,20 @@ export const DebugViewMixin = {
     this._render();
   },
 
+  /**
+   * Indent a JSON body so it can be read, leaving anything else untouched.
+   *
+   * Decided by whether it parses rather than by which endpoint it came from:
+   * the device's log is not JSON and must survive verbatim, a body cut off by
+   * the size limit is no longer valid JSON and would be mangled by any
+   * formatter willing to guess, and a firmware that changes what an endpoint
+   * returns cannot make this wrong. Only the whitespace differs from what the
+   * device sent -- keys keep their order, because `JSON.parse` preserves
+   * insertion order for string keys and the device's order is information.
+   *
+   * The opening-brace check decides nothing that the parse does not already
+   * decide; it is there to keep 20 KB of log off `JSON.parse` on every render.
+   */
   _prettyJson(text) {
     const src = String(text ?? "");
     const trimmed = src.trim();
@@ -916,19 +961,12 @@ export const DebugViewMixin = {
 
   _wireDebugView() {
     const root = this.shadowRoot;
-    // The memory-bars switch, which lives on this tab. Its row is the settings
-    // tab's, so its label needs the same help: `ha-switch` is not a native
-    // input, and `<label for>` does not reach it.
+    // The memory-bars switch, which lives on this tab in the settings tab's
+    // row.
     root.querySelectorAll(".settings-feature-switch").forEach((el) =>
       el.addEventListener("change", (ev) =>
         this._changeTextSetting(el.dataset.section, "enabled", ev.target.checked)));
-    root.querySelectorAll(".settings-switch-text label").forEach((el) =>
-      el.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        const sw = root.querySelector(`#${el.getAttribute("for")}`);
-        if (!sw || sw.disabled) return;
-        this._changeTextSetting(sw.dataset.section, "enabled", !sw.checked);
-      }));
+    this._wireSwitchLabels(root, ".settings-switch-text label, .debug-switch label");
     root.querySelector(".debug-probe-btn")?.addEventListener("click", () => this._runDebugProbe());
     root.querySelector(".debug-port-toggle")
         ?.addEventListener("change", (ev) => this._setDebugPort(!!ev.target.checked));
@@ -942,20 +980,11 @@ export const DebugViewMixin = {
     root.querySelector(".debug-traffic-log")
         ?.addEventListener("change", (ev) =>
           this._loadDebugTraffic({ log_enabled: !!ev.target.checked }));
-    // A <label for> does not reach into ha-switch, so its words flip it by hand.
-    root.querySelectorAll(".debug-switch label").forEach((el) =>
-      el.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        const sw = root.querySelector(`#${el.getAttribute("for")}`);
-        if (!sw || sw.disabled) return;
-        sw.checked = !sw.checked;
-        sw.dispatchEvent(new Event("change", { bubbles: true }));
-      }));
     root.querySelectorAll(".debug-pretty-btn").forEach((el) =>
       el.addEventListener("click", (e) => {
-        // The button lives inside the `<summary>`, where a click is the
-        // browser's own way of collapsing the section. Formatting a section
-        // and closing it are opposite intentions.
+        // The button sits in the expansion panel's header row, where a click
+        // is the panel's own way of collapsing the section. Formatting a
+        // section and closing it are opposite intentions.
         e.preventDefault();
         e.stopPropagation();
         this._toggleDebugPretty(el.dataset.endpoint);
@@ -970,12 +999,6 @@ export const DebugViewMixin = {
     // would send the device every level between the old and the new.
     root.querySelectorAll(".debug-level-select").forEach((el) =>
       this._wireHaSelect(el, (level) => this._setDebugLogLevel(el.dataset.module, level)));
-
-    // The levels load by themselves, because the tab cannot be read without
-    // them. Guarded on all three states so the repeated renders of a filling
-    // report do not each start a fetch, and so a failure is not retried
-    // forever -- the reload button is how a failed read is tried again.
-
   },
 
   /**
@@ -992,14 +1015,11 @@ export const DebugViewMixin = {
     const busy = !!this._debugTrafficBusy;
     return `
         <ha-card outlined class="debug-card debug-traffic">
-          <div class="actions-card-header">
-            <h2 class="actions-card-title">${this._t("debug_traffic")}</h2>
-            ${!tr ? "" : `
+          ${this._htmlCardHeader("debug_traffic", { action: !tr ? "" : `
             <ha-button appearance="outlined" class="debug-btn debug-traffic-copy" title="${this._esc(this._t("debug_report_copy"))}" aria-label="${this._esc(this._t("debug_report_copy"))}">
               <ha-icon slot="start" icon="mdi:content-copy" style="--mdc-icon-size:18px" aria-hidden="true"></ha-icon>
               ${this._esc(this._t("debug_report_copy"))}
-            </ha-button>`}
-          </div>
+            </ha-button>` })}
           <div class="debug-body">
             ${tr ? `<p class="hint-text">${this._esc(this._t("debug_traffic_hint", {
               since: this._debugTime(tr.stats.since * 1000, false),
@@ -1109,54 +1129,25 @@ export const DebugViewMixin = {
   },
 
   async _loadDebugTraffic(opts = {}) {
-    if (!this._currentEntry || this._debugTrafficBusy) return;
-    const entry = this._currentEntry;
-    this._debugTrafficBusy = true;
-    this._debugTrafficError = null;
-    this._render();
-    try {
-      const tr = await this._hass.callWS({
+    await this._runDebug("_debugTrafficBusy", "_debugTrafficError",
+      (entry) => this._hass.callWS({
         type: "lizaip_config/debug_traffic",
         entry_id: entry,
         ...opts,
-      });
-      if (this._currentEntry !== entry) return;
-      this._debugTraffic = tr;
-    } catch (e) {
-      if (this._currentEntry !== entry) return;
-      this._debugTrafficError = this._wsErrorText(e);
-    } finally {
-      this._debugTrafficBusy = false;
-      this._render();
-    }
+      }),
+      (tr) => { this._debugTraffic = tr; });
   },
 
+  // A probe that cannot run is itself a finding, so its failure is shown
+  // rather than swallowed into the console.
   async _runDebugProbe() {
-    if (!this._currentEntry || this._debugProbeBusy) return;
-    const entry = this._currentEntry;
-    this._debugProbeBusy = true;
-    this._debugProbeError = null;
-    this._render();
-    try {
-      const probe = await this._hass.callWS({
+    await this._runDebug("_debugProbeBusy", "_debugProbeError",
+      (entry) => this._hass.callWS({
         type: "lizaip_config/debug_probe",
         entry_id: entry,
-      });
-      // Dropped rather than shown if the selection moved while the call was
-      // out: the answer describes the device that was asked, and posting it
-      // under another one is worse than showing nothing.
-      if (this._currentEntry !== entry) return;
-      this._debugProbe = probe;
-    } catch (e) {
-      // A probe that cannot run is itself a finding, so it is shown rather
-      // than swallowed into the console.
-      if (this._currentEntry !== entry) return;
-      this._debugProbe = null;
-      this._debugProbeError = this._wsErrorText(e);
-    } finally {
-      this._debugProbeBusy = false;
-      this._render();
-    }
+      }),
+      (probe) => { this._debugProbe = probe; },
+      () => { this._debugProbe = null; });
   },
 
   async _setDebugPort(enabled) {

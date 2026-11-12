@@ -5,6 +5,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .device.sensor import PARALLEL_UPDATES  # noqa: F401
 from .device.sensor import async_setup_entry as _async_setup_device_sensors
 from .config.media_queue.sensor import async_setup_entry as _async_claim_queue_sensors
 

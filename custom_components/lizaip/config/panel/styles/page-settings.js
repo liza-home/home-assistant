@@ -98,51 +98,6 @@ export const STYLES_PAGE_SETTINGS = `
     white-space: nowrap;
   }
 
-  /* --- Page Settings: Color Picker --- */
-  .ps-color-presets {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 8px 0;
-    align-items: center;
-  }
-  .ps-color-dot {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    border: 2px solid transparent;
-    cursor: pointer;
-    transition: transform .15s, border-color .15s, box-shadow .15s;
-    box-shadow: inset 0 0 0 1px rgba(0,0,0,.15);
-    position: relative;
-  }
-  .ps-color-dot:hover { transform: scale(1.12); }
-  .ps-color-dot.active {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 2px var(--primary-color), inset 0 0 0 1px rgba(0,0,0,.12);
-  }
-  .ps-color-dot.active::after {
-    content: "✓";
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--liza-font-m);
-    font-weight: 700;
-    color: rgba(0,0,0,.55);
-    pointer-events: none;
-  }
-  .ps-color-row {
-    display: flex;
-    align-items: center;
-    /* Wrapping so a validation message can take a full line of its own below
-       the row rather than being squeezed between the swatch and the box. */
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 4px 0 0;
-  }
-
   /* Validation messages.
      Never colour alone: the message is words, and it is placed next to the
      field it is about, so 1.4.1 does not depend on anyone seeing red. The
@@ -161,24 +116,5 @@ export const STYLES_PAGE_SETTINGS = `
   :host [aria-invalid="true"] {
     border-color: var(--error-color, #db4437);
     box-shadow: 0 0 0 1px var(--error-color, #db4437);
-  }
-  .ps-color-native {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 28px;
-    height: 28px;
-    border: 1px solid var(--divider-color, #444);
-    border-radius: 6px;
-    padding: 0;
-    cursor: pointer;
-    flex-shrink: 0;
-    background: none;
-  }
-  .ps-color-native::-webkit-color-swatch-wrapper { padding: 2px; }
-  .ps-color-native::-webkit-color-swatch { border: none; border-radius: 4px; }
-  .ps-color-native::-moz-color-swatch { border: none; border-radius: 4px; }
-  .ps-color-input {
-    width: 120px;
-    font-family: monospace;
   }
 `;

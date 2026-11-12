@@ -32,7 +32,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from .const import NATIVE_SOURCE_TYPES, custom_icon_prefixes, set_custom_icon_prefixes
+from ..data import find_lizaip_data, lizaip_data
+from .source_parse import NATIVE_SOURCE_TYPES, custom_icon_prefixes, set_custom_icon_prefixes
 from .icon_sets import IconSetFiles
 from .render import render_multi_path_svg
 
@@ -40,7 +41,6 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY: Final = f"{DOMAIN}.custom_icons"
 STORAGE_VERSION: Final = 1
-_DATA_KEY: Final = "_custom_icons"
 
 #: Bounds on what a panel can make the integration keep. A set's paths are a
 #: few hundred bytes to a few kilobytes; the caps only stop a runaway.
@@ -202,13 +202,14 @@ class CustomIcons:
 
 
 def get_custom_icons(hass: HomeAssistant) -> CustomIcons | None:
-    return hass.data.get(DOMAIN, {}).get(_DATA_KEY)
+    data = find_lizaip_data(hass)
+    return data.custom_icons if data is not None else None
 
 
 async def async_setup_custom_icons(hass: HomeAssistant) -> CustomIcons:
     icons = CustomIcons(hass)
     await icons.async_load()
-    hass.data.setdefault(DOMAIN, {})[_DATA_KEY] = icons
+    lizaip_data(hass).custom_icons = icons
     websocket_api.async_register_command(hass, ws_sync_custom_icons)
     websocket_api.async_register_command(hass, ws_store_custom_icons)
     return icons

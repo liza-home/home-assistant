@@ -29,16 +29,18 @@ from urllib.parse import urlparse
 import aiohttp
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import get_url
 
 from .device.cert import get_ha_certificate_pem
+from .device.http import device_session, device_url
 
 _LOGGER = logging.getLogger(__name__)
 
 PROVISION_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
-#: The remote's HTTP management port.
+#: The remote's default HTTP management port (GET /api/info, POST
+#: /api/config/ha), used only when its mDNS SRV record advertised none. The
+#: advertised port wins: 80 for HTTP, 443 when the remote speaks HTTPS.
 DEVICE_HTTP_PORT = 80
 
 # Last-resort name when HA's own hostname cannot be determined. Not unique —
@@ -290,9 +292,9 @@ async def async_read_ha_config(
     same as "it is fine", and treating it as one is what left a factory-reset
     remote unrepaired for so long.
     """
-    session = async_get_clientsession(hass, verify_ssl=False)
+    session = device_session(hass)
     for device_ip in device_ips:
-        url = f"http://{device_ip}:{port}/api/config/ha"
+        url = device_url(device_ip, port, "/api/config/ha")
         try:
             async with session.get(url, timeout=PROVISION_TIMEOUT) as resp:
                 if resp.status != 200:
@@ -353,11 +355,11 @@ async def async_provision(
     stops at the first success: they are candidate addresses for one device, not
     several devices to configure.
     """
-    session = async_get_clientsession(hass, verify_ssl=False)
+    session = device_session(hass)
     payload = await async_build_payload(hass)
 
     for device_ip in device_ips:
-        url = f"http://{device_ip}:{port}/api/config/ha"
+        url = device_url(device_ip, port, "/api/config/ha")
         try:
             async with session.post(url, json=payload, timeout=PROVISION_TIMEOUT) as resp:
                 if resp.status == 200:

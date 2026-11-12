@@ -9,8 +9,7 @@
 #     each opening with `media_player.select_source`; more than twelve get
 #     more Apps pages, button 12 leading on.
 #   - Digits: 1–9 and 0 as on a phone keypad, with Channel up and down.
-#   A Fire TV lists no inputs, so there is no Inputs page; button 12 holds
-#   Fast forward instead.
+#   A Fire TV lists no inputs, so there is no Inputs page; button 12 is empty.
 
 # Keys go through the Android Debug Bridge integration's `remote.send_command`,
 # which knows the names in its own key table (UP, CENTER, MENU, REWIND, …)
@@ -106,12 +105,12 @@ pages:
         goto_page: digits
 
       button_9:
-        icon: mdi:rewind
-        tooltip: {translate: previous}
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
         config:
           - action: remote.send_command
             data:
-              command: REWIND
+              command: MUTE
 
       button_10:
         icon: mdi:arrow-down-bold-outline
@@ -129,14 +128,6 @@ pages:
           - action: remote.send_command
             data:
               command: HOME
-
-      button_12:
-        icon: mdi:fast-forward
-        tooltip: {translate: next}
-        config:
-          - action: remote.send_command
-            data:
-              command: FAST_FORWARD
 
       button_power:
         icon: mdi:power

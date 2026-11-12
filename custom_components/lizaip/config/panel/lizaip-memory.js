@@ -27,12 +27,10 @@ export const MemoryViewMixin = {
    * on the debug tab, not here -- the bars are a tool for looking into the
    * remote, which is what that tab is for.
    */
-  _htmlSettingsMemoryCard() {
+  _htmlDebugMemoryCard() {
     return `
       <ha-card outlined class="settings-card">
-        <div class="actions-card-header">
-          <h2 class="actions-card-title">${this._esc(this._t("settings_memory_card"))}</h2>
-        </div>
+        ${this._htmlCardHeader("settings_memory_card")}
         <div class="settings-body">
           <div class="settings-switch-list">
             ${this._htmlFeatureSwitch("memory", "settings_memory", "settings_memory_hint")}
@@ -170,10 +168,10 @@ export const MemoryViewMixin = {
   async _subscribeDeviceSynced() {
     if (this._syncedUnsub || !this._hass?.connection) return;
     try {
-      this._syncedUnsub = await this._hass.connection.subscribeEvents((ev) => {
+      await this._holdSubscription("_syncedUnsub", () => this._hass.connection.subscribeEvents((ev) => {
         if (ev?.data?.entry_id !== this._currentEntry) return;
         if (this._memoryEnabled()) this._memoryFetchSoon();
-      }, "lizaip_config_device_synced");
+      }, "lizaip_config_device_synced"));
     } catch (e) {
       console.debug("[lizaIP] device_synced subscription failed:", e);
     }

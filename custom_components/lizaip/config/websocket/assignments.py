@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from ...runtime import _get_store, remember_panel_language
+from ...runtime import get_store, remember_panel_language
 from ...shared.history import history_entities
 from ...shared.i18n import get_ui_language, language_scope, translate_inline
 from ...shared.logs import device_id_logger
@@ -24,12 +24,8 @@ from ..blueprint import async_get_blueprint
 from ..const import ASSIGNMENTS_SCHEMA, PAGE_ID_SCHEMA
 from ..events import fire_config_changed
 from .assignment_entry import build_assignment_entry, drop_own_device_target
-from .common import (
-    refresh_state_listener,
-    requires_device,
-    schedule_push_rescan,
-    send_failure,
-)
+from ..listeners import refresh_state_listener, schedule_push_rescan
+from .common import requires_device, send_failure
 from ..access import require_device_access
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,7 +86,7 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
 @websocket_api.async_response
 @requires_device
 async def ws_get_actions(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
-    store = _get_store(hass)
+    store = get_store(hass)
     connection.send_result(msg["id"], {"actions": await store.async_get_action_library(device_id)})
 
 
@@ -105,7 +101,7 @@ async def ws_get_actions(hass: HomeAssistant, connection, msg: dict, device_id: 
 async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
 
     try:
-        store = _get_store(hass)
+        store = get_store(hass)
         await store.async_set_action_library(device_id, msg["actions"])
 
         await refresh_state_listener(hass, msg["entry_id"])
@@ -130,7 +126,7 @@ async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id:
 async def ws_get_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
 
     page_id = msg.get("page_id", 1)
-    store = _get_store(hass)
+    store = get_store(hass)
     assignments = await store.async_get_assignments(device_id, page_id)
     connection.send_result(msg["id"], {"assignments": assignments, "page_id": page_id})
 
@@ -155,7 +151,7 @@ async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, dev
     back as the strings it sends elsewhere, so page ids are stringified here
     rather than leaving each caller to guess which form it got.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     all_assignments = await store.async_get_all_assignments(device_id)
     connection.send_result(msg["id"], {
         "assignments": {str(pid): assigns for pid, assigns in all_assignments.items()},
@@ -189,7 +185,7 @@ async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device
     assignments = msg["assignments"]
 
     try:
-        store = _get_store(hass)
+        store = get_store(hass)
 
         blueprint = await async_get_blueprint(hass, msg["entry_id"])
         all_btn_keys = [btn["key"] for btn in blueprint.get("buttons", [])]
@@ -217,7 +213,6 @@ async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device
             drop_own_device_target(hass, config_entry, assign)
 
         await store.async_set_assignments(device_id, page_id, full_assignments)
-        await store.async_recompute_page_hash(device_id, page_id)
 
         fire_config_changed(hass, msg["entry_id"])
         await refresh_state_listener(hass, msg["entry_id"])

@@ -14,7 +14,6 @@ MODEL: Final = "lizaIP"
 # Hardware product SKU — matches the firmware release channel at
 # https://firmware.api.ruwido.com/<MODEL_ID>/
 MODEL_ID: Final = "3029-000"
-ZEROCONF_SERVICE_TYPE: Final = "_lizaip._tcp.local."
 
 WS_PATH: Final = "/api/lizaip/ws"
 

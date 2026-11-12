@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.core import HomeAssistant
@@ -35,30 +36,26 @@ async def async_queue_targets(hass: HomeAssistant) -> set[str]:
     typed would not be there for the panel to offer, or for the preview to
     read, at the moment the user is choosing it.
     """
-    from ...action_controller.helpers import (
-        _get_assignments,
-        _get_store,
-        _resolve_device_id,
-        resolve_target_entities,
-    )
-    from ...action_controller.toggle import toggle_rules
-    from ...const import DOMAIN
+    from ...action_controller.helpers import resolve_target_entities
+    from ...runtime import get_assignments, get_store, resolve_device_id
+    from ...action_controller.toggle import representative_steps
+    from ...const import DEFAULT_PAGE_ID, DOMAIN
 
     targets: set[str] = set()
-    store = _get_store(hass)
+    store = get_store(hass)
     for entry in hass.config_entries.async_entries(DOMAIN):
         try:
-            device_id = _resolve_device_id(hass, entry.entry_id)
+            device_id = resolve_device_id(hass, entry.entry_id)
             if not device_id:
                 continue
             for page in await store.async_get_pages(device_id):
-                page_id = page.get("id", 1)
+                page_id = page.get("id", DEFAULT_PAGE_ID)
                 # The page's own player, for `${_device.media_title_prev}`.
                 template_target = (page.get("template") or {}).get("target") or {}
                 if isinstance(template_target.get("entity_id"), str):
                     targets.add(template_target["entity_id"])
-                for _button, assign in await _get_assignments(hass, device_id, page_id):
-                    for config in _configs(assign, toggle_rules):
+                for _button, assign in await get_assignments(hass, device_id, page_id):
+                    for config in representative_steps(assign):
                         targets.update(resolve_target_entities(config, hass))
         except Exception as err:  # noqa: BLE001 - discovery must never break setup
             device_logger(_LOGGER, entry).debug(
@@ -72,21 +69,6 @@ async def async_queue_targets(hass: HomeAssistant) -> set[str]:
     }
 
 
-def _configs(assign, toggle_rules):
-    """The first step of the assignment, and of each of its cycle rules.
-
-    A cycle rule may point at a different speaker from the button it sits on,
-    and its own label reads that one.
-    """
-    config = assign.get("config") if isinstance(assign, dict) else None
-    if isinstance(config, list) and config:
-        yield config[0]
-    for rule in toggle_rules(assign):
-        rule_config = rule.get("config")
-        if isinstance(rule_config, list) and rule_config:
-            yield rule_config[0]
-
-
 async def async_sync_sensors(hass: HomeAssistant) -> None:
     """Make the live queue sensors match what the buttons point at.
 
@@ -95,7 +77,31 @@ async def async_sync_sensors(hass: HomeAssistant) -> None:
     """
     from .sensor import async_sync
 
-    try:
-        await async_sync(hass, await async_queue_targets(hass))
-    except Exception as err:  # noqa: BLE001 - a tooltip must never raise
-        _LOGGER.debug("Queue sensors: cannot sync: %s", err)
+    # Every loaded remote calls this on the same config change. Calls that
+    # arrive while a scan runs share the one scan after it, and each call
+    # still returns only once a scan begun after it has finished.
+    state = hass.data.get(_SYNC_STATE)
+    if state is None:
+        state = hass.data[_SYNC_STATE] = _SyncState()
+    state.requested += 1
+    ticket = state.requested
+    async with state.lock:
+        if state.covered >= ticket:
+            return
+        state.covered = state.requested
+        try:
+            await async_sync(hass, await async_queue_targets(hass))
+        except Exception as err:  # noqa: BLE001 - a tooltip must never raise
+            _LOGGER.debug("Queue sensors: cannot sync: %s", err)
+
+
+class _SyncState:
+    """How many syncs were asked for, and how many the last scan covered."""
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.requested = 0
+        self.covered = 0
+
+
+_SYNC_STATE = "lizaip_media_queue_sync"

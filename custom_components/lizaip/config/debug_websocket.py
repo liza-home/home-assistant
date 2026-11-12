@@ -22,12 +22,13 @@ from homeassistant.exceptions import HomeAssistantError
 from ..device import debug
 from ..device.memory import async_read_memory
 from ..imgserv.render_mdi import _load_mdi_paths
-from ..runtime import _get_store, _resolve_device_id, entry_connection
+from ..runtime import get_store, resolve_device_id, entry_connection
 from ..shared.logs import device_id_logger
 from .blueprint import async_get_blueprint
 from .const import generate_page_id
 from .events import fire_config_changed
-from .websocket.common import refresh_state_listener, reserved_page_ids
+from .listeners import refresh_state_listener
+from .page_list import reserved_page_ids
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ async def ws_debug_traffic(hass: HomeAssistant, connection, msg: dict) -> None:
     if conn is None:
         connection.send_error(msg["id"], "not_found", "Device not found")
         return
-    traffic = conn._protocol.traffic
+    traffic = conn.protocol.traffic
     if msg["reset"]:
         traffic.reset()
     if "log_enabled" in msg:
@@ -275,7 +276,7 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
     new page, which the panel opens.
     """
     entry_id = msg["entry_id"]
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if not device_id:
         connection.send_error(msg["id"], "not_found", "Device not found")
         return
@@ -288,7 +289,7 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
     pool = rng.sample(names, min(msg["images"], len(names)))
     keys = [btn["key"] for btn in (await async_get_blueprint(hass, entry_id)).get("buttons", [])]
 
-    store = _get_store(hass)
+    store = get_store(hass)
     pages = await store.async_get_pages(device_id)
     reserved = await reserved_page_ids(
         store, device_id, {p["id"] for p in pages if isinstance(p, dict)},
@@ -298,13 +299,11 @@ async def ws_debug_random_pages(hass: HomeAssistant, connection, msg: dict) -> N
         page_id = generate_page_id(reserved)
         reserved.add(page_id)
         new_ids.append(page_id)
-        pages.append({"id": page_id, "title": f"text:page {page_id}", "hash": 0})
+        pages.append({"id": page_id, "title": f"text:page {page_id}"})
         await store.async_set_assignments(
             device_id, page_id, random_page_buttons(keys, pool, msg["tooltip"], rng),
         )
     await store.async_set_pages(device_id, pages)
-    for page_id in new_ids:
-        await store.async_recompute_page_hash(device_id, page_id)
 
     await refresh_state_listener(hass, entry_id)
     fire_config_changed(hass, entry_id)

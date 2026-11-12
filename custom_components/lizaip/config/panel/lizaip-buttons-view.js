@@ -3,13 +3,14 @@
  *
  * HTML generation and wiring for the Buttons tab (pages, SVG, button config),
  * split by concern across the `buttons/` directory and composed back into one
- * mixin here. The spread is flat and the slices share no method names, so a
- * method means the same thing after the split as before it -- a collision
- * would silently drop one of them, which `buttons-split.test.mjs` forbids.
+ * mixin here. The slices share no method names, so a method means the same
+ * thing after the split as before it -- `applyMixins` throws on a collision at
+ * load, and `buttons-split.test.mjs` forbids one too.
  *
  * Importers see exactly what they saw before: `ButtonsViewMixin` and the
  * handful of pure helpers below.
  */
+import { applyMixins } from "./lizaip-mixins.js";
 import { ButtonsMarkupMixin } from "./buttons/markup.js";
 import { ButtonsSliderMixin } from "./buttons/slider.js";
 import { ButtonsFaceMixin } from "./buttons/face.js";
@@ -30,13 +31,14 @@ export {
   gotoLinkPath,
 } from "./buttons/shared.js";
 
-export const ButtonsViewMixin = {
-  ...ButtonsMarkupMixin,
-  ...ButtonsSliderMixin,
-  ...ButtonsFaceMixin,
-  ...ButtonsPageStripMixin,
-  ...ButtonsGotoLinksMixin,
-  ...ButtonsMenusMixin,
-  ...ButtonsPressesMixin,
-  ...ButtonsWiringMixin,
-};
+export const ButtonsViewMixin = applyMixins(
+  {},
+  ButtonsMarkupMixin,
+  ButtonsSliderMixin,
+  ButtonsFaceMixin,
+  ButtonsPageStripMixin,
+  ButtonsGotoLinksMixin,
+  ButtonsMenusMixin,
+  ButtonsPressesMixin,
+  ButtonsWiringMixin,
+);

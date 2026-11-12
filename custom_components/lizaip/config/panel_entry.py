@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 
-from ..const import DOMAIN
+from ..runtime import entry_runtime
 
 if TYPE_CHECKING:
+    from ..data import LizaIPRuntimeData
     from .icon_push import IconPushQueue
     from ..config.page_templates.refresh import PushTriggers
 
@@ -64,20 +65,42 @@ class PanelEntry:
         self._stops.clear()
 
 
+def _runtime(hass: HomeAssistant, entry_id: str) -> LizaIPRuntimeData | None:
+    entries = getattr(hass, "config_entries", None)
+    entry = entries.async_get_entry(entry_id) if entries is not None else None
+    return entry_runtime(entry)
+
+
 def add_panel_entry(hass: HomeAssistant, entry_id: str) -> PanelEntry:
-    """Create the state for a remote whose config entry is being set up."""
+    """Create the state for a remote whose config entry is being set up.
+
+    It is kept on the entry's ``runtime_data``, which the device setup has
+    made by now. A setup that failed part-way left its state behind (Home
+    Assistant does not unload an entry that never loaded), so the retry
+    closes it first.
+    """
+    runtime = _runtime(hass, entry_id)
+    if runtime is None:
+        raise RuntimeError(f"Config entry {entry_id} has no runtime data to keep panel state on")
     panel_entry = PanelEntry()
-    hass.data.setdefault(DOMAIN, {})[entry_id] = panel_entry
+    previous = runtime.panel
+    if isinstance(previous, PanelEntry):
+        previous.close()
+    runtime.panel = panel_entry
     return panel_entry
 
 
 def get_panel_entry(hass: HomeAssistant, entry_id: str) -> PanelEntry | None:
     """The loaded remote's state, or ``None`` if its entry is not set up."""
-    found = hass.data.get(DOMAIN, {}).get(entry_id)
+    runtime = _runtime(hass, entry_id)
+    found = runtime.panel if runtime is not None else None
     return found if isinstance(found, PanelEntry) else None
 
 
 def pop_panel_entry(hass: HomeAssistant, entry_id: str) -> PanelEntry | None:
     """Remove and return the remote's state, for the unload to close."""
-    found = hass.data.get(DOMAIN, {}).pop(entry_id, None)
+    runtime = _runtime(hass, entry_id)
+    if runtime is None:
+        return None
+    found, runtime.panel = runtime.panel, None
     return found if isinstance(found, PanelEntry) else None

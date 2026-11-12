@@ -24,9 +24,15 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from ..const import DOMAIN
-from ..device.protocol import DEFAULT_REQUEST_TIMEOUT, ProtocolError, is_valid_page_id
+from ..device.protocol import (
+    DEFAULT_REQUEST_TIMEOUT,
+    ERR_CONFLICT,
+    SPEC_ERROR_CODES,
+    ProtocolError,
+    is_valid_page_id,
+)
 from ..runtime import entry_connection, entry_device_id
+from ..data import lizaip_data
 from ..shared.logs import device_logger
 from .const import is_subpage
 from .default_pages import async_effective_pages
@@ -151,22 +157,26 @@ class _GiveUp:
 async def _add_page_if_missing(conn, page_id: int) -> None:
     """Create *page_id*, tolerating a page the device already holds.
 
-    An interrupted sync can leave a page added but unrecorded, and firmware
-    answers the second ``add_page`` with an error (``409`` per PROTOCOL.md, but
-    at least one version sends ``-4 "data"."page_id"``). The code alone cannot
-    be trusted to mean "already exists" — it is also what a device out of room
-    returns — so ask the device and only swallow the error when the page really
-    is there. Raising otherwise lets ``_send_page_op`` log and count it.
+    An interrupted sync can leave a page added but unrecorded, and the device
+    answers the second ``add_page`` with ``409``: the page is there, carry on.
+    Any other spec code is a real refusal. Older firmware answers both cases
+    with the same non-spec ``-4 "data"."page_id"``; only for that is the device
+    asked whether the page is there. Raising lets ``_send_page_op`` log and
+    count it.
     """
     try:
         await conn.add_page(page_id)
     except Exception as err:
-        try:
-            existing = {p["page_id"] for p in await conn.get_pages()}
-        except Exception:
-            raise err from None
-        if page_id not in existing:
-            raise
+        code = getattr(err, "code", None)
+        if code != ERR_CONFLICT:
+            if code in SPEC_ERROR_CODES:
+                raise
+            try:
+                existing = {p["page_id"] for p in await conn.get_pages()}
+            except Exception:
+                raise err from None
+            if page_id not in existing:
+                raise
         device_logger(_LOGGER, conn).debug(
             "Page %s already on device, keeping it: %s", page_id, err,
         )
@@ -261,8 +271,7 @@ async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool
 
 def _sync_state(hass: HomeAssistant, entry: ConfigEntry) -> dict:
     """Per-entry sync lock and pending flag, created on first use."""
-    store = hass.data.setdefault(DOMAIN, {}).setdefault("_sync_state", {})
-    return store.setdefault(
+    return lizaip_data(hass).sync_state.setdefault(
         entry.entry_id, {"lock": asyncio.Lock(), "running": False, "dirty": False}
     )
 
@@ -346,7 +355,7 @@ async def _sync_config_to_device(
                 "Failed to get_pages from device: %s — skipping this sync rather "
                 "than rewriting all %d page(s) blind", err, len(pages),
             )
-            _note_sync_failure(hass, entry, conn, err)
+            _note_sync_failure(entry, conn, err)
             return False
         device_hash_map: dict[int, int] = {p["page_id"]: p.get("hash", 0) for p in device_pages}
 
@@ -525,13 +534,12 @@ async def _sync_config_to_device(
         else:
             log.info("Removed page %s, which the device held without having confirmed it", pid)
 
-    # A failed `add_page` no longer takes its `set_page` down with it. The
-    # device answers `[-4] "data"."page_id"` both for an ID it will not accept
-    # and for one it already holds, and `get_pages` is the only thing telling
-    # us which — so a device that under-reports its pages would leave HA
-    # re-adding a page that exists and never writing it. Attempting the write
-    # anyway costs one round-trip on a path that was already failing, and is
-    # what distinguishes "cannot store this page" from "already had it".
+    # A failed `add_page` does not take its `set_page` down with it. Older
+    # firmware answers `[-4] "data"."page_id"` both for an ID it will not
+    # accept and for one it already holds, so a device that under-reports its
+    # pages would leave HA re-adding a page that exists and never writing it.
+    # Attempting the write anyway costs one round-trip on a path that was
+    # already failing, and tells "cannot store this page" from "already had it".
     add_failed = set()
     adds = _GiveUp(entry, "page adds")
     for pid in add_order:
@@ -656,13 +664,13 @@ async def _sync_config_to_device(
         # remote that drops the same page every time is the fault nobody goes
         # looking for, and the per-page log line is the only other trace.
         _note_sync_failure(
-            hass, entry, conn,
+            entry, conn,
             RuntimeError(f"{len(failed)} page write(s) failed (pages {names})"),
         )
         return False
 
     if order_error is not None:
-        _note_sync_failure(hass, entry, conn, order_error)
+        _note_sync_failure(entry, conn, order_error)
         return False
 
     _note_sync_success(hass, entry, conn)
@@ -689,9 +697,7 @@ def _is_disconnect(conn: Any, err: Exception) -> bool:
     return isinstance(err, ProtocolError) and err.message in _DISCONNECT_MESSAGES
 
 
-def _note_sync_failure(
-    hass: HomeAssistant, entry: ConfigEntry, conn: Any, err: Exception,
-) -> None:
+def _note_sync_failure(entry: ConfigEntry, conn: Any, err: Exception) -> None:
     """Count a failed sync and, once they stack up, log it as an error.
 
     Not raised in Repairs: a remote refusing pages is a firmware problem the
@@ -735,7 +741,7 @@ def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
     """The tile and tooltip changes from *sent* to *built*, or None if more moved.
 
     The page title is not compared: a variable can move it, and it is pushed
-    on its own (see `_push_variable_pages`).
+    on its own (see `async_push_variable_pages`).
     """
     before = {b.get("name"): b for b in sent.get("buttons", ())}
     if set(before) != {b.get("name") for b in built.get("buttons", ())}:
@@ -797,14 +803,41 @@ def note_partial_page(
         conn.page_cache.pages[page_id] = patched
 
 
-async def async_push_variable_pages(
-    hass: HomeAssistant, entry: ConfigEntry, page_ids: set[int],
+async def async_send_partial_page(
+    conn, page_id: int, buttons: list[dict], img_title: str | None = None,
 ) -> None:
-    """Bring the pages whose variables moved up to date; see :func:`_push_variable_pages`."""
-    await _push_variable_pages(hass, entry, page_ids)
+    """Send one partial ``set_page`` and record it once the device acknowledged it.
+
+    A send that does not reach the device drops the page from the known copy,
+    so the next full sync resends it instead of trusting a page it never got.
+    """
+    if not is_ready(conn):
+        forget_page(conn, page_id)
+        return
+    fields: dict = {"buttons": buttons} if buttons else {}
+    if img_title is not None:
+        fields["img_title"] = img_title
+    # The page's new hash goes with the change, so the device's copy says
+    # what it now shows (see `patched_page`).
+    patched = patched_page(conn, page_id, buttons, img_title)
+    if patched is not None:
+        fields["hash"] = patched["hash"]
+    try:
+        await conn.set_page(page_id, **fields)
+    except Exception:
+        forget_page(conn, page_id)
+        raise
+    note_partial_page(conn, page_id, buttons, img_title)
 
 
-async def _push_variable_pages(
+def forget_page(conn, page_id: int) -> None:
+    """Drop one page from the device's known copy so the next sync resends it."""
+    pages = getattr(getattr(conn, "page_cache", None), "pages", None)
+    if pages:
+        pages.pop(page_id, None)
+
+
+async def async_push_variable_pages(
     hass: HomeAssistant, entry: ConfigEntry, page_ids: set[int],
 ) -> None:
     """Bring the pages whose variables moved up to date, sending only what changed.
@@ -850,7 +883,8 @@ async def _push_variable_pages(
         if changes is None:
             await sync_config_to_device(hass, entry)
             return
-        known[page_id] = built
+        # Not recorded here: `async_send_partial_page` records the page once
+        # the device acknowledged it, and forgets it if the send fails.
         title = built.get("img_title")
         title = title if title != sent.get("img_title") else None
         if changes or title is not None:

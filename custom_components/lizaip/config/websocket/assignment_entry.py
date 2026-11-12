@@ -36,7 +36,7 @@ from ...shared.numbers import to_float
 from ..const import payload_display
 from ..internal_commands import get_internal_command
 from ..page_payload import step_targets_entry
-from .common import EMPTY_BUTTON
+from ..const import EMPTY_BUTTON
 
 
 # Sensitivity bounds for the drag factor. Defined by the executor, which is the

@@ -7,13 +7,11 @@ from collections.abc import Mapping
 from typing import Any, Final
 from urllib.parse import quote, unquote, urlencode
 
-from ..imgserv.const import (
-    DEFAULT_FG_COLOR,
-    SIZE_IDS,
+from ..imgserv.const import DEFAULT_FG_COLOR, SIZE_IDS, parse_color
+from ..imgserv.source_parse import (
     _custom_icon_prefixes,
     is_address,
     names_a_source,
-    parse_color,
     split_source_parts,
 )
 from ..imgserv.fonts import DEFAULT_FONT_ID
@@ -21,7 +19,7 @@ from .i18n import translate_inline
 from .theme import DEFAULT_THEME, DEFAULT_THEME_ID, get_theme
 
 #: imgserv options a picture may carry in its query: ``media:<url>?size=200x200``.
-MEDIA_OPTION_KEYS: Final = ("size", "box", "fit", "mode", "fg", "bg", "crop", "alpha", "percent")
+MEDIA_OPTION_KEYS: Final = ("size", "box", "fit", "mode", "fg", "bg", "crop", "alpha", "percent", "radius")
 
 #: Options that are imgserv's wherever they are written, not just on a picture.
 #: The drawing options (`font`, `hours`) only mean something to some sources,
@@ -49,6 +47,8 @@ def _media_option(part: str) -> tuple[str, str] | None:
             return None
         val = val.lower()
     if key == "percent" and not (val.isdigit() and int(val) <= 100):
+        return None
+    if key == "radius" and not (val.isdigit() and int(val) <= 100):
         return None
     if key == "fit":
         val = val.lower()
@@ -147,7 +147,17 @@ def split_media_options(value: str) -> tuple[str, dict[str, str]]:
     return head + (f"?{query}" if query else "") + hash_sign + fragment, options
 
 
-def _media_url(url: str, size: str, pct: str) -> str:
+#: Bumped whenever imgserv draws a whole `media:` picture differently, so a
+#: device or browser holding the old one fetches it again. A boxed piece is
+#: drawn as before and carries none.
+MEDIA_RENDER_VERSION: Final = "round1"
+
+
+#: The corner radius imgserv draws without being told; sent only when it differs.
+_DEFAULT_RADIUS: Final = 100
+
+
+def _media_url(url: str, size: str, pct: str, radius: int | None = None) -> str:
     """``imgserv://media:…`` for *url*, its own options over the defaults."""
     url, options = split_media_options(url)
     if "percent" in options:
@@ -160,6 +170,10 @@ def _media_url(url: str, size: str, pct: str) -> str:
         options = {**options, "fit": "fill"}
     source = encode_media_source(url)
     query = urlencode({"size": size, "mode": "dark", **options}, safe=",")
+    if "box" not in options:
+        query += f"&rv={MEDIA_RENDER_VERSION}"
+        if radius is not None and radius != _DEFAULT_RADIUS and "radius" not in options:
+            query += f"&radius={radius}"
     return f"imgserv://{source}?{query}" + (f"&{pct}" if pct else "")
 
 
@@ -239,7 +253,7 @@ def _ascii_safe_path(value: str) -> str:
 
 def resolve_icon_url(
     icon: str, size: str = "tile", color: str = "", percent: int | None = None,
-    theme: str = "",
+    theme: str = "", radius: int | None = None,
 ) -> str:
     """Convert an icon value to a fetchable URL.
 
@@ -281,6 +295,10 @@ def resolve_icon_url(
     ``ftp://host/a.png`` is handed on untouched rather than silently turned into
     a picture of the word "ftp://host/a.png".
 
+    The optional `radius` (0-100) is the corner radius, in percent of the shorter
+    side, a whole `media:` picture is cut with; left out, imgserv's default
+    (a circle) applies and the URL is unchanged.
+
     The optional `percent` param (0-100) is imgserv's fill level: the bottom
     `percent`% of the finished image keeps its alpha and the rows above are
     dimmed, which is how a lamp's brightness reaches its tile. It is appended
@@ -311,12 +329,12 @@ def resolve_icon_url(
             # An HA path (a player's `entity_picture`, `/local/…`) is fetched
             # by imgserv too: the firmware does not resolve `ha://` and would
             # ask HA for `/ha://api/…`.
-            return _media_url(icon, size, pct)
+            return _media_url(icon, size, pct, radius)
         if icon.startswith("media:"):
             # The value is a URL in its own right — encode it so its query survives.
-            return _media_url(icon[len("media:"):], size, pct)
+            return _media_url(icon[len("media:"):], size, pct, radius)
         if not names_a_source(icon):
-            return resolve_icon_url(_words_source(icon), size, color, percent, theme)
+            return resolve_icon_url(_words_source(icon), size, color, percent, theme, radius)
     # Something imgserv draws: an icon, words, a logo, a graph, or several
     # parts with a picture among them (each picture encoded on its own, so its
     # query stays its own). The value may carry its own query

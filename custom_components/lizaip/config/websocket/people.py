@@ -26,7 +26,6 @@ from ..access import (
     async_reconcile_sidebar,
     is_assignable_user,
 )
-from .devices import device_list
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,56 +107,6 @@ async def ws_set_device_users(hass: HomeAssistant, connection, msg: dict) -> Non
         )
 
     connection.send_result(msg["id"], {"user_ids": user_ids})
-
-
-@websocket_api.websocket_command({
-    vol.Required("type"): "lizaip_config/set_user_devices",
-    vol.Required("user_id"): str,
-    vol.Required("entry_ids"): [str],
-})
-@websocket_api.require_admin
-@websocket_api.async_response
-async def ws_set_user_devices(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Replace the list of remotes one person holds.
-
-    The same assignment read from the other end. ``set_device_users`` answers
-    "who holds this remote"; this answers "which remotes does this person
-    hold", which is how an administrator thinks when handing somebody a set of
-    them at once.
-
-    Only the named user is touched on each entry, so two administrators editing
-    different people cannot undo each other. An entry id the panel does not
-    know about is simply not matched, and the answer carries what was written.
-
-    A remote the dialog could not show is left alone: `device_list` skips an
-    entry that is unloaded or has no registry device yet, and reading that
-    absence as a revocation would strip somebody of an offline remote.
-    """
-    user_id = msg["user_id"]
-    if user_id not in await async_assignable_user_ids(hass):
-        connection.send_error(msg["id"], "not_found", "User not found")
-        return
-
-    wanted = set(msg["entry_ids"])
-    listed = {row["entry_id"] for row in device_list(hass, connection.user)}
-    held: list[str] = []
-    changed = False
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        current = set(assigned_user_ids(entry))
-        holds = user_id in current
-        should_hold = entry.entry_id in wanted or (holds and entry.entry_id not in listed)
-        if should_hold:
-            held.append(entry.entry_id)
-        if should_hold == holds:
-            continue
-        _write_assigned(hass, entry, sorted(current ^ {user_id}))
-        changed = True
-
-    if changed:
-        await _async_assignments_changed(hass)
-        _LOGGER.info("User %s now holds %d remote(s)", user_id, len(held))
-
-    connection.send_result(msg["id"], {"entry_ids": sorted(held)})
 
 
 def _write_assigned(hass: HomeAssistant, entry, user_ids: list[str]) -> None:

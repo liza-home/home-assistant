@@ -12,7 +12,8 @@ lizaip/
   strings.json
   services.yaml        # HA service definitions
   const.py             # Domain, option keys, bus event and dispatcher signal names
-  runtime.py           # Lookups into live runtime state (store, connection, device id)
+  data.py              # Typed state: LizaIPRuntimeData (entry.runtime_data), LizaIPData (hass.data)
+  runtime.py           # Lookups into live runtime state (store, connection, panel, device id)
   optimistic.py        # Short-lived predictions of where a lamp is heading
   state_icon.py        # How a tile is drawn from the bound entity's state
   state_color.py       # Entity-derived icon tint (light rgb_color → fg=)
@@ -62,6 +63,12 @@ lizaip/
     panel_entry.py      # PanelEntry: one remote's listeners, closed together
     events.py           # fire_config_changed (the one bus event config sends)
     websocket/          # WS API for the frontend panel, one module per panel area
+    page_list.py        # Page order on the device, page links, free page ids
+    template_targets.py # Which devices and config entries a template can bind to
+    template_pages.py   # Making pages from a template, for the panel and the LLM tools
+    template_writes.py  # Storing a template's composed pages (shared with the dynamic refresh)
+    listeners.py        # Rebuilding the state listener and push triggers after a save
+    log_tail.py         # The tail of Home Assistant's log, our lines only
     blueprint.py        # Button geometry per remote model (reads blueprints/)
     store.py            # YAML store for the remote's configuration
     restore.py          # Validates and applies downloaded configurations
@@ -83,7 +90,17 @@ lizaip/
     render_custom.py    # Browser-registered icon sets (phu:, hue:, ...): store, upload, draw
     render_text.py     # Text-to-image rendering (shrink-to-fit, emoji fallback)
     const.py           # Size IDs, color names, path constants
+    fonts.py           # Font files: listing, lookup, opening, glyph probing
+    source_parse.py    # Source types and splitting a title into parts
   config/page_templates/       # Dynamic page-template engine
+    catalog.py         # Template files: discovery, listing cache, loading, page structure
+    resolver.py        # @source[N].field tokens: expansion and bindings
+    sources.py         # Where token items come from (registry, browse tree, favourites)
+    generate.py        # Buttons → action-library entries and assignments; goto_page links
+    parts.py           # A paginate: page's parts as its definition spells them
+    paginate.py        # Adds/removes a paginated page's parts on a remote
+    compose.py         # One template → the pages it describes
+    refresh.py         # Re-resolves stored template pages when their sources change
   assets/
     logos/                     # Bundled SVG/PNG logo assets
     templates/                 # Ready-made page-template presets
@@ -132,6 +149,22 @@ The device name can be changed via **Settings → Devices → (device) → ⋮ �
 | `sensor` | Battery | Device → HA |
 | `binary_sensor` | Connectivity | Device → HA |
 | `update` | Firmware (with release notes) | HA → Device |
+
+The firmware entity installs the newest release from the card. `update.install` with a
+`version` installs any published release instead, which is how a device is rolled back
+(**Developer tools → Actions → Update: Install update**, with the version field filled
+in):
+
+```yaml
+action: update.install
+target:
+  entity_id: update.living_room_remote_firmware
+data:
+  version: "11.4.1"
+```
+
+The versions come from the release server's published list; one it does not list is
+refused with the list of the ones it does.
 
 Sliders are `number` entities in `NumberMode.SLIDER`. Protocol v1 has no slider-set command,
 so writes from Home Assistant only update the local value and log a warning — the position
@@ -202,6 +235,16 @@ remotes cannot end up disagreeing. It is derived from the control's mechanics on
 (`sliders.control_inverts`), so configurations written before this existed pick it up with no
 migration.
 
+### Slider follows a toggle
+
+A grid button hands the page slider a device only when it says so: its slider block
+(`overrides.slider_vertical.entity_id`, set on the slider's card) is the opt-in. When you
+give a button a **toggle** action (`light.toggle`, `fan.toggle`, …) for a device the slider
+can drive — a dimmable lamp, say — the panel sets that opt-in for you, just as the Hue
+template does for its lamp tiles. It only does so while the page slider follows the
+selection, never overwrites a device you chose yourself, and stays out once you clear it.
+Changing the action to another device moves an automatically set subject along with it.
+
 ### Icon tint and fill
 
 A button bound to a light can fill its icon from the bottom, like a gauge, to show how
@@ -215,6 +258,7 @@ change to a remote the user has already arranged:
 | Tint icons with the light's colour | off | A lit lamp's colour replaces the page colour. |
 | Fill icons with the light's brightness | off | Fills the icon from the bottom. |
 | Fill step | `5 %` | How much the fill advances per level. Range 1–25. |
+| Corner radius | `0 %` | Rounding of whole `media:` pictures (covers): 0 % square, 100 % round, 1 % steps, applied when the slider is released. Pictures cut into a `box` grid stay square. A `radius=` written on the picture wins. |
 
 The two switches are independent: the fill can be on with the tint off, and the reverse.
 The fill step applies only while the fill is on, so the gear tab greys it out otherwise.
@@ -316,8 +360,8 @@ exist and be exposed, a `slider` control must fit the entity's domain -- then ge
 the template generator from a definition bound to nothing (no `target_selector`), so it is stored as an ordinary page (no
 `template:` key) with plain `ai_…` action ids, and a slot the generator cannot fill is
 reported back instead of left empty. Writes need an admin user on the request's context.
-The tools never write outside the paths the panel uses: `async_add_template_page` for a new
-page, the store plus `fire_config_changed` for a button, `_push_page_list` for a deleted
+The tools never write outside the paths the panel uses: `async_add_template_page`
+(`config/template_pages.py`, shared with the panel's template handlers) for a new page, the store plus `fire_config_changed` for a button, `_push_page_list` for a deleted
 page.
 
 ## Image Server (imgserv)
@@ -679,7 +723,7 @@ State changes are debounced (500 ms) and deduplicated to avoid unnecessary devic
 Not a token of its own. `${_device.attribute}` already named the page's device for a
 template page title; it now survives a Tooltip field too, so
 `play:5 ${_state} - ${_device.media_title}` reaches the device as
-"play:5 Pause - Bohemian Rhapsody".
+"play:5 pause - Bohemian Rhapsody".
 
 - **What actually changed.** `DOTTED_TOKEN_RE` in `shared/tooltips.py` widened from
   `_queue\.` to `(?:_queue|_device)\.`, so `is_token_only_tooltip` strips the token and
@@ -905,6 +949,12 @@ table, in the reader's language; the key may also be the English words
 table has them. Quote a key YAML would read otherwise (`{translate: "off"}`).
 Translate the word and write the value beside it --
 `tooltip: "{translate: brightness} 25 %"` -- rather than a wording per value.
+The key may also be a variable -- `"{translate: ${_state}}"`,
+`"text:{translate: ${switch.fan}}"` -- whose value is looked up once it is
+filled in, and shown as it is when no table has it. The state reads the same
+with or without `{translate: }`: as a label (`button_tooltips`, "Aus") when it
+opens the tooltip, as a word in the sentence (`state_words`, "Lampe aus") when
+it follows other words.
 
 | Where | Table | Language |
 |---|---|---|
@@ -1143,7 +1193,6 @@ and the AST pins in `tests/test_remote_access.py`).
 | `lizaip_config/set_pages` | Replace the pages list |
 | `lizaip_config/update_page` | Update a page's `title` and/or default colour |
 | `lizaip_config/get_settings` | Get a device's title/tooltip text settings, with the defaults, the installed fonts, the size limits, the theme list and the resolved theme |
-| `lizaip_config/get_themes` | The themes the picker may offer, bundled and user-authored |
 | `lizaip_config/set_settings` | Validate and save the text settings and push them to the device |
 | `lizaip_config/image_urls` | The `imgserv://` URL the device is sent for each `{value, kind: tile\|title\|tooltip, color, percent}`, built by the same `resolve_icon_url` / `resolve_title_url` / `resolve_tooltip_url` as the page sync |
 | `lizaip_config/sync_custom_icons` | Report the browser's extra icon sets (`window.customIcons`); answers the names the remote asked for that imgserv has no shape for yet |
@@ -1152,7 +1201,6 @@ and the AST pins in `tests/test_remote_access.py`).
 | `lizaip_config/subscribe_devices` | The caller's device list, re-sent whenever an assignment changes |
 | `lizaip_config/list_persons` | Admin-only. Home Assistant persons with the user account behind each, and why one cannot be assigned |
 | `lizaip_config/set_device_users` | Admin-only. Write a remote's assigned user ids to `entry.options[assigned_users]` |
-| `lizaip_config/set_user_devices` | Admin-only. The same assignment from the other end: write the remotes one person holds |
 
 ## Localization
 

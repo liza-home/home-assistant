@@ -22,20 +22,20 @@ from ..shared.preludes import (
     build_launch_verification,
 )
 from ..shared.services import (
-    NEXT_STATE_MAP,
     PREDICTED_HA_STATE_MAP,
-    catchall_state_icon,
+    attribute_toggle_template,
     is_state_toggle_service,
     normalise_payload,
     service_name,
+    service_to_attribute,
+    toggles_attribute,
 )
 from ..shared.tokens import (
     button_scope,
     clean_tooltip_text,
     page_scope,
-    resolve_image_tokens,
 )
-from ..shared.i18n import button_tooltips, get_ui_language, language_scope
+from ..shared.i18n import get_ui_language, language_scope
 from ..shared.logs import device_id_logger, device_logger
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url
@@ -46,8 +46,9 @@ from ._state import (
     cycle_index,
     get_selected_button,
 )
-from .helpers import _get_store, _resolve_device_id, first_step, resolve_step_entity
-from .icons import _match_state_icon, toggle_icon
+from ..runtime import entry_connection, get_store, resolve_device_id
+from .helpers import first_step, resolve_step_entity
+from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
 from .overrides import resolve_fixed_action
 from .toggle import (
     MODE_CYCLE,
@@ -55,6 +56,7 @@ from .toggle import (
     resolve_rule_tooltip,
     rule_steps,
     runtime_assign,
+    step_tooltip,
     toggle_mode,
     toggle_rules,
 )
@@ -79,7 +81,7 @@ def _script_cache(
     entry = hass.config_entries.async_get_entry(entry_id)
     if entry is None:
         return None
-    return getattr(getattr(entry, "runtime_data", None), "script_cache", None)
+    return getattr(entry_connection(entry), "script_cache", None)
 
 
 def _actions_fingerprint(actions: list) -> str:
@@ -106,8 +108,13 @@ async def _get_script(
     button_key: str,
     actions: list,
     gesture: str = "click",
+    step: int | None = None,
 ) -> Script | None:
-    """Return the cached Script, rebuilding when the source config changed."""
+    """Return the cached Script, rebuilding when the source config changed.
+
+    *step* is a cycle button's step: each keeps a Script of its own, so a
+    press of the next step neither recompiles nor stops the one still running.
+    """
     log = device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
     cache = _script_cache(hass, entry_id)
     if cache is None:
@@ -120,6 +127,8 @@ async def _get_script(
     # A click keeps the key it always had; a long touch is a second script on
     # the same button.
     cache_key = (page_id, button_key) if gesture == "click" else (page_id, f"{button_key}:{gesture}")
+    if step is not None:
+        cache_key = (page_id, f"{cache_key[1]}#{step}")
     fingerprint = _actions_fingerprint(actions)
     cached = cache.get(cache_key)
     if cached is not None and cached[0] == fingerprint:
@@ -145,14 +154,41 @@ async def _get_script(
         DOMAIN,
         script_mode=SCRIPT_MODE_PARALLEL,
     )
-    if cached is not None:
-        # Build first, then retire the old one: the superseded Script holds
-        # condition listeners and sub-scripts that only `async_unload` releases.
-        await cached[1].async_unload()
     # Keyed by content, so a later edit recompiles even if the caller mutated
     # the list it handed in.
     cache[cache_key] = (fingerprint, script)
+    if cached is not None:
+        # Build first, then retire the old one: the superseded Script holds
+        # condition listeners and sub-scripts that only `async_unload` releases.
+        await _retire_script(cached[1])
     return script
+
+
+async def _retire_script(script: Script) -> None:
+    """Unload a superseded Script, unless a run of it is still going.
+
+    `async_unload` stops in-flight runs; an IR sequence halfway through its
+    delays would be cut off. A running one is left to finish and be collected.
+    """
+    if script.is_running:
+        return
+    await script.async_unload()
+
+
+async def _evict_cycle_steps(
+    hass: HomeAssistant, entry_id: str, page_id: int, button_key: str, count: int,
+) -> None:
+    """Drop the Scripts of cycle steps a shortened rule list no longer has."""
+    cache = _script_cache(hass, entry_id)
+    if not cache:
+        return
+    prefix = f"{button_key}#"
+    for key in list(cache):
+        if key[0] != page_id or not key[1].startswith(prefix):
+            continue
+        index = key[1][len(prefix):]
+        if index.isdigit() and int(index) >= count:
+            await _retire_script(cache.pop(key)[1])
 
 
 async def async_unload_scripts(hass: HomeAssistant, entry_id: str) -> None:
@@ -349,6 +385,47 @@ def _reroute_launches(hass: HomeAssistant, actions: list) -> list:
     return [_launch_step(hass, step) or step for step in actions]
 
 
+def _toggle_attribute_step(hass: HomeAssistant, step: Any) -> dict | None:
+    """The step rewritten to flip its boolean attribute, else ``None``.
+
+    `volume_mute` writes the value it is handed, so a stored direction would
+    make the button one-way. The stored boolean stays the plain checkbox HA's
+    editor writes and the direction is filled in here, as Jinja so that every
+    press runs the same sequence.
+    """
+    if not isinstance(step, dict):
+        return None
+    service = step.get("action") or step.get("service") or ""
+    attribute = service_to_attribute(service_name(service))
+    key = "service_data" if "service_data" in step else "data"
+    data = step.get(key) or {}
+    if not attribute or not toggles_attribute(service, data):
+        return None
+    entity_id = resolve_step_entity(step, hass)
+    if entity_id:
+        value: Any = attribute_toggle_template(entity_id, attribute)
+    elif attribute not in data:
+        # Nothing to read the current value from, and HA requires the field:
+        # set it rather than send a call that fails.
+        value = True
+    else:
+        return None
+    return {**step, key: {**data, attribute: value}}
+
+
+def _runnable_steps(
+    hass: HomeAssistant, actions: list, entry_id: str, toggle: bool = True,
+) -> list:
+    """Rewrite stored steps into the form the Script runs.
+
+    *toggle* is false for a cycle press, whose direction the user spelled out
+    face by face and which must run exactly as written.
+    """
+    if toggle:
+        actions = [_toggle_attribute_step(hass, step) or step for step in actions]
+    return _bind_internal_steps(_reroute_launches(hass, actions), entry_id)
+
+
 def _is_optimistic(hass: HomeAssistant, entry_id: str) -> bool:
     entry = hass.config_entries.async_get_entry(entry_id)
     if entry is None:
@@ -370,11 +447,7 @@ async def _fire_cycle_update(
     entry_id: str,
 ) -> None:
     """:func:`_fire_cycle_update_in_scope`, reading ``${_device}`` as the page has it."""
-    template = None
-    for page in await _get_store(hass).async_get_pages(device_id):
-        if page.get("id", _DEFAULT_PAGE_ID) == page_id:
-            template = page.get("template")
-            break
+    template, page_color = await _page_meta(get_store(hass), device_id, page_id)
     with page_scope(template), button_scope(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
     ), language_scope(get_ui_language(
@@ -382,7 +455,16 @@ async def _fire_cycle_update(
     )):
         await _fire_cycle_update_in_scope(
             hass, device_id, page_id, button_key, assign, entry_id,
+            page_color=page_color,
         )
+
+
+async def _page_meta(store: Any, device_id: str, page_id: int) -> tuple[Any, str]:
+    """``(template, default_color)`` of the page, read once per press."""
+    for page in await store.async_get_pages(device_id):
+        if page.get("id", _DEFAULT_PAGE_ID) == page_id:
+            return page.get("template"), page.get("default_color", "")
+    return None, ""
 
 
 async def _fire_cycle_update_in_scope(
@@ -392,6 +474,8 @@ async def _fire_cycle_update_in_scope(
     button_key: str,
     assign: Mapping,
     entry_id: str,
+    *,
+    page_color: str | None = None,
 ) -> None:
     """Repaint a cycle button with the step its *next* press will run.
 
@@ -410,7 +494,7 @@ async def _fire_cycle_update_in_scope(
     ``toggle_icon`` reads the step that comes next — which is exactly the one
     the tile should advertise.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     theme = settings_theme(await store.async_get_settings(device_id))
     entity = resolve_step_entity(first_step(dict(assign)), hass)
     icon = toggle_icon(
@@ -429,30 +513,16 @@ async def _fire_cycle_update_in_scope(
         return
     index = cycle_index(entry_id, page_id, button_key, len(rules))
 
-    pages = await store.async_get_pages(device_id)
-    page_color = ""
-    for page in pages:
-        if page.get("id", _DEFAULT_PAGE_ID) == page_id:
-            page_color = page.get("default_color", "")
-            break
+    if page_color is None:
+        page_color = (await _page_meta(store, device_id, page_id))[1]
 
-    # A cycle step's name can only come from the user: there is no state to
-    # phrase and an IR command is a key code, not a sentence. Falling back to
-    # the button's own label keeps the tooltip truthful rather than blank.
-
-    # Resolved, not merely cleaned: `clean_tooltip_text` *strips* a `${sensor.x}`
-    # instead of filling it in, so a press tooltip read "Battery" where press
-    # 1's own -- via `icons.py` -- read "Battery 87 %".
-
-    # Both halves now go through `resolve_rule_tooltip`, which fills them from
-    # the target of whichever config it is handed: the step's for a rule, the
-    # button's own for this fallback.
-
-    # The device's own language option, so a press resolving `${_state}` reads
-    # the same word the rest of its tile does. Only `entry_id` reaches here.
+    # Same order as `icons.toggle_tooltip`: the press's own words, the ones it
+    # derives from its step, then the button's label. Resolved, not just
+    # cleaned, so a `${sensor.x}` is filled in rather than stripped.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
     tooltip = clean_tooltip_text(
         resolve_rule_tooltip(rules[index], hass, entry)
+        or step_tooltip(rules[index], hass, entry)
         or resolve_rule_tooltip(assign, hass, entry)
     )
 
@@ -464,7 +534,10 @@ async def _fire_cycle_update_in_scope(
     async_dispatcher_send(hass, SIGNAL_ICON_UPDATE.format(device_id), [{
         "page_id": page_id,
         "button_key": button_key,
-        "icon": resolve_icon_url(icon, color=page_color, theme=theme.theme_id),
+        "icon": resolve_icon_url(
+            icon, color=page_color, theme=theme.theme_id,
+            radius=read_icon_style_options(getattr(entry, "options", None)).radius,
+        ),
         "tooltip": tooltip,
         "page_color": page_color,
     }])
@@ -482,7 +555,7 @@ async def _fire_optimistic_update(
     """Predict the next state and fire an immediate icon update.
 
     Only for toggle services whose next state is predictable via
-    ``NEXT_STATE_MAP``. Stateless services (send_command, play_media, …) and
+    ``PREDICTED_HA_STATE_MAP``. Stateless services (send_command, play_media, …) and
     attribute-setting ones (volume_set, …) are skipped — their outcome either
     has no icon or cannot be predicted from the current state alone.
 
@@ -525,18 +598,15 @@ async def _fire_optimistic_update(
         )
         return
 
-    store = _get_store(hass)
+    store = get_store(hass)
     # The remote's theme picks the icon table and rides in the URL built below,
     # so this repaint and the correcting state listener cannot disagree.
     theme = settings_theme(await store.async_get_settings(device_id))
 
     # Asked against the *predicted* state through the table the listener reads,
     # so the optimistic glyph is the one confirmation lands on.
-    action_icon = _match_state_icon(
-        service,
-        State(entity_id, predicted_ha_state, state.attributes),
-        theme.icons,
-    )
+    predicted = State(entity_id, predicted_ha_state, state.attributes)
+    action_icon = _match_state_icon(service, predicted, theme.icons)
     if not action_icon:
         log.debug(
             "Optimistic: theme has no icon for predicted state '%s' — skipping",
@@ -544,31 +614,20 @@ async def _fire_optimistic_update(
         )
         return
 
-    # Tooltip action keys can differ from HA states; NEXT_STATE_MAP has the key.
-    predicted_action_key = NEXT_STATE_MAP.get(state.state, predicted_ha_state)
-
-    state_icons = assign.get("state_icons") or {}
-    override = state_icons.get(predicted_ha_state) or catchall_state_icon(
-        state_icons, state.entity_id.split(".")[0], predicted_ha_state, svc,
-    )
-
     # Variables read as the sync reads them; one with no value falls back to
     # the themed icon, and with neither there is nothing to predict.
-    pages = await store.async_get_pages(device_id)
-    page_color = ""
-    template = None
-    for p in pages:
-        if p.get("id", _DEFAULT_PAGE_ID) == page_id:
-            page_color = p.get("default_color", "")
-            template = p.get("template")
-            break
+    template, page_color = await _page_meta(store, device_id, page_id)
 
     with page_scope(template), button_scope(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
     ), language_scope(get_ui_language(
         hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
     )):
-        icon = resolve_image_tokens(override, hass) or resolve_image_tokens(action_icon, hass)
+        # The sync's order, so a picture the user gave the button survives the
+        # press instead of giving way to the predicted state's glyph.
+        from ..config.button_rendering import library_names, live_button_icon
+
+        icon = live_button_icon(assign, predicted, service, action_icon, hass)
     if not icon:
         log.debug("Optimistic: predicted icon has no value — skipping")
         return
@@ -591,17 +650,16 @@ async def _fire_optimistic_update(
 
     resolved = resolve_icon_url(
         icon, color=tile_style.color, percent=tile_style.percent,
-        theme=theme.theme_id,
+        theme=theme.theme_id, radius=style_options.radius,
     )
 
-    # Same entry as the style above; the correcting state listener uses it too.
-    lang = get_ui_language(hass, entry)
-    action_word = button_tooltips.get(predicted_action_key, lang)
-    entity_name = (
-        state.attributes.get("friendly_name", "")
-        or entity_id.split(".")[-1].replace("_", " ").title()
+    # The ladder the sync and the correcting state listener read, against the
+    # predicted state: a label the user wrote, and its variables, survive the
+    # press instead of being swapped for a generic "<name> <action>".
+    names = library_names(await store.async_get_action_library(device_id))
+    tooltip = _compute_next_state_tooltip(
+        assign, predicted, hass, entry, names.get(assign.get("action_id")),
     )
-    tooltip = f"{entity_name} {action_word}" if entity_name else action_word
 
     log.debug(
         "Optimistic update: %s/%s → predicted %s → icon=%s tooltip=%s",
@@ -628,10 +686,10 @@ async def resolve_button_assignment(
     The fixed-button context applies, so this is the override when the selected
     grid button has one.
     """
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if not device_id:
         return None, None
-    assignments = await _get_store(hass).async_get_assignments(device_id, page_id)
+    assignments = await get_store(hass).async_get_assignments(device_id, page_id)
     assign = resolve_fixed_action(assignments, get_selected_button(entry_id), button_key)
     return device_id, assign if isinstance(assign, dict) else None
 
@@ -651,7 +709,7 @@ async def longtouch_assignment(
     steps = longtouch_steps(assign)
     if not steps:
         return []
-    settings = await _get_store(hass).async_get_settings(device_id)
+    settings = await get_store(hass).async_get_settings(device_id)
     return steps if longtouch_enabled(settings) else []
 
 
@@ -694,7 +752,7 @@ async def execute_longtouch(
         log.debug("execute_longtouch: no long touch for %s/%s", page_id, button_key)
         return
     before = _inferred_prelude(hass, actions[0])
-    actions = _bind_internal_steps(_reroute_launches(hass, actions), entry_id)
+    actions = _runnable_steps(hass, actions, entry_id)
     script = await _get_script(
         hass, entry_id, page_id, button_key,
         (before or []) + actions, gesture="longtouch",
@@ -759,11 +817,19 @@ async def execute_action(
     entry_id: str,
     button_key: str,
     page_id: int = _DEFAULT_PAGE_ID,
+    *,
+    resolved: tuple[str | None, dict | None] | None = None,
 ) -> None:
-    """Run the HA script action assigned to a clicked button."""
+    """Run the HA script action assigned to a clicked button.
+
+    *resolved* is what `resolve_button_assignment` already answered for this
+    press, so the event handler reads the assignment once.
+    """
     entry = hass.config_entries.async_get_entry(entry_id)
     log = device_logger(_LOGGER, entry)
-    device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+    if resolved is None:
+        resolved = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+    device_id, assign = resolved
     if not device_id:
         log.warning("execute_action: device not found")
         return
@@ -781,7 +847,7 @@ async def execute_action(
     if TOGGLE_KEY in assign:
         assign = runtime_assign(
             assign,
-            toggle_enabled(await _get_store(hass).async_get_settings(device_id)),
+            toggle_enabled(await get_store(hass).async_get_settings(device_id)),
         )
 
     actions = assign.get("config", [])
@@ -792,6 +858,11 @@ async def execute_action(
     # Preserve the button's own steps for verification retries. A ``toggle``
     # block may substitute a different rule's steps here; ``config`` stays the
     # declared default that everything else in the integration reads.
+    cycle_step: int | None = None
+    if toggle_mode(assign) == MODE_CYCLE and (rules := toggle_rules(assign)):
+        # Read before `resolve_toggle_steps` advances it: the step this press runs.
+        cycle_step = cycle_index(entry_id, page_id, button_key, len(rules))
+        await _evict_cycle_steps(hass, entry_id, page_id, button_key, len(rules))
     own_actions = resolve_toggle_steps(
         hass, entry_id, page_id, button_key, assign, actions,
     )
@@ -827,7 +898,9 @@ async def execute_action(
             )
 
     # Order: wake, capture, button action, check; non-list siblings are ignored.
-    actions = _bind_internal_steps(_reroute_launches(hass, own_actions), entry_id)
+    actions = _runnable_steps(
+        hass, own_actions, entry_id, toggle=toggle_mode(assign) != MODE_CYCLE,
+    )
     if capture:
         actions = capture + actions
     if isinstance(before, list) and before:
@@ -835,7 +908,9 @@ async def execute_action(
     if isinstance(after, list) and after:
         actions = actions + after
 
-    script = await _get_script(hass, entry_id, page_id, button_key, actions)
+    script = await _get_script(
+        hass, entry_id, page_id, button_key, actions, step=cycle_step,
+    )
     if script is None:
         return
     log.info(

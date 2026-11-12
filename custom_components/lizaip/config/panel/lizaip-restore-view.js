@@ -262,15 +262,15 @@ export const RestoreViewMixin = {
   _htmlRestoreActions(ctx) {
     if (ctx.stage === "working") return "";
     if (ctx.stage === "done") {
-      return `<div class="template-dialog-actions">
-          <ha-button variant="brand" class="debug-btn primary restore-close-btn">${this._esc(this._t("close"))}</ha-button>
-        </div>`;
+      return this._htmlDialogActions({
+        commit: { cls: "debug-btn primary restore-close-btn", label: this._t("close") },
+      });
     }
     if (ctx.stage !== "review" || !ctx.summary) return "";
-    return `<div class="template-dialog-actions">
-        <ha-button appearance="plain" class="confirm-cancel-btn restore-back-btn">${this._esc(this._t("back"))}</ha-button>
-        <ha-button variant="danger" class="confirm-danger-btn restore-confirm-btn">${this._esc(this._t("restore_confirm_action"))}</ha-button>
-      </div>`;
+    return this._htmlDialogActions({
+      dismiss: { cls: "confirm-cancel-btn restore-back-btn", label: this._t("back") },
+      danger: { cls: "confirm-danger-btn restore-confirm-btn", label: this._t("restore_confirm_action") },
+    });
   },
 
   /** Which step the window is on, as the user counts them. */

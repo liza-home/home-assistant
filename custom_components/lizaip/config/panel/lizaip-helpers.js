@@ -3,18 +3,15 @@
  * Icon resolution, label computation, rendering helpers.
  */
 
-/** True for URLs the device cannot fetch itself — these go through imgserv's media: proxy. */
-function isExternalUrl(val) {
-  const low = String(val ?? "").trim().toLowerCase();
-  return low.startsWith("http://") || low.startsWith("https://");
-}
-
 /**
- * The spelling the panel writes into a label it fills in for the user, and the
- * services that get one. Mirrors `STATE_TOKEN` / `is_two_way_service` in
- * `const.py`; `tests/label_auto_cases.json` pins the two together.
+ * `{translate: ${_state}}` -- the spelling the panel writes into a label it
+ * fills in for the user -- and a bare `${_state}` both print the state's word
+ * in the remote's language. Mirrors `STATE_TOOLTIP` / `STATE_PLACEHOLDER_RE`
+ * in `shared/tooltips.py`.
  */
-export const STATE_TOKEN = "${_state}";
+export const STATE_TOOLTIP = "{translate: ${_state}}";
+const STATE_PLACEHOLDER_RE = /\{\s*translate\s*:\s*\$\{\s*_state\s*\}\s*\}|\$\{\s*_state\s*\}/gi;
+const LEADING_SEPARATORS_RE = /^[\s:;,/\-–—]*$/;
 const TWO_WAY_SERVICES = ["toggle", "media_play_pause"];
 
 /**
@@ -78,7 +75,7 @@ export const ATTR_ACTION_CYCLES = {
   repeat: [["off", "repeat_off"], ["all", "repeat_all"], ["one", "repeat_one"]],
 };
 
-/** attribute -> the value a press *sets* -> the action naming that set. */
+/** attribute -> the value a cycle press *sets* -> the action naming that set. */
 export const ATTR_VALUE_ACTION_MAP = Object.fromEntries(
   Object.entries(ATTR_ACTION_CYCLES).map(([attr, cycle]) => [attr, Object.fromEntries(cycle)]),
 );
@@ -210,7 +207,7 @@ function customIconRegistry() {
 }
 
 /** `media_player` -> "Media player": a heading, not an identifier. */
-export function domainLabel(hass, domain) {
+function domainLabel(hass, domain) {
   const localized = hass?.localize?.(`component.${domain}.title`);
   if (localized) return localized;
   const words = String(domain || "").replace(/_/g, " ");
@@ -726,6 +723,24 @@ export const HelpersMixin = {
     });
   },
 
+  /**
+   * Make each label matching *selector* flip the `ha-switch` its `for` names.
+   * `ha-switch` is not a native input, so `<label for>` does not reach it;
+   * `preventDefault` keeps a browser that does forward the click from
+   * toggling it a second time. The flip is announced as the switch's own
+   * `change`, so its change handler is the one place that acts on it.
+   */
+  _wireSwitchLabels(root, selector) {
+    root.querySelectorAll(selector).forEach((el) =>
+      el.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const sw = root.querySelector(`#${el.getAttribute("for")}`);
+        if (!sw || sw.disabled) return;
+        sw.checked = !sw.checked;
+        sw.dispatchEvent(new Event("change", { bubbles: true }));
+      }));
+  },
+
   /** Withdraw a `_setFieldError`, including the describedby it added. */
   _clearFieldError(el) {
     if (!el) return;
@@ -750,6 +765,91 @@ export const HelpersMixin = {
   },
 
   /**
+   * Run one guarded, busy-flagged backend call against the open remote, and
+   * report its failure. Every busy flag in the panel goes through here.
+   *
+   * Skipped without a remote, or while *flag* is already raised; the flag is
+   * held for the duration and the view repainted on the way in and out, so the
+   * controls that bind `disabled` to it really are disabled while it runs. The
+   * copies this replaced had drifted on exactly that: one never repainted when
+   * it raised its flag, so a second click was swallowed by the re-entry guard
+   * with no error and no trace.
+   *
+   * *work* gets the entry it was started for. A failure is reported one of two
+   * ways:
+   * - `toast`: an i18n key, shown with the error in its `{error}`;
+   * - `errorField`: the error's text written into that field for the view to
+   *   draw inline, cleared when the run starts. An inline error belongs to the
+   *   remote it was made on, so one arriving after the selection moved is
+   *   dropped -- posting it under another device is worse than showing nothing.
+   *   `onError` undoes what the failure leaves stale.
+   * `render: false` leaves the drawing to the caller.
+   *
+   * Resolves whether *work* succeeded.
+   */
+  async _runBusy(flag, work, { toast = null, errorField = null, onError = null, render = true } = {}) {
+    if (!this._currentEntry || this[flag]) return false;
+    const entry = this._currentEntry;
+    this[flag] = true;
+    if (errorField) this[errorField] = null;
+    if (render) this._render();
+    try {
+      await work(entry);
+      return true;
+    } catch (e) {
+      if (errorField) {
+        if (this._currentEntry !== entry) return false;
+        onError?.();
+        this[errorField] = this._wsErrorText(e);
+      }
+      if (toast) this._toast(this._t(toast, { error: String(e?.message || e) }));
+      return false;
+    } finally {
+      this[flag] = false;
+      if (render) this._render();
+    }
+  },
+
+  /**
+   * A card header: the name, an optional glyph before it and an optional
+   * action on the right. Every card in the panel wears this one, so a card that
+   * carries an action does not have to grow a header shape of its own for it.
+   *
+   * `level` is the heading's place in the outline, and it differs by tab: the
+   * Settings cards sit under the search-results heading and over their own h4
+   * subheadings, so they are h3; elsewhere a card is the first heading under
+   * the toolbar's h1.
+   */
+  _htmlCardHeader(titleKey, { icon = "", action = "", level = 2 } = {}) {
+    const glyph = icon
+      ? `
+        <ha-icon class="settings-card-icon" icon="${icon}" aria-hidden="true"></ha-icon>`
+      : "";
+    return `
+      <div class="actions-card-header${icon ? " settings-card-header" : ""}">${glyph}
+        <h${level} class="actions-card-title">${this._esc(this._t(titleKey))}</h${level}>
+        ${action}
+      </div>`;
+  },
+
+  /**
+   * A dialog's row of buttons, in the panel's one convention: the way out is a
+   * plain button on the left, the step forward on the right -- brand when it
+   * commits, danger when it destroys. Each is `{cls, label, attrs?}`, the label
+   * already translated; one that is left out is not drawn. `row` is the class of
+   * the row itself, which differs between a dialog and the add-page walk's foot.
+   */
+  _htmlDialogActions({ dismiss = null, commit = null, danger = null, row = "template-dialog-actions" } = {}) {
+    const button = (look, b) => b
+      ? `
+          <ha-button ${look} class="${b.cls}"${b.attrs ? ` ${b.attrs}` : ""}>${this._esc(b.label)}</ha-button>`
+      : "";
+    return `<div class="${row}">${button('appearance="plain"', dismiss)}${
+      button('variant="brand"', commit)}${button('variant="danger"', danger)}
+        </div>`;
+  },
+
+  /**
    * HTML-escape a value for interpolation into a template string.
    *
    * Coerces before escaping: callers pass whatever a store handed them, and not
@@ -770,11 +870,6 @@ export const HelpersMixin = {
     return val.startsWith("http://") || val.startsWith("https://") || val.startsWith("/") || val.startsWith("data:");
   },
 
-  /** Mixin access to {@link isExternalUrl} for call sites that only have `this`. */
-  _isExternalUrl(val) {
-    return isExternalUrl(val);
-  },
-
   /**
    * @param {string} val   Icon source spec (`mdi:`, `text:`, a URL, …).
    * @param {number|string} size  Rendered size in px, or `title` / `tooltip`.
@@ -786,10 +881,11 @@ export const HelpersMixin = {
    *
    * *opts.theme* draws it in a named theme instead of the remote's stored
    * one, for a picture that is panel chrome rather than a preview.
+   *
+   * *box* is the space the preview occupies on screen and defaults to the
+   * square a numeric size implies. The two are separate because a title is not
+   * square: the strip the remote draws is shown whole, at the box's size.
    */
-  // `box` is the space the preview occupies on screen and defaults to the
-  // square a numeric size implies. The two are separate because a title is not
-  // square: the strip the remote draws is shown whole, at the box's size.
   _renderIconHtml(val, size = 20, color = "", box = null, opts = {}) {
     const boxW = box?.w ?? size;
     const boxH = box?.h ?? size;
@@ -1287,6 +1383,9 @@ export const HelpersMixin = {
       if (/[?&]mode=/.test(src)) src = src.replace(/([?&]mode=)dark\b/, "$1light");
       else src += `${q >= 0 ? "&" : "?"}mode=light`;
     }
+    // A whole `media:` picture is drawn round since `round1`; the version
+    // makes a browser holding the old, square one ask again.
+    if (/^\/api\/imgserv\/media:/.test(src) && !/[?&](box|rv|radius)=/.test(src)) src += `${src.includes("?") ? "&" : "?"}rv=round1`;
     return `${src}${src.includes("?") ? "&" : "?"}alpha=1`;
   },
 
@@ -1606,8 +1705,8 @@ export const HelpersMixin = {
   /**
    * The default name for a newly created action library entry.
    *
-   * Uses `_friendlySvc` -- the same vocabulary the device prints and the
-   * shipped templates use ("Previous", "Play/Pause", "Next", "Mute") -- rather
+   * Uses `_serviceRef` -- `{translate: previous}` and friends, the same
+   * vocabulary the device prints and the shipped templates use -- rather
    * than a mechanical verb + domain transform. This name is stored on the
    * library entry and flows straight into the button label, so the transform
    * reached the device as "play:5 Media play media_player" (and, worse,
@@ -1626,7 +1725,7 @@ export const HelpersMixin = {
     if (internal) return internal.name;
     const action = service.split(".")[1];
     if (!action) return service;
-    return this._friendlySvc(action, this._tooltipLang()) || service;
+    return this._serviceRef(action) || service;
   },
 
   // --- Internal (device-local) commands -------------------------------------
@@ -1697,16 +1796,6 @@ export const HelpersMixin = {
   },
 
   /**
-   * The stored value of the first target param holding text — the panel's
-   * mirror of `_stored_target_name` in `internal_commands/registry.py`.
-   *
-   * Type-agnostic on purpose, and text-only for the same reason the Python is:
-   * this is the floor every command gets, so a new one targeting something
-   * that is not a page still names itself from what the user picked, with no
-   * change here. A type that can do better than the raw stored value — turning
-   * a page id into that page's title — says so in the branch above.
-   */
-  /**
    * The name a device-local command's target had when the button was saved.
    *
    * Mirrors `_internal_target_hint` in device_sync.py. Held beside the step,
@@ -1721,6 +1810,16 @@ export const HelpersMixin = {
     return typeof hint === "string" ? hint.trim() : "";
   },
 
+  /**
+   * The stored value of the first target param holding text — the panel's
+   * mirror of `_stored_target_name` in `internal_commands/registry.py`.
+   *
+   * Type-agnostic on purpose, and text-only for the same reason the Python is:
+   * this is the floor every command gets, so a new one targeting something
+   * that is not a page still names itself from what the user picked, with no
+   * change here. A type that can do better than the raw stored value — turning
+   * a page id into that page's title — says so in the branch above.
+   */
   _internalStoredTargetName(config, fallbackService = "") {
     const cmd = this._internalCommandFor(config, fallbackService);
     if (!cmd) return "";
@@ -1901,8 +2000,11 @@ export const HelpersMixin = {
 
   /** Turn an icon or logo slug into words; `text:` labels are never touched. */
   _humanisePageSlug(value) {
-    return value.replace(/[-_+]+/g, " ").trim().split(/\s+/)
-      .map(w => w.slice(0, 1).toUpperCase() + w.slice(1)).join(" ");
+    // A `${…}` variable is code, not words: kept as written.
+    return value.split(/(\$\{[^}]*\})/).map((part, i) => (i % 2 ? part
+      : part.replace(/[-_+]+/g, " ").split(/\s+/).filter(Boolean)
+        .map(w => w.slice(0, 1).toUpperCase() + w.slice(1)).join(" ")))
+      .filter(Boolean).join(" ");
   },
 
   /**
@@ -1931,11 +2033,23 @@ export const HelpersMixin = {
       `Page ${i + 1}/${pages.length} (#${page?.id})`);
   },
 
+  /**
+   * `_pageTitle` for showing: its `${…}` variables filled in as the remote
+   * fills them, so a device's own name reads as the name. Not for matching --
+   * the backend resolves a stored name against the unexpanded words.
+   */
+  _pageTitleShown(page) {
+    const title = this._pageTitle(page);
+    if (!title.includes("${")) return title;
+    const filled = this._substituteEntityTokens?.(this._expandPageDevice?.(title, page) ?? title) ?? title;
+    return this._cleanTooltipText(filled) || title.replace(/\$\{[^}]*\}/g, "").trim();
+  },
+
   /** `_pagePosition` and the title on one line, for places that have only one
    *  (an HA dropdown option, a toast, a tooltip line). */
   _pageDisplayLine(page) {
     const pos = this._pagePosition(page);
-    const title = this._pageTitle(page);
+    const title = this._pageTitleShown(page);
     return title ? `${pos} · ${title}` : pos;
   },
 
@@ -2223,8 +2337,8 @@ export const HelpersMixin = {
     // A two-way service gets a *template*, not a resolved state. The caller
     // persists this string into `assign.tooltip`, so returning "Lampe Aus" here
     // would freeze whatever the entity happened to be doing when the button
-    // was configured. `${_state}` is resolved per render, on the device side.
-    if (hasSubject && this._isStateTooltipService(svc)) return STATE_TOKEN;
+    // was configured. The state is resolved per render, on the device side.
+    if (hasSubject && this._isStateTooltipService(svc)) return STATE_TOOLTIP;
 
     // An explicit action name is only *this* button's name when the service has no
     // payload. For play_media & friends the library entry is shared, so its name
@@ -2240,8 +2354,7 @@ export const HelpersMixin = {
     // stored name alone.
     if (!svc) return "";
 
-    const label = this._friendlySvc(svc, lang);
-    return label || "";
+    return this._serviceRef(svc);
   },
 
   /** Services that flip an entity but cannot say which way by themselves. */
@@ -2304,18 +2417,45 @@ export const HelpersMixin = {
     if (this._hasEntityToken?.(text)) text = this._substituteEntityTokens(text);
     // `\w*`, not `\w+`: `${}` and `${ }` must be consumed too, or a brace
     // survives into the rendered label.
-    const out = text.replace(/\$\{\s*(\w*)\s*\}/g, (_, name) => lookup[name.toLowerCase()] ?? "");
+    let out = text.replace(/\$\{\s*(\w*)\s*\}/g, (_, name) => lookup[name.toLowerCase()] ?? "");
+    // `{translate: ${_state}}` waited for its value; the backend looks it up now.
+    if (out.includes("{translate:")) out = this._substituteEntityTokens?.(out) ?? out;
     // A token that collapsed can leave a separator joining nothing ("Go to
     // page:"). Trimmed here rather than in `_cleanTooltipText`, which sees the
     // text after this and cannot tell it from a colon the user typed.
     return out.replace(/^[\s:;,/\-–—]+|[\s:;,/\-–—]+$/g, "").split(/\s+/).filter(Boolean).join(" ");
   },
 
-  /** Name the state a press produces — the service decides before the entity. */
+  /** Mirrors `state_word`: lowercase, unless the language's `state_words` says otherwise. */
+  _stateWord(key, lang) {
+    return this._stateWords?.[key] || this._getButtonTooltip(key, lang).toLowerCase();
+  },
+
+  /** Mirrors `state_label`: the label word when it opens a label, else the sentence word. */
+  _stateLabel(key, lang, opensLabel) {
+    return opensLabel ? this._getButtonTooltip(key, lang) : this._stateWord(key, lang);
+  },
+
+  /** Mirrors `state_token_tooltip`: the word a label made of the state placeholder prints. */
   _stateTokenTooltip(svc, stateVal, lang, attributes, data) {
-    // Mirrors `state_token_tooltip` in const.py, rung for rung. The two attribute
+    const key = this._stateTokenKey(svc, stateVal, attributes, data);
+    return key ? this._stateLabel(key, lang, true) : "";
+  },
+
+  /** Mirrors `translate_state`: each state placeholder as the word for *key*. */
+  _translateState(text, key, lang) {
+    if (!text || !text.includes("${")) return text;
+    return text.replace(STATE_PLACEHOLDER_RE, (_m, offset) => (
+      // No key: left for the token pass, which also drops the separator it joined.
+      key ? this._stateLabel(key, lang, LEADING_SEPARATORS_RE.test(text.slice(0, offset))) : "${_state}"
+    ));
+  },
+
+  /** Name the state a press produces — the service decides before the entity. */
+  _stateTokenKey(svc, stateVal, attributes, data) {
+    // Mirrors `state_token_key` in shared/tooltips.py, rung for rung. The two attribute
     // rungs sit above the service map because a setter (`volume_mute`) does not
-    // name its own direction: the answer is in the button's data or in the
+    // name its own direction: the answer is in a cycle press's data or in the
     // attribute it inverts, never in `state.state` — a muted speaker is still
     // `playing`. `attrAction` is the allowlist for both, so the value setters
     // (`select_source`, `set_hvac_mode`, …) cannot start printing raw HA values.
@@ -2326,21 +2466,18 @@ export const HelpersMixin = {
     const cycle = this._attributeCycleFor(svc);
     if (cycle) {
       if (data && data[attribute] !== undefined) {
-        // A template (`{{ not is_state_attr(...) }}`) is not a value of the
-        // attribute, so it misses here and falls to the rung below — which is
-        // where an inverting button belongs.
         const target = ATTR_VALUE_ACTION_MAP[attribute]?.[this._attrStr(data[attribute])];
-        if (target) return this._getButtonTooltip(target, lang);
+        if (target) return target;
       }
       if (attributes && attributes[attribute] !== undefined) {
         const nextKey = cycle[this._attrStr(attributes[attribute])];
-        if (nextKey) return this._getButtonTooltip(nextKey, lang);
+        if (nextKey) return nextKey;
       }
     }
     const serviceAction = SERVICE_ACTION_MAP[svc];
-    if (serviceAction) return this._getButtonTooltip(serviceAction, lang);
+    if (serviceAction) return serviceAction;
     if (this._isTwoWayService(svc) && stateVal && NEXT_STATE_MAP[stateVal]) {
-      return this._getButtonTooltip(NEXT_STATE_MAP[stateVal], lang);
+      return NEXT_STATE_MAP[stateVal];
     }
     return "";
   },
@@ -2369,22 +2506,17 @@ export const HelpersMixin = {
    * Read-only: this must never be written back to `assign.tooltip`, or the
    * template collapses into a frozen state on the next save.
    */
-  _displayTooltip(name, action, entityId, config, assign = null) {
+  _displayTooltip(name, action, entityId, config, assign = null, press = false) {
     return this._withButtonDevice(
       entityId || this._getTargetEntitiesFromConfig(config)[0],
-      () => this._displayTooltipInScope(name, action, entityId, config, assign),
+      () => this._displayTooltipInScope(name, action, entityId, config, assign, press),
     );
   },
 
-  _displayTooltipInScope(name, action, entityId, config, assign = null) {
+  _displayTooltipInScope(name, action, entityId, config, assign = null, press = false) {
     // Unlike its Python counterpart this is a display path in its own right,
     // so it cleans on the way out too rather than only via `_resolveTooltip`.
-    if (!name || !name.includes("${")) {
-      // `{translate: brightness} 25 %` in the remote's language.
-      return this._cleanTooltipText(
-        this._localizeStoredName(this._substituteTooltipTokens(name, {}), assign),
-      );
-    }
+    if (!name || !name.includes("${")) return this._displayName(name);
     // The action library's service, not the first step's. `_fill_tooltip_tokens`
     // in device_sync.py reads `action_def["service"]`, and this has to answer
     // what the remote will print. Where the two differ -- a library entry of
@@ -2399,13 +2531,16 @@ export const HelpersMixin = {
       || (entityId && this._hass?.states?.[entityId]) || null;
     const stateVal = stateObj?.state || "";
     const attributes = stateObj?.attributes || null;
-    // The first step's own service data, matching `_fill_tooltip_tokens`, which
-    // reads `assign["config"][0]["data"]`.
+    // The first step's own service data, matching `_fill_tooltip_tokens`. Read
+    // for a cycle, which runs every face verbatim, and so names the direction
+    // it stores; a plain action toggles the attribute instead.
     const step = Array.isArray(config) && config[0] && typeof config[0] === "object" ? config[0] : {};
     const data = step.data || {};
-    const lang = this._tooltipLang();
+    const asPress = press || assign?.toggle?.mode === "cycle";
+    const stateKey = this._stateTokenKey(svc, stateVal, attributes, asPress ? data : null);
+    name = this._translateState(name, stateKey, this._tooltipLang());
     const values = {
-      _state: this._stateTokenTooltip(svc, stateVal, lang, attributes, data),
+      _state: stateKey,
       // `${_queue.…}` aliases the target's queue sensor, which only the remote
       // can resolve. Blank rather than absent, for the separator reason above.
       "_queue.next_song": "",
@@ -2717,6 +2852,7 @@ export const HelpersMixin = {
     return !text
       .replace(/\$\{\s*(\w*)\s*\}/g, "")
       .replace(/\$\{\s*(?:_queue|_device)\.[A-Za-z0-9_]+\s*\}/gi, "")
+      .replace(/\{\s*translate\s*:/gi, "")
       .replace(/[{}]/g, "")
       .replace(/[\s:;,/\-–—]+/g, "")
       .trim();
@@ -2839,15 +2975,11 @@ export const HelpersMixin = {
     if (stored && !this._tooltipIsAutoFilled(stored, action, this._computeTooltip(action, entityId, config), assign)) {
       return this._displayTooltip(stored, action, entityId, config, assign);
     }
-    const userNamed = !!assign?.tooltip_edited;
-
     const payload = this._getPayloadDisplay(config);
     if (payload?.title) return payload.title;
 
-    const staticName = this._localizeStaticName(
+    const staticName = this._displayName(
       stored || (this._isPayloadService(service) ? "" : (action?.name || "")),
-      lang,
-      userNamed,
     );
     if (!svc) return staticName;
 
@@ -2860,14 +2992,12 @@ export const HelpersMixin = {
     // same name in `button_rendering._resolve_button_tooltip_ladder`; without it
     // the panel would print `${_state}` while the device printed a frozen "Mute".
     if (this._isAttributeStateService(svc)) {
-      const attrTooltip = this._displayTooltip(STATE_TOKEN, action, entityId, config);
+      const attrTooltip = this._displayTooltip(STATE_TOOLTIP, action, entityId, config);
       if (attrTooltip) return attrTooltip;
     }
 
-    const nextState = {on:"off",off:"on",playing:"pause",paused:"play",idle:"play",
-      open:"close",closed:"open",locked:"unlock",unlocked:"lock"};
-    if (this._stateToggleServices.includes(svc) && stateVal && nextState[stateVal]) {
-      return this._getButtonTooltip(nextState[stateVal], lang);
+    if (this._stateToggleServices.includes(svc) && stateVal && NEXT_STATE_MAP[stateVal]) {
+      return this._stateLabel(NEXT_STATE_MAP[stateVal], lang, true);
     }
 
     if (this._isStatelessService(svc) && staticName) return staticName;
@@ -2899,25 +3029,15 @@ export const HelpersMixin = {
     return String(key ?? "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   },
 
-  // Mirrors `localize_static_name` in const.py. A brand ("Alexa") or a symbol
-  // ("CH+") has no wording key and comes back untouched.
-  _localizeStaticName(name, lang, userNamed) {
-    if (!name || userNamed) return name;
-    const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-    if (!this._buttonTooltips?.[slug]) return name;
-    const translated = this._getButtonTooltip(slug, lang);
-    // The template's own spelling is the English source, so a wording that only
-    // respells it ("Play/Pause" against the table's "Play / Pause") must not
-    // replace it -- that rewrite reads as a user-typed label further up.
-    const back = String(translated).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-    return back === slug ? name : translated;
+  /** A stored name as it reads: words as written, `{translate: …}` translated. */
+  _displayName(name) {
+    return this._cleanTooltipText(this._substituteTooltipTokens(name, {}));
   },
 
-  // Display only: `_computeTooltip` keeps the English, because Reset persists it
-  // and storing a translation would freeze one language into the button.
-  _localizeStoredName(name, assign) {
-    if (!name || assign?.tooltip_edited) return name;
-    return this._localizeStaticName(name, this._tooltipLang(), false);
+  /** Mirrors `ButtonTooltips.service_ref`: what a button stores to name *svc*. */
+  _serviceRef(svc) {
+    if (SERVICE_ACTION_MAP[svc]) return `{translate: ${SERVICE_ACTION_MAP[svc]}}`;
+    return this._friendlySvc(svc, "en");
   },
 
   _friendlySvc(svc, lang) {
@@ -3128,10 +3248,10 @@ export const HelpersMixin = {
         <div class="add-page-dialog confirm-dialog" role="document">
           <h2 class="add-page-dialog-title" id="liza-dlg-title">${this._esc(title)}${subtitleHtml}</h2>
           <p class="confirm-dialog-message" id="liza-dlg-message">${this._esc(message)}</p>
-          <div class="template-dialog-actions">
-            <ha-button appearance="plain" class="confirm-cancel-btn">${this._esc(this._t("cancel"))}</ha-button>
-            <ha-button variant="danger" class="confirm-danger-btn" autofocus>${this._esc(confirmText)}</ha-button>
-          </div>
+          ${this._htmlDialogActions({
+            dismiss: { cls: "confirm-cancel-btn", label: this._t("cancel") },
+            danger: { cls: "confirm-danger-btn", label: confirmText, attrs: "autofocus" },
+          })}
         </div>
       `, {
         labelledBy: "liza-dlg-title", describedBy: "liza-dlg-message", role: "alertdialog",

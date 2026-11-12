@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .connection import LizaIPConnection
 from ..const import DOMAIN
+from ..runtime import entry_connection
 from ..shared.logs import device_logger
 from .const import WS_PATH
 from .protocol import PING_INTERVAL
@@ -61,15 +62,9 @@ class LizaIPWebSocketView(HomeAssistantView):
                     status=503,
                     text="Device config entry exists but is not ready yet — retry shortly",
                 )
-            # Unknown device → trigger config-flow discovery
-            _LOGGER.info("Unknown device '%s' — triggering discovery flow", device_id)
-            # try:
-            #     await hass.config_entries.flow.async_init(
-            #         DOMAIN, context={"source": "websocket"}, data={"device_id": device_id},
-            #     )
-            # except Exception as err:
-            #     _LOGGER.warning("Discovery flow init for '%s' failed: %s", device_id, err)
-            return web.Response(status=409, text="Device not configured yet — discovery triggered")
+            # Unknown device: it is set up through zeroconf discovery, not here.
+            _LOGGER.info("Unknown device '%s' — not configured yet, refusing", device_id)
+            return web.Response(status=409, text="Device not configured yet")
 
         # A live connection for this device already exists. Rather than rejecting the
         # newcomer, accept it and let LizaIPConnection.accept() evict the stale one —
@@ -90,7 +85,7 @@ class LizaIPWebSocketView(HomeAssistantView):
 
     def _find_connection(self, hass: HomeAssistant, device_id: str) -> LizaIPConnection | None:
         for entry in hass.config_entries.async_entries(DOMAIN):
-            if entry.unique_id == device_id and hasattr(entry, "runtime_data"):
-                return entry.runtime_data
+            if entry.unique_id == device_id and (conn := entry_connection(entry)) is not None:
+                return conn
         return None
 

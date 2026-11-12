@@ -23,10 +23,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .. import provisioning
-from .http import error_detail
+from .http import device_session, device_url, error_detail
 
 
 class OtaReply(NamedTuple):
@@ -207,6 +206,11 @@ class LizaIPConnection:
         return self._protocol
 
     @property
+    def device_id(self) -> str | None:
+        """The remote's device id, or ``None`` until one is known."""
+        return self._device_id
+
+    @property
     def device_protocol_version(self) -> int | None:
         return self._device_protocol_version
 
@@ -267,8 +271,12 @@ class LizaIPConnection:
 
     # ── Callback registration ─────────────────────────────────────────────
 
-    def register_availability(self, cb: Callable[[bool], None]) -> None:
+    # Each `register_*` returns the call that undoes it, for an entity's
+    # `async_on_remove` or an entry's `async_on_unload`.
+
+    def register_availability(self, cb: Callable[[bool], None]) -> Callable[[], None]:
         self._availability_callbacks.append(cb)
+        return lambda: self.unregister_availability(cb)
 
     def unregister_availability(self, cb: Callable[[bool], None]) -> None:
         try:
@@ -276,26 +284,38 @@ class LizaIPConnection:
         except ValueError:
             pass
 
-    def register_discovery(self, cb: Callable[[dict[str, Any]], None]) -> None:
+    def register_discovery(self, cb: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
         self._discovery_callbacks.append(cb)
         if self._last_discovery is not None:
             cb(self._last_discovery)
+        return lambda: self.unregister_discovery(cb)
 
-    def register_button(self, button_id: str, cb: Callable[[str, dict[str, Any]], None]) -> None:
+    def unregister_discovery(self, cb: Callable[[dict[str, Any]], None]) -> None:
+        try:
+            self._discovery_callbacks.remove(cb)
+        except ValueError:
+            pass
+
+    def register_button(
+        self, button_id: str, cb: Callable[[str, dict[str, Any]], None],
+    ) -> Callable[[], None]:
         self._button_callbacks[button_id] = cb
+        return lambda: self.unregister_button(button_id)
 
     def unregister_button(self, button_id: str) -> None:
         self._button_callbacks.pop(button_id, None)
 
-    def register_sensor(self, key: str, cb: Callable[[float], None]) -> None:
+    def register_sensor(self, key: str, cb: Callable[[float], None]) -> Callable[[], None]:
         self._sensor_callbacks[key] = cb
+        return lambda: self.unregister_sensor(key)
 
     def unregister_sensor(self, key: str) -> None:
         self._sensor_callbacks.pop(key, None)
 
-    def register_brightness(self, cb: Callable[[float, bool], None]) -> None:
+    def register_brightness(self, cb: Callable[[float, bool], None]) -> Callable[[], None]:
         self._brightness_callbacks.append(cb)
         cb(self._brightness_value, self._brightness_automatic)
+        return lambda: self.unregister_brightness(cb)
 
     def unregister_brightness(self, cb: Callable[[float, bool], None]) -> None:
         try:
@@ -617,8 +637,8 @@ class LizaIPConnection:
                 translation_key="device_port_unknown",
             )
 
-        session = async_get_clientsession(self._hass)
-        url = f"http://{self._peer_ip}:{self._device_http_port}{endpoint}"
+        session = device_session(self._hass)
+        url = device_url(self._peer_ip, self._device_http_port, endpoint)
         try:
             async with session.request(method, url, **kwargs) as resp:
                 return resp.status, await resp.text()
@@ -655,23 +675,13 @@ class LizaIPConnection:
             control_payload,
         )
 
-        status, text = await self._control_request(
-            "POST",
-            json={"Device": {"Control": control_payload}},
-            timeout=ClientTimeout(total=10),
-        )
+        status, text = await self.async_device_control(control_payload)
         self._logger.debug(
             "DemoMode response (%s): HTTP %s body=%r",
             self._peer_ip,
             status,
             text[:300],
         )
-        if status not in (200, 202, 204):
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="control_rejected",
-                translation_placeholders={"status": str(status), "error": text[:200]},
-            )
 
     async def _ota_request(self, method: str, **kwargs: Any) -> tuple[int, str]:
         """Call the device's ``/Device/OTA`` endpoint; returns (status, body text)."""
@@ -855,8 +865,8 @@ class LizaIPConnection:
             self._logger.debug("No device HTTP port stored — skipping probe")
             return
 
-        session = async_get_clientsession(self._hass)
-        url = f"http://{peer_ip}:{self._device_http_port}/api/info"
+        session = device_session(self._hass)
+        url = device_url(peer_ip, self._device_http_port, "/api/info")
         info: dict[str, Any] | None = None
         try:
             async with session.get(url, timeout=ClientTimeout(total=5)) as resp:

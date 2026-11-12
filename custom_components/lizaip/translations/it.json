@@ -88,7 +88,6 @@
     },
     "abort": {
       "already_configured": "Device is already configured.",
-      "no_device_id": "Device connected without an ID.",
       "discovery_only": "Manual setup is not supported. The device must be discovered automatically via mDNS.",
       "reconfigure_successful": "Configuration updated."
     }
@@ -289,6 +288,9 @@
     "no_firmware_url": {
       "message": "No firmware download URL available. Check that the latest GitHub release has a .bin asset."
     },
+    "unknown_firmware_version": {
+      "message": "Il server del firmware non ha la versione «{version}»."
+    },
     "no_devices": {
       "message": "No lizaIP devices are configured."
     },
@@ -358,5 +360,29 @@
   },
   "page_titles": {
     "welcome": "benvenuto!"
+  },
+  "state_words": {
+    "on": "acceso",
+    "off": "spento",
+    "play": "riproduci",
+    "pause": "pausa",
+    "open": "apri",
+    "close": "chiudi",
+    "stop": "stop",
+    "lock": "blocca",
+    "unlock": "sblocca",
+    "next": "successivo",
+    "previous": "precedente",
+    "mute": "muto",
+    "unmute": "riattiva audio",
+    "shuffle_on": "casuale attivo",
+    "shuffle_off": "casuale disattivo",
+    "oscillate_on": "oscillazione attiva",
+    "oscillate_off": "oscillazione disattiva",
+    "forward": "avanti",
+    "reverse": "indietro",
+    "repeat_off": "ripeti disattivo",
+    "repeat_all": "ripeti tutto",
+    "repeat_one": "ripeti uno"
   }
 }

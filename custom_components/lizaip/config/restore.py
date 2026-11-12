@@ -53,7 +53,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
-from ..const import DOMAIN
+from ..data import lizaip_data
 from .access import holds_any_entry, is_admin_user
 from .store import YAML_DIR
 from ..shared.theme import USER_THEMES_SUBDIR
@@ -259,7 +259,8 @@ _PAGES_PREFIX = "pages/"
 #: live one level up from the device folder and travel under their own prefix.
 _THEMES_PREFIX = f"{USER_THEMES_SUBDIR[-1]}/"
 
-#: The two files the store reads as flat lists of page ids.
+#: Flat lists of page ids. The store reads only ``page_order.yaml``;
+#: ``main_pages.yaml`` is found in archives from releases that still wrote it.
 _ID_LISTS = ("page_order.yaml", "main_pages.yaml")
 
 
@@ -565,7 +566,7 @@ async def async_restore_files(
 
 def _uploads(hass: HomeAssistant) -> dict[str, tuple[float, dict[str, Any]]]:
     """The parsed-but-not-yet-applied uploads, by token."""
-    return hass.data.setdefault(DOMAIN, {}).setdefault("_restore_uploads", {})
+    return lizaip_data(hass).restore_uploads
 
 
 def async_store_upload(hass: HomeAssistant, parsed: dict[str, Any]) -> str:

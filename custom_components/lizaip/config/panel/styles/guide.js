@@ -557,8 +557,7 @@ export const STYLES_GUIDE = `
     background: transparent;
     touch-action: none;
   }
-  .guide-resize:hover,
-  .guide-resize:focus-visible {
+  .guide-resize:hover {
     background: var(--primary-color, #03a9f4);
   }
 

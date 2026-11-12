@@ -13,6 +13,7 @@ import glob
 import json
 import logging
 import os
+import threading
 
 from PIL import Image
 
@@ -27,6 +28,8 @@ _MDI_FALLBACK_GLOB = "/usr/local/lib/python3.*/site-packages/hass_frontend/stati
 
 # Lazy-loaded icon path cache: icon_name -> SVG d string
 _MDI_PATHS: dict[str, str] | None = None
+# Several executor threads render at once; one loads, the rest wait for it.
+_MDI_LOCK = threading.Lock()
 
 
 def _load_mdi_paths() -> dict[str, str]:
@@ -34,8 +37,16 @@ def _load_mdi_paths() -> dict[str, str]:
     global _MDI_PATHS
     if _MDI_PATHS is not None:
         return _MDI_PATHS
+    with _MDI_LOCK:
+        if _MDI_PATHS is None:
+            # Published only once complete: a concurrent reader must never
+            # see a half-filled table and answer 404 for a real icon.
+            _MDI_PATHS = _read_mdi_paths()
+    return _MDI_PATHS
 
-    _MDI_PATHS = {}
+
+def _read_mdi_paths() -> dict[str, str]:
+    paths: dict[str, str] = {}
 
     # Locate the mdi JSON directory shipped with hass_frontend
     try:
@@ -55,17 +66,17 @@ def _load_mdi_paths() -> dict[str, str]:
                     # Quick sanity check: values should be long-ish strings.
                     sample = next(iter(chunk.values()), "")
                     if isinstance(sample, str) and len(sample) > 20:
-                        _MDI_PATHS.update(chunk)
+                        paths.update(chunk)
             except Exception:
                 _LOGGER.warning("MDI: failed to load %s", path, exc_info=True)
                 continue
 
-    if _MDI_PATHS:
-        _LOGGER.info("MDI: loaded %d icons from hass_frontend", len(_MDI_PATHS))
+    if paths:
+        _LOGGER.info("MDI: loaded %d icons from hass_frontend", len(paths))
     else:
         _LOGGER.error("MDI: could not load icons \u2014 ensure hass_frontend is installed")
 
-    return _MDI_PATHS
+    return paths
 
 
 # ---------------------------------------------------------------------------

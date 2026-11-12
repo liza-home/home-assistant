@@ -35,12 +35,11 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from aiohttp import ClientTimeout
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..const import DOMAIN
 from ..shared.logs import device_logger
 from .const import DEBUG_LOG_PORT
-from .http import device_base_url, error_detail
+from .http import device_base_url, device_session, error_detail
 from .report import (  # noqa: F401 — re-exported for callers of this module
     DEFAULT_LOG_LEVEL,
     LOG_LEVELS,
@@ -165,7 +164,7 @@ def set_traffic_logging(conn: LizaIPConnection, enabled: bool) -> None:
     """
     global _TRAFFIC_PRIOR_LEVEL
     logger = TRAFFIC_LOGGER
-    conn._protocol.traffic.log_enabled = enabled
+    conn.protocol.traffic.log_enabled = enabled
     if enabled:
         if not _TRAFFIC_LOGGING:
             _TRAFFIC_PRIOR_LEVEL = logger.level
@@ -338,7 +337,7 @@ async def _async_post_logging(conn: LizaIPConnection, levels: dict[str, str]) ->
             translation_key="device_ip_unknown",
         )
 
-    session = async_get_clientsession(conn.hass)
+    session = device_session(conn.hass)
     url = f"{device_base_url(conn)}{LOGGING_ENDPOINT}"
 
     try:

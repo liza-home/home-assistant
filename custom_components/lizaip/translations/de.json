@@ -14,7 +14,6 @@
     },
     "abort": {
       "already_configured": "Gerät ist bereits konfiguriert.",
-      "no_device_id": "Gerät hat sich ohne ID verbunden.",
       "discovery_only": "Manuelle Einrichtung wird nicht unterstützt. Das Gerät muss automatisch über mDNS erkannt werden.",
       "reconfigure_successful": "Konfiguration aktualisiert."
     }
@@ -215,6 +214,9 @@
     "no_firmware_url": {
       "message": "Keine Firmware-Download-URL verfügbar. Prüfe, ob das neueste Release ein .bin-Asset enthält."
     },
+    "unknown_firmware_version": {
+      "message": "Der Firmware-Server hat keine Version „{version}“."
+    },
     "no_devices": {
       "message": "Es sind keine lizaIP-Geräte konfiguriert."
     },
@@ -358,5 +360,29 @@
   },
   "page_titles": {
     "welcome": "willkommen!"
+  },
+  "state_words": {
+    "on": "ein",
+    "off": "aus",
+    "play": "Wiedergabe",
+    "pause": "Pause",
+    "open": "auf",
+    "close": "zu",
+    "stop": "Stop",
+    "lock": "sperren",
+    "unlock": "entsperren",
+    "next": "nächster",
+    "previous": "vorheriger",
+    "mute": "stumm",
+    "unmute": "Ton ein",
+    "shuffle_on": "Zufall ein",
+    "shuffle_off": "Zufall aus",
+    "oscillate_on": "Schwenken ein",
+    "oscillate_off": "Schwenken aus",
+    "forward": "vorwärts",
+    "reverse": "rückwärts",
+    "repeat_off": "Wiederholen aus",
+    "repeat_all": "alle wiederholen",
+    "repeat_one": "eines wiederholen"
   }
 }

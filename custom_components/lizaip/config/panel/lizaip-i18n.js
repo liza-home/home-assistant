@@ -49,7 +49,6 @@ export const STRINGS = {
   name: { ha: "ui.common.name", en: "Name" },
   icon: { ha: "ui.dialogs.label-detail.icon", en: "Icon" },
   image: { ha: "ui.components.selectors.image.image", en: "Image" },
-  custom: { ha: "ui.panel.config.backup.data.apps_custom", en: "Custom" },
   filter: { ha: "ui.components.related-filter-menu.filter", en: "Filter…" },
   move: { ha: "ui.common.move", en: "Move" },
   clear: { ha: "ui.common.clear", en: "Clear" },
@@ -193,13 +192,6 @@ export const STRINGS = {
     it: "Questo tema verrà eliminato definitivamente. Un telecomando che lo usa manterrà il nome e tornerà all’aspetto predefinito.",
     es: "Este tema se eliminará permanentemente. Un mando que lo use conservará el nombre y volverá al aspecto predeterminado.",
   },
-  settings_theme_delete_remote_text: {
-    en: "Remote Text: {text}",
-    de: "Fernbedienungstext: {text}",
-    fr: "Texte de la télécommande : {text}",
-    it: "Testo del telecomando: {text}",
-    es: "Texto del mando: {text}",
-  },
   settings_theme_name: {
     en: "Theme name", de: "Name des Designs", fr: "Nom du thème",
     it: "Nome del tema", es: "Nombre del tema",
@@ -219,31 +211,12 @@ export const STRINGS = {
     en: "My theme", de: "Mein Design", fr: "Mon thème",
     it: "Il mio tema", es: "Mi tema",
   },
-  settings_theme_states: {
-    en: "Tile colour by state", de: "Kachelfarbe nach Zustand",
-    fr: "Couleur de tuile selon l'état", it: "Colore della casella per stato",
-    es: "Color de la casilla según el estado",
-  },
   settings_theme_states_hint: {
     en: "What a button falls back to, tinted by what the entity behind it is doing. A page's icon colour, an icon given its own colour, and a lit lamp's own colour each win over this.",
     de: "Worauf eine Taste zurückfällt, eingefärbt danach, was die Entität dahinter gerade tut. Die Symbolfarbe einer Seite, ein Symbol mit eigener Farbe und die Farbe einer eingeschalteten Lampe gehen jeweils vor.",
     fr: "Ce à quoi une touche revient, teinté selon ce que fait l'entité derrière elle. La couleur d'icône d'une page, une icône à la couleur propre et la couleur d'une lampe allumée l'emportent chacune.",
     it: "Ciò a cui un tasto ricade, colorato in base a ciò che fa l'entità dietro di esso. Il colore dell'icona di una pagina, un'icona con un colore proprio e il colore di una luce accesa prevalgono su questo.",
     es: "Aquello a lo que recurre un botón, teñido según lo que hace la entidad detrás de él. El color de icono de una página, un icono con color propio y el color de una lámpara encendida tienen prioridad sobre esto.",
-  },
-  settings_theme_palette: {
-    en: "Colours a page can be given",
-    de: "Farben, die eine Seite bekommen kann",
-    fr: "Couleurs qu'une page peut recevoir",
-    it: "Colori che una pagina può ricevere",
-    es: "Colores que puede recibir una página",
-  },
-  settings_theme_palette_hint: {
-    en: "The six swatches offered under a page's icon colour, captioned with the colour each one now holds. A page keeps the colour, not the swatch, so repainting one here leaves pages already set alone.",
-    de: "Die sechs Farbfelder, die unter der Symbolfarbe einer Seite angeboten werden, jeweils benannt nach der Farbe, die sie gerade haben. Eine Seite behält die Farbe, nicht das Feld — wer hier eines umfärbt, ändert bereits gesetzte Seiten nicht.",
-    fr: "Les six échantillons proposés sous la couleur d'icône d'une page, chacun nommé d'après la couleur qu'il contient. Une page retient la couleur, pas l'échantillon : en repeindre un ici ne touche pas aux pages déjà réglées.",
-    it: "I sei campioni offerti sotto il colore dell'icona di una pagina, ognuno intitolato con il colore che ha ora. Una pagina conserva il colore, non il campione: ridipingerne uno qui non tocca le pagine già impostate.",
-    es: "Las seis muestras que se ofrecen bajo el color de icono de una página, cada una con el nombre del color que tiene ahora. Una página guarda el color, no la muestra: repintar una aquí no cambia las páginas ya configuradas.",
   },
   settings_theme_state_default: {
     en: "Default", de: "Standard", fr: "Par défaut",
@@ -392,53 +365,6 @@ export const STRINGS = {
   },
   click_action: {
     en: "Click", de: "Klick", fr: "Clic", it: "Clic", es: "Clic",
-  },
-  // The face's hover card. "Opens" rather than the command's own "Go to
-  // page", which the registry already carries: the row names the kind of
-  // fact, and the page is the value beside it.
-  tip_opens: {
-    en: "Opens", de: "Öffnet", fr: "Ouvre", it: "Apre", es: "Abre",
-  },
-  // Why a press will do nothing, from `_internalCommandProblem`. Headed as a
-  // problem rather than folded into the row above, because the row above is
-  // still true — the button does point at that page; the page is just gone.
-  tip_problem: {
-    en: "Problem", de: "Problem", fr: "Problème", it: "Problema", es: "Problema",
-  },
-  // How the slider is pointed, not what it is. "Slider" heads the row that
-  // names a device, and one word cannot be the question on one card and the
-  // answer on another.
-  tip_slider_mode: {
-    en: "Mode", de: "Modus", fr: "Mode", it: "Modalità", es: "Modo",
-  },
-  // The tail of a long cycle, which is counted rather than listed: a card
-  // taller than the face stops being a glance.
-  tip_more: {
-    en: "+{n} more", de: "+{n} weitere", fr: "+{n} autres",
-    it: "+{n} altri", es: "+{n} más",
-  },
-  // The vertical slider's normal arrangement: pinned to nothing, taking
-  // whichever device the selected grid button lends it. Stated outright,
-  // because silence here would read as "nothing assigned".
-  tip_slider_follows: {
-    en: "Follows the selected button", de: "Folgt der ausgewählten Taste",
-    fr: "Suit le bouton sélectionné", it: "Segue il pulsante selezionato",
-    es: "Sigue al botón seleccionado",
-  },
-  // The other arrangement: a slider pinned to one device, which only a
-  // hand-written page YAML can spell and which therefore needs saying out
-  // loud, since every slider the panel itself writes follows.
-  tip_slider_fixed: {
-    en: "Fixed to one device", de: "Fest auf ein Gerät eingestellt",
-    fr: "Fixé sur un seul appareil", it: "Fissato su un solo dispositivo",
-    es: "Fijado a un solo dispositivo",
-  },
-  // The empty card for a shape with no actions to be missing — a slider, or
-  // the page title strip, of which "No action assigned" is true and useless.
-  tip_not_configured: {
-    en: "Nothing configured here", de: "Hier ist nichts eingerichtet",
-    fr: "Rien n'est configuré ici", it: "Qui non è configurato nulla",
-    es: "Aquí no hay nada configurado",
   },
   settings_key_repeat: {
     en: "Key repeat", de: "Tastenwiederholung",
@@ -1084,23 +1010,7 @@ export const STRINGS = {
     it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono.",
     es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella.",
   },
-  // One switch for both cards: a shape's and a thumbnail's are the same card
-  // and the same interruption, and two switches would have to be found and
-  // flipped together.
-  settings_button_tips: {
-    en: "Show button and page details",
-    de: "Tasten- und Seitendetails anzeigen",
-    fr: "Afficher les détails des boutons et des pages",
-    it: "Mostra i dettagli di pulsanti e pagine",
-    es: "Mostrar detalles de botones y páginas",
-  },
-  settings_button_tips_hint: {
-    en: "While the pointer rests on a button, raises a card describing it: its label, what each press runs, its long touch, and the entity or page it acts on. Resting it on a page names that page and says how full it is.",
-    de: "Steht der Zeiger auf einer Taste, erscheint eine Karte, die sie beschreibt: Beschriftung, was jeder Druck ausführt, die lange Berührung und das Gerät oder die Seite, auf die sie wirkt. Steht er auf einer Seite, nennt die Karte deren Namen und wie voll sie ist.",
-    fr: "Tant que le pointeur repose sur un bouton, affiche une carte qui le décrit : son libellé, ce que lance chaque appui, son appui long et l'entité ou la page concernée. S'il repose sur une page, la carte la nomme et indique son remplissage.",
-    it: "Finché il puntatore resta su un pulsante, mostra una scheda che lo descrive: l'etichetta, ciò che esegue ogni pressione, il tocco prolungato e l'entità o la pagina su cui agisce. Se resta su una pagina, la scheda la nomina e indica quanto è piena.",
-    es: "Mientras el puntero descansa sobre un botón, muestra una tarjeta que lo describe: su etiqueta, lo que ejecuta cada pulsación, su toque largo y la entidad o página sobre la que actúa. Si descansa sobre una página, la tarjeta la nombra e indica cuán llena está.",
-  },
+
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
   },
@@ -1209,6 +1119,16 @@ export const STRINGS = {
     it: "Da {min} a {max}. Più piccolo è più fluido; più grande rende la regolazione più reattiva, perché il telecomando scarica una nuova immagine per ogni livello.",
     es: "De {min} a {max}. Más pequeño es más suave; más grande hace que la regulación se sienta más rápida, ya que el mando descarga una imagen nueva por cada nivel.",
   },
+  settings_corner_radius: {
+    en: "Corner radius", de: "Eckenradius", fr: "Rayon des coins", it: "Raggio degli angoli", es: "Radio de las esquinas",
+  },
+  settings_corner_radius_hint: {
+    en: "From {min} % (square) to {max} % (round). Applies to whole pictures such as covers; pictures cut into a grid stay square.",
+    de: "Von {min} % (eckig) bis {max} % (rund). Gilt für ganze Bilder wie Cover; in ein Raster zerschnittene Bilder bleiben eckig.",
+    fr: "De {min} % (carré) à {max} % (rond). S'applique aux images entières comme les pochettes ; les images découpées en grille restent carrées.",
+    it: "Da {min} % (quadrato) a {max} % (tondo). Vale per le immagini intere, come le copertine; quelle divise in griglia restano quadrate.",
+    es: "De {min} % (cuadrado) a {max} % (redondo). Se aplica a imágenes completas, como las carátulas; las cortadas en cuadrícula siguen cuadradas.",
+  },
   settings_saved: {
     en: "Settings saved. The remote redraws its pages.",
     de: "Einstellungen gespeichert. Die Fernbedienung zeichnet ihre Seiten neu.",
@@ -1280,6 +1200,14 @@ export const STRINGS = {
   debug_not_tested: {
     en: "Not tested yet.", de: "Noch nicht getestet.", fr: "Pas encore testé.",
     it: "Non ancora testato.", es: "Aún sin probar.",
+  },
+  debug_ping: {
+    en: "Ping", de: "Anpingen", fr: "Envoyer un ping",
+    it: "Esegui ping", es: "Hacer ping",
+  },
+  debug_pinging: {
+    en: "Pinging…", de: "Wird angepingt…", fr: "Ping en cours…",
+    it: "Ping in corso…", es: "Haciendo ping…",
   },
   debug_never_connected: {
     en: "The remote has never connected, so there is no address to test.",
@@ -1591,10 +1519,6 @@ export const STRINGS = {
   button_icons: {
     en: "Button icons", de: "Tastensymbole", fr: "Icônes des touches",
     it: "Icone dei tasti", es: "Iconos de los botones",
-  },
-  icon_color: {
-    en: "Icon color", de: "Symbolfarbe", fr: "Couleur des icônes",
-    it: "Colore delle icone", es: "Color de los iconos",
   },
 
   // ── virtual toggle button ──────────────────────────────────────────
@@ -2357,16 +2281,6 @@ export const STRINGS = {
     es: "No se pudo cambiar la asignación de este mando",
   },
 
-  // ── the other way round: a person and the remotes they hold ───────
-
-  setup_guide_link: {
-    en: "Step-by-step guide for iPhone and Android",
-    de: "Schritt-für-Schritt-Anleitung für iPhone und Android",
-    fr: "Guide pas à pas pour iPhone et Android",
-    it: "Guida passo passo per iPhone e Android",
-    es: "Guía paso a paso para iPhone y Android",
-  },
-
   // ── remotes waiting to be added ────────────────────────────────────
   discovered_heading: {
     en: "Discovered",
@@ -2414,11 +2328,6 @@ export const STRINGS = {
   },
 
   // ── buttons ────────────────────────────────────────────────────────
-  no_action_assigned: {
-    en: "No action assigned", de: "Keine Aktion zugewiesen",
-    fr: "Aucune action attribuée", it: "Nessuna azione assegnata",
-    es: "Ninguna acción asignada",
-  },
   not_assigned_to_button: {
     en: "Not assigned to any button", de: "Keiner Taste zugewiesen",
     fr: "Attribuée à aucune touche", it: "Non assegnata ad alcun tasto",
@@ -2460,13 +2369,6 @@ export const STRINGS = {
   // ── validation messages ────────────────────────────────────────────
   // Each says what a correct answer looks like, not just that it was wrong:
   // WCAG 3.3.3 asks for a suggestion where one is known.
-  invalid_hex: {
-    en: "Enter a 6-digit hex colour, for example 1A73E8.",
-    de: "Sechsstelligen Hex-Farbwert eingeben, z. B. 1A73E8.",
-    fr: "Saisissez une couleur hexadécimale à 6 chiffres, par exemple 1A73E8.",
-    it: "Inserisci un colore esadecimale a 6 cifre, ad esempio 1A73E8.",
-    es: "Introduce un color hexadecimal de 6 dígitos, por ejemplo 1A73E8.",
-  },
   invalid_number: {
     en: "Enter a number.", de: "Zahl eingeben.",
     fr: "Saisissez un nombre.", it: "Inserisci un numero.",
@@ -2485,30 +2387,6 @@ export const STRINGS = {
     fr: "Le maximum doit être supérieur au minimum.",
     it: "Il massimo deve essere maggiore del minimo.",
     es: "El máximo debe ser mayor que el mínimo.",
-  },
-  // ── colour ─────────────────────────────────────────────────────────
-  color_hex: {
-    en: "Icon color as hex value", de: "Symbolfarbe als Hex-Wert",
-    fr: "Couleur d'icône en hexadécimal", it: "Colore icona in esadecimale",
-    es: "Color de icono en hexadecimal",
-  },
-  pick_custom_color: {
-    en: "Pick a custom color", de: "Eigene Farbe wählen",
-    fr: "Choisir une couleur personnalisée", it: "Scegli un colore personalizzato",
-    es: "Elegir un color personalizado",
-  },
-  clear_color: {
-    en: "Clear color (follow theme)", de: "Farbe zurücksetzen (Theme folgen)",
-    fr: "Effacer la couleur (suivre le thème)",
-    it: "Cancella il colore (segui il tema)",
-    es: "Borrar el color (seguir el tema)",
-  },
-  tints_icons: {
-    en: "Tints icons on this page. Logos are not affected.",
-    de: "Färbt die Symbole dieser Seite ein. Logos bleiben unberührt.",
-    fr: "Colore les icônes de cette page. Les logos ne sont pas affectés.",
-    it: "Colora le icone di questa pagina. I loghi non sono interessati.",
-    es: "Tiñe los iconos de esta página. Los logotipos no se ven afectados.",
   },
 
   // ── tooltips and sliders ───────────────────────────────────────────
@@ -2788,6 +2666,13 @@ export const STRINGS = {
     fr: "Choisissez d'abord une entité cible.",
     it: "Scegli prima un'entità di destinazione.",
     es: "Elige primero una entidad de destino.",
+  },
+  slider_writes_range: {
+    en: "Writes <code>{key}</code> between {min} and {max}.",
+    de: "Schreibt <code>{key}</code> zwischen {min} und {max}.",
+    fr: "Écrit <code>{key}</code> entre {min} et {max}.",
+    it: "Scrive <code>{key}</code> tra {min} e {max}.",
+    es: "Escribe <code>{key}</code> entre {min} y {max}.",
   },
   no_presets_for_domain: {
     en: "No presets for <code>{domain}</code> — configure it under Advanced.",
@@ -3069,6 +2954,13 @@ export const STRINGS = {
     it: "Impossibile caricare i dispositivi: {error}",
     es: "No se han podido cargar los dispositivos: {error}",
   },
+  remote_load_failed: {
+    en: "Could not load this remote: {error}",
+    de: "Diese Fernbedienung konnte nicht geladen werden: {error}",
+    fr: "Impossible de charger cette télécommande : {error}",
+    it: "Impossibile caricare questo telecomando: {error}",
+    es: "No se ha podido cargar este mando: {error}",
+  },
   no_matching_devices: {
     en: "No matching devices found. Set up the {integration} integration first.",
     de: "Keine passenden Geräte gefunden. Richte zuerst die Integration {integration} ein.",
@@ -3180,8 +3072,7 @@ export const STRINGS = {
     it: "Titolo della pagina", es: "Título de la página",
   },
   // The name a reader hears: which page, and where it sits. The fill count
-  // rides on aria-describedby instead, being supplementary, and the hover card
-  // gives a sighted user the same two facts on two lines.
+  // rides on aria-describedby instead, being supplementary.
   page_name_pos: {
     en: "{name}, page {n} of {m}",
     de: "{name}, Seite {n} von {m}",
@@ -3238,14 +3129,6 @@ export const I18nMixin = {
     return LANGS.includes(base) ? base : "en";
   },
 
-  /**
-   * One user-visible phrase, translated and filled in.
-   *
-   * Home Assistant is asked first and believed only when it answers: an
-   * unloaded fragment returns "", and silently rendering that would blank the
-   * label rather than fall back. Unknown ids return the id itself, which is
-   * ugly on screen on purpose — a blank is easy to miss in review.
-   */
   /** A message that names the thing when there is a name, and falls back to the
    *  `<id>_generic` wording when there is not -- rather than interpolating an
    *  empty string and announcing "Editing ". */
@@ -3259,6 +3142,14 @@ export const I18nMixin = {
     return count === 1 ? this._t(`${id}_one`) : this._t(id, { count });
   },
 
+  /**
+   * One user-visible phrase, translated and filled in.
+   *
+   * Home Assistant is asked first and believed only when it answers: an
+   * unloaded fragment returns "", and silently rendering that would blank the
+   * label rather than fall back. Unknown ids return the id itself, which is
+   * ugly on screen on purpose — a blank is easy to miss in review.
+   */
   _t(id, vars) {
     const entry = STRINGS[id];
     let text = "";

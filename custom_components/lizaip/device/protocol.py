@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+import aiohttp
 from aiohttp import web
 
 from ..shared.logs import device_logger
@@ -214,7 +215,7 @@ class SeqIdGenerator:
     def __init__(self) -> None:
         self._counter: int = 0
 
-    async def next(self) -> int:
+    def next(self) -> int:
         self._counter = (self._counter + 1) & 0xFFFFFFFF
         return self._counter
 
@@ -306,7 +307,7 @@ class LizaIPProtocol:
         if self._ws is None or self._ws.closed:
             raise ProtocolError(ERR_INTERNAL, "Not connected")
 
-        seq_id = await self._seq.next()
+        seq_id = self._seq.next()
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
@@ -314,7 +315,12 @@ class LizaIPProtocol:
         self._pending_names[seq_id] = name
         try:
             sent_at = asyncio.get_running_loop().time()
-            await self._send(build_request(name, seq_id, data), TYPE_REQUEST, name, seq_id)
+            try:
+                await self._send(build_request(name, seq_id, data), TYPE_REQUEST, name, seq_id)
+            except (ConnectionError, aiohttp.ClientError, RuntimeError) as err:
+                # A socket that is closing raises from the transport; callers
+                # only expect ProtocolError.
+                raise ProtocolError(ERR_INTERNAL, f"Send of '{name}' failed: {err}") from err
             if not wait_while_silent:
                 return await asyncio.wait_for(future, timeout=timeout)
             return await self._await_response(future, sent_at, timeout)
@@ -528,7 +534,11 @@ class LizaIPProtocol:
                 f"event '{name}' is not one of {sorted(SPEC_EVENTS)} (§8)", msg,
             )
         if handler := self._event_handlers.get(name):
-            handler(msg.get("data", {}))
+            try:
+                handler(msg.get("data", {}))
+            except Exception:
+                # A failing handler must not end the receive loop and drop the remote.
+                self._logger.exception("Error handling device event %s", name)
         elif name in SPEC_EVENTS or name in SPEC_EVENT_ALIASES:
             self._logger.warning("Unhandled device event: %s (data=%s)", name, msg.get("data", {}))
 
@@ -542,7 +552,13 @@ class LizaIPProtocol:
                 f"({sorted(SPEC_DEVICE_REQUESTS)})", msg,
             )
         if handler := self._request_handlers.get(name):
-            handler(seq_id, msg.get("data", {}))
+            try:
+                handler(seq_id, msg.get("data", {}))
+            except Exception as err:
+                self._logger.exception("Error handling device request %s (seq_id=%s)", name, seq_id)
+                fire_and_forget(
+                    self.send_error(name, seq_id, ERR_INTERNAL, f"Internal error: {err}")
+                )
         else:
             if name in SPEC_DEVICE_REQUESTS:
                 self._logger.warning("Unhandled device request: %s (seq_id=%s)", name, seq_id)

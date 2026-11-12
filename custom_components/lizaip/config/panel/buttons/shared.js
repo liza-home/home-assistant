@@ -382,6 +382,35 @@ export const setSliderControl = (assign, control) => {
   else delete block.control;
 };
 
+// Is a press a toggle? The click actions a slider naturally belongs to: "toggle
+// the lamp" on the tile, its brightness on the strip beside it. `turn_on` with
+// a fixed brightness or a scene already says what level it wants.
+const isToggleService = service => typeof service === "string" && /\.toggle$/.test(service);
+
+// What choosing an action should do to a grid button's slider subject, when
+// the user has not said: `undefined` leaves it, a string names the device, and
+// `null` drops the block.
+//
+// The Hue template opts every lamp tile in by hand; this does the same for a
+// tile built in the panel. Only on a *change* of the click action -- the
+// autosave commits the same sequence again and again, and a subject the user
+// just cleared must stay cleared. A block the user pointed somewhere else is
+// theirs and is never touched; one that merely mirrored the old action follows
+// it to the new one, or goes with it.
+export const autoSliderSubject = ({
+  key, assign, prevService, prevEntity, service, entity, controls, stateObj, pageSliderFollows,
+}) => {
+  if (!isGridBtn(key) || !pageSliderFollows) return undefined;
+  if (prevService === service && prevEntity === entity) return undefined;
+  const current = sliderSubjectEntity(assign);
+  const mirrored = current === null || (!!prevEntity && current === prevEntity);
+  if (!mirrored) return undefined;
+  const drivable = isToggleService(service) && !!entity
+    && controlsForEntity(controls, entity, stateObj).length > 0;
+  if (drivable) return entity;
+  return current === null ? undefined : null;
+};
+
 // The control a button will actually drive when it retargets the slider: the
 // stored `overrides.slider_vertical` when the entity still supports it, else the
 // derived first entry. Named rather than inlined because several places need

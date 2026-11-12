@@ -29,9 +29,18 @@ export const PeopleViewMixin = {
    * named, so it is counted rather than listed, which is still true and still
    * useful.
    */
-  _assignedPeople(device) {
+  _assignedPeople(device, byUser = null) {
     const ids = device?.assigned_users;
     if (!Array.isArray(ids) || !ids.length) return { people: [], unnamed: 0 };
+    byUser ||= this._personsByUser();
+    const people = ids.map((id) => byUser.get(id)).filter(Boolean);
+    return { people, unnamed: ids.length - people.length };
+  },
+
+  /** User id to `{ name, key }`, from the person entities. One walk of every
+   *  state, so a render of the device list does it once and hands the map
+   *  to each row rather than each row walking the states again. */
+  _personsByUser() {
     const byUser = new Map();
     for (const st of Object.values(this._hass?.states || {})) {
       const uid = st?.attributes?.user_id;
@@ -39,14 +48,13 @@ export const PeopleViewMixin = {
         byUser.set(uid, { name: st.attributes.friendly_name || st.entity_id, key: uid });
       }
     }
-    const people = ids.map((id) => byUser.get(id)).filter(Boolean);
-    return { people, unnamed: ids.length - people.length };
+    return byUser;
   },
 
   /** Every assignee, named, the ones no person entity stands behind counted
    *  at the end. */
-  _assignedNameList(device) {
-    const { people, unnamed } = this._assignedPeople(device);
+  _assignedNameList(device, byUser = null) {
+    const { people, unnamed } = this._assignedPeople(device, byUser);
     const names = people.map((p) => p.name);
     if (unnamed > 0) names.push(this._t("assigned_people_unnamed", { count: unnamed }));
     return names;
@@ -55,8 +63,8 @@ export const PeopleViewMixin = {
   /** The same set as a sentence, which is what a reader is given. Two are
    *  spelled out and the rest counted, so the row reads the same whether a
    *  remote is held by one person or by the whole household. */
-  _assignedNames(device) {
-    const names = this._assignedNameList(device);
+  _assignedNames(device, byUser = null) {
+    const names = this._assignedNameList(device, byUser);
     if (names.length === 2) {
       return this._t("assigned_people_pair", { first: names[0], second: names[1] });
     }
@@ -89,18 +97,20 @@ export const PeopleViewMixin = {
    *  Three faces at most and then a counter; the full list is on the tooltip.
    *  Admins only -- it is the only audience: the others are on the list
    *  themselves. */
-  _htmlAssignedChip(device) {
+  _htmlAssignedChip(device, byUser = null) {
     if (!this._isAdmin?.()) return "";
-    const names = this._assignedNames(device);
+    if (!device?.assigned_users?.length) byUser = null;
+    else byUser ||= this._personsByUser();
+    const names = this._assignedNames(device, byUser);
     if (!names) return "";
-    const { people } = this._assignedPeople(device);
+    const { people } = this._assignedPeople(device, byUser);
     const over = people.length - FACE_CAP;
     const faces = people.slice(0, FACE_CAP).map((p) => this._htmlUserBadge("device-face", p.key, p.name)).join("")
       + (over > 0
         ? `<span class="device-face device-face-more" aria-hidden="true">+${over}</span>`
         : "");
     const full = this._t("assigned_people_summary", {
-      names: this._assignedNameList(device).join(", "),
+      names: this._assignedNameList(device, byUser).join(", "),
     });
     return `<span class="device-assigned" title="${this._esc(full)}">${
       faces ? `<span class="device-faces">${faces}</span>` : ""
@@ -134,6 +144,10 @@ export const PeopleViewMixin = {
     // Only the people a switch can mean anything for: an administrator has
     // every remote anyway, and an inactive account cannot sign in to use one.
     const assignable = persons.filter((p) => p.assignable && !p.is_admin);
+    const tally = () => this._t("assigned_people_count", {
+      count: assignable.filter((p) => selected.has(p.user_id)).length,
+      total: assignable.length,
+    });
     const rows = assignable.map((p, i) => this._htmlPersonRow(p, i, selected)).join("");
     const search = assignable.length > SEARCH_THRESHOLD
       ? `<ha-input-search appearance="outlined" class="people-search" autocomplete="off"
@@ -163,67 +177,33 @@ export const PeopleViewMixin = {
                <span class="people-section">${this._esc(
                  this._t("assigned_people_section")
                )}</span>
-               <output class="people-count" aria-live="polite">${this._esc(
-                 this._t("assigned_people_count", {
-                   count: assignable.filter((p) => selected.has(p.user_id)).length,
-                   total: assignable.length,
-                 })
-               )}</output>
+               <output class="people-count" aria-live="polite">${this._esc(tally())}</output>
              </div>`
           : ""}
         ${body}
-        <div class="template-dialog-actions">
-          <ha-button appearance="plain" class="people-cancel-btn">${this._esc(
-            this._t("cancel")
-          )}</ha-button>
-          <ha-button variant="brand" class="people-save-btn">${this._esc(
-            this._t("save")
-          )}</ha-button>
-        </div>
+        ${this._htmlDialogActions({
+          dismiss: { cls: "people-cancel-btn", label: this._t("cancel") },
+          commit: { cls: "people-save-btn", label: this._t("save") },
+        })}
       </div>
     `, { labelledBy: "liza-people-title", describedBy: "liza-people-hint" });
 
-    this._wireSwitchList(dlg, {
-      selector: ".person-switch",
-      chosen: selected,
-      field: "user",
-      tally: () => this._t("assigned_people_count", {
-        count: assignable.filter((p) => selected.has(p.user_id)).length,
-        total: assignable.length,
-      }),
-    });
+    // The switch and the label beside it both toggle a person, and the
+    // running count follows.
+    const count = dlg.querySelector(".people-count");
+    dlg.querySelectorAll(".person-switch").forEach((sw) =>
+      sw.addEventListener("change", () => {
+        if (sw.checked) selected.add(sw.dataset.user);
+        else selected.delete(sw.dataset.user);
+        if (count) count.textContent = tally();
+      }));
+    this._wireSwitchLabels(dlg, ".person-info[for]");
     this._wireUserBadges(dlg);
     this._wirePeopleSearch(dlg);
     dlg.querySelector(".people-cancel-btn")?.addEventListener("click", () => close());
     this._wirePeopleSave(dlg, close,
       () => this._saveAssignedPeople(entryId, [...selected]));
     this._focusWhenReady(dlg.querySelector(".people-search, .person-switch, .people-cancel-btn"));
-  },
-
-  /**
-   * A list of switches over a set: the switch and the label beside it both
-   * toggle it, and the running count follows.
-   */
-  _wireSwitchList(dlg, { selector, chosen, field, tally }) {
-    const count = dlg.querySelector(".people-count");
-    const pick = (sw) => {
-      if (sw.checked) chosen.add(sw.dataset[field]);
-      else chosen.delete(sw.dataset[field]);
-      if (count) count.textContent = tally();
-    };
-    dlg.querySelectorAll(selector).forEach((el) =>
-      el.addEventListener("change", () => pick(el)));
-    // `ha-switch` is not a native input, so `<label for>` does not reach it,
-    // and `preventDefault` keeps a browser that does forward the click from
-    // toggling it a second time.
-    dlg.querySelectorAll(".person-info[for]").forEach((el) =>
-      el.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        const sw = dlg.querySelector(`#${el.getAttribute("for")}`);
-        if (!sw || sw.disabled) return;
-        sw.checked = !sw.checked;
-        pick(sw);
-      }));
   },
 
   /** Filter the list by name. Rows are hidden rather than re-rendered: a
@@ -295,7 +275,7 @@ export const PeopleViewMixin = {
    * dialog closes only once the write is through, and a failure leaves it
    * open with the choices still on it rather than closing over a toast.
    */
-  _wirePeopleSave(dlg, close, write, after) {
+  _wirePeopleSave(dlg, close, write) {
     const btn = dlg.querySelector(".people-save-btn");
     if (!btn) return;
     const label = btn.textContent;
@@ -311,7 +291,6 @@ export const PeopleViewMixin = {
         return;
       }
       close();
-      after?.();
     });
   },
 

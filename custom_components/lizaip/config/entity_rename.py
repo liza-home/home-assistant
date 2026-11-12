@@ -110,19 +110,13 @@ async def _async_follow_for_device(
         await store.async_set_pages(device_id, pages)
     for page_id, buttons in rewritten.items():
         await store.async_set_assignments(device_id, page_id, buttons)
-    if pages_changed:
-        # A page's hash covers its title, which may itself have named the old
-        # id. The recompute writes nothing where the hash already matches.
-        for page in pages:
-            if isinstance(page, dict) and page.get("id"):
-                await store.async_recompute_page_hash(device_id, page["id"])
     if library_changed:
         await store.async_set_action_library(device_id, library)
 
     log.info("Entity %s was renamed to %s; stored references rewritten", old, new)
     # The same three steps every binding save takes: the rewritten targets are
     # not watched, drawn or pushed to until the listeners are rebuilt on them.
-    from .websocket.common import refresh_state_listener, schedule_push_rescan
+    from .listeners import refresh_state_listener, schedule_push_rescan
     await refresh_state_listener(hass, entry_id)
     fire_config_changed(hass, entry_id)
     schedule_push_rescan(hass, entry_id)

@@ -5,6 +5,7 @@ Handles Zeroconf discovery and WebSocket-based device onboarding.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from collections.abc import Mapping
 from typing import Any, Final
@@ -14,7 +15,6 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult, section
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
@@ -28,6 +28,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    DOMAIN,
     CONF_DEMO_MODE,
     CONF_DEMO_MODE_DWELL_TIME,
     CONF_DEMO_MODE_SWIPE_TIME,
@@ -42,13 +43,13 @@ from .shared.slider_throttle import (
     SLIDER_MIN_INTERVAL_MS_MAX,
 )
 from . import provisioning
+from .device.http import device_session, device_url
 from .shared.logs import DeviceLogger, device_logger
 from .shared.numbers import to_float
+from .runtime import entry_connection
 from .device.const import LIZAIP_AVAILABILITY_EVENT, MODEL
 
 _LOGGER = logging.getLogger(__name__)
-
-DOMAIN = "lizaip"
 
 
 class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -64,21 +65,14 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return the options flow handler."""
         return LizaIPOptionsFlowHandler()
 
-    # The management HTTP API (GET /api/info, POST /api/config/ha) always listens
-    # on port 80 on physical hardware, regardless of what the mDNS SRV record
-    # advertises (which is the WSS port, typically 443).
-    _DEVICE_HTTP_PORT = 80
-
     # Seconds an advertising device aimed at a stale address gets to connect
     # on its own before its Home Assistant address is re-pushed.
     _RECONNECT_GRACE = 30
 
-    # Fallback device info when GET /api/info is unreachable.
+    # Fallback when GET /api/info is unreachable: capabilities only. The
+    # device's identity and version are never invented — they come from
+    # zeroconf now and from the remote's hello once it connects.
     _FALLBACK_DEVICE_INFO: dict[str, Any] = {
-        "device_id": "1c:63:49:9a:7c:fd",
-        "device_name": "myDevName",
-        "version": "0.0.0",
-        "protocol_version": 1,
         "capabilities": {
             "buttons_per_page": 12,
             "static_buttons": [
@@ -181,21 +175,27 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = {"name": self.device_name}
         return await self.async_step_confirm()
 
+    @property
+    def _device_port(self) -> int:
+        """The port the remote advertised over mDNS, else the HTTP default."""
+        return self.discovered_port or provisioning.DEVICE_HTTP_PORT
+
     async def _fetch_device_info(self, device_ips: list[str]) -> dict[str, Any] | None:
-        """Call GET /api/info on the device's HTTP management port (80).
+        """Call GET /api/info on the device's advertised management port.
 
         Falls back to a hardcoded default if the device is unreachable.
         """
-        session = async_get_clientsession(self.hass, verify_ssl=False)
+        session = device_session(self.hass)
+        port = self._device_port
         for device_ip in device_ips:
-            url = f"http://{device_ip}:{self._DEVICE_HTTP_PORT}/api/info"
+            url = device_url(device_ip, port, "/api/info")
             try:
                 async with session.get(url, timeout=provisioning.PROVISION_TIMEOUT) as resp:
                     if resp.status == 200:
                         info = await resp.json(content_type=None)
                         _LOGGER.info(
                             "Device info from %s:%d: id=%s version=%s",
-                            device_ip, self._DEVICE_HTTP_PORT,
+                            device_ip, port,
                             info.get("device_id"), info.get("version"),
                         )
                         return info
@@ -203,9 +203,9 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("GET %s failed: %s", url, err)
         _LOGGER.error(
             "Could not reach GET /api/info on any IP %s (port %d) — using fallback capabilities",
-            device_ips, self._DEVICE_HTTP_PORT,
+            device_ips, port,
         )
-        return dict(self._FALLBACK_DEVICE_INFO)
+        return copy.deepcopy(self._FALLBACK_DEVICE_INFO)
 
     async def _async_read_ha_config(self, device_ips: list[str]) -> dict | None:
         """What Home Assistant the device is currently set to reach.
@@ -214,7 +214,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         addresses mDNS advertised for the device.
         """
         return await provisioning.async_read_ha_config(
-            self.hass, device_ips, self._DEVICE_HTTP_PORT
+            self.hass, device_ips, self._device_port
         )
 
     # ------------------------------------------------------------------
@@ -298,9 +298,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """The device's WebSocket state, or ``None`` before its entry loaded."""
         for entry in self._async_current_entries():
             if entry.unique_id == unique_id:
-                connected = getattr(
-                    getattr(entry, "runtime_data", None), "connected", None
-                )
+                connected = getattr(entry_connection(entry), "connected", None)
                 return connected if isinstance(connected, bool) else None
         return None
 
@@ -370,7 +368,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return False
 
         return await provisioning.async_provision(
-            self.hass, device_ips, self._DEVICE_HTTP_PORT
+            self.hass, device_ips, self._device_port
         )
 
     def _spawn_provisioning(self, coro, *, what: str) -> None:
@@ -397,18 +395,6 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Other config flow steps
     # ------------------------------------------------------------------
 
-    async def async_step_websocket(self, discovery_info: dict) -> FlowResult:
-        device_id = discovery_info.get("device_id", "")
-        if not device_id:
-            return self.async_abort(reason="no_device_id")
-
-        await self.async_set_unique_id(device_id)
-        self._abort_if_unique_id_configured()
-
-        self.device_name = f"{MODEL} ({device_id})"
-        self.context["title_placeholders"] = {"name": self.device_name}
-        return await self.async_step_confirm()
-
     async def async_step_confirm(self, user_input=None) -> FlowResult:
         if user_input is not None:
             if self.discovered_ips:
@@ -430,8 +416,9 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data["device_port"] = self.discovered_port
             if self.device_info:
                 data["capabilities"] = self.device_info.get("capabilities")
-                data["device_id"] = self.device_info.get("device_id")
-                data["protocol_version"] = self.device_info.get("protocol_version")
+                for key in ("device_id", "protocol_version"):
+                    if self.device_info.get(key) is not None:
+                        data[key] = self.device_info[key]
                 if self.device_info.get("version"):
                     data["sw_version"] = self.device_info["version"]
 

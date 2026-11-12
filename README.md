@@ -303,6 +303,53 @@ The same pattern works for anything with stepped icons, such as Wi-Fi strength
 (`mdi:wifi-strength-1` … `-4`). The weather needs no helper: `${weather.home}` alone
 is already drawn as the matching `mdi:weather-…` icon.
 
+#### A clock — the time on a button or in a title
+
+There is no built-in time variable, but a **template helper** that holds the time is
+one line, and `${…}` shows it like any other value.
+
+1. In Home Assistant open **Settings → Devices & services → Helpers → Create helper →
+   Template → Template a sensor**.
+2. **Name:** `Clock` — this creates the entity `sensor.clock`.
+3. **State template:**
+
+   ```jinja
+   {{ now().strftime('%H:%M') }}
+   ```
+
+   Leave unit, device class and state class empty. The preview should show the current
+   time, e.g. `14:05`.
+4. **Submit**, then use it in the lizaIP editor:
+
+   | Field | You write | The remote shows |
+   |---|---|---|
+   | Page title | `${sensor.clock}` | 14:05 |
+   | Page title | `Living room · ${sensor.clock}` | Living room · 14:05 |
+   | Image | `text:${sensor.clock}` | the time drawn as the button's picture |
+   | Tooltip | `${_state} · ${sensor.clock}` | Off · 14:05 |
+
+A template using `now()` is re-evaluated once a minute, which is exactly what `%H:%M`
+needs. Other formats work the same way: `%d.%m.` for the date (`12.11.`), `%a %H:%M` for
+the weekday and time (`Thu 14:05`).
+
+**With seconds.** `now()` alone only updates every minute, so `hh:mm:ss` needs a helper
+that is triggered every second. That is only possible in YAML (`configuration.yaml`):
+
+```yaml
+template:
+  - trigger:
+      - trigger: time_pattern
+        seconds: "/1"
+    sensor:
+      - name: "Clock seconds"
+        state: "{{ now().strftime('%H:%M:%S') }}"
+```
+
+Use it as `${sensor.clock_seconds}`. Be aware of the cost: every change is a new page for
+the remote, so the page is resent every second, and the **Update interval** under
+**Settings → Variables** limits how often that can happen (0.5 s by default). For a
+button that merely shows the time, minutes are usually the better choice.
+
 **Tooltips take pictures too.** A tooltip is usually words, but it accepts everything a
 button's image or a page's title does — `mdi:…`, `logo:…`, a URL, `history:…` — and reads its
 variables the same way: `mdi:battery-${sensor.phone_battery}` shows the battery icon (no unit
@@ -359,7 +406,12 @@ entity actually supports) and a **sensitivity**. Left empty, it does nothing unt
 touch a device.
 
 A grid button can **retarget** it, so selecting that button points the slider at its
-entity instead.
+entity instead. You switch this on in the slider's card while the button is selected.
+Giving a button a **toggle** action (e.g. *Light: Toggle*) for a device the slider can
+drive — a dimmable lamp, a fan — switches it on for you: select the lamp's button on the
+remote and the slider dims that lamp. A device you chose yourself is never replaced, and
+once you remove it, it stays removed. This happens only while the page's slider follows
+the selected button.
 
 ### Actions — the library
 

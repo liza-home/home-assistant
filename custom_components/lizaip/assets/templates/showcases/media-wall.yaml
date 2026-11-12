@@ -9,7 +9,7 @@
 #   4           how far into the track, the same way, from two attributes
 #   7           the artist as words; the tooltip names the album
 #   8           two marks sharing one tile (`mdi:play mdi:pause`), and a
-#               tooltip mixing `${_state}` with the title
+#               tooltip mixing `{translate: ${_state}}` with the title
 #   9, 11       previous and next, each tooltip naming the track the press
 #               lands on (Sonos only -- empty elsewhere)
 #   10          the source, drawn as text
@@ -64,7 +64,7 @@ pages:
 
       button_8:
         icon: mdi:play mdi:pause
-        tooltip: "${_state} - ${_device.media_title}"
+        tooltip: "{translate: ${_state}} - ${_device.media_title}"
         config:
           - action: media_player.media_play_pause
 

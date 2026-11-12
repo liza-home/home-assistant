@@ -35,19 +35,13 @@ pages:
         icon: mdi:volume-mute
         tooltip: "{translate: mute} ${_device.is_volume_muted}"
         config:
-          # volume_mute is a setter, not a toggle: reading the target's current
-          # state and inverting it is what makes this button behave like one.
           - action: media_player.volume_mute
-            data:
-              is_volume_muted: "{{ not is_state_attr('@target', 'is_volume_muted', true) }}"
 
       button_2:
         icon: mdi:shuffle-variant
         tooltip: "{translate: shuffle} ${_device.shuffle}"
         config:
           - action: media_player.shuffle_set
-            data:
-              shuffle: "{{ not is_state_attr('@target', 'shuffle', true) }}"
 
       button_3:
         icon: mdi:repeat-off

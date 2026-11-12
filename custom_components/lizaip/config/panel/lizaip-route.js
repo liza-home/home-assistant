@@ -12,7 +12,7 @@
  *
  *     /lizaip                     the device list
  *     /lizaip/<entry_id>          a remote, default tab
- *     /lizaip/<entry_id>/<tab>    pages|actions|settings|debug
+ *     /lizaip/<entry_id>/<tab>    pages|settings|debug
  *
  * The remote is named by id rather than by name, so that a rename does not
  * break a link someone saved. The walk stops at the tab: a page and a control
@@ -35,7 +35,7 @@ export const ROUTE_MEMORY_KEY = "lizaip:last-route";
  * tab, and `/lizaip/<entry>/buttons` parses through the same default that an
  * absent tab does.
  */
-const TABS = new Set(["buttons", "actions", "settings", "debug"]);
+const TABS = new Set(["buttons", "settings", "debug"]);
 
 // Module scope on purpose: a navigation entry belongs to the document, and so
 // does one evaluation of this module.
@@ -433,11 +433,6 @@ export const RouteMixin = {
       case "settings":
         this._enterSettingsTab?.();
         break;
-      case "actions":
-        Promise.resolve(this._loadGlobalUsage?.()).then((changed) => {
-          if (changed) this._render();
-        });
-        break;
       case "debug":
         // The guard in `_routeApply` has already ruled out a build without the
         // tab, so reaching here with no `_enterDebugTab` would be a bug rather
@@ -508,8 +503,13 @@ export const RouteMixin = {
     }
     // A second navigation arriving while the first is still fetching would
     // interleave two `_selectDevice` loads and leave the later one's pages
-    // under the earlier one's selection.
-    if (this._routeNavigating) return;
+    // under the earlier one's selection. It is kept, the latest only, and run
+    // once the first is done: dropped, the first one's render would write its
+    // own path over the address the user went to.
+    if (this._routeNavigating) {
+      this._routeNavPending = path;
+      return;
+    }
 
     this._routeNavigating = true;
     try {
@@ -532,5 +532,8 @@ export const RouteMixin = {
     } finally {
       this._routeNavigating = false;
     }
+    const next = this._routeNavPending;
+    this._routeNavPending = null;
+    if (next != null) await this._routeNavigate(next);
   },
 };

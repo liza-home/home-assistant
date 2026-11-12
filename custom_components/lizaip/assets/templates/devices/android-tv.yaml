@@ -110,6 +110,14 @@ pages:
         tooltip: {translate: digits}
         goto_page: digits
 
+      button_9:
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
+        config:
+          - action: remote.send_command
+            data:
+              command: VOLUME_MUTE
+
       button_10:
         icon: mdi:arrow-down-bold-outline
         tooltip: {translate: down}

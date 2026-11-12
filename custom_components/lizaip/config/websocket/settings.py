@@ -12,8 +12,8 @@ from homeassistant.core import HomeAssistant
 from ...action_controller import serialized_controls
 from ...const import DOMAIN
 from ...imgserv.fonts import list_fonts, www_fonts_dir
-from ...runtime import _get_store, _resolve_device_id, find_store
-from ...shared.i18n import button_tooltips, get_ui_language
+from ...runtime import get_store, resolve_device_id, find_store
+from ...shared.i18n import button_tooltips, get_ui_language, state_words
 from ...shared.icon_defaults import icon_defaults
 from ...shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ...shared.theme import (
@@ -35,6 +35,13 @@ from ...state_brightness import (
     ICON_FILL_STEP_MIN,
     read_fill_enabled,
     read_fill_step,
+)
+from ...state_icon import (
+    CONF_ICON_CORNER_RADIUS,
+    DEFAULT_ICON_CORNER_RADIUS,
+    ICON_CORNER_RADIUS_MAX,
+    ICON_CORNER_RADIUS_MIN,
+    read_corner_radius,
 )
 from ...state_color import (
     CONF_ICON_COLOR_ENABLED,
@@ -64,7 +71,7 @@ from ..text_style import (
     theme_facets,
     validate_settings,
 )
-from .common import requires_device
+from .common import requires_device, send_failure
 from ..access import require_any_device_access, require_device_access
 
 
@@ -90,15 +97,20 @@ def _icon_options_reply(options: object) -> dict:
         "icon_fill_step": read_fill_step(options),
         "icon_fill_enabled": read_fill_enabled(options),
         "icon_color_enabled": read_color_enabled(options),
+        "icon_corner_radius": read_corner_radius(options),
         "variables_interval_ms": read_variables_interval(options),
         "defaults": {
             "icon_fill_step": DEFAULT_ICON_FILL_STEP,
             "icon_fill_enabled": DEFAULT_ICON_FILL_ENABLED,
             "icon_color_enabled": DEFAULT_ICON_COLOR_ENABLED,
+            "icon_corner_radius": DEFAULT_ICON_CORNER_RADIUS,
             "variables_interval_ms": DEFAULT_VARIABLES_INTERVAL,
         },
         "limits": {
             "icon_fill_step": {"min": ICON_FILL_STEP_MIN, "max": ICON_FILL_STEP_MAX},
+            "icon_corner_radius": {
+                "min": ICON_CORNER_RADIUS_MIN, "max": ICON_CORNER_RADIUS_MAX, "step": 1,
+            },
             "variables_interval_ms": {
                 "min": VARIABLES_INTERVAL_MIN,
                 "max": VARIABLES_INTERVAL_MAX,
@@ -140,6 +152,19 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
                 f"{ICON_FILL_STEP_MIN} to {ICON_FILL_STEP_MAX}"
             )
         updates[CONF_ICON_FILL_STEP] = fill_step
+
+    if CONF_ICON_CORNER_RADIUS in changes:
+        radius = changes[CONF_ICON_CORNER_RADIUS]
+        if (
+            isinstance(radius, bool)
+            or not isinstance(radius, int)
+            or not ICON_CORNER_RADIUS_MIN <= radius <= ICON_CORNER_RADIUS_MAX
+        ):
+            raise ValueError(
+                f"{CONF_ICON_CORNER_RADIUS} must be a whole number from "
+                f"{ICON_CORNER_RADIUS_MIN} to {ICON_CORNER_RADIUS_MAX}"
+            )
+        updates[CONF_ICON_CORNER_RADIUS] = radius
 
     if CONF_VARIABLES_INTERVAL in changes:
         interval = changes[CONF_VARIABLES_INTERVAL]
@@ -196,6 +221,7 @@ async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     vol.Optional("icon_fill_step"): object,
     vol.Optional("icon_fill_enabled"): object,
     vol.Optional("icon_color_enabled"): object,
+    vol.Optional("icon_corner_radius"): object,
     vol.Optional("variables_interval_ms"): object,
 })
 @require_device_access
@@ -205,7 +231,7 @@ async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     changes = {
         key: msg[key]
         for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled",
-                    "variables_interval_ms")
+                    "icon_corner_radius", "variables_interval_ms")
         if key in msg
     }
     try:
@@ -258,10 +284,10 @@ async def _entry_theme(hass: HomeAssistant, entry_id: str | None):
     A caller that names no remote -- or names one that is gone -- asks a
     question about no device in particular, and gets today's constants.
     """
-    device_id = _resolve_device_id(hass, entry_id) if entry_id else None
+    device_id = resolve_device_id(hass, entry_id) if entry_id else None
     if not device_id:
         return DEFAULT_THEME
-    return settings_theme(await _get_store(hass).async_get_settings(device_id))
+    return settings_theme(await get_store(hass).async_get_settings(device_id))
 
 
 def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
@@ -300,7 +326,7 @@ async def ws_get_settings(hass: HomeAssistant, connection, msg: dict, device_id:
     ``fonts`` is re-read on every call, so a font dropped into the font folder
     shows up the next time the settings tab opens.
     """
-    settings = await _get_store(hass).async_get_settings(device_id)
+    settings = await get_store(hass).async_get_settings(device_id)
     fonts = await async_list_fonts(hass)
     connection.send_result(msg["id"], _settings_reply(settings, fonts))
 
@@ -340,11 +366,14 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
     the named theme, text style included, because what it is previewing is
     the theme rather than this remote's settings.
     """
-    settings = await _get_store(hass).async_get_settings(device_id)
+    settings = await get_store(hass).async_get_settings(device_id)
     # The *resolved* id, as the sync uses: a theme whose file is gone draws the
     # default, and the preview must ask for the same picture the device does.
     resolved = settings_theme(settings)
     thm = resolved.theme_id
+    entries = getattr(hass, "config_entries", None)
+    entry = entries.async_get_entry(msg["entry_id"]) if entries else None
+    radius = read_corner_radius(getattr(entry, "options", None))
     urls = []
     for item in msg["items"]:
         value, color = item["value"], item.get("color") or ""
@@ -358,7 +387,7 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
             urls.append(resolve(value, color, style, theme=tid))
         else:
             urls.append(
-                resolve_icon_url(value, color=color, theme=tid)
+                resolve_icon_url(value, color=color, theme=tid, radius=radius)
                 if value.strip() else ""
             )
     connection.send_result(msg["id"], {"urls": urls})
@@ -375,7 +404,7 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
 async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
     """Save the text settings and redraw the remote's pages with them."""
     fonts = await async_list_fonts(hass)
-    store = _get_store(hass)
+    store = get_store(hass)
     # What the remote has now, so a theme that went missing since it was
     # chosen is carried through rather than refusing the save.
     stored = await store.async_get_settings(device_id)
@@ -384,42 +413,15 @@ async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id:
     except ValueError as exc:
         connection.send_error(msg["id"], "invalid_format", str(exc))
         return
-    stored = await store.async_set_settings(device_id, settings)
+    try:
+        stored = await store.async_set_settings(device_id, settings)
+    except Exception as err:  # noqa: BLE001
+        send_failure(
+            hass, connection, msg, "save_failed", err, what="Saving the text settings",
+        )
+        return
     fire_config_changed(hass, msg["entry_id"])
     connection.send_result(msg["id"], _settings_reply(stored, fonts))
-
-
-@websocket_api.websocket_command({
-    vol.Required("type"): "lizaip_config/get_palette",
-    vol.Optional("entry_id"): str,
-})
-@require_device_access
-@websocket_api.async_response
-async def ws_get_palette(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> None:
-    """Return icon-tint swatches from imgserv's renderable color palette.
-
-    The panel stores the selected hex as ``default_color`` and sends it back as
-    ``?fg=`` on icon URLs, so the choices must be colors imgserv can render.
-    With an ``entry_id`` the swatches are the remote's theme's.
-    """
-    theme = await _entry_theme(hass, msg.get("entry_id"))
-    connection.send_result(msg["id"], {"colors": theme.palette()})
-
-
-@websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_themes"})
-@require_any_device_access
-@websocket_api.async_response
-async def ws_get_themes(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> None:
-    """Every theme the picker may offer, bundled and user-authored alike."""
-    connection.send_result(msg["id"], {"themes": list_themes()})
 
 
 async def async_reload_themes(hass: HomeAssistant) -> None:
@@ -444,9 +446,9 @@ async def _redraw_theme_users(hass: HomeAssistant, theme_id: str) -> None:
     wanted = str(theme_id or "").strip().lower()
     if not wanted:
         return
-    store = _get_store(hass)
+    store = get_store(hass)
     for entry in hass.config_entries.async_entries(DOMAIN):
-        device_id = _resolve_device_id(hass, entry.entry_id)
+        device_id = resolve_device_id(hass, entry.entry_id)
         if not device_id:
             continue
         settings = await store.async_get_settings(device_id)
@@ -595,7 +597,7 @@ async def ws_get_button_tooltips(
     drift; an entry-pinned language outranks the browser language.
 
     Response payload:
-      {language, tooltips}
+      {language, tooltips, state_words}
     """
     entry = (
         hass.config_entries.async_get_entry(msg["entry_id"])
@@ -607,8 +609,11 @@ async def ws_get_button_tooltips(
     # can send this — kept so the command does not depend on that ordering to
     # stay off the disk.
     await button_tooltips.async_preload(hass)
+    await state_words.async_preload(hass)
     tooltips = {**button_tooltips.load("en"), **button_tooltips.load(lang)}
-    connection.send_result(msg["id"], {"language": lang, "tooltips": tooltips})
+    connection.send_result(msg["id"], {
+        "language": lang, "tooltips": tooltips, "state_words": state_words.load(lang),
+    })
 
 
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_slider_controls"})

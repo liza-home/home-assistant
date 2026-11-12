@@ -39,7 +39,7 @@ def _history_parts(image: Any) -> list[str]:
     """Every ``history:`` part of *image*, a lone graph or a composite's."""
     if not isinstance(image, str) or HISTORY_SCHEME not in image:
         return []
-    from ..imgserv.const import split_source_parts
+    from ..imgserv.source_parse import split_source_parts
 
     return [p for p in split_source_parts(image) if history_entity(p) is not None]
 

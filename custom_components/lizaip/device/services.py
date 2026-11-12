@@ -24,7 +24,7 @@ from ..config.internal_commands import (
     build_page_context,
     enabled_commands,
 )
-from ..runtime import find_store
+from ..runtime import entry_connection, entry_device_id, find_store
 from ..shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             device_logger(_LOGGER, entry).info(
                 "lizaip.firmware_update: sending update request: %s", url,
             )
-            await entry.runtime_data.update_firmware(url)
+            await entry.runtime_data.connection.update_firmware(url)
 
     if not hass.services.has_service(DOMAIN, "firmware_update"):
         hass.services.async_register(
@@ -67,7 +67,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         from ..config.device_sync import sync_config_to_device
 
         for entry in _target_entries(hass, call.data):
-            conn = entry.runtime_data
+            conn = entry.runtime_data.connection
             device_logger(_LOGGER, entry).info("lizaip.clear_device_pages: clearing")
             async with conn.page_cache.lock:
                 await conn.clear_all()
@@ -95,7 +95,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             ) from None
         for entry in _target_entries(hass, call.data):
             device_logger(_LOGGER, entry).debug("lizaip.send_ir: %d bytes", len(ir_blob))
-            await entry.runtime_data.send_ir(ir_blob)
+            await entry.runtime_data.connection.send_ir(ir_blob)
 
     if not hass.services.has_service(DOMAIN, "send_ir"):
         hass.services.async_register(
@@ -154,10 +154,11 @@ def async_register_services(hass: HomeAssistant) -> None:
 
 
 def _entry_ids_from_devices(hass: HomeAssistant, device_ids) -> set[str]:
-    """Config entry ids of the given devices.
+    """Config entry ids of the given devices; the caller narrows them to ours.
 
-    A device may carry several entries when more than one integration
-    contributes to it, so the whole set is taken and the caller narrows it.
+    Reads ``config_entry_id`` rather than the ``config_entries`` set, like the
+    rename listener in ``__init__``: since HA 2026.8 a device belongs to exactly
+    one entry, and the set stops working in 2027.10.
     """
     if not device_ids:
         return set()
@@ -166,8 +167,8 @@ def _entry_ids_from_devices(hass: HomeAssistant, device_ids) -> set[str]:
     entry_ids: set[str] = set()
     for device_id in device_ids:
         device = dev_reg.async_get(device_id)
-        if device is not None:
-            entry_ids |= set(device.config_entries or ())
+        if device is not None and device.config_entry_id:
+            entry_ids.add(device.config_entry_id)
     return entry_ids
 
 
@@ -244,7 +245,7 @@ def _target_entries(hass: HomeAssistant, data) -> list:
 
     connected = [
         e for e in entries
-        if getattr(e, "runtime_data", None) is not None and e.runtime_data.connected
+        if (conn := entry_connection(e)) is not None and conn.connected
     ]
     if not connected:
         raise ServiceValidationError(
@@ -262,7 +263,7 @@ async def _page_context(hass: HomeAssistant, entry) -> dict:
     than silently rejecting names it has no opinion about.
     """
     store = find_store(hass)
-    device_id = getattr(getattr(entry, "runtime_data", None), "_device_id", None)
+    device_id = entry_device_id(entry)
     if store is None or not device_id:
         raise ServiceValidationError(
             translation_domain=DOMAIN,
@@ -311,7 +312,7 @@ def _register_internal_command(hass: HomeAssistant, command: InternalCommand) ->
             device_logger(_LOGGER, entry).debug(
                 "%s: sending %s", command.full_service, params,
             )
-            await command.run(entry.runtime_data, params)
+            await command.run(entry.runtime_data.connection, params)
 
     hass.services.async_register(
         DOMAIN,

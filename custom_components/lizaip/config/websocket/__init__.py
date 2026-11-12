@@ -7,11 +7,14 @@ One module per area of the panel:
 - ``assignments``      -- the action library and what each button does
 - ``pages``            -- the page list: reorder, edit, duplicate
 - ``settings``         -- text style, icon options and the editors' lookups
-- ``templates``          -- pages generated from a template, and retargeting them
+- ``templates``        -- pages generated from a template, and retargeting them
 - ``page_device``      -- a device for a page no template made; saving a page as a template
-- ``dynamic``          -- buttons filled from a dynamic source
 - ``assignment_entry`` -- validating a button assignment the panel sent
-- ``common``           -- helpers the handler modules share
+- ``common``           -- error reporting and lookups the handler modules share
+
+What a handler shares with the LLM tools lives outside this package, in
+``config.page_list``, ``config.template_targets``, ``config.template_pages`` and
+``config.listeners``.
 
 The voluptuous schema on each handler is the wire contract with
 ``panel/*.js``; responses keep the JSON shapes those views consume.
@@ -23,7 +26,7 @@ from homeassistant.core import HomeAssistant
 
 from ...runtime import debug_available
 from . import (
-    assignments, devices, dynamic, page_device, people, templates, pages, settings,
+    assignments, devices, page_device, people, templates, pages, settings,
 )
 
 
@@ -40,7 +43,6 @@ def register_commands(hass: HomeAssistant) -> None:
         devices.ws_restore_config,
         people.ws_list_persons,
         people.ws_set_device_users,
-        people.ws_set_user_devices,
         assignments.ws_get_actions,
         assignments.ws_save_actions,
         assignments.ws_get_assignments,
@@ -57,8 +59,6 @@ def register_commands(hass: HomeAssistant) -> None:
         settings.ws_get_icon_options,
         settings.ws_set_icon_options,
         settings.ws_get_icon_defaults,
-        settings.ws_get_palette,
-        settings.ws_get_themes,
         settings.ws_save_theme,
         settings.ws_delete_theme,
         settings.ws_export_theme,
@@ -74,11 +74,6 @@ def register_commands(hass: HomeAssistant) -> None:
         templates.ws_retarget_template_page,
         page_device.ws_list_all_devices,
         page_device.ws_assign_page_device,
-        dynamic.ws_browse_media,
-        dynamic.ws_list_dynamic_sources,
-        dynamic.ws_preview_dynamic_source,
-        dynamic.ws_refresh_dynamic,
-        dynamic.ws_set_dynamic_binding,
     ):
         websocket_api.async_register_command(hass, handler)
 

@@ -83,6 +83,19 @@ def device_logger(logger: logging.Logger | logging.LoggerAdapter,
     return DeviceLogger(logger, lambda: _entry_title(source))
 
 
+def entry_id_logger(logger: logging.Logger | logging.LoggerAdapter,
+                    hass: HomeAssistant, entry_id: str | None) -> DeviceLogger:
+    """*logger*, naming the remote the config entry *entry_id* configures.
+
+    The entry is looked up at each call, like the device below; one that
+    cannot be resolved -- unloaded, or a stand-in ``hass`` without a registry --
+    logs unprefixed.
+    """
+    return DeviceLogger(
+        logger, lambda: _entry_title(hass.config_entries.async_get_entry(entry_id or "")),
+    )
+
+
 def device_id_logger(logger: logging.Logger | logging.LoggerAdapter,
                      hass: HomeAssistant, device_id: str | None) -> DeviceLogger:
     """*logger*, naming the remote registered as *device_id*.

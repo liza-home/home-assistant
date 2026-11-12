@@ -65,7 +65,7 @@ export const STYLES_TILE_MENU = `
     opacity: .5;
   }
   button.face-menu-item[disabled]:hover { background: transparent; }
-  button.face-menu-item:hover, button.face-menu-item:focus-visible {
+  button.face-menu-item:hover {
     background: var(--secondary-background-color);
   }
 
@@ -79,8 +79,7 @@ export const STYLES_TILE_MENU = `
   button.face-menu-item-danger, button.face-menu-item-danger ha-icon {
     color: var(--ha-color-on-danger-quiet, var(--liza-danger-text));
   }
-  button.face-menu-item-danger:not([disabled]):hover,
-  button.face-menu-item-danger:focus-visible {
+  button.face-menu-item-danger:not([disabled]):hover {
     background: color-mix(in srgb, var(--liza-danger-text) 12%, transparent);
   }
 
@@ -93,22 +92,6 @@ export const STYLES_TILE_MENU = `
   }
   .inline-editor-row .action-name-input {
     flex: 1;
-  }
-  .btn-unassign {
-    background: none;
-    border: 1px solid var(--error-color, #db4437);
-    color: var(--liza-error-text);
-    border-radius: 8px;
-    padding: 4px 12px;
-    font-size: var(--liza-font-s);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    transition: background .15s;
-  }
-  .btn-unassign:hover {
-    background: color-mix(in srgb, var(--error-color, #db4437) 10%, transparent);
   }
 
   .action-editor-heading {

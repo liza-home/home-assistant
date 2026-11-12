@@ -8,27 +8,106 @@ without the extension, lowercased -- the name the font picker stores and
 ``?font=`` carries.
 
 Pillow cannot read ``.woff``/``.woff2``. Listing one reads only its name; it is
-decoded in memory the first time text is drawn in it (see ``const.open_font``),
+decoded in memory the first time text is drawn in it (see :func:`open_font`),
 and nothing is written to disk.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
+import threading
 from functools import lru_cache
-from typing import Final
+from typing import Any, Final
 from urllib.parse import quote
 
 from PIL import ImageFont
 
-from .const import (
-    DEFAULT_FONT,
-    FONT_EXTENSIONS,
-    WEBFONT_EXTENSIONS,
-    find_font,
-)
+from .const import DEFAULT_FONT
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# ── Reading a font file ───────────────────────────────────────────────────
+
+FONT_EXTENSIONS: Final = (".ttf", ".otf", ".ttc")
+WEBFONT_EXTENSIONS: Final = (".woff", ".woff2")
+
+
+# Only the three web fonts used last stay decoded, in memory only.
+@lru_cache(maxsize=3)
+def _decoded_webfont(path: str, _mtime: float) -> bytes:
+    from fontTools.ttLib import TTFont  # noqa: PLC0415 - only needed for web fonts
+    font = TTFont(path)
+    font.flavor = None
+    buf = io.BytesIO()
+    font.save(buf)
+    return buf.getvalue()
+
+
+def open_font(path: str, size: int, **kwargs: Any) -> ImageFont.FreeTypeFont:
+    """Load *path* with Pillow; a ``.woff``/``.woff2`` is decoded in memory on first use."""
+    if path.lower().endswith(WEBFONT_EXTENSIONS):
+        data = _decoded_webfont(path, os.path.getmtime(path))
+        return ImageFont.truetype(io.BytesIO(data), size, **kwargs)
+    return ImageFont.truetype(path, size, **kwargs)
+
+
+# Probing a font for a glyph opens the file and draws it; both are cached per
+# file version so a label is not re-read character by character on every render.
+_GLYPH_PROBE_LOCK = threading.Lock()
+
+
+@lru_cache(maxsize=8)
+def _glyph_probe_font(path: str, _mtime: float) -> tuple[ImageFont.FreeTypeFont, bytes]:
+    font = open_font(path, 40)
+    notdef_mask = font.getmask("\ufffe", mode="1")
+    return font, bytes(notdef_mask) if notdef_mask else b""
+
+
+@lru_cache(maxsize=8192)
+def _font_has_glyph(path: str, mtime: float, ch: str) -> bool:
+    # A FreeType face is not safe to draw from two threads at once.
+    with _GLYPH_PROBE_LOCK:
+        font, notdef_bytes = _glyph_probe_font(path, mtime)
+        mask = font.getmask(ch, mode="1")
+        if not mask or mask.size == (0, 0):
+            return False
+        return not (bytes(mask) == notdef_bytes and notdef_bytes)
+
+
+def font_has_all_glyphs(font_path: str, text: str) -> bool:
+    """Return False if *font_path* renders any character as the .notdef glyph."""
+    try:
+        mtime = os.path.getmtime(font_path)
+        _glyph_probe_font(font_path, mtime)  # an unreadable font has no glyphs
+        for ch in text:
+            if ord(ch) <= 0x20:
+                continue
+            if not _font_has_glyph(font_path, mtime, ch):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def find_font(name: str, fonts_dir: str) -> str | None:
+    """Find a font file in *fonts_dir* matching *name* (case-insensitive, fuzzy)."""
+    if not os.path.isdir(fonts_dir):
+        return None
+    name_lower = name.lower().replace(" ", "")
+    for f in os.listdir(fonts_dir):
+        f_lower = f.lower()
+        f_base = os.path.splitext(f_lower)[0]
+        if f_lower == name_lower or f_base == name_lower:
+            return os.path.join(fonts_dir, f)
+        name_parts = name_lower.replace("-", " ").replace("_", " ").split()
+        f_parts = f_base.replace("-", " ").replace("_", " ").split()
+        if all(any(np_ in fp for fp in f_parts) for np_ in name_parts):
+            return os.path.join(fonts_dir, f)
+    if "regular" not in name_lower:
+        return find_font(name + "-regular", fonts_dir)
+    return None
 
 
 # Below HA's config directory; served as ``/local/fonts``.
@@ -37,14 +116,6 @@ WWW_FONTS_SUBDIR: Final = ("www", "fonts")
 def www_fonts_dir(hass) -> str:
     """Where the user's own fonts go: ``<ha_config>/www/fonts``."""
     return hass.config.path(*WWW_FONTS_SUBDIR)
-
-
-def _www_fonts_dir(user_dir: str | None) -> str | None:
-    """``<ha_config>/www/fonts`` (served as ``/local/fonts``), next to ``lizaip/``."""
-    if not user_dir:
-        return None
-    config_dir = os.path.dirname(os.path.dirname(os.path.normpath(user_dir)))
-    return os.path.join(config_dir, "www", "fonts")
 
 
 def font_id(path: str) -> str:

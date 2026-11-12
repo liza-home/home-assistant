@@ -5,14 +5,7 @@ import logging
 
 from homeassistant.core import HomeAssistant, State
 
-from ..shared.services import (
-    attr_str,
-    is_state_toggle_service,
-    is_stateless_service,
-    scoped_icon_state,
-    service_to_attribute,
-    service_name,
-)
+from ..shared.services import icon_state_key, state_icon_override
 from ..shared.tokens import (
     resolve_image_tokens,
 )
@@ -21,9 +14,12 @@ from ._state import cycle_index
 from .toggle import (
     MODE_CYCLE,
     rule_icon,
+    rule_service,
+    rule_state_icons,
     rule_tooltip,
     resolve_rule_tooltip,
     step_icon,
+    step_tooltip,
     toggle_mode,
     toggle_rules,
 )
@@ -68,30 +64,11 @@ def _match_state_icon(service: str, state: State, icons=None) -> str | None:
     table = icons or icon_defaults
     if not service:
         return None
-    svc = service_name(service)
     # Icons follow the *entity's* domain, not the service's: a cross-domain
     # step (e.g. homeassistant.toggle on a media_player) must still resolve
-    # media_player icons. The sole caller skips falsy states, and a HA State
-    # always carries entity_id, so no fallback is reachable here.
-    domain = state.entity_id.split(".")[0]
-
-    if is_stateless_service(svc):
-        return None
-
-    attribute = service_to_attribute(svc)
-    if attribute:
-        attr_val = attr_str(state.attributes.get(attribute, ""))
-        return table.for_state(domain, attribute, attr_val)
-
-    if is_state_toggle_service(svc):
-        # A service narrower than its domain reads the shared icon table through
-        # its catch-all, so `media_play_pause` on an off TV shows "press to play"
-        # rather than the power glyph that entry carries for `turn_on`. A
-        # one-way service gets no state-keyed icon at all.
-        lookup = scoped_icon_state(svc, domain, state.state)
-        return table.for_state(domain, None, lookup) if lookup else None
-
-    return None
+    # media_player icons.
+    attribute, key = icon_state_key(service, state)
+    return table.for_state(state.entity_id.split(".")[0], attribute, key) if key else None
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +139,12 @@ def toggle_icon(
         # A variable that reads nothing drops the whole value, exactly as it
         # does for a button image -- and here that is not a blank but a fall
         # through to `step_icon`, which is a better answer than half a name.
-        icon = rule_icon(rule)
+        #
+        # The press's own row for this state first, matched the way a button's
+        # `state_icons` are: the same action, asked the same question.
+        icon = state_icon_override(
+            rule_state_icons(rule), state, rule_service(rule) or "",
+        ) or rule_icon(rule)
         if icon and hass is not None:
             icon = resolve_image_tokens(icon, hass)
         # Derived when the user picked nothing. Falling through to the
@@ -225,6 +207,12 @@ def toggle_tooltip(
         # is still better than nothing: the callers that can pass it do.
         if hass is None:
             return rule_tooltip(rules[index])
-        return resolve_rule_tooltip(rules[index], hass, entry) or None
+        # The twin of the `icon or step_icon(...)` line above: stored words
+        # first, then the ones this press derives from its own step.
+        return (
+            resolve_rule_tooltip(rules[index], hass, entry)
+            or step_tooltip(rules[index], hass, entry)
+            or None
+        )
 
     return None

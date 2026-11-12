@@ -13,7 +13,6 @@ import {
   TITLE_PREVIEW_W,
   TOOLTIP_PREVIEW_H,
   PRESS_GLYPH_SHAPE,
-  OVERRIDABLE_FIXED_BUTTONS,
   num,
   entityIcon,
   FACTOR_MIN,
@@ -30,7 +29,6 @@ import {
   shownControl,
   sliderRetarget,
   SLIDER_VERTICAL_KEY,
-  followsSelection,
   sliderFollows,
   pageSliderFollowsIn,
   SLIDER_ICON_HIDDEN_KEY,
@@ -162,32 +160,10 @@ ${pagesHtml}
     const canMoveUp = this._currentPageIdx > 0;
     const canMoveDown = this._currentPageIdx < pageCount - 1;
 
-    const allBtns = bp.buttons.filter(b => b.key !== "slider_horizontal");
-    const assignedCount = allBtns.filter(b => this._isButtonAssigned(b.key)).length;
-
-    // Icon-tint swatches, served by lizaip_config/get_palette rather than
-    // hardcoded: the hex a user clicks is stored as default_color and handed
-    // back to imgserv as `?fg=`, and the list is the remote's theme's.
-    const presets = this._palette || [];
-    // Only used to seed the native picker, which needs some opening colour.
-    // Looked up by name instead of by position so reordering PALETTE_NAMES cannot
-    // silently change it.
-    const defaultHex = presets.find(p => p.name === "white")?.hex || "FFFFFF";
-    const isCustomColor = pageDefaultColor && !presets.some(p => p.hex === pageDefaultColor);
-    // An unset page follows the theme rather than being tinted, so showing White
-    // as active would claim a choice that was never made. White stays a real
-    // option and is cleared like any other.
-    const swatchesHtml = presets.map(p => {
-      const isActive = pageDefaultColor === p.hex;
-      const label = p.name.charAt(0).toUpperCase() + p.name.slice(1);
-      return `<button class="ps-color-dot ${isActive ? 'active' : ''}" data-color="${p.hex}" title="${this._esc(label)}" aria-label="${this._esc(label)}" aria-pressed="${isActive ? 'true' : 'false'}" style="background:#${p.hex};"></button>`;
-    }).join("")
-      + (isCustomColor ? `<button class="ps-color-dot active" data-color="${pageDefaultColor}" title="${this._esc(this._t("custom"))}" aria-label="${this._esc(this._t("custom"))}" aria-pressed="true" style="background:#${pageDefaultColor};"></button>` : '');
-
     // The title's editor, shown once the title itself has been clicked on the
     // face. Selecting a page is how this card is usually reached, and the
-    // page's picture is not what that selection was about — the colour below
-    // is. `ps-page-meta` carries the "which page, of how many" line either way.
+    // page's picture is not what that selection was about. `ps-page-meta`
+    // carries the "which page, of how many" line either way.
     //
     // Rendered as nothing rather than hidden with `display:none`, so there is
     // one answer to "is the title open" (this flag) instead of two that can
@@ -221,7 +197,7 @@ ${pagesHtml}
     //
     // The whole banner goes, not just its contents. An empty one is a band of
     // padding above the field, which reads as the card having lost something.
-    const pageTitleText = this._pageTitle(this._pages[this._currentPageIdx]);
+    const pageTitleText = this._pageTitleShown(this._pages[this._currentPageIdx]);
     const bannerHtml = this._pageTitleSelected ? '' : `
         <div class="ps-title-banner">
           <div class="ps-page-meta">
@@ -259,33 +235,6 @@ ${pagesHtml}
             })}
           </div>` : '';
 
-    // The colour is the page's, not the title's: it tints every icon on the
-    // page and the title is one item among them. So it is offered while the
-    // card is *about* the page, and stands down while the title row is open —
-    // a swatch grid sitting under an open rename box reads as the colour of
-    // the thing being renamed, which is the one thing it is not.
-    //
-    // Absent rather than disabled: there is nothing to grey out here, the
-    // question simply is not being asked. Every colour handler in
-    // `_wirePageSettingsPanel` is already null-guarded, and the swatches are
-    // wired through `querySelectorAll`, which yields nothing on an empty list.
-    // Temporarily disabled: the per-page icon colour section.
-    const colorSectionHtml = '';
-    /*
-    const colorSectionHtml = this._pageTitleSelected ? '' : `
-          <div class="ps-section" style="margin-top:0;padding-top:0;border-top:none;">
-            <h2 class="ps-section-title" title="${this._esc(this._t("tints_icons"))}">
-              <ha-icon icon="mdi:palette" style="--mdc-icon-size:16px;"></ha-icon> ${this._t("icon_color")}
-            </h2>
-            <div class="ps-color-presets">${swatchesHtml}</div>
-            <div class="ps-color-row">
-              <input type="color" class="ps-color-native" id="psColorNative" value="${pageDefaultColor ? '#' + pageDefaultColor : '#' + defaultHex}" aria-label="${this._esc(this._t("pick_custom_color"))}" title="${this._esc(this._t("pick_custom_color"))}" />
-              <ha-input appearance="outlined" class="ps-color-input" id="psColorInput" value="${pageDefaultColor ? '#' + pageDefaultColor : ''}" accessible-label="${this._esc(this._t("color_hex"))}" placeholder="#hex" autocomplete="off"></ha-input>
-              ${pageDefaultColor ? `<ha-icon-button class="ps-color-clear" id="psColorClear" label="${this._esc(this._t("clear_color"))}"><ha-icon icon="mdi:close" aria-hidden="true"></ha-icon></ha-icon-button>` : ''}
-            </div>
-          </div>`;
-    */
-
     // A page made from a template drives one device (or hub); naming it here, as
     // the button that changes it, answers "what does this page control" without
     // a trip through the page strip's context menu.
@@ -309,7 +258,7 @@ ${pagesHtml}
     // The banner can be the whole card: with no title open, no template target
     // and the colour section stood down, an empty body is padding and a rule
     // under a row that has nothing below it.
-    const bodyHtml = `${titleEditorHtml}${templateTargetHtml}${colorSectionHtml}`;
+    const bodyHtml = `${titleEditorHtml}${templateTargetHtml}`;
     return `
       <ha-card outlined class="config-card">
         <h2 class="liza-sr-only">${this._esc(this._t("a11y_page_region"))}</h2>
@@ -417,6 +366,68 @@ ${pagesHtml}
       { ...assign, icon: "", icon_pinned: false }, action, "") || "";
   },
 
+  /**
+   * The icon field(s) for one step — a button, or one press of a cycle.
+   *
+   * An action with states gets one field per state, one without gets the
+   * single Icon field. Asked here once so a button and a press agree.
+   */
+  _iconFieldsHtml(step, key, { action, autoIcon = "", color = "",
+    slotId = "", slotAttrs = "", groupId = "liza-btn-icons-label" } = {}) {
+    const entity = this._stepEntity(step, key);
+    const icon = step.icon || "";
+    const stateIcons = step.state_icons || {};
+    const domain = entity ? entity.split(".")[0] : (action?.service || "").split(".")[0];
+    let states = this._actionStates(action, entity);
+    // Keep showing a state the user overrode but the list no longer offers:
+    // the backend still matches it, so hiding it would leave it live and
+    // invisible. Attribute keys ("attr:value") are not states, so skip them.
+    if (action) {
+      const shown = new Set(states.map(s => s.state));
+      const defaults = this._getDefaultIcons(domain, null);
+      for (const stored of Object.keys(stateIcons)) {
+        if (!stateIcons[stored] || stored.includes(":") || shown.has(stored)) continue;
+        states = states.concat({ state: stored, icon: defaults[stored] || "" });
+      }
+    }
+
+    // One field per state, built the same way as the single field below it,
+    // because it is the same question asked once per state.
+    if (action && states.length) {
+      const rows = states.map(s => this._htmlIconField({
+        label: this._localizeState(s.state, entity || (domain + ".x"), s.attribute),
+        value: stateIcons[s.state] || "",
+        // The step's own icon for this state stands in when nothing is
+        // overridden — the same stored-then-derived order every other field
+        // here uses, so an untouched row previews what the device draws.
+        autoIcon: s.icon || autoIcon,
+        color,
+        slotAttrs: [slotAttrs, `data-state="${this._esc(s.state)}"`].filter(Boolean).join(" "),
+      })).join("");
+      return `
+        <div class="config-field state-icons-section">
+          <label id="${groupId}">${this._t("button_icons")}</label>
+          <div class="state-icons-list" role="group" aria-labelledby="${groupId}">${rows}</div>
+        </div>`;
+    }
+
+    return this._htmlIconField({
+      label: this._t("icon"),
+      value: icon,
+      // What the device draws when the step names no icon of its own. Left
+      // blank, the preview showed the broken-image fallback, which reads as
+      // "no icon" when the step in fact has a perfectly good one.
+      autoIcon,
+      // Display only — `_wireMediaInput` commits nothing until the text differs
+      // from what the field was opened with — so a step showing the derived
+      // glyph still stores no icon and still follows its action.
+      inputValue: icon || autoIcon,
+      color,
+      slotId,
+      slotAttrs,
+    });
+  },
+
   _htmlButtonConfigPanel(bp, selBtn) {
     // Read through the edit slot, never `this._assignments[key]` directly: under
     // a context this card is the override's editor, and reading the page
@@ -434,12 +445,6 @@ ${pagesHtml}
     // — and not because the page default happens to be configured. An icon on
     // its own counts, because that too is something ✕ now clears.
     const editingOverride = this._editingOverride(selBtn.key);
-    // A label the device could never show. Fixed buttons carry a firmware glyph
-    // (PROTOCOL.md §12) — but that is equally true of the page default's card,
-    // which has always offered the field, so the *page* card is left exactly as
-    // it is and only the write is guarded. `tooltipIsDead` is kept as a name so
-    // there is one place to say "never offer it" if that decision is ever taken.
-    const tooltipIsDead = false;
     // Under a context the field is offered but inert until the override has an
     // action of its own: a label-only override is dropped by the writers, so
     // accepting one would be a field that takes a value and loses it.
@@ -448,7 +453,6 @@ ${pagesHtml}
     // remote holds a click back for the long touch of the button itself, not
     // of an override the selection swaps in.
     const showLongtouch = !!this._longtouchEnabled?.() && !editingOverride;
-    const selAssigned = this._isAssignedRecord(selAssign);
     const selEntity = selAssign.config ? this._getTargetEntityFromConfig(selAssign.config) : null;
     // A proportional slider has no action_id and no library entry, so the shared
     // resolver cannot name it — its icon comes from the control it drives. An
@@ -640,11 +644,6 @@ ${pagesHtml}
     // Hiding is *presentational only*: a stored slider subject stays exactly
     // where it is, because the page's slider may be switched to follow later
     // and the button's target must still be there when it is.
-    const verticalAssign = (this._assignments || {})[SLIDER_VERTICAL_KEY];
-    // An unconfigured vertical slider follows the selection — including one
-    // with no assignment at all, which is how a template that declares no slider
-    // arrives here. `sliderFollows` owns that rule for both languages.
-    const verticalFollows = sliderFollows(SLIDER_VERTICAL_KEY, verticalAssign);
     const pageSliderFollows = pageSliderFollowsIn(this._assignments);
 
     // Which grid button's slider settings this card edits, and null on every
@@ -661,8 +660,7 @@ ${pagesHtml}
     // is the rule the whole feature rests on. So the card is the slider's and
     // the record is the context's, and that split is why this key exists rather
     // than the code just reading `selBtn`.
-    const sliderCtxKey = (selBtn.key === SLIDER_VERTICAL_KEY && this._liveContextKey())
-      ? this._liveContextKey() : null;
+    const sliderCtxKey = this._sliderCtxKey(selBtn.key);
     // The page slot, deliberately, not the edit slot. The control name and
     // the slider block are not fixed-button overrides — they are the grid button's own
     // itself — so routing them through `_editAssign` would bury them in
@@ -676,10 +674,6 @@ ${pagesHtml}
       stateFor: (e) => this._hass?.states?.[e],
       pageSliderFollows,
     });
-    // The effective entity, explicit or derived — read from the predicate rather
-    // than recomputed, so the card cannot describe one entity while the face
-    // marks another.
-    const sliderCtxEntity = sliderCtxState.entity || null;
 
     // Everything the card needs to know about the selected grid button — and
     // nothing about how any of it looks.
@@ -784,10 +778,7 @@ ${pagesHtml}
       // re-derived from the live entity on every gesture and a stored per-button
       // copy is silently discarded, and Icon and Label are baked into the face
       // the device is sent per *page*, which nothing re-renders on a selection.
-      const pageFactor = (() => {
-        const raw = this._assignments[SLIDER_VERTICAL_KEY]?.slider_actions?.factor;
-        return typeof raw === "number" && isFinite(raw) ? raw : 1.0;
-      })();
+      const pageFactor = this._pageSliderFactor();
       const own = sliderCtxAssign.slider_factor;
       const factorOverridden = typeof own === "number" && isFinite(own);
 
@@ -829,21 +820,6 @@ ${pagesHtml}
       };
     })();
 
-    // Appearance is the button's whenever the button is actually holding the
-    // slider, and the page's otherwise. Those are the only two honest readings:
-    // a context button that does not retarget leaves the slider showing the
-    // page's icon, so a per-button icon there would store something that never
-    // appears.
-    //
-    // Hoisted above the card body because the header reads it too — a header
-    // showing the page's icon and name above fields holding the button's would
-    // be the same split this change removes, moved forty lines up.
-    // Appearance is the selected button's whenever a button is selected. Not
-    // gated on `retargets`: a selection has to edit the selection's record, or
-    // the fields quietly rewrite the page default -- see
-    // `_sliderAppearanceTarget`, which this must agree with exactly.
-    const apprCtx = sliderCtx;
-
     // --- The slider card ---
     // Every `slider_` button gets it, configured or not. Gating on
     // `slider_actions.mode === "proportional"` would leave a fresh slider
@@ -867,14 +843,16 @@ ${pagesHtml}
       // unreachable on screen.
       const targetEntity = sliderCtx ? sliderCtx.entity : (sliderActions.target_entity || "");
       // Whose name and glyph the header wears. The same answer the Appearance
-      // fields give, because the header is a preview of them: with a button
-      // holding the slider it shows that button's stored pair, falling back to
-      // the live control the way the fields' placeholders do.
-      const displayName = apprCtx
-        ? (apprCtx.tooltip || apprCtx.autoTooltip || selDefault)
+      // fields give, because the header is a preview of them: with a grid
+      // button in context it shows that button's stored pair, falling back to
+      // the live control the way the fields' placeholders do. Not gated on
+      // `retargets`: a selection edits the selection's record, exactly as
+      // `_sliderAppearanceTarget` decides.
+      const displayName = sliderCtx
+        ? (sliderCtx.tooltip || sliderCtx.autoTooltip || selDefault)
         : (selAssign.tooltip || selDefault);
-      const headerIcon = apprCtx
-        ? (apprCtx.icon || apprCtx.autoIcon || "mdi:radiobox-blank")
+      const headerIcon = sliderCtx
+        ? (sliderCtx.icon || sliderCtx.autoIcon || "mdi:radiobox-blank")
         : selIcon;
       const factor = sliderCtx ? sliderCtx.factor : num(sliderActions.factor, 1.0);
       const attribute = sliderActions.attribute || "volume_level";
@@ -934,7 +912,7 @@ ${pagesHtml}
                 // Happy path: state what the slider will actually write, so the
                 // mechanics are visible without opening Advanced to find them.
                 : (activeControl
-                    ? `Writes <code>${this._esc(dataKey)}</code> between ${valMin} and ${valMax}.`
+                    ? this._t("slider_writes_range", { key: this._esc(dataKey), min: valMin, max: valMax })
                     : "")));
 
       // --- Inline validation ---
@@ -1109,11 +1087,9 @@ ${pagesHtml}
 
       // Sliders get the same icon control as grid buttons — see
       // `sliderIconFieldHtml` above, shared with the last-touched card. Which
-      // record it writes depends on who is holding the slider: the page when
-      // nothing is, the context button when one is.
-      // Appearance is the button's whenever the button is actually holding the
-      // slider — see `apprCtx` above, hoisted so the header shares this answer.
-      const iconFieldHtml = sliderIconFieldHtml(!!sliderActions.target_entity, apprCtx);
+      // record it writes follows `_sliderAppearanceTarget`: the grid button in
+      // context when there is one, the page otherwise.
+      const iconFieldHtml = sliderIconFieldHtml(!!sliderActions.target_entity, sliderCtx);
 
       return `
         <ha-card outlined class="config-card">
@@ -1193,21 +1169,21 @@ ${pagesHtml}
             <h3 class="config-section-title">${this._t("appearance")}</h3>
             ${iconFieldHtml}
             ${(() => {
-              const sliderTooltip = apprCtx ? apprCtx.tooltip : (selAssign.tooltip || selDefault);
+              const sliderTooltip = sliderCtx ? sliderCtx.tooltip : (selAssign.tooltip || selDefault);
               return this._htmlIconField({
                 label: this._t("label"),
-                value: sliderTooltip || apprCtx?.autoTooltip || "",
+                value: sliderTooltip || sliderCtx?.autoTooltip || "",
                 inputValue: sliderTooltip,
                 inputClass: "config-tooltip-input",
-                placeholder: apprCtx ? apprCtx.autoTooltip : "",
+                placeholder: sliderCtx ? sliderCtx.autoTooltip : "",
                 color: this._currentPageColor(),
                 shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },
                 previewClass: "icon-preview-title",
                 slotId: "config-tooltip-slot",
-                hint: apprCtx
+                hint: sliderCtx
                   ? this._t("label_own_hint", {
                       name: this._esc(contextName),
-                      auto: this._esc(apprCtx.autoTooltip),
+                      auto: this._esc(sliderCtx.autoTooltip),
                     })
                   : "",
               });
@@ -1283,78 +1259,15 @@ ${pagesHtml}
     const internalProblem = this._internalCommandProblem(selAssign.config, selAction?.service);
 
     const buttonIconVal = selAssign.icon || "";
-
-    const stateIcons = selAssign.state_icons || {};
-    const iconDomain = selEntity ? selEntity.split(".")[0] : (selAction?.service || "").split(".")[0];
-    let actionStates = this._actionStates(selAction, selEntity);
-    // Grandfather any state the user has already overridden but that the list
-    // above no longer offers — a service whose rows were narrowed, or an action
-    // re-pointed at a different entity.
-    //
-    // `state_icons` lives on the assignment and is keyed by state string, so it
-    // outlives whatever the editor happens to render: `device_sync.py` still
-    // matches it when pushing an icon and `store.py` still folds it into the
-    // config hash. A row that vanishes from the card therefore does not become
-    // inert, it becomes *invisible and live* — an icon the user cannot see,
-    // explain or clear. Showing the row keeps the ✕ reachable.
-    //
-    // Attribute-keyed overrides ("attr:value", per `_resolve_button_icon`) are
-    // left alone; they are not states and have no row to belong to.
-    if (selAction) {
-      const shown = new Set(actionStates.map(s => s.state));
-      const defaults = this._getDefaultIcons(iconDomain, null);
-      for (const key of Object.keys(stateIcons)) {
-        if (!stateIcons[key] || key.includes(":") || shown.has(key)) continue;
-        actionStates = actionStates.concat({ state: key, icon: defaults[key] || "" });
-      }
-    }
-
-    let stateIconsHtml = '';
-    const hasStateIcons = showButtonIcon && selAction && actionStates.length > 0;
-    if (hasStateIcons) {
-      // One field per state, built the same way as the Image field above it,
-      // because it is the same question asked once per state. The row used to be
-      // a display line with a ✎ that revealed an editor, a ✕ that reset it and a
-      // badge naming the default — three controls around a picker that answers
-      // all three: it shows what is stored, clearing it restores the default,
-      // and the preview beside it says what the device will draw either way.
-      const rows = actionStates.map(s => {
-        const override = stateIcons[s.state] || "";
-        return this._htmlIconField({
-          label: this._localizeState(
-            s.state,
-            selEntity || ((selAction.service || "").split(".")[0] + ".x"),
-            s.attribute),
-          value: override,
-          // The action's own icon for this state stands in when nothing is
-          // overridden — the same stored-then-derived order every other field
-          // here uses, so an untouched row previews what the device draws.
-          autoIcon: s.icon || "",
-          color: this._currentPageColor(),
-          slotAttrs: `data-state="${this._esc(s.state)}"`,
-        });
-      }).join("");
-      stateIconsHtml = `
-        <div class="config-field state-icons-section">
-          <label id="liza-btn-icons-label">${this._t("button_icons")}</label>
-          <div class="state-icons-list" role="group" aria-labelledby="liza-btn-icons-label">${rows}</div>
-        </div>`;
-    }
-
-    // Image and state icons remain mutually exclusive -- when an action carries
-    // states, those rows *are* the button's images and a single image above them
-    // would be a fourth answer to a question the list has already answered three
-    // times. They now live in different regions of the card, so the exclusion is
-    // stated once here and both regions read it.
-    const showButtonIconEditor = showButtonIcon && !hasStateIcons;
     // The icon the device derives when nothing is stored, which is what the
-    // preview stands in with.
-    const autoButtonIcon = showButtonIconEditor
-      ? this._derivedButtonIcon(selBtn.key)
-      : "";
-    const buttonIconFieldHtml = showButtonIconEditor ? this._htmlIconField({
-      label: this._t("icon"),
-      value: buttonIconVal,
+    // preview stands in with. For an action with states that is the glyph for
+    // the state the entity is in right now, so the press 1 head previews what
+    // the button actually draws rather than nothing at all.
+    const autoButtonIcon = showButtonIcon ? this._derivedButtonIcon(selBtn.key) : "";
+    // One field per state, or the single Icon field when the action has none --
+    // the same helper every press row below uses.
+    const buttonIconFieldHtml = showButtonIcon ? this._iconFieldsHtml(selAssign, selBtn.key, {
+      action: selAction,
       autoIcon: autoButtonIcon,
       color: this._currentPageColor(),
       slotId: "config-icon-picker-slot",
@@ -1417,13 +1330,6 @@ ${pagesHtml}
             // elsewhere in the card, so a row remembering its own state would
             // forget it immediately.
             const open = this._openPresses?.has(`${selBtn.key}:${idx}`);
-            // What the device falls back to when this press stores nothing of
-            // its own -- the glyph the backend derives from the step's service
-            // (`toggle.step_icon`) and the caption the heading above already
-            // asks for. Computed once per row because both the preview and the
-            // input now need them, and two copies of the expression is how
-            // the box and the field it labels drift apart.
-            const derivedIcon = this._getServiceIcon(rule.config?.[0]?.action || "", selEntity);
             const derivedTooltip = this._pressDefaultTooltip(
               rule,
               this._toggleRuleName(rule),
@@ -1439,10 +1345,14 @@ ${pagesHtml}
             // service both sides can read.
             const pressService = rule.config?.[0]?.action || "";
             const pressAction = { service: pressService };
-            const pressEntity = this._getTargetEntityFromConfig(rule.config || []) || selEntity;
+            const pressEntity = this._stepEntity(rule, selBtn.key);
+            // What the device falls back to when this press stores nothing of
+            // its own. Asked through the same helper the picker is mounted
+            // with, so the box and the field it labels cannot drift apart.
+            const derivedIcon = this._stepDerivedIcon(rule, selBtn.key);
             // What the remote prints for this press right now, tokens read.
             const pressResolved = this._displayTooltip(
-              rule.tooltip || "", pressAction, pressEntity, rule.config, rule,
+              rule.tooltip || "", pressAction, pressEntity, rule.config, rule, true,
             );
             // The same three lessons press 1's Tooltip offers, on the same
             // conditions. They used to be withheld here on the grounds that a
@@ -1452,9 +1362,9 @@ ${pagesHtml}
             // an empty value map, which is now fixed, so withholding the hint
             // would be hiding a feature that works.
             const pressShowsState = this._tooltipHasStateToken(rule.tooltip || "")
-              && !!this._displayTooltip("${_state}", pressAction, pressEntity, rule.config);
+              && !!this._displayTooltip("${_state}", pressAction, pressEntity, rule.config, rule, true);
             const pressShowsName = this._tooltipHasNameToken(rule.tooltip || "")
-              && !!this._displayTooltip("${_name}", pressAction, pressEntity, rule.config);
+              && !!this._displayTooltip("${_name}", pressAction, pressEntity, rule.config, rule, true);
             const pressShowsVariable = this._hasEntityToken(rule.tooltip || "");
             // Same discovery rule as the Label field: the two track tokens are
             // only meaningful on a media player, so the press's own target
@@ -1482,33 +1392,12 @@ ${pagesHtml}
                   PRESS_GLYPH_SHAPE,
                 ),
               })}
-              ${this._htmlIconField({
-                // "Icon", the same word press 1's field uses, and now said
-                // only once -- `_htmlIconField` hands it to the picker, which
-                // floats it inside the box, instead of also printing it above.
-                label: this._t("icon"),
-                value: rule.icon || "",
-                // What the device draws when the press names no icon of its
-                // own: the backend derives the same glyph from the step's
-                // service (`toggle.step_icon`). Left blank, the preview showed
-                // the broken-image fallback, which reads as "no icon" when the
-                // press in fact has a perfectly good one.
+              ${this._iconFieldsHtml(rule, selBtn.key, {
+                action: pressAction,
                 autoIcon: derivedIcon,
-                // Prefilled with the derived glyph when the press stores no
-                // icon, which is what press 1's Image field has always done
-                // (see the note at `_mountIconPicker` for the button's own
-                // picker). It was left blank here, so the one field that was
-                // meant to be press 1's twin was the one field that did not
-                // behave like it: press 1 read `mdi:lightbulb-on` while an
-                // untouched press read nothing, and the difference looked like
-                // a press that had lost its icon rather than one inheriting.
-                // Display only -- `_wireMediaInput` commits nothing until the
-                // text differs from what the field was opened with -- so a
-                // press that shows the derived glyph still stores no icon and
-                // still follows the action if it is changed.
-                inputValue: rule.icon || derivedIcon,
                 color: this._currentPageColor(),
                 slotAttrs: `data-toggle-idx="${idx}"`,
+                groupId: `liza-press-${idx}-icons-label`,
               })}
               ${this._htmlIconField({
                 label: this._t("tooltip"),
@@ -1586,9 +1475,9 @@ ${pagesHtml}
       : "";
     const pressOneTitle = (
       (tooltipFieldValue && !this._isMediaSource?.(tooltipFieldValue) ? tooltipPreview : "")
-      || selDefault || pressTitles[0] || ""
+      || selDefault
     );
-    const tooltipFieldHtml = tooltipIsDead ? '' : this._htmlIconField({
+    const tooltipFieldHtml = this._htmlIconField({
       label: this._t("tooltip"),
       // The preview draws what the remote prints, tokens read; the field
       // holds the stored text, tokens and all.
@@ -1619,18 +1508,17 @@ ${pagesHtml}
         <h2 class="liza-sr-only">${this._esc(regionLabel)}</h2>
         ${this._htmlConfigCardHeader({
           subtitleHtml: cardKeyHtml,
-          // One host, one question -- "what does this button look like?" -- with
-          // two mutually exclusive answers. `showButtonIconEditor` is defined as
-          // `showButtonIcon && !hasStateIcons`, so exactly one of these is ever
-          // non-empty and concatenating them cannot show both.
+          // One host, one question -- "what does this button look like?" --
+          // answered by the same helper the press rows use: the per-state rows
+          // when the action has states, the single Icon field when it has not.
           //
-          // Emitted unconditionally even when both are empty:
+          // Emitted unconditionally even when it is empty:
           // `_refreshButtonEntitySections` rebuilds it by assigning innerHTML,
           // which can empty a host that is there and cannot create one that is
           // not. Make this conditional and the field stops following the entity,
           // silently.
           appearanceHostHtml:
-            `<div id="config-card-appearance">${buttonIconFieldHtml}${stateIconsHtml}</div>`,
+            `<div id="config-card-appearance">${buttonIconFieldHtml}</div>`,
           tooltipFieldHtml,
           // A second host, after the Tooltip rather than inside the first.
           //
@@ -1644,9 +1532,11 @@ ${pagesHtml}
           //
           // Still a refreshable host of its own, because each row's derived
           // glyph is resolved against the button's entity domain and that
-          // entity is chosen inside the action editor. The press labels are
-          // safe here where the Tooltip was not: they commit on `change`, so
-          // they hold no pending state for a rebuild to throw away.
+          // entity is chosen inside the action editor. The press tooltips are
+          // media inputs that commit on Enter or blur, so one can hold text
+          // typed but not yet committed; the refresh carries the focused
+          // field's text and caret across the rebuild (see
+          // `_pressFieldInProgress`).
           //
           // Emitted unconditionally for the same reason as the other host: a
           // rebuild can empty a host that exists and cannot create one that
@@ -1723,25 +1613,4 @@ ${pagesHtml}
         </div>
       </ha-card>`;
   },
-
-
-  // The icon the slider would show if nothing were stored — the same answer the
-  // preview and the face give, so the picker cannot sit blank beside a glyph.
-  //
-  // Empty still means "derive it" on disk; this only decides what the *field*
-  // displays, exactly as the state-icon pickers already preselect an action's
-  // own state icon. Both scopes answer from their own control, which is what
-  // makes the context card behave like the page card rather than like a
-  // special case.
-  /**
-   * The icon a button's image field should *offer* when it stores none.
-   *
-   * Display only. The tile already draws this glyph via `_resolveButtonIcon`,
-   * so showing it here just stops the field from claiming the button has no
-   * icon. Nothing is written unless the user changes it — the media field
-   * commits only a value that differs from the one it was opened with.
-   *
-   * A payload thumbnail is skipped: it is a URL, and this control is in icon
-   * mode, so handing it over would blank the picker anyway.
-   */
 };

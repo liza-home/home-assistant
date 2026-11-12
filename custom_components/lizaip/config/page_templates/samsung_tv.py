@@ -215,12 +215,9 @@ async def installed_apps(hass: HomeAssistant, host: str) -> list[dict]:
     if kept.get("apps"):
         lock = state.locks.get(host)
         if time.time() - kept.get("at", 0) > RESCAN_S and not (lock and lock.locked()):
-            create = getattr(hass, "async_create_background_task", None)
-            coro = _scan(hass, state, host)
-            if create:
-                create(coro, f"lizaip samsung apps {host}")
-            else:
-                asyncio.ensure_future(coro)
+            hass.async_create_background_task(
+                _scan(hass, state, host), f"lizaip samsung apps {host}",
+            )
         return [dict(r) for r in kept["apps"] if r.get("media_content_id") not in NOT_APPS]
     return [dict(r) for r in (await _scan(hass, state, host) or [])]
 

@@ -6,6 +6,9 @@ transparency, alpha, fonts — plus the HTTP names built from them (``SIZE_IDS``
 several modules *and* by the config panel, and they are what a user actually
 sees, so one file is the right home for them.
 
+Reading a font file is :mod:`.fonts`'s, and how a source is spelled --
+its type and the parts of a title -- is :mod:`.source_parse`'s.
+
 **What does not:** numbers that only make sense next to the code they steer —
 the SVG supersampling factor, the text padding, where a dashboard plugin installs
 its JS. Those live in the module that uses them, where the comment explaining
@@ -14,15 +17,12 @@ would only put distance between a value and its reason.
 """
 from __future__ import annotations
 
-import io
-import os
 import re
-from functools import cache, lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 
 import yaml
-from PIL import ImageFont
 
 # ── The default theme ─────────────────────────────────────────────────────
 
@@ -126,125 +126,6 @@ MIN_FONT_SIZE: Final = 6
 DEFAULT_SIZE_ID: Final = "tile"
 DEFAULT_SIZE: Final = SIZE_IDS[DEFAULT_SIZE_ID][:2]
 
-# Every source but words has a slug for its value, which can never hold a
-# space: a logo is a file we ship (`hue`, `netflix_wide`), an icon a
-# hyphenated name (`mdi:play-circle`, `phu:sonos`, a registered set's
-# `hue:bulb`), a graph an entity id and a picture an address, which spells a
-# space `%20`. After one of those the first space starts something else.
-WORDS_SOURCE: Final = "text:"
-
-# A picture written as a bare address: an HA path (`/local/a.png`,
-# `${_device.entity_picture}`) or an http(s) URL. It is a part of its own, as
-# `media:` is, so a title can put a cover beside a mark and a name.
-_ADDRESS = re.compile(r"^(?:/\S|https?://)", re.IGNORECASE)
-
-
-def is_address(word: str) -> bool:
-    """Whether *word* is a picture written as a bare address."""
-    return bool(_ADDRESS.match(word))
-
-# What may stand between two parts once a space has already divided them. A
-# bare hyphen cannot be a separator on its own -- `mdi:play-circle` holds one
-# -- but a spaced hyphen can, as can the plus that used to be the spelling.
-_PART_LEAD_INS: Final = ("-", "+")
-
-# What a part looks like from the outside: a scheme, then a colon. A word not
-# shaped like that belongs to the part it follows, so `text:Hello world` is
-# one phrase.
-_PART_START = re.compile(r"^([a-z][a-z0-9_]*):")
-
-# The source types imgserv draws itself. Only one of these -- or a registered
-# extra icon set -- starts a part: words that merely end in a colon do not, or
-# a label like "Go to page: Sonos" would ask imgserv for a `page:` source.
-PART_SOURCE_TYPES: Final = frozenset(
-    ("mdi", "logo", "text", "media", "ref", "history", "phu"),
-)
-
-
-def has_source_type(word: str) -> bool:
-    """Whether *word* is written ``type:…`` at all, a type imgserv knows or not.
-
-    An escaped colon (``text\\:``) writes no type, and nor does a colon a
-    space follows: ``battery: 50`` and ``Battery: ${level}`` are words, as a
-    label is written. ``battery:50`` names a type, unknown or not yet
-    registered.
-    """
-    m = _PART_START.match(word)
-    if not m:
-        return False
-    rest = word[m.end():]
-    return bool(rest) and not rest[0].isspace() or names_a_source(word)
-
-
-def names_a_source(word: str) -> bool:
-    """Whether *word* starts with a source type imgserv draws (``mdi:``, ``hue:``…)."""
-    m = _PART_START.match(word)
-    return bool(m) and (m.group(1) in PART_SOURCE_TYPES or m.group(1) in _custom_icon_prefixes)
-
-
-def _is_part_start(word: str) -> bool:
-    """Whether *word* names a source, and so starts a part of its own."""
-    return is_address(word) or names_a_source(word)
-
-
-def split_source_parts(source: str) -> tuple[str, ...]:
-    """Split *source* into the parts drawn side by side, in order.
-
-    A part ends where the next one starts, and a part starts at a word naming
-    a source (``logo:``, ``text:``, ``mdi:``, ``media:``..., or a registered
-    icon set) -- not at any word ending in a colon, which is just punctuation. After a slug
-    subject plain words start a part too, and are read as the ``text:`` they
-    would have to be spelled as anywhere else, so all of these draw the hue
-    mark beside the word "Wohnzimmer"::
-
-        logo:hue Wohnzimmer
-        logo:hue - Wohnzimmer
-        logo:hue + Wohnzimmer
-        logo:hue + text:Wohnzimmer
-        logo:hue text:Wohnzimmer
-
-    A lone ``-`` or ``+`` between two parts is punctuation and is dropped,
-    except where dropping it would change what a part means: a ``text:1 +
-    1`` whose next word is not a part of its own is one phrase.
-
-    One part is the common case and comes back as a tuple of one. The rule is
-    the whole rule: `_draws_words` and the panel's `_splitSourceParts` read a
-    title by it, so preview and device cannot drift apart.
-    """
-    text = (source or "").strip()
-    if not text or " " not in text:
-        return (text,) if text else ()
-
-    words = text.split(" ")
-    parts: list[str] = [words[0]]
-    i = 1
-    while i < len(words):
-        word = words[i]
-        if not word:
-            i += 1
-            continue
-        nxt = next((w for w in words[i + 1:] if w), "")
-        if word in _PART_LEAD_INS and (
-            _is_part_start(nxt) or _is_slug_part(parts[-1])
-        ):
-            # Punctuation between two parts, not a part and not a value.
-            i += 1
-            continue
-        if _is_part_start(word) or _is_slug_part(parts[-1]):
-            parts.append(word if _is_part_start(word) else f"text:{word}")
-        else:
-            parts[-1] = f"{parts[-1]} {word}"
-        i += 1
-    return tuple(p for p in (p.strip() for p in parts) if p)
-
-
-def _is_slug_part(part: str) -> bool:
-    """Whether *part* is a slug subject still holding nothing but its slug."""
-    return (
-        is_address(part) or (names_a_source(part) and not part.startswith(WORDS_SOURCE))
-    ) and " " not in part
-
-
 # Symbolic color names → (R, G, B, A)
 #
 # The hues and the four state names (`on`, `off`, `unavailable`, `default`)
@@ -328,70 +209,6 @@ FALLBACK_EMOJI_PATHS: Final = (
 )
 
 
-
-# ── Font lookup ───────────────────────────────────────────────────────────
-
-FONT_EXTENSIONS: Final = (".ttf", ".otf", ".ttc")
-WEBFONT_EXTENSIONS: Final = (".woff", ".woff2")
-
-
-# Only the three web fonts used last stay decoded, in memory only.
-@lru_cache(maxsize=3)
-def _decoded_webfont(path: str, _mtime: float) -> bytes:
-    from fontTools.ttLib import TTFont  # noqa: PLC0415 - only needed for web fonts
-    font = TTFont(path)
-    font.flavor = None
-    buf = io.BytesIO()
-    font.save(buf)
-    return buf.getvalue()
-
-
-def open_font(path: str, size: int, **kwargs: Any) -> ImageFont.FreeTypeFont:
-    """Load *path* with Pillow; a ``.woff``/``.woff2`` is decoded in memory on first use."""
-    if path.lower().endswith(WEBFONT_EXTENSIONS):
-        data = _decoded_webfont(path, os.path.getmtime(path))
-        return ImageFont.truetype(io.BytesIO(data), size, **kwargs)
-    return ImageFont.truetype(path, size, **kwargs)
-
-
-def font_has_all_glyphs(font_path: str, text: str) -> bool:
-    """Return False if *font_path* renders any character as the .notdef glyph."""
-    try:
-        font = open_font(font_path, 40)
-        notdef_mask = font.getmask("\ufffe", mode="1")
-        notdef_bytes = bytes(notdef_mask) if notdef_mask else b""
-        for ch in text:
-            if ord(ch) <= 0x20:
-                continue
-            mask = font.getmask(ch, mode="1")
-            if not mask or mask.size == (0, 0):
-                return False
-            if bytes(mask) == notdef_bytes and notdef_bytes:
-                return False
-        return True
-    except Exception:
-        return False
-
-
-def find_font(name: str, fonts_dir: str) -> str | None:
-    """Find a font file in *fonts_dir* matching *name* (case-insensitive, fuzzy)."""
-    if not os.path.isdir(fonts_dir):
-        return None
-    name_lower = name.lower().replace(" ", "")
-    for f in os.listdir(fonts_dir):
-        f_lower = f.lower()
-        f_base = os.path.splitext(f_lower)[0]
-        if f_lower == name_lower or f_base == name_lower:
-            return os.path.join(fonts_dir, f)
-        name_parts = name_lower.replace("-", " ").replace("_", " ").split()
-        f_parts = f_base.replace("-", " ").replace("_", " ").split()
-        if all(any(np_ in fp for fp in f_parts) for np_ in name_parts):
-            return os.path.join(fonts_dir, f)
-    if "regular" not in name_lower:
-        return find_font(name + "-regular", fonts_dir)
-    return None
-
-
 # ?mode= presets → (default_fg, default_bg).
 # These only supply *defaults*: an explicit ?fg=/?color= or ?bg= query param
 # always overrides the mode-derived value for its own channel.
@@ -440,36 +257,6 @@ def build_palette() -> list[dict[str, str]]:
 # URL base path. Shared by the view (which builds its routes from it) and by
 # ``__init__``'s log line, so it is not local to either.
 IMG_PATH: Final = "/api/imgserv"
-
-
-#: imgserv's own source types. A browser icon set registered under one of
-#: these names never shadows it. ``phu`` is deliberately not among them: the
-#: custom-brand-icons set is a browser registration like any other, and its
-#: shapes arrive through the upload path instead of a JS bundle read off disk.
-NATIVE_SOURCE_TYPES: Final = frozenset({"mdi", "logo", "text", "media"})
-
-#: Icon sets the frontend has registered beyond the native ones (``phu``,
-#: ``hue``, ``fapro``, ...), as last reported by the panel. They exist only in
-#: the browser, so imgserv draws them from the shapes the panel uploaded
-#: (``render_custom.py``). Module state because the classifiers in the root
-#: ``const.py`` need it and none of them has ``hass`` to look it up with.
-_custom_icon_prefixes: set[str] = set()
-
-_ICON_PREFIX_RE: Final = re.compile(r"^[a-z0-9_-]+$")
-
-
-def set_custom_icon_prefixes(prefixes) -> None:
-    """Replace the registered extra icon sets; native and malformed names are dropped."""
-    _custom_icon_prefixes.clear()
-    _custom_icon_prefixes.update(
-        p for p in prefixes or ()
-        if isinstance(p, str) and _ICON_PREFIX_RE.match(p) and p not in NATIVE_SOURCE_TYPES
-    )
-
-
-def custom_icon_prefixes() -> frozenset[str]:
-    """The extra icon sets currently registered."""
-    return frozenset(_custom_icon_prefixes)
 
 
 def parse_color(color_str: str | None, names: dict | None = None) -> tuple | None:

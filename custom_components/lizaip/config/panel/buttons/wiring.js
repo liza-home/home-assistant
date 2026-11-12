@@ -19,7 +19,6 @@ import {
   applyControl,
   SLIDER_VERTICAL_KEY,
   SLIDER_TARGET_ENTITY,
-  isConfigured,
 } from "./shared.js";
 import {
   armSuppress,
@@ -67,27 +66,15 @@ export const ButtonsWiringMixin = {
       });
     });
 
-    // The strip's hover card. On the thumb rather than the picture inside it,
-    // because the thumbs are small and a card that only answers over the drawn
-    // pixels is one the user has to aim for. Focus too, for the keyboard.
-    this.shadowRoot.querySelectorAll(".page-thumb").forEach(el => {
-      const idx = parseInt(el.dataset.pageIdx);
-      el.addEventListener("mouseenter", () => this._onPageHover(idx, el, true));
-      el.addEventListener("mouseleave", () => this._onPageHover(idx, el, false));
-      el.addEventListener("focusin", () => this._onPageHover(idx, el, true, true));
-      el.addEventListener("focusout", () => this._onPageHover(idx, el, false));
-    });
-
     // Right-click, and the long-press that stands in for it on touch. Same
     // gesture and same 500 ms as the button faces, so the strip does not teach
     // a second way to ask for a menu. Movement cancels it: dragging across the
     // strip is how it is scrolled, and how pages are reordered.
     this.shadowRoot.querySelectorAll(".page-thumb").forEach(el => {
-      const idx = parseInt(el.dataset.pageIdx);
       el.addEventListener("contextmenu", (e) => {
         e.preventDefault?.();
         e.stopPropagation?.();
-        this._showPageMenu(idx, e);
+        this._showPageMenu(this._pageIdxOf(el), e);
       });
       // Without this the whole thing is pointer-only, and the README's claim
       // that the panel can be driven from the keyboard stops being true. Same
@@ -99,7 +86,7 @@ export const ButtonsWiringMixin = {
         e.preventDefault?.();
         e.stopPropagation?.();
         const r = el.getBoundingClientRect?.() || { left: 0, top: 0, width: 0, height: 0 };
-        this._showPageMenu(idx, {
+        this._showPageMenu(this._pageIdxOf(el), {
           clientX: r.left + r.width / 2,
           clientY: r.top + r.height / 2,
         });
@@ -118,7 +105,7 @@ export const ButtonsWiringMixin = {
           // The click handler above switches pages; without this the menu
           // would open on a page the user is no longer looking at.
           armSuppress(el, true);
-          this._showPageMenu(idx, { clientX: x, clientY: y });
+          this._showPageMenu(this._pageIdxOf(el), { clientX: x, clientY: y });
         }, 500);
       }, { passive: true });
       for (const type of ["touchend", "touchmove", "touchcancel"]) {
@@ -151,23 +138,6 @@ export const ButtonsWiringMixin = {
     }
   },
 
-  /**
-   * Where a dragged page would land, as an index into the reordered list.
-   *
-   * Measured against the thumbs' midpoints rather than asking which thumb is
-   * under the pointer. "Which thumb" cannot answer the only question a reorder
-   * asks -- before it or after it -- which is why the old blue tint on the
-   * hovered thumb told the user nothing they could act on.
-   *
-   * Reading rects instead of elements is also what makes the slot *after the
-   * last page* addressable. There is no element there to hover, so the old
-   * handler could only ever drop onto the final thumb and let splice decide.
-   *
-   * `rects` is in page order and excludes the add button, which shares the
-   * strip but is not a page. Returns an index in the list as it will be once
-   * the move is applied, which is what `_reorderPage` takes.
-   */
-
   _wirePageSettingsPanel(bp) {
     // --- Title image wiring ---
     //
@@ -183,13 +153,8 @@ export const ButtonsWiringMixin = {
       if (!page) return;
       const newTitle = normalizeTitle(raw);
       if (newTitle === (page.title || "")) return;
-      const updateMsg = {
-        type: "lizaip_config/update_page", entry_id: this._currentEntry,
-        page_id: page.id, title: newTitle,
-      };
       try {
-        const result = await this._hass.callWS(updateMsg);
-        if (result?.pages) this._pages = result.pages;
+        await this._updatePage(page, { title: newTitle });
       } catch (e) {
         page.title = newTitle;
       }
@@ -210,62 +175,6 @@ export const ButtonsWiringMixin = {
       const page = this._pages[this._currentPageIdx];
       if (page?.template?.type || page?.template?.target?.device) this._changeTemplateTarget(page);
     });
-
-    // --- Color picker wiring ---
-    const colorInput = this.shadowRoot.querySelector("#psColorInput");
-    const colorClear = this.shadowRoot.querySelector("#psColorClear");
-
-    const saveColor = async (hexVal) => {
-      const page = this._pages[this._currentPageIdx];
-      // Strip # and normalize to uppercase 6-char hex
-      const clean = (hexVal || "").replace(/^#/, "").toUpperCase().slice(0, 6);
-      const changed = clean !== (page.default_color || "");
-      if (!changed) return;
-      const updateMsg = { type: "lizaip_config/update_page", entry_id: this._currentEntry, page_id: page.id, default_color: clean };
-      try {
-        const result = await this._hass.callWS(updateMsg);
-        if (result?.pages) this._pages = result.pages;
-      } catch (e) {
-        page.default_color = clean;
-      }
-      this._render();
-    };
-
-    this.shadowRoot.querySelectorAll(".ps-color-dot").forEach(dot => {
-      dot.addEventListener("click", () => {
-        const page = this._pages[this._currentPageIdx];
-        const clicked = (dot.dataset.color || "").replace(/^#/, "").toUpperCase();
-        const selected = (page?.default_color || "").replace(/^#/, "").toUpperCase();
-        // Clicking the active swatch toggles back to "follow theme" (default).
-        saveColor(clicked && clicked === selected ? "" : clicked);
-      });
-    });
-    const colorNative = this.shadowRoot.querySelector("#psColorNative");
-    if (colorNative) {
-      colorNative.addEventListener("input", () => saveColor(colorNative.value));
-    }
-    if (colorInput) {
-      colorInput.addEventListener("change", () => {
-        let val = colorInput.value.trim();
-        if (val && !val.startsWith("#")) val = "#" + val;
-        const hex = val.replace(/^#/, "");
-        // Empty is not an error: it is how the page goes back to following the
-        // theme, and the clear button does exactly the same thing.
-        if (!hex) { this._clearFieldError(colorInput); saveColor(""); return; }
-        if (!/^[0-9A-Fa-f]{6}$/.test(hex)) {
-          // The text stays in the field. Re-rendering it away would destroy
-          // the evidence along with the mistake, and a correction is usually
-          // one character.
-          this._setFieldError(colorInput, this._t("invalid_hex"));
-          return;
-        }
-        this._clearFieldError(colorInput);
-        saveColor(val);
-      });
-    }
-    if (colorClear) {
-      colorClear.addEventListener("click", () => saveColor(""));
-    }
 
     this.shadowRoot.querySelector(".ps-move-up")?.addEventListener("click", () => {
       this._reorderPage(this._currentPageIdx, this._currentPageIdx - 1);
@@ -347,7 +256,6 @@ export const ButtonsWiringMixin = {
           if (typed) rec[appr.nameKey] = typed;
           else delete rec[appr.nameKey];
           this._scheduleAutoSave();
-          this._refreshSVG();
           this._render();
           return;
         }
@@ -412,15 +320,11 @@ export const ButtonsWiringMixin = {
       // The control name and `slider_factor` belong to the grid button
       // itself, not overrides, so routing them through `_editAssign` would bury
       // them in `overrides` where nothing reads them.
-      const ctxKey = (selBtn.key === SLIDER_VERTICAL_KEY && this._liveContextKey())
-        ? this._liveContextKey() : null;
+      const ctxKey = this._sliderCtxKey(selBtn.key);
       const ctxAssign = () => ctxKey
         ? (this._assignments[ctxKey] || (this._assignments[ctxKey] = {}))
         : null;
-      const pageFactor = (() => {
-        const raw = this._assignments[SLIDER_VERTICAL_KEY]?.slider_actions?.factor;
-        return typeof raw === "number" && isFinite(raw) ? raw : 1.0;
-      })();
+      const pageFactor = this._pageSliderFactor();
 
       // Creates the mechanics blob on the first real edit, and stamps the mode
       // that the Behavior row used to stamp. Without it a fresh slider would be
@@ -643,10 +547,13 @@ export const ButtonsWiringMixin = {
           if (ctxKey && key === "factor") {
             const assign = ctxAssign();
             if (!assign) return;
-            const next = parseFloat(el.value);
+            // `Number`, as the page's own branch below reads it: `parseFloat`
+            // took "1.5abc" for 1.5 and saved a number nobody typed.
+            const raw = String(el.value ?? "").trim();
+            const next = raw ? Number(raw) : NaN;
             // Not clamped -- that would save a number nobody typed -- but no
             // longer silent either: the value used to be re-rendered away.
-            if (!isFinite(next)) {
+            if (badNumber(el) || !Number.isFinite(next)) {
               this._setFieldError(el, this._t("invalid_number"));
               return;
             }
@@ -740,22 +647,6 @@ export const ButtonsWiringMixin = {
     });
   },
 
-  // The button's entity lives inside the action editor, so it changes without
-  // anything on the card being touched. `_onSequenceChanged` cannot answer that
-  // with `_render()`: `_renderDeviceConfig` replaces the whole shadow root and
-  // `_mountEditor` then clears its container and constructs a *new*
-  // `ha-automation-action` — asynchronously, behind `_loadHaComponents()`. The
-  // editor would collapse and lose focus on every change event, which is why
-  // the original only refreshed the SVG and why the entity-derived sections
-  // never appeared until the button was reselected.
-  //
-  // So rebuild only that subtree. The HTML comes from `_htmlButtonConfigPanel`
-  // itself rather than a second builder: every gate those sections have —
-  // `pageSliderFollows`, `isSliderBtn`, an empty `available`, `showButtonIcon`,
-  // `actionStates.length` — is therefore evaluated by the same code that
-  // evaluates it on a full render, and cannot drift into resurrecting a section
-  // that should stay hidden. The rest of the produced markup is discarded; it
-  // is string building, and the editor in it is never mounted.
   // A mixin method, not a closure. It was a `const` inside
   // `_wireButtonConfigPanel`, which was fine while the page-level Entity field
   // was its only caller -- and a blank panel the moment the context card
@@ -807,28 +698,4 @@ export const ButtonsWiringMixin = {
     const fallback = container.querySelector(".slider-entity-fallback");
     fallback.addEventListener("change", () => onChange(String(fallback.value ?? "").trim()));
   },
-
-  /**
-   * The tile's own menu: move this button's configuration elsewhere, or clear
-   * it. Opened by right-click, or by long-press on a touch screen.
-   *
-   * Until now the only route to either was the card — the ✕ in its header, an
-   * anonymous glyph on a card the user has to open first, which meant clearing
-   * a button was discoverable only by having already found it. This puts both
-   * actions on the thing they act on, with words on them rather than symbols.
-   *
-   * It does neither itself. Clear selects the button and runs
-   * `_unassignButton`, which is what the ✕ used to run — so the override
-   * rules, which depend on what is in context at the moment of the clear,
-   * apply here unchanged. Move only *arms* the move; the second gesture picks
-   * the destination, and `_moveButtonTo` owns what that means.
-   *
-   * Offered only where there is something to act on: an empty tile gets no
-   * menu at all rather than a menu with two dead items in it.
-   */
-  /**
-   * Is there a configuration here a move could pick up? The one predicate
-   * behind both routes to a move, so the menu item and the drag cannot
-   * disagree. The title bar is not a button and has no assignment.
-   */
 };

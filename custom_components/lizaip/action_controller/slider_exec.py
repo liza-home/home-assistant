@@ -20,7 +20,7 @@ from ._state import (
     get_selected_entity,
     get_selected_factor,
 )
-from .helpers import _get_store, _resolve_device_id
+from ..runtime import get_store, resolve_device_id
 from ..shared.logs import DeviceLogger, device_logger
 from ..shared.services import split_service
 from .sliders import (
@@ -351,7 +351,7 @@ async def _load_slider_cfg(
     the rest of the event — re-deriving it is how two shipped bugs got in. A
     config of None means there is nothing stored to drive.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     assignments = await store.async_get_assignments(device_id, page_id)
     assign = assignments.get(slider_key)
     if not isinstance(assign, dict):
@@ -672,7 +672,7 @@ async def _execute_slider_action(
     drive a 0.0-1.0 volume and a 0-255 brightness alike.
     """
     log = _log_for(hass, entry_id)
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if not device_id:
         return
 

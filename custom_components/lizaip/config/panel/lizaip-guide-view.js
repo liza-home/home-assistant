@@ -135,10 +135,10 @@ const clampWidth = (n) => Math.min(widthMax(), Math.max(WIDTH_MIN, Math.round(n)
 
 export const GuideViewMixin = {
   /**
-   * The ⋮ menu's entry point: open the guide, or put it away again.
+   * The help button's action: open the guide, or put it away again.
    *
    * A toggle rather than an "open", because docked it is a thing that is
-   * either there or not -- the menu row reports which, as a checkbox would.
+   * either there or not -- the button reports which through `aria-pressed`.
    */
   async _toggleGuide() {
     if (this._guideDocks()) {
@@ -198,7 +198,7 @@ export const GuideViewMixin = {
     return (window.innerWidth || 0) >= DOCK_MIN;
   },
 
-  /** Is the guide on screen in either shape? Read by the menu for its state. */
+  /** Is the guide on screen in either shape? Read by the help button for its state. */
   _guideOpen() {
     return Boolean(this._guideDrawerEl() || this._guideDialog);
   },
@@ -390,7 +390,7 @@ export const GuideViewMixin = {
     this._wireGuideResize(aside);
     this._wireGuide(aside);
 
-    // Focus moves in, and goes back to the ⋮ button on the way out. The guide
+    // Focus moves in, and goes back to the help button on the way out. The guide
     // is asked for in order to be read, and Page Down has to work without
     // tabbing past the whole configuration to reach it.
     aside.querySelector(".guide-content")?.focus?.();
@@ -442,6 +442,7 @@ export const GuideViewMixin = {
       this.classList.remove("guide-resizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
       handle.releasePointerCapture?.(ev?.pointerId);
       store.set(LS_WIDTH, String(
         parseInt(this.style.getPropertyValue("--liza-guide-width"), 10) || WIDTH_DEFAULT,
@@ -455,6 +456,10 @@ export const GuideViewMixin = {
       handle.setPointerCapture?.(ev.pointerId);
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", stop);
+      // A drag the browser takes over -- a touch turning into a scroll, a
+      // pointer lost to another window -- ends in pointercancel, not pointerup;
+      // missing it left the move listener and the paused transition behind.
+      window.addEventListener("pointercancel", stop);
     });
 
     // 2.1.1: a pointer-only resize is not operable. The separator takes the

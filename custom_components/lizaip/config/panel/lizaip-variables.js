@@ -22,7 +22,7 @@ const BACKEND_TOKEN = /\$\{(?!\s*\w*\s*\})[^{}$]*\}/;
 const TRANSLATE_TOKEN = "{translate:";
 // The same, whole, for the fallback: until the backend answers, the words as
 // written stand in (`{translate: Volume Up}` reads "Volume Up").
-const TRANSLATE_RE = /\{translate:\s*([^{}]+?)\s*\}/g;
+const TRANSLATE_RE = /\{translate:\s*([^{}]*?)\s*\}/g;
 
 /** *text* as shown before the backend has answered for it. */
 function unanswered(text) {

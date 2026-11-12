@@ -65,14 +65,6 @@ pages:
             data:
               command: Up
 
-      button_3:
-        icon: mdi:skip-next
-        tooltip: {translate: next}
-        config:
-          - action: remote.send_command
-            data:
-              command: Next
-
       button_4:
         icon: mdi:apps
         tooltip: {translate: apps}
@@ -110,12 +102,12 @@ pages:
         goto_page: digits
 
       button_9:
-        icon: mdi:skip-previous
-        tooltip: {translate: previous}
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
         config:
           - action: remote.send_command
             data:
-              command: Prev
+              command: Mute
 
       button_10:
         icon: mdi:arrow-down-bold-outline

@@ -17,6 +17,7 @@ import voluptuous as vol
 from homeassistant.helpers import config_validation as cv
 
 from ...shared.icon_urls import custom_icon_scheme
+from ...imgserv.source_parse import NATIVE_SOURCE_TYPES, PHU_SOURCE_TYPE
 from ...device.protocol import is_valid_page_id
 from .base import InternalCommand, InternalCommandError
 
@@ -27,9 +28,11 @@ from .base import InternalCommand, InternalCommandError
 # ---------------------------------------------------------------------------
 
 
-#: ``title`` is a picture spec first and a page name second.
+#: ``title`` is a picture spec first and a page name second. ``history:`` and
+#: ``ref:`` are not among the source schemes, as they never were: such a title
+#: is its own name.
 _TITLE_SCHEMES = (
-    "text:", "mdi:", "logo:", "phu:", "media:",
+    *(f"{t}:" for t in sorted(NATIVE_SOURCE_TYPES | {PHU_SOURCE_TYPE})),
     "imgserv://", "http://", "https://", "data:",
 )
 
@@ -42,8 +45,16 @@ _EXT_RE = re.compile(r"\.[a-z0-9]{2,4}$", re.IGNORECASE)
 
 def _humanise_slug(value: str) -> str:
     """Turn an icon or logo slug into words."""
-    words = re.sub(r"[-_+]+", " ", value).strip()
-    return " ".join(w[:1].upper() + w[1:] for w in words.split())
+    # A ``${...}`` variable is code, not words: kept as written.
+    parts = re.split(r"(\$\{[^}]*\})", value)
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2:
+            out.append(part)
+            continue
+        words = re.sub(r"[-_+]+", " ", part).split()
+        out.extend(w[:1].upper() + w[1:] for w in words)
+    return " ".join(out)
 
 
 def _looks_opaque(text: str) -> bool:
@@ -263,7 +274,7 @@ async def _goto_page_run(connection: Any, params: dict) -> Any:
 GOTO_PAGE = InternalCommand(
     service="goto_page",
     action_type="goto_page",
-    icon="mdi:page-next",
+    icon="mdi:arrow-right",
     name="goto page",
     build_params=_goto_page_params,
     run=_goto_page_run,

@@ -1,26 +1,33 @@
 /**
- * lizaIP Panel — Buttons View: The slider block: its icon, its appearance target and the facts shown about it.
+ * lizaIP Panel — Buttons View: The slider block: its icon and its appearance target.
  *
  * One slice of `ButtonsViewMixin`. The barrel one directory up spreads the
  * slices into a single object, so these methods still run with `this` bound
  * to the panel element and may call any other method on it.
  */
 import {
-  hasOverride,
-  controlsForEntity,
-  matchControl,
-  sliderSubjectEntity,
-  sliderControlOverride,
-  shownControl,
   sliderRetarget,
   SLIDER_VERTICAL_KEY,
-  sliderFollows,
   pageSliderFollowsIn,
   SLIDER_ICON_HIDDEN_KEY,
   sliderIconFor,
+  autoSliderSubject,
+  sliderSubjectEntity,
+  setSliderSubject,
 } from "./shared.js";
 
 export const ButtonsSliderMixin = {
+  /**
+   * The icon a button's image field should *offer* when it stores none.
+   *
+   * Display only. The tile already draws this glyph via `_resolveButtonIcon`,
+   * so showing it here just stops the field from claiming the button has no
+   * icon. Nothing is written unless the user changes it — the media field
+   * commits only a value that differs from the one it was opened with.
+   *
+   * A payload thumbnail is skipped: it is a URL, and this control is in icon
+   * mode, so handing it over would blank the picker anyway.
+   */
   _autoIconForField(selKey) {
     const slider = this._sliderAutoIcon(selKey);
     if (slider || selKey === SLIDER_VERTICAL_KEY) return slider;
@@ -32,6 +39,14 @@ export const ButtonsSliderMixin = {
     return this._isImageUrl(icon) ? "" : icon;
   },
 
+  // The icon the slider would show if nothing were stored — the same answer the
+  // preview and the face give, so the picker cannot sit blank beside a glyph.
+  //
+  // Empty still means "derive it" on disk; this only decides what the *field*
+  // displays, exactly as the state-icon pickers already preselect an action's
+  // own state icon. Both scopes answer from their own control, which is what
+  // makes the context card behave like the page card rather than like a
+  // special case.
   _sliderAutoIcon(selKey) {
     if (selKey !== SLIDER_VERTICAL_KEY) return "";
     const appr = this._sliderAppearanceTarget(selKey);
@@ -145,49 +160,41 @@ export const ButtonsSliderMixin = {
     });
   },
 
-  // Which nesting mark, if any, the face should put on `key`.
-  //
-  // Since the read-only list came off the grid button's card, this is the *only*
-  // thing that says which fixed controls are overridden — so it is the whole
-  // affordance rather than half of it, and the reason it still asks
-  // `hasOverride` / `sliderRetarget` rather than a rule of its own is that
-  // those are what the executor's twins agree with.
-  //
-  // Returns null when no grid button is in context: without one, "overridden"
-  // has nothing to be relative to, and a permanent mark would say the fixed
-  // buttons are special even on pages that never nest anything.
-
-  _sliderTipFacts(key, assign) {
-    const sa = assign?.slider_actions || {};
-    const follows = sliderFollows(key, assign);
-    const stored = typeof sa.target_entity === "string" ? sa.target_entity.trim() : "";
-    // With no default of its own it takes whatever the selected grid button
-    // lends it, so the live context is the only thing that can name a device.
-    let entity = stored;
-    if (follows && !entity) {
-      const ctx = this._liveContextKey?.();
-      const ctxAssign = ctx ? (this._assignments?.[ctx] || null) : null;
-      entity = ctxAssign ? (sliderSubjectEntity(ctxAssign) || "") : "";
-    }
-    const control = matchControl(this._sliderControls, sa);
-    return { follows, entity, control: control?.label || "" };
+  /** The grid button whose slider settings the card for *key* edits: the live
+   * context when *key* is the vertical slider, else null. */
+  _sliderCtxKey(key) {
+    return (key === SLIDER_VERTICAL_KEY && this._liveContextKey()) || null;
   },
 
-  // The other half: which device *this* grid button hands the slider. Through
-  // `shownControl`, as the slider card itself does, so a stale stored id
-  // resolves to the control a touch would really move.
-
-  _buttonSliderOverride(assign) {
-    const entity = sliderSubjectEntity(assign) || "";
-    if (!entity) return { entity: "", control: "" };
-    const available = controlsForEntity(
-      this._sliderControls, entity, this._hass?.states?.[entity],
-    );
-    const control = shownControl(available, sliderControlOverride(assign));
-    return { entity, control: control?.label || "" };
+  /**
+   * Opt a grid button into the page slider when its click action is a toggle
+   * the slider can drive -- see `autoSliderSubject` for when, and why only then.
+   * *prevConfig* is the button's click action before this edit.
+   */
+  _applyAutoSliderSubject(key, assign, prevConfig) {
+    const service = this._stepService(assign.config || []);
+    const entity = this._getTargetEntityFromConfig(assign.config || []) || "";
+    const next = autoSliderSubject({
+      key,
+      assign,
+      prevService: prevConfig ? this._stepService(prevConfig) : "",
+      prevEntity: prevConfig ? (this._getTargetEntityFromConfig(prevConfig) || "") : "",
+      service,
+      entity,
+      controls: this._sliderControls,
+      stateObj: entity ? this._hass?.states?.[entity] : null,
+      pageSliderFollows: pageSliderFollowsIn(this._assignments),
+    });
+    if (next === undefined) return;
+    // A new device starts from its own first control: the old one's id is a
+    // capability of the lamp it replaced.
+    if (next !== sliderSubjectEntity(assign)) setSliderSubject(assign, undefined);
+    if (next !== null) setSliderSubject(assign, next);
   },
 
-  // Shared by the thumbnail's hover card and its accessible description.
-  // Counts rather than a finished sentence, because the two word it
-  // differently and neither is a reason for the other to recount the buttons.
+  /** The page slider's stored sensitivity, 1.0 when it has none. */
+  _pageSliderFactor() {
+    const raw = this._assignments[SLIDER_VERTICAL_KEY]?.slider_actions?.factor;
+    return typeof raw === "number" && isFinite(raw) ? raw : 1.0;
+  },
 };

@@ -6,7 +6,6 @@ from .const import (  # noqa: F401
     MODEL,
     MODEL_ID,
     WS_PATH,
-    ZEROCONF_SERVICE_TYPE,
 )
 from .services import async_register_services  # noqa: F401
 from .websocket import LizaIPWebSocketView  # noqa: F401

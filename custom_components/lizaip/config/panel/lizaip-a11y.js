@@ -192,11 +192,9 @@ export const A11yMixin = {
     // container (the chevron in an action row, a chip) is retargeted to the
     // host by the time it reaches the shadow root.
     const el = e.composedPath().find(
-      (n) => n instanceof Element && (n.getAttribute?.("role") === "button" || n.getAttribute?.("role") === "tab"),
+      (n) => n instanceof Element && n.getAttribute?.("role") === "button",
     );
     if (!el) return;
-
-    if (el.getAttribute("role") === "tab") return this._a11yTabKeys(e, el);
 
     if (e.key !== "Enter" && e.key !== " ") return;
     // Native controls already do this, and doing it twice fires the handler
@@ -208,27 +206,6 @@ export const A11yMixin = {
     // Re-dispatched, not called directly: several of these are wired through
     // an ancestor, so a real click keeps keyboard and pointer on one path.
     el.click();
-  },
-
-  /** Arrow keys along the tab strip: `role="tab"` without them is a promise
-   *  the markup does not keep. */
-  _a11yTabKeys(e, tab) {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
-    const list = tab.closest('[role="tablist"]');
-    if (!list) return;
-    const tabs = [...list.querySelectorAll('[role="tab"]')];
-    const i = tabs.indexOf(tab);
-    if (i < 0) return;
-
-    e.preventDefault();
-    const next = e.key === "Home" ? 0
-      : e.key === "End" ? tabs.length - 1
-      : (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-    // Activating on arrow, not only on Enter: both panels are already built
-    // and switching is instant, so following the selection is the behaviour
-    // with the least to explain. `_render` re-establishes focus via the id.
-    tabs[next].focus();
-    tabs[next].click();
   },
 
   /** True while an editor is deliberately open -- a button's config card, or
@@ -252,9 +229,9 @@ export const A11yMixin = {
    *  stops the button card and the page title row drifting apart. */
   _a11yEditorToggled(opened, openMsg, closeMsg) {
     if (opened) {
-      // Opening reveals the editor, so focus follows in rather than staying on
-      // a face shape whose panel just changed underneath it.
-      this._a11yFocusConfigView({ firstControl: !!this._a11yFirstControlNext });
+      // Focus stays on the button that was selected: the editor is revealed,
+      // not entered, so Tab and the arrow keys stay the user's to spend.
+      // `_render` hands focus back, so only the announcement is left to do.
       this._a11yAnnounce(openMsg);
     } else {
       // The trigger can be gone -- closing after deleting the page it lived
@@ -415,39 +392,17 @@ export const A11yMixin = {
     return false;
   },
 
-  /** Focus the first usable control in the open button's config card.
-   *  Selecting reveals an editor, so focus follows into it. Returns false when
-   *  the card has nothing that will take focus. */
-  _a11yFocusConfigView(opts = {}) {
-    if (this._a11yFocusConfigViewOnce(opts)) return true;
-    // HA's own controls are not always upgraded by the time the markup lands,
-    // and an un-upgraded component refuses focus. Give the frame a chance.
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => {
-        if (!this._a11yEditorOpen()) return;
-        // Still nothing that will take focus -- an editor built only from HA
-        // components that never upgraded. Focus is on the shape the render
-        // destroyed, so it has to go somewhere rather than nowhere.
-        if (!this._a11yFocusConfigViewOnce(opts)) this._a11yFocusFallback();
-      });
-    }
-    return false;
-  },
-
-  /** `firstControl`: the first control in document order, text field or not --
-   *  what Enter on a face button asks for. Otherwise one that takes no typing
-   *  comes first, so a click leaves the Delete key to the button. */
-  _a11yFocusConfigViewOnce({ firstControl = false } = {}) {
+  /** Focus the first usable control in the open button's config card. Not a
+   *  landing the user asked for -- only `_a11yFocusFallback` calls it, for
+   *  focus a re-render left with nowhere to be. A control that takes no typing
+   *  comes first, so the Delete key still deletes the button. */
+  _a11yFocusConfigViewOnce() {
     const sr = this.shadowRoot;
     const card = sr?.querySelector(".config-card");
     if (!card) return false;
-    // A control that takes no typing first: a focused text field would take
-    // the Delete key that deletes the button and turn a quick delete into
-    // editing the image. Only a card holding nothing but text fields gets
-    // one, so focus still always lands on a real control.
     const usable = [...card.querySelectorAll(FOCUSABLE)]
       .filter((el) => !el.disabled && el.getAttribute("aria-hidden") !== "true");
-    const ordered = firstControl ? usable : [
+    const ordered = [
       ...usable.filter((el) => !takesText(el)),
       ...usable.filter((el) => takesText(el)),
     ];
@@ -527,13 +482,17 @@ export const A11yMixin = {
     // HA's own controls sit in shadow roots the walk above cannot see, and
     // the toolbar's back button is one of them. Writing the stop on the inner
     // control adds one stop, not two, in Chrome and Firefox (measured).
+    //
+    // A root that already has its observer is skipped: that observer has kept
+    // it right since it was walked, and walking it again (with every root
+    // nested in it) on each mutation above it was the expensive part.
     for (const host of scope.querySelectorAll("*")) {
-      if (host.shadowRoot) {
-        this._a11yNormalizeTabStops(host.shadowRoot);
-        // A MutationObserver does not cross a shadow boundary, so each root
-        // needs its own or HA's next internal repaint drops the stop again.
-        this._a11yObserveTabStops(host.shadowRoot);
-      }
+      const inner = host.shadowRoot;
+      if (!inner || this._a11yTabStopRoots?.has(inner)) continue;
+      this._a11yNormalizeTabStops(inner);
+      // A MutationObserver does not cross a shadow boundary, so each root
+      // needs its own or HA's next internal repaint drops the stop again.
+      this._a11yObserveTabStops(inner);
     }
   },
 
@@ -551,11 +510,17 @@ export const A11yMixin = {
     // detached and their observers are watching nothing; without this the
     // list only ever grows, one entry per nested root per repaint, for as
     // long as the panel stays open.
+    // A root whose observer goes is forgotten as well, so a node that comes
+    // back (a dialog re-appended after a render) is walked and watched again
+    // rather than skipped as already in hand.
     const kept = [];
     for (const entry of this._a11yTabStopObservers || []) {
       const node = entry.ref.deref();
       if (node && node.isConnected) kept.push(entry);
-      else entry.obs.disconnect();
+      else {
+        entry.obs.disconnect();
+        if (node) this._a11yTabStopRoots?.delete(node);
+      }
     }
     this._a11yTabStopObservers = kept;
     // One per root, including each HA component's own.

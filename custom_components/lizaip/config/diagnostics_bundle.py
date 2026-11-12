@@ -41,16 +41,16 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
-from aiohttp import ClientTimeout, web
+from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from ..const import CONF_ASSIGNED_USERS, DOMAIN
 from .access import can_access_entry
+from .log_tail import LOG_NEEDLE, filter_lines, read_raw_tail, supervisor_log
 from .store import YAML_DIR
 from ..device import report as device_report
 from ..diagnostics import (
@@ -58,7 +58,8 @@ from ..diagnostics import (
     async_get_config_entry_diagnostics,
     async_settings_snapshot,
 )
-from ..runtime import debug_available, entry_connection, find_store, _resolve_device_id
+from ..runtime import debug_available, entry_connection, find_store, resolve_device_id
+from ..data import lizaip_data
 from ..shared.logs import device_logger
 from ..shared.theme import USER_THEMES_SUBDIR, user_themes_dir
 
@@ -88,27 +89,6 @@ BUNDLE_URL_BASE = "/api/lizaip/diagnostics"
 #: download to start, short enough that a user who closed the tab instead is not
 #: holding a few megabytes in memory for the rest of the day.
 BUNDLE_TTL = 600.0
-
-#: How much of `home-assistant.log` is read before filtering. The whole file can
-#: be hundreds of megabytes on an installation that never rotates it, and the
-#: lines that matter are at the end.
-_LOG_TAIL_BYTES = 8 * 1024 * 1024
-
-#: How much of the filtered result is kept. A remote in a reconnect loop writes
-#: a great many lines that all say the same thing; the newest are the ones worth
-#: carrying.
-_LOG_KEEP_BYTES = 2 * 1024 * 1024
-
-#: What makes a log line ours. The integration's loggers all live under the
-#: domain, so the module name alone catches them -- and a line from elsewhere
-#: that names the integration is usually about it.
-_LOG_NEEDLE = DOMAIN
-
-#: How many journal lines the supervisor is asked for. Everything but our own
-#: lines is dropped immediately afterwards, so this is a bound on what is
-#: transferred, not on what is kept: a busy installation needs a wide net to
-#: yield the same couple of thousand lizaip lines a file tail would.
-_SUPERVISOR_LOG_LINES = 100_000
 
 #: Anything that is not a safe filename character. Endpoint paths become file
 #: names inside the ZIP, and they arrive from a constant in `device.report`, but
@@ -256,7 +236,7 @@ async def _add_config_store(collector: _Collector) -> None:
     async def build() -> None:
         hass, entry = collector.hass, collector.entry
         store = find_store(hass)
-        device_id = _resolve_device_id(hass, entry.entry_id)
+        device_id = resolve_device_id(hass, entry.entry_id)
         if store is None or not device_id:
             collector.skip("configuration/store.json", "No store or device id for this entry")
             return
@@ -355,7 +335,7 @@ async def _add_config_files(collector: _Collector) -> None:
 
     async def build() -> None:
         hass, entry = collector.hass, collector.entry
-        device_id = _resolve_device_id(hass, entry.entry_id)
+        device_id = resolve_device_id(hass, entry.entry_id)
         if not device_id:
             collector.skip(label, "No device id for this entry")
             return
@@ -550,7 +530,7 @@ async def _add_traffic(collector: _Collector) -> None:
     """
     async def build() -> None:
         conn = entry_connection(collector.entry)
-        protocol = getattr(conn, "_protocol", None)
+        protocol = getattr(conn, "protocol", None)
         traffic = getattr(protocol, "traffic", None)
         snapshot = traffic.snapshot(_MESSAGES_KEPT, bodies=True) if traffic is not None else None
         if snapshot is None:
@@ -559,75 +539,6 @@ async def _add_traffic(collector: _Collector) -> None:
         collector.add(LOG_MESSAGES, _dumps({**snapshot, "connected": bool(conn.connected)}))
 
     await collector.section(LOG_MESSAGES, build)
-
-
-def _filter_lines(text: str, needle: str = _LOG_NEEDLE) -> str:
-    """Keep only the lines that mention *needle*.
-
-    The rest of the log belongs to other integrations and to the household —
-    tokens in URLs, addresses, names of people — and none of it answers a
-    question about a remote.
-
-    The needle is the domain for an administrator and ``[this remote]`` for
-    anybody else, which is why :mod:`..shared.logs` puts the name there.
-    """
-    needle = needle.lower()
-    kept = "".join(
-        line for line in text.splitlines(keepends=True) if needle in line.lower()
-    )
-    return kept[-_LOG_KEEP_BYTES:] if len(kept) > _LOG_KEEP_BYTES else kept
-
-
-def _read_raw_tail(path: str) -> str:
-    """The end of one log file, unfiltered.
-
-    Runs on an executor thread: the file is read, and on an installation that
-    never rotates it that read is measured in megabytes.
-    """
-    size = os.path.getsize(path)
-    with open(path, "rb") as handle:
-        if size > _LOG_TAIL_BYTES:
-            handle.seek(size - _LOG_TAIL_BYTES)
-            # The seek lands mid-line; drop the remainder of it rather than
-            # carry half a message.
-            handle.readline()
-        raw = handle.read()
-    return raw.decode("utf-8", errors="replace")
-
-
-def _read_log_tail(path: str) -> str:
-    """The end of one log file, filtered to the lines that mention us."""
-    return _filter_lines(_read_raw_tail(path))
-
-
-async def _supervisor_log(hass: HomeAssistant) -> str | None:
-    """The core log from the supervisor, for installations that keep no file.
-
-    This is not a rare fallback — it is the normal case. Home Assistant OS and
-    supervised installations log to the journal, and `/config/home-assistant.log`
-    simply does not exist there (verified on our own test instance, which had
-    only an empty `.fault` file). The file-only version of this section
-    therefore reported "no log file" to exactly the users most likely to be
-    asking for help.
-
-    ``SUPERVISOR_TOKEN`` is in the core container's environment; its absence is
-    how a Core or container installation identifies itself, and those are the
-    ones that do have the file.
-    """
-    token = os.environ.get("SUPERVISOR_TOKEN")
-    if not token:
-        return None
-
-    session = async_get_clientsession(hass)
-    async with session.get(
-        "http://supervisor/core/logs",
-        params={"lines": str(_SUPERVISOR_LOG_LINES)},
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=ClientTimeout(total=30),
-    ) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"supervisor answered HTTP {resp.status}")
-        return await resp.text()
 
 
 async def _add_ha_log(collector: _Collector) -> None:
@@ -661,11 +572,11 @@ async def _add_ha_log(collector: _Collector) -> None:
             if not await hass.async_add_executor_job(os.path.isfile, path):
                 continue
             raw_chunks.append(
-                (name, await hass.async_add_executor_job(_read_raw_tail, path))
+                (name, await hass.async_add_executor_job(read_raw_tail, path))
             )
 
         if not raw_chunks:
-            journal = await _supervisor_log(hass)
+            journal = await supervisor_log(hass)
             if journal is None:
                 collector.skip(
                     LOG_HA,
@@ -675,9 +586,9 @@ async def _add_ha_log(collector: _Collector) -> None:
                 return
             raw_chunks.append(("supervisor core log", journal))
 
-        needle = _LOG_NEEDLE
+        needle = LOG_NEEDLE
         collector.add(LOG_HA, "\n".join(
-            f"===== {name} =====\n{_filter_lines(text, needle)}"
+            f"===== {name} =====\n{filter_lines(text, needle)}"
             for name, text in raw_chunks
         ))
 
@@ -750,8 +661,8 @@ async def _add_entities(collector: _Collector) -> None:
 
 
 def _integration_version() -> str | None:
-    """The installed version, read from the manifest next to this file."""
-    path = os.path.join(os.path.dirname(__file__), "manifest.json")
+    """The installed version, read from the integration's manifest."""
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "manifest.json")
     try:
         with open(path, encoding="utf-8") as handle:
             return json.load(handle).get("version")
@@ -1248,7 +1159,7 @@ async def async_build_zip(
     # ZIP itself still says whose it is and when, so copies do not collide.
     root = name
     if scope == SCOPE_CONFIG:
-        root = _resolve_device_id(hass, entry.entry_id) or name
+        root = resolve_device_id(hass, entry.entry_id) or name
     data = await hass.async_add_executor_job(_zip_bytes, files, root)
     return f"{name}.zip", data
 
@@ -1259,7 +1170,7 @@ def _bundles(hass: HomeAssistant) -> dict[str, tuple[float, str, bytes, str]]:
     Each is `(expires, filename, data, entry_id)` -- the remote it describes
     travels with it, because the view has only the token to decide by.
     """
-    return hass.data.setdefault(DOMAIN, {}).setdefault("_bundles", {})
+    return lizaip_data(hass).bundles
 
 
 def async_store_bundle(

@@ -13,18 +13,10 @@ from typing import Final
 import yaml
 from homeassistant.core import HomeAssistant
 
-from ..const import DOMAIN
+from ..data import lizaip_data
 from .const import DEFAULT_BLUEPRINT_ID
 
 _LOGGER = logging.getLogger(__name__)
-
-
-#: Cache slot for the parsed blueprints, in ``hass.data[DOMAIN]`` beside
-#: ``_ui_language``. Underscore-prefixed because the other keys there are
-#: config entry ids. Holds a dict keyed by blueprint id, not a single
-#: blueprint: two remotes of different models may be set up at once, and each
-#: has to keep its own face.
-_BLUEPRINT_CACHE_KEY: Final = "_blueprints"
 
 
 #: How many parsed faces to keep. The key is the device-reported ``model_id``,
@@ -117,8 +109,7 @@ async def async_get_blueprint(hass: HomeAssistant, entry_id: str | None = None) 
     the panel still renders, but caching that would outlive the cause and hide
     a blueprint restored underneath a running instance.
     """
-    store = hass.data.setdefault(DOMAIN, {})
-    cache = store.setdefault(_BLUEPRINT_CACHE_KEY, {})
+    cache = lizaip_data(hass).blueprints
     blueprint_id = entry_blueprint_id(hass, entry_id)
     cached = cache.get(blueprint_id)
     if cached is not None:

@@ -168,32 +168,6 @@ def service_name(service: str) -> str:
     return split_service(service)[1]
 
 
-def catchall_state_icon(
-    state_icons: dict, domain: str, live_state: str, service: str
-) -> str | None:
-    """Look up a per-button override via the domain's catch-all state.
-
-    Only for a service whose row list was *narrowed* (``media_play_pause``), so
-    an override has to stretch to cover the states that lost a row. A service
-    showing every row (``toggle``) is excluded: a missing entry there means the
-    user chose not to set one, and borrowing another row would override that
-    choice. A fixed-icon service is excluded too -- it has no rows at all.
-
-    ``service`` is taken with or without its domain prefix, like
-    ``scope_action_states``; it is required, because defaulting it would quietly
-    opt a caller into catch-all behaviour for a service that must not have it.
-    """
-    if not state_icons:
-        return None
-    svc = service_name(service)
-    if not service_state_scope(svc):
-        return None
-    fallback = state_catchall(domain, live_state)
-    if not fallback or fallback == live_state:
-        return None
-    return state_icons.get(fallback) or None
-
-
 def is_seeded_icon(domain: str, rule: dict) -> bool:
     """Whether *rule* carries the shipped icon rather than a chosen one.
 
@@ -310,9 +284,8 @@ ATTR_ACTION_CYCLES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 # Maps attribute → the value it would be set to → the action key naming that
-# set. ``volume_mute`` with ``is_volume_muted: true`` in its data is a button
-# that mutes, whatever the speaker is doing right now. This is the cycle read
-# in place: each value named by itself.
+# set. Only a *cycle press* reads it, where the user drew one direction per
+# face; a button's own action toggles instead — see ``attribute_toggle_template``.
 ATTR_VALUE_ACTION_MAP: dict[str, dict[str, str]] = {
     attribute: dict(cycle) for attribute, cycle in ATTR_ACTION_CYCLES.items()
 }
@@ -325,6 +298,23 @@ ATTR_VALUE_ACTION_MAP: dict[str, dict[str, str]] = {
 ATTR_ACTION_MAP: dict[str, dict[str, str]] = {
     attribute: {
         value: cycle[(i + 1) % len(cycle)][1]
+        for i, (value, _) in enumerate(cycle)
+    }
+    for attribute, cycle in ATTR_ACTION_CYCLES.items()
+}
+
+# Attributes that only ever hold true/false, so a setter for one can flip it.
+BOOLEAN_ATTRIBUTES: frozenset[str] = frozenset(
+    attribute for attribute, cycle in ATTR_ACTION_CYCLES.items()
+    if {value for value, _ in cycle} == {"true", "false"}
+)
+
+# attribute -> value -> the value that comes before it. The icon table is
+# keyed on the entity's current value and shows what a press would do, so the
+# icon for setting a value is stored under the value before it.
+ATTR_PREVIOUS_VALUE: dict[str, dict[str, str]] = {
+    attribute: {
+        cycle[(i + 1) % len(cycle)][0]: value
         for i, (value, _) in enumerate(cycle)
     }
     for attribute, cycle in ATTR_ACTION_CYCLES.items()
@@ -369,6 +359,46 @@ def attr_str(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+
+def icon_state_key(service: str, state: Any) -> tuple[str | None, str | None]:
+    """``(attribute, value)`` a button's state icon is keyed on, or a None value.
+
+    The attribute's value for an attribute-backed service (``volume_mute`` →
+    ``is_volume_muted`` → ``"true"``); for a two-way service, the state its rows
+    cover (``idle`` reads as ``paused`` on ``media_play_pause``). A one-way or
+    stateless service has no state-keyed icon. The theme table and the button's
+    own ``state_icons`` are both read with this key, so they cannot disagree.
+    """
+    svc = service_name(service)
+    if is_stateless_service(svc):
+        return None, None
+    attribute = service_to_attribute(svc)
+    if attribute:
+        return attribute, attr_str(state.attributes.get(attribute, ""))
+    if is_state_toggle_service(svc):
+        return None, scoped_icon_state(svc, state.entity_id.split(".")[0], state.state)
+    return None, None
+
+
+def state_icon_override(state_icons: dict, state: Any, service: str) -> str | None:
+    """The button's own ``state_icons`` row for *state*, or None.
+
+    Keyed as the theme table is (``icon_state_key``); then the entity's own
+    state, for a row on a service with none, and an ``attribute:value`` key.
+    """
+    if not state_icons or state is None:
+        return None
+    for key in (icon_state_key(service, state)[1], state.state):
+        if key and state_icons.get(key):
+            return state_icons[key]
+    for key, icon in state_icons.items():
+        if icon and ":" in key:
+            attr_name, attr_val = key.split(":", 1)
+            if attr_str(state.attributes.get(attr_name, "")) == attr_val:
+                return icon
+    return None
 
 
 def service_to_attribute(svc: str) -> str | None:
@@ -438,6 +468,35 @@ def attribute_cycle_for(svc: str) -> dict[str, str] | None:
     """
     attribute = service_to_attribute(svc)
     return ATTR_ACTION_MAP.get(attribute) if attribute else None
+
+
+def toggles_attribute(svc: str, data: Any) -> bool:
+    """True when the button flips the attribute instead of setting a value.
+
+    A boolean setter such as ``volume_mute`` stores True/False, which HA's own
+    controls treat as "invert the current value"; leaving the field out of a
+    known boolean attribute means the same. A value setter such as
+    ``repeat_set`` stores the value it writes on every press.
+    """
+    attribute = service_to_attribute(service_name(svc))
+    if not attribute:
+        return False
+    if not isinstance(data, dict):
+        data = {}
+    if attribute not in data:
+        return attribute in BOOLEAN_ATTRIBUTES
+    return isinstance(data[attribute], bool)
+
+
+def attribute_toggle_template(entity_id: str, attribute: str) -> str:
+    """Jinja that flips *attribute* on *entity_id*.
+
+    Home Assistant has no toggle-mute service: ``volume_mute`` writes the
+    boolean it is handed. Its own mute controls store no direction and invert
+    the live attribute instead, which is what this renders. ``true`` as the
+    default makes an entity that reports nothing unmute-then-mute, not error.
+    """
+    return f"{{{{ not is_state_attr('{entity_id}', '{attribute}', true) }}}}"
 
 
 def is_attribute_state_service(svc: str) -> bool:

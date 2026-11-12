@@ -121,8 +121,6 @@ class ResolveResult:
     error: str | None = None
     succeeded_at: float = 0.0
 
-    def age(self) -> float:
-        return max(0.0, time.time() - self.succeeded_at) if self.succeeded_at else 0.0
 
 #: Content types integrations expose favorites under, tried in order.
 FAVORITE_TYPES = [
@@ -152,6 +150,10 @@ INPUTS_CATEGORY: Final = "inputs"
 
 #: What integrations call the browse folder holding their apps.
 _APP_FOLDERS: Final = ("apps", "app_list", "applications")
+
+#: ``MediaPlayerEntityFeature.SELECT_SOURCE``, named rather than imported so
+#: that this module keeps to Home Assistant's core.
+_SELECT_SOURCE: Final = 2048
 
 
 # ── entity lookup ─────────────────────────────────────────────────────
@@ -401,26 +403,35 @@ async def favorite_kinds(hass: HomeAssistant, entity_id: str) -> set[str] | None
     return kinds
 
 
-async def browse_apps(entity, entity_id: str, max_items: int) -> list[dict]:
-    """The apps a player lists in its apps browse folder, or ``[]``.
+async def _browse_app_folders(entity, entity_id: str) -> tuple[Any, bool]:
+    """The first of :data:`_APP_FOLDERS` the player answers, and whether it browses.
 
-    Apple TV, Roku, Sony Bravia and Android TV Remote answer
-    ``("apps", "apps")``; the Hisense TV integration calls its folder
-    ``app_list``. Each has one entry per app, which ``play_media`` opens.
-    Android TV Remote marks them unplayable, so an app is taken by its type
-    rather than by ``can_play``.
+    ``NotImplementedError`` is how a media player says it does not browse at
+    all -- Home Assistant's own browse command reads it the same way -- as
+    against answering with nothing to show.
     """
-    if entity is None or not hasattr(entity, "async_browse_media"):
-        return []
-    result = None
+    result, browses = None, False
     for folder in _APP_FOLDERS:
         try:
             result = await _browse(entity, "apps", folder, 15)
+        except NotImplementedError:
+            continue
         except Exception as exc:  # noqa: BLE001 - another folder name may answer
             _LOGGER.debug("browse_media(apps, %s) failed for %s: %s", folder, entity_id, exc)
+            browses = True
             continue
+        browses = True
         if getattr(result, "children", None):
             break
+    return result, browses
+
+
+def _app_rows(result, max_items: int) -> list[dict]:
+    """The apps among a browse result's children.
+
+    Android TV Remote marks its apps unplayable, so an app is taken by its
+    type rather than by ``can_play``.
+    """
     return [
         {
             "title": child.title or "",
@@ -431,6 +442,48 @@ async def browse_apps(entity, entity_id: str, max_items: int) -> list[dict]:
         for child in (getattr(result, "children", None) or [])
         if child.media_content_type == "app" or getattr(child, "can_play", False)
     ][:max_items]
+
+
+def _sources_unread(entity) -> bool:
+    """Whether a player that has sources has yet to read them.
+
+    A player which says it can select a source but names none has not read
+    them yet; one that does not offer the feature at all -- Chromecast, the
+    Android TV Remote -- simply has none and is not asked again.
+    """
+    try:
+        if not int(getattr(entity, "supported_features", 0) or 0) & _SELECT_SOURCE:
+            return False
+        return not getattr(entity, "source_list", None)
+    except Exception:  # noqa: BLE001 - a property that reads the device
+        return False
+
+
+async def _browse_apps(entity, entity_id: str, max_items: int) -> tuple[list[dict], bool]:
+    """The apps a player browses, and whether it browses them at all.
+
+    Apple TV, Roku, Sony Bravia and Android TV Remote answer
+    ``("apps", "apps")``; the Hisense TV integration calls its folder
+    ``app_list``. Each has one entry per app, which ``play_media`` opens.
+
+    A Sony Bravia in standby has never read its sources -- it reads them when
+    it is on, or when its *root* is browsed -- and answers for its apps folder
+    with nothing. Browsing the root once makes it read them, and is asked for
+    only when the player has sources it has yet to read.
+    """
+    if entity is None or not hasattr(entity, "async_browse_media"):
+        return [], False
+    result, browses = await _browse_app_folders(entity, entity_id)
+    rows = _app_rows(result, max_items)
+    if rows or not _sources_unread(entity):
+        return rows, browses
+    try:
+        await _browse(entity, None, None, 15)
+    except Exception as exc:  # noqa: BLE001 - a player that cannot be read
+        _LOGGER.debug("browse_media(root) failed for %s: %s", entity_id, exc)
+        return rows, browses
+    result, browses = await _browse_app_folders(entity, entity_id)
+    return _app_rows(result, max_items), browses
 
 
 def _platform(entity: Any) -> str:
@@ -605,34 +658,20 @@ class SourceUnavailable(RuntimeError):
 
     Resolution treats this as a hard error, keeps last-known button content and
     marks it stale instead of blanking it as an empty source.
-
-    ``refused`` carries whatever degraded answer was rejected — an offline
-    speaker's restored ``source_list``, for instance. It must never reach a
-    button, but a preview is allowed to show it: somebody configuring a template
-    against a speaker that is currently asleep still needs to see which
-    favourites they are binding to.
     """
-
-    def __init__(self, message: str, refused: list | None = None) -> None:
-        super().__init__(message)
-        self.refused = refused or []
 
 
 #: Unreachable states, kept literal so test-stubbed HA modules can import this.
 _UNREACHABLE_STATES = {"unavailable", "unknown", "none"}
 
 
-def _ensure_reachable(
-    hass: HomeAssistant, entity_id: str, refused: list | None = None
-) -> None:
+def _ensure_reachable(hass: HomeAssistant, entity_id: str) -> None:
     state = hass.states.get(entity_id)
     if state is None:
-        raise SourceUnavailable(
-            f"{entity_id} has no state (not loaded yet?)", refused
-        )
+        raise SourceUnavailable(f"{entity_id} has no state (not loaded yet?)")
     value = getattr(state, "state", None)
     if isinstance(value, str) and value.lower() in _UNREACHABLE_STATES:
-        raise SourceUnavailable(f"{entity_id} is {value}", refused)
+        raise SourceUnavailable(f"{entity_id} is {value}")
 
 
 async def _read_tv_sources(
@@ -673,13 +712,17 @@ async def _resolve_apps(
     A TV that is off lists none -- or cannot be read at all -- and its Apps
     page would empty with it; the list it gave last stands in (see
     :mod:`.app_cache`).
+
+    Only a TV that browses no apps at all lists them as sources instead; one
+    that keeps them in a browse folder has none to show rather than its own
+    HDMI sockets, and sockets kept from before are dropped.
     """
     from .app_cache import async_get, async_put, cache_key
 
     exclude = _patterns(spec.get("exclude"))
     key = cache_key(entity_id, exclude)
     every = DEFAULT_MAX_ITEMS * 4
-    raw = await browse_apps(entity, entity_id, every)
+    raw, browses = await _browse_apps(entity, entity_id, every)
     raw = [r for r in raw if not _excluded((r.get("title", ""), r.get("media_content_id", "")), exclude)]
     if raw and _platform(entity) == "apple_tv":
         from .apple_tv import add_app_icons
@@ -691,13 +734,19 @@ async def _resolve_apps(
         raw = [r for r in await entity_apps(hass, entity) if not _excluded((r["title"], r["media_content_id"]), exclude)]
     if raw:
         items = _items_from_browse(sorted(raw, key=lambda r: _alphabetical(r.get("title", ""))))
+    elif browses:
+        items = []
     else:
         items = await _read_tv_sources(hass, entity, entity_id, spec, exclude, every, inputs=False)
     if items:
         await async_put(hass, key, [asdict(i) for i in items])
         return items[:max_items]
     known = {f.name for f in fields(DynamicItem)}
-    kept = [DynamicItem(**{k: v for k, v in d.items() if k in known}) for d in await async_get(hass, key)]
+    kept = [
+        DynamicItem(**{k: v for k, v in d.items() if k in known})
+        for d in await async_get(hass, key)
+        if not (browses and d.get("action") == "media_player.select_source")
+    ]
     if kept:
         return kept[:max_items]
     _ensure_reachable(hass, entity_id)
@@ -769,9 +818,8 @@ async def resolve_favorites(
     # a player that *is* up and simply cannot browse has genuinely told us it
     # has no artwork, and must keep the titles it gave.
     if entity is None or not items:
-        # "Nothing" is credible only if the player is currently reachable. The
-        # titles travel with the refusal so a preview can still list them.
-        _ensure_reachable(hass, entity_id, items)
+        # "Nothing" is credible only if the player is currently reachable.
+        _ensure_reachable(hass, entity_id)
 
     if items:
         return items
@@ -958,7 +1006,7 @@ def _entry_area_id(entry, device_reg) -> str:
         return str(area_id)
     device_id = getattr(entry, "device_id", None)
     if device_id and device_reg is not None:
-        device = _reg_mapping(device_reg, "devices").get(device_id)
+        device = device_reg.async_get(device_id)
         if device is not None and getattr(device, "area_id", None):
             return str(device.area_id)
     return ""
@@ -1172,7 +1220,7 @@ def _spec_wants_entity(hass: HomeAssistant, spec: dict[str, Any], entity_id: str
 
     try:
         entity_reg, area_reg, device_reg, label_reg = _registries(hass)
-        entry = _reg_mapping(entity_reg, "entities").get(entity_id)
+        entry = entity_reg.async_get(entity_id)
     except Exception:  # noqa: BLE001 - a filter must never break the event loop
         return True
 
@@ -1262,7 +1310,7 @@ _TOKEN_RE = re.compile(r"\$\{[^}]*\}")
 
 def _is_graphic_part(part: str) -> bool:
     """Whether *part* of a title is a picture rather than words."""
-    from ...imgserv.const import PART_SOURCE_TYPES, is_address
+    from ...imgserv.source_parse import PART_SOURCE_TYPES, is_address
     from ...shared.icon_urls import custom_icon_scheme
 
     if is_address(part) or custom_icon_scheme(part):
@@ -1279,14 +1327,13 @@ def _short_text(name: str) -> str:
     return first if len(first) <= _SHORT_TEXT + 2 else name[:_SHORT_TEXT]
 
 
-def page_name(title: str, page_id: Any = None) -> str:
-    """A page's name, read off its title: its words, else its first picture.
+def title_parts(title: str) -> tuple[list[str], str]:
+    """The words and the first picture of a page's title.
 
     Variables are left out -- they would be read against the overview, not the
-    page -- and so are a part's options (``text:demo?percent=47``) and the
-    plumbing of schemes. ``logo:sonos + ${_device}`` is "Sonos".
+    page -- and so are a part's options (``text:demo?percent=47``).
     """
-    from ...imgserv.const import split_source_parts
+    from ...imgserv.source_parse import split_source_parts
 
     words: list[str] = []
     picture = ""
@@ -1300,7 +1347,17 @@ def page_name(title: str, page_id: Any = None) -> str:
             picture = picture or part
         else:
             words.append(part)
-    name = " ".join(w for w in words if w and w not in ("+", "-")).strip(" +-")
+    return [w for w in words if w and w not in ("+", "-")], picture
+
+
+def page_name(title: str, page_id: Any = None) -> str:
+    """A page's name, read off its title: its words, else its first picture.
+
+    The plumbing of schemes is left out, as :func:`title_parts` leaves out
+    variables and options. ``logo:sonos + ${_device}`` is "Sonos".
+    """
+    words, picture = title_parts(title)
+    name = " ".join(words).strip(" +-")
     if not name and picture and not picture.startswith(("media:", "/", "http")):
         slug = picture.split(":", 1)[1]
         name = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_]+", slug) if w)
@@ -1315,7 +1372,7 @@ def page_tile(title: str, name: str) -> str:
     variable is passed over: it would be read against the page the tile is on,
     not the page it opens.
     """
-    from ...imgserv.const import split_source_parts
+    from ...imgserv.source_parse import split_source_parts
 
     for part in split_source_parts((title or "").strip()):
         if "${" not in part and _is_graphic_part(part):
@@ -1347,11 +1404,11 @@ def _listed_pages(pages: list, exclude: str, overviews: set | frozenset = frozen
 
 async def _remote_pages(hass: HomeAssistant, entry_id: str) -> tuple[list, set]:
     """The remote's pages, and the ids of those that are overviews themselves."""
-    from ...runtime import _resolve_device_id, find_store
+    from ...runtime import resolve_device_id, find_store
     from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
 
     store = find_store(hass)
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if store is None or not device_id:
         raise SourceUnavailable(f"remote {entry_id} is not loaded")
     pages = await store.async_get_pages(device_id)
@@ -1443,6 +1500,11 @@ def subscribe_pages(hass: HomeAssistant, specs, on_change) -> Any | None:
             watched.setdefault(str(spec["remote"]), _exclude(spec))
     if not watched:
         return None
+    # What the returned unsubscribe stops: a check still reading the store
+    # when the page goes away must not schedule a refresh after it.
+    closed = False
+    tasks: set[asyncio.Task] = set()
+
     async def _check(entry_id: str, prime: bool = False) -> None:
         key = (entry_id, watched[entry_id])
         if prime and key in _PAGES_SEEN:
@@ -1451,6 +1513,8 @@ def subscribe_pages(hass: HomeAssistant, specs, on_change) -> Any | None:
             pages, overviews = await _remote_pages(hass, entry_id)
         except SourceUnavailable:
             return
+        if closed:
+            return
         fingerprint = pages_fingerprint(pages, watched[entry_id], overviews)
         before = _PAGES_SEEN.get(key)
         _PAGES_SEEN[key] = fingerprint
@@ -1458,18 +1522,34 @@ def subscribe_pages(hass: HomeAssistant, specs, on_change) -> Any | None:
             _LOGGER.debug("Pages of %s changed; refreshing its overview", entry_id)
             on_change()
 
+    def _start(entry_id: str, prime: bool = False) -> None:
+        task = hass.async_create_task(_check(entry_id, prime))
+        if task is not None:
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
     for entry_id in watched:
-        hass.async_create_task(_check(entry_id, prime=True))
+        _start(entry_id, prime=True)
 
     # On the loop: HA runs a listener not marked as a callback in a worker
     # thread, where scheduling the check is not allowed.
     @callback
     def _on_config_changed(event: Any) -> None:
         entry_id = (getattr(event, "data", None) or {}).get("entry_id")
-        if entry_id in watched:
-            hass.async_create_task(_check(entry_id))
+        if entry_id in watched and not closed:
+            _start(entry_id)
 
-    return hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed)
+    unlisten = hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed)
+
+    def _unsubscribe() -> None:
+        nonlocal closed
+        closed = True
+        unlisten()
+        for task in list(tasks):
+            task.cancel()
+        tasks.clear()
+
+    return _unsubscribe
 
 
 # ── the source table ──────────────────────────────────────────────────
@@ -1518,16 +1598,6 @@ class Source:
         if self.item_actions_vary:
             fields.append("action")
         return fields
-
-    def describe(self) -> dict[str, Any]:
-        """Metadata for ``lizaip_config/list_dynamic_sources``."""
-        return {
-            "id": self.id,
-            "name": self.name,
-            "params": self.param_schema,
-            "default_fields": self.default_fields,
-            "item_actions_vary": self.item_actions_vary,
-        }
 
 
 SOURCES: dict[str, Source] = {
@@ -1598,16 +1668,8 @@ async def async_resolve_source(
     spec: dict[str, Any] | None,
     *,
     max_items: int = DEFAULT_MAX_ITEMS,
-    best_effort: bool = False,
 ) -> ResolveResult:
-    """Resolve one source and classify success, emptiness and failure.
-
-    ``best_effort`` is for callers that only *display* the answer. A source
-    that refuses to be read may still have handed back what it refused, and a
-    preview showing a greyed-out list beats a preview showing nothing. The
-    error is reported either way, so a caller that writes buttons — which
-    passes ``best_effort=False`` — never sees the degraded items at all.
-    """
+    """Resolve one source and classify success, emptiness and failure."""
     source = get_source(source_id)
     if source is None:
         return ResolveResult(error=f"Unknown dynamic source '{source_id}'")
@@ -1618,14 +1680,6 @@ async def async_resolve_source(
         items = await source.resolve(hass, dict(spec or {}), max_items)
     except asyncio.CancelledError:
         raise
-    except SourceUnavailable as exc:
-        _WARNED_EMPTY.discard(key)
-        _LOGGER.warning(
-            "Dynamic source %r failed for spec %s: %s", source_id, spec, exc
-        )
-        refused = getattr(exc, "refused", None) if best_effort else None
-        clean = [item for item in (refused or []) if isinstance(item, DynamicItem)]
-        return ResolveResult(items=clean, error=str(exc) or exc.__class__.__name__)
     except Exception as exc:  # noqa: BLE001 - a source must never crash a refresh
         _WARNED_EMPTY.discard(key)
         _LOGGER.warning(
@@ -1669,27 +1723,3 @@ def spec_key(source_id: str, spec: dict[str, Any] | None) -> str:
         raw = repr(sorted((spec or {}).items()))
     digest = hashlib.md5(f"{source_id}|{raw}".encode()).hexdigest()
     return f"{source_id}:{digest[:12]}"
-
-
-def validate_spec(source_id: str, spec: dict[str, Any] | None) -> str | None:
-    """Return an error string when *spec* is unusable for *source_id*.
-
-    Only presence of required params is checked. A source's own ``resolve``
-    stays responsible for anything it cannot know up front (entity missing,
-    integration offline) — those are runtime staleness, not config errors.
-    """
-    source = get_source(source_id)
-    if source is None:
-        return f"Unknown dynamic source '{source_id}'"
-    if spec is None:
-        spec = {}
-    if not isinstance(spec, dict):
-        return "spec must be a mapping"
-    missing = [
-        key
-        for key, meta in (source.param_schema or {}).items()
-        if meta.get("required") and not spec.get(key)
-    ]
-    if missing:
-        return f"Source '{source_id}' requires: {', '.join(sorted(missing))}"
-    return None

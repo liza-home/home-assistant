@@ -7,9 +7,10 @@ import time
 
 from homeassistant.core import Event, HomeAssistant
 
-from ..const import DOMAIN
 from ..device.const import LIZAIP_EVENT
 from ._state import (
+    REPEAT_HEARTBEAT_TIMEOUT,
+    REPEAT_MAX_SECONDS,
     _SELECTING_INTERACTIONS,
     _note_page,
     _page_changed,
@@ -19,7 +20,8 @@ from ._state import (
 )
 from . import longtouch
 from .buttons import execute_action, resolve_button_assignment
-from .helpers import _get_store
+from ..runtime import get_store
+from ..data import lizaip_data
 from ..config.text_style import key_repeat_timing
 from ..shared.assignment import key_repeats
 from .helpers import _coerce_page_id, _normalize_position, _raw_page_id, _resolve_entry_id
@@ -29,14 +31,6 @@ from .slider_exec import execute_slider_action
 from .sliders import SLIDER_NAME_ALIASES
 
 _LOGGER = logging.getLogger(__name__)
-
-
-#: A held button says so every ~0.24 s; one silent for longer has been let go,
-#: whether or not its ``release`` arrived.
-REPEAT_HEARTBEAT_TIMEOUT = 0.4
-
-#: No hold is this long; a repeat loop still running by then is stopped anyway.
-REPEAT_MAX_SECONDS = 60.0
 
 
 def _heartbeat(entry_id: str, button_key: str) -> None:
@@ -54,12 +48,20 @@ def _stop_repeat(entry_id: str, button_key: str) -> None:
     state.repeat_heartbeat.pop(button_key, None)
 
 
-async def _start_repeat(hass: HomeAssistant, entry_id: str, button_key: str, page_id: int) -> None:
-    """Begin key repeat for a just-pressed button, if it repeats."""
-    device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+async def _start_repeat(
+    hass: HomeAssistant, entry_id: str, button_key: str, page_id: int,
+    resolved: tuple[str | None, dict | None] | None = None,
+) -> None:
+    """Begin key repeat for a just-pressed button, if it repeats.
+
+    *resolved* is the press's ``(device_id, assignment)``, when already read.
+    """
+    if resolved is None:
+        resolved = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+    device_id, assign = resolved
     if not key_repeats(assign):
         return
-    settings = await _get_store(hass).async_get_settings(device_id) if device_id else None
+    settings = await get_store(hass).async_get_settings(device_id) if device_id else None
     delay, interval = key_repeat_timing(settings)
     _stop_repeat(entry_id, button_key)
     state = remote_state(entry_id)
@@ -188,13 +190,15 @@ def setup(hass: HomeAssistant) -> None:
             )
 
         if interaction == "touch":
-            _heartbeat(entry_id, button_key)
+            # A touch after the press means the key came up and the finger
+            # merely rests on it: the repeat stops here, not on release.
+            _stop_repeat(entry_id, button_key)
             await longtouch.on_touch(hass, entry_id, button_key, page_id)
         elif interaction == "release":
             _stop_repeat(entry_id, button_key)
             await longtouch.on_release(hass, entry_id, button_key)
         elif interaction == "repeat":
-            # The remote's own repeat is only a sign the button is still down:
+            # The remote's own repeat is only a sign the key is still pressed:
             # the presses come from the virtual repeat, at the remote's rate.
             _heartbeat(entry_id, button_key)
             return
@@ -207,14 +211,16 @@ def setup(hass: HomeAssistant) -> None:
             log.debug("  → click held until release (button has a long touch)")
             return
 
-        await _start_repeat(hass, entry_id, button_key, page_id)
-        await execute_action(hass, entry_id, button_key, page_id)
+        # Read once for the repeat and the press; repeats read it afresh.
+        resolved = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+        await _start_repeat(hass, entry_id, button_key, page_id, resolved)
+        await execute_action(hass, entry_id, button_key, page_id, resolved=resolved)
 
-    hass.data.setdefault(DOMAIN, {})
-    previous_unsub = hass.data[DOMAIN].pop("_button_unsub", None)
+    data = lizaip_data(hass)
+    previous_unsub, data.button_unsub = data.button_unsub, None
     if previous_unsub:
         previous_unsub()
 
-    hass.data[DOMAIN]["_button_unsub"] = hass.bus.async_listen(
+    data.button_unsub = hass.bus.async_listen(
         LIZAIP_EVENT, _on_device_event,
     )

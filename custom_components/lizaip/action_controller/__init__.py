@@ -15,21 +15,25 @@ list in ``__init__.py`` and a dozen call sites already spell:
 
 * :mod:`._state`         — process-global mutable state (selection, gestures,
                            the script cache) and the accessors that clear it.
-* :mod:`.helpers`        — store access, entity resolution, page-id coercion.
+* :mod:`.helpers`        — entity resolution, page-id coercion. (The store
+                           and device lookups are :mod:`..runtime`'s.)
 * :mod:`.sliders`        — the capability table, and what a stored slider
                            config means.
 * :mod:`.overrides`      — grid buttons overriding what a fixed button does.
+* :mod:`.toggle`         — toggle and cycle rules: which step a press runs.
 * :mod:`.icons`          — state → icon, and state → tooltip.
 * :mod:`.buttons`        — compiling and running a button's action, including
                            the wake prelude, launch verification and the
                            optimistic icon update.
-* :mod:`.selection`      — recording what the grid last selected.
+* :mod:`.longtouch`      — telling a long touch from a click.
 * :mod:`.slider_exec`    — executing a slider gesture.
+* :mod:`.selection`      — recording what the grid last selected.
 * :mod:`.state_listener` — watching entities, pushing icon updates.
 * :mod:`.dispatch`       — the device event listener that routes into all of it.
 
-Submodules import strictly downwards in that order, so the package has no
-import cycles.
+A submodule imports only those listed above it, so the package has no import
+cycles. (``icons`` and ``toggle`` reach into ``config`` lazily, inside the
+function that needs it.)
 
 **Only the public API is re-exported below.** Private helpers (leading
 underscore) stay in their submodule, and code that needs one — tests mostly —
@@ -41,14 +45,12 @@ untouched. See ``tests/test_action_controller.py``.
 from __future__ import annotations
 
 from ._state import (
-    SLIDER_GESTURE_TIMEOUT,
     clear_slider_state,
     forget_remote,
     get_current_page,
     get_selected_button,
     get_selected_control,
     get_selected_entity,
-    get_selected_factor,
 )
 from .helpers import (
     get_entity_from_step,
@@ -82,14 +84,11 @@ from .overrides import (
     OVERRIDABLE_FIXED_BUTTONS,
     OVERRIDABLE_FIXED_KEYS,
     fixed_overrides,
-    live_override,
     is_grid_button,
     may_be_context,
     resolve_fixed_action,
     sanitize_slider_override,
-    slider_control_override,
     slider_override,
-    slider_subject_entity,
 )
 # Only what is used outside this package. The rest of `toggle`'s surface is
 # read by its own siblings and by tests, which import it from `.toggle`
@@ -111,7 +110,6 @@ __all__ = [
     "SLIDER_CONTROLS",
     "SLIDER_FACTOR_MAX",
     "SLIDER_FACTOR_MIN",
-    "SLIDER_GESTURE_TIMEOUT",
     "SLIDER_NAME_ALIASES",
     "SLIDER_VERTICAL_KEY",
     "SLIDER_TARGET_ENTITY",
@@ -126,7 +124,6 @@ __all__ = [
     "execute_action",
     "execute_slider_action",
     "fixed_overrides",
-    "live_override",
     "follows_selection",
     "follows_selection_only",
     "get_current_page",
@@ -134,7 +131,6 @@ __all__ = [
     "get_selected_button",
     "get_selected_control",
     "get_selected_entity",
-    "get_selected_factor",
     "is_grid_button",
     "last_touched_or_entity_slider_actions",
     "last_touched_slider_actions",
@@ -143,9 +139,7 @@ __all__ = [
     "resolve_fixed_action",
     "sanitize_slider_override",
     "sanitize_toggle",
-    "slider_control_override",
     "slider_override",
-    "slider_subject_entity",
     "first_step",
     "resolve_step_entity",
     "subject_for_assign",

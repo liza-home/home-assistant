@@ -28,11 +28,8 @@ from .const import (
     MAX_SIZE,
     TEXT_BAND_INFO,
     TRANSPARENT,
-    find_font,
-    font_has_all_glyphs,
-    open_font,
 )
-from .fonts import resolve_font_path
+from .fonts import find_font, font_has_all_glyphs, open_font, resolve_font_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -330,9 +327,21 @@ def render_text(
     the NotoEmoji fallback font so only those characters switch fonts — the
     rest of the string keeps the primary font.
     """
+    fonts = _resolve_fonts(font_id, fonts_dir, emoji)
+    return _render_text(text, height, fg_color, font_size, fonts)
+
+
+def _render_text(
+    text: str,
+    height: int,
+    fg_color: tuple,
+    font_size: int | None,
+    fonts: tuple[str | None, str | None, str | None],
+) -> Image.Image:
+    """`render_text` with the fonts already resolved by `_resolve_fonts`."""
     height = min(height, MAX_SIZE)
 
-    primary_path, emoji_path, color_emoji_path = _resolve_fonts(font_id, fonts_dir, emoji)
+    primary_path, emoji_path, color_emoji_path = fonts
     font_size, top, baseline, bottom = _line(primary_path, height, font_size or height)
     primary_font = _load_font(primary_path, font_size)
     emoji_font = _load_font(emoji_path, font_size) if emoji_path else primary_font
@@ -350,9 +359,11 @@ def render_text(
 
     # Decide per-cluster which font to use.
     clusters = list(grapheme_iter(text))
-    needs_emoji = (emoji_path or color_emoji_path) and primary_path and any(
-        _char_needs_emoji(cl, primary_path) for cl in clusters
-    )
+    needs_emoji = False
+    cluster_is_emoji: list[bool] = []
+    if (emoji_path or color_emoji_path) and primary_path:
+        cluster_is_emoji = [_char_needs_emoji(cl, primary_path) for cl in clusters]
+        needs_emoji = any(cluster_is_emoji)
 
     # ── Measure ───────────────────────────────────────────────────────
     scratch = Image.new("RGBA", (1, 1))
@@ -381,20 +392,20 @@ def render_text(
         up, down = _extents(primary_font)
         emoji_h = max(1, up + down)
 
-        segments: list[tuple[str, Image.Image | None]] = []
+        segments: list[tuple[str, bool, Image.Image | None]] = []
         total_w = 0
-        for cl in clusters:
-            if _char_needs_emoji(cl, primary_path):
+        for cl, is_emoji in zip(clusters, cluster_is_emoji, strict=True):
+            if is_emoji:
                 if color_emoji_font:
                     emoji_img = _render_color_emoji(cl, emoji_h, color_emoji_font)
-                    segments.append((cl, emoji_img))
+                    segments.append((cl, is_emoji, emoji_img))
                     total_w += emoji_img.width
                     continue
                 font = emoji_font
             else:
                 font = primary_font
             bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
-            segments.append((cl, None))
+            segments.append((cl, is_emoji, None))
             total_w += bb[2] - bb[0]
 
         img_width = min(max(total_w + 2 * TEXT_PADDING, 1), MAX_SIZE)
@@ -402,12 +413,11 @@ def render_text(
         draw = ImageDraw.Draw(img)
         cursor_x = float(TEXT_PADDING)
 
-        for cl, emoji_img in segments:
+        for cl, is_emoji, emoji_img in segments:
             if emoji_img is not None:
                 img.paste(emoji_img, (int(cursor_x), baseline - up), emoji_img)
                 cursor_x += emoji_img.width
                 continue
-            is_emoji = _char_needs_emoji(cl, primary_path)
             font = emoji_font if is_emoji else primary_font
             bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
             # A colour outline font (COLR, as Twemoji) draws in its own
@@ -457,11 +467,12 @@ def render_text_fitted(
     keep the same lettering. Shrinking stops at *min_size*: past that the
     words would be unreadable, and staying wide is the better failure.
     """
-    img = render_text(text, width, height, fg_color, font_size, font_id, fonts_dir, emoji)
+    fonts = _resolve_fonts(font_id, fonts_dir, emoji)
+    img = _render_text(text, height, fg_color, font_size, fonts)
     size = font_size or height
     while width > 0 and img.width > width and size > min_size:
         # Aim straight at the ratio that would fit, but always move by at
         # least one step: rounding could otherwise stand still forever.
         size = max(min_size, min(size - 1, int(size * width / img.width)))
-        img = render_text(text, width, height, fg_color, size, font_id, fonts_dir, emoji)
+        img = _render_text(text, height, fg_color, size, fonts)
     return img

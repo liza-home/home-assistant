@@ -73,7 +73,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
     known: set[str] = set()
 
     # Primed here so the file is read in the executor. Every later call is
@@ -91,7 +91,7 @@ async def async_setup_entry(
             known.update(b._button_id for b in new)
             async_add_entities(new)
 
-    connection.register_discovery(on_discovery)
+    entry.async_on_unload(connection.register_discovery(on_discovery))
 
 
 class LizaIPButton(LizaIPEntity, EventEntity):
@@ -135,11 +135,8 @@ class LizaIPButton(LizaIPEntity, EventEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._connection.register_button(self._button_id, self._handle_event)
+        self.async_on_remove(self._connection.register_button(self._button_id, self._handle_event))
 
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_button(self._button_id)
-        await super().async_will_remove_from_hass()
 
     def _handle_event(self, event_type: str, extra: dict) -> None:
         self._trigger_event(event_type, extra)

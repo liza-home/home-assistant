@@ -15,8 +15,7 @@
 #   - Inputs: a Roku TV's own input keys -- Antenna TV, HDMI 1–4 and AV. A
 #     streaming stick has no inputs and ignores them, as it ignores the volume
 #     keys.
-#   A Roku has no digit keys, so there is no Digits page; button 8 holds Fast
-#   forward instead.
+#   A Roku has no digit keys, so there is no Digits page; button 8 is empty.
 #
 # Reference: https://www.home-assistant.io/integrations/roku
 
@@ -102,21 +101,13 @@ pages:
             data:
               command: right
 
-      button_8:
-        icon: mdi:fast-forward
-        tooltip: {translate: next}
-        config:
-          - action: remote.send_command
-            data:
-              command: forward
-
       button_9:
-        icon: mdi:rewind
-        tooltip: {translate: previous}
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
         config:
           - action: remote.send_command
             data:
-              command: reverse
+              command: volume_mute
 
       button_10:
         icon: mdi:arrow-down-bold-outline

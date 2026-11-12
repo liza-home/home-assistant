@@ -15,6 +15,7 @@ Failure handling has two shapes:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from copy import deepcopy
@@ -35,37 +36,22 @@ from ...shared.assignment import (
 )
 from ...device.const import LIZAIP_EVENT
 from ...config.const import ASSIGNMENT_BLANKED_KEY
-from .generate import _GENERIC_SERVICE_DOMAINS
+from .generate import GENERIC_SERVICE_DOMAINS
 from .paginate import async_paginate
 from .resolver import ASSIGNMENT_FIELD_MAP, field_value, resolve_binding
 from .sources import bound_specs, get_source
-from ...runtime import entry_device_id, find_store, _resolve_device_id
-from ...shared.logs import DeviceLogger, device_id_logger, device_logger
+from ...runtime import entry_device_id, find_store, resolve_device_id
+from ...data import lizaip_data
+from ...shared.logs import device_id_logger, device_logger, entry_id_logger
 from ...config.events import fire_config_changed
 
 _LOGGER = logging.getLogger(__name__)
 
-
-def _entry_log(hass: HomeAssistant, entry_id: str) -> DeviceLogger:
-    """A logger naming the remote *entry_id* configures.
-
-    The registry is read through ``getattr`` because the refresh helpers are
-    also driven by callers holding a stand-in ``hass`` that has none; an
-    unresolved entry logs unprefixed.
-    """
-    registry = getattr(hass, "config_entries", None)
-    entry = registry.async_get_entry(entry_id) if registry is not None else None
-    return device_logger(_LOGGER, entry)
-
-#: Prevent concurrent refreshes from racing store writes for the same device.
-_REFRESH_LOCKS_KEY = "_dynamic_refresh_locks"
-
-
-def _refresh_lock(hass: HomeAssistant, device_id: str) -> asyncio.Lock:
-    locks = hass.data.setdefault(DOMAIN, {}).setdefault(_REFRESH_LOCKS_KEY, {})
-    lock = locks.get(device_id)
+def _refresh_lock(hass: HomeAssistant, entry_id: str) -> asyncio.Lock:
+    locks = lizaip_data(hass).refresh_locks
+    lock = locks.get(entry_id)
     if lock is None:
-        lock = locks[device_id] = asyncio.Lock()
+        lock = locks[entry_id] = asyncio.Lock()
     return lock
 
 
@@ -183,7 +169,7 @@ def _target_a_filled_step(assignment: dict[str, Any], binding: dict[str, Any]) -
     if not isinstance(action, str) or "." not in action:
         return False
     domain = action.split(".", 1)[0]
-    if domain == DOMAIN or domain in _GENERIC_SERVICE_DOMAINS:
+    if domain == DOMAIN or domain in GENERIC_SERVICE_DOMAINS:
         return False
     data = step.get("data")
     if isinstance(data, dict) and data.get("entity_id"):
@@ -346,13 +332,19 @@ async def _refresh_assignment(
     assignment: dict[str, Any],
     *,
     cache: dict[Any, Any] | None = None,
+    resolution: Any = None,
 ) -> bool:
-    """Re-resolve one button. Returns True if the assignment changed."""
-    binding = assignment.get(ASSIGNMENT_DYNAMIC_KEY)
-    if not isinstance(binding, dict) or not binding.get("source"):
+    """Re-resolve one button. Returns True if the assignment changed.
+
+    *resolution*, when given, is the binding's already-read answer, so the
+    assignment is updated without awaiting a source.
+    """
+    binding = _binding_of(assignment)
+    if binding is None:
         return False
 
-    resolution = await resolve_binding(hass, binding, cache=cache)
+    if resolution is None:
+        resolution = await resolve_binding(hass, binding, cache=cache)
     item, error = resolution
     fields = [f for f in (binding.get("fields") or []) if f]
     raw_map = binding.get("field_map")
@@ -424,42 +416,85 @@ async def async_refresh_page(
     hass: HomeAssistant,
     device_id: str,
     page_id: int,
+    *,
+    cache: dict[Any, Any] | None = None,
 ) -> bool:
-    """Refresh every dynamic button on one page. Returns True if it changed."""
+    """Refresh every dynamic button on one page. Returns True if it changed.
+
+    *cache* is shared by the pages of one refresh (see `resolve_binding`).
+    """
     log = device_id_logger(_LOGGER, hass, device_id)
     store = find_store(hass)
     if store is None:
         return False
 
-    assignments = await store.async_get_assignments(device_id, page_id)
-    if not assignments:
+    snapshot = await store.async_get_assignments(device_id, page_id)
+    if not snapshot:
         return False
-    if not any(
-        isinstance(a, dict) and a.get(ASSIGNMENT_DYNAMIC_KEY)
-        for a in assignments.values()
-    ):
+    bindings = [b for a in list(snapshot.values()) if (b := _binding_of(a)) is not None]
+    if not bindings:
         return False
 
-    changed = False
-    # One source answer per refresh, however many buttons are bound to it: a
-    # page is usually one speaker's favourites spread across its buttons.
-    cache: dict[Any, Any] = {}
-    for assignment in assignments.values():
-        if not isinstance(assignment, dict):
+    # Sources are read first, with no lock held: a read can take many seconds,
+    # and the page must stay saveable meanwhile. One source answer per
+    # refresh, however many buttons are bound to it: a page is usually one
+    # speaker's favourites spread across its buttons.
+    if cache is None:
+        cache = {}
+    resolved: dict[tuple, Any] = {}
+    for binding in bindings:
+        key = _binding_key(binding)
+        if key in resolved:
             continue
         try:
-            changed |= await _refresh_assignment(hass, assignment, cache=cache)
+            resolved[key] = await resolve_binding(hass, binding, cache=cache)
         except Exception as exc:  # noqa: BLE001 - one bad button must not
             # abort the rest of the page.
             log.debug("Dynamic refresh failed for a button: %s", exc)
 
-    # Also when nothing moved now: a slot filled by an earlier refresh may still
-    # be waiting for its action id.
-    changed |= await _arm_filled_slots(store, device_id, assignments)
-    if changed:
-        await store.async_set_assignments(device_id, page_id, assignments)
-        await store.async_recompute_page_hash(device_id, page_id)
+    # Then applied to the page as it is now, under the store's lock, so a
+    # panel save made during the reads is built on rather than overwritten.
+    async with store.device_lock(device_id):
+        assignments = deepcopy(await store.async_get_assignments(device_id, page_id) or {})
+        changed = False
+        for assignment in assignments.values():
+            binding = _binding_of(assignment)
+            if binding is None:
+                continue
+            resolution = resolved.get(_binding_key(binding))
+            if resolution is None:
+                # Bound while the sources were read: the next refresh has it.
+                continue
+            try:
+                changed |= await _refresh_assignment(hass, assignment, resolution=resolution)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Dynamic refresh failed for a button: %s", exc)
+
+        # Also when nothing moved now: a slot filled by an earlier refresh may
+        # still be waiting for its action id.
+        changed |= await _arm_filled_slots(store, device_id, assignments)
+        if changed:
+            await store.async_set_assignments_locked(device_id, page_id, assignments)
     return changed
+
+
+def _binding_of(assignment: Any) -> dict[str, Any] | None:
+    """The assignment's dynamic binding, if it has one with a source."""
+    if not isinstance(assignment, dict):
+        return None
+    binding = assignment.get(ASSIGNMENT_DYNAMIC_KEY)
+    if not isinstance(binding, dict) or not binding.get("source"):
+        return None
+    return binding
+
+
+def _binding_key(binding: dict[str, Any]) -> tuple:
+    """What decides a binding's resolution: its source, spec and index."""
+    return (
+        str(binding.get("source") or ""),
+        json.dumps(binding.get("spec"), sort_keys=True, default=str),
+        str(binding.get("index")),
+    )
 
 
 def _needs_action_id(assignment: Any) -> str:
@@ -484,6 +519,9 @@ def _needs_action_id(assignment: Any) -> str:
 async def _arm_filled_slots(store, device_id: str, assignments: dict) -> bool:
     """Give every filled-but-unarmed slot an action library entry for its service.
 
+    Called with the store's `device_lock` held, so the library is read and
+    written in one step.
+
     The step carries the item's own data, so the entry only says which service
     runs: a template's entry for that service is reused when there is one,
     otherwise one shared entry per service is made.
@@ -491,7 +529,7 @@ async def _arm_filled_slots(store, device_id: str, assignments: dict) -> bool:
     wanted = {k: s for k, a in assignments.items() if (s := _needs_action_id(a))}
     if not wanted:
         return False
-    library = list(await store.async_get_action_library(device_id) or [])
+    library = deepcopy(list(await store.async_get_action_library(device_id) or []))
     by_service: dict[str, str] = {}
     for entry in library:
         if not isinstance(entry, dict) or not entry.get("id") or not entry.get("service"):
@@ -522,7 +560,7 @@ async def _arm_filled_slots(store, device_id: str, assignments: dict) -> bool:
             added = True
         assignments[key]["action_id"] = action_id
     if added:
-        await store.async_set_action_library(device_id, library)
+        await store.async_set_action_library_locked(device_id, library)
     return True
 
 
@@ -536,13 +574,16 @@ async def async_refresh_entry(
     store = find_store(hass)
     if store is None:
         return False
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if not device_id:
         return False
 
+    # One answer per source for the whole refresh: the pages of a set (a
+    # speaker's favourites over several parts) ask the same question.
+    cache: dict[Any, Any] = {}
     async with _refresh_lock(hass, entry_id):
         if page_id is not None:
-            changed = await async_refresh_page(hass, device_id, page_id)
+            changed = await async_refresh_page(hass, device_id, page_id, cache=cache)
         else:
             pages = await store.async_get_pages(device_id)
             changed = False
@@ -550,9 +591,11 @@ async def async_refresh_entry(
                 pid = page.get("id")
                 if pid is None:
                     continue
-                changed |= await async_refresh_page(hass, device_id, pid)
+                changed |= await async_refresh_page(hass, device_id, pid, cache=cache)
         # After the buttons: a part whose items have all gone is empty by now.
-        changed |= await async_paginate(hass, entry_id, device_id, store, page_id=page_id)
+        changed |= await async_paginate(
+            hass, entry_id, device_id, store, page_id=page_id, cache=cache,
+        )
         return changed
 
 
@@ -610,7 +653,7 @@ class _DelayedRefresh:
         self._entry_id = entry_id
         self._delay = delay
         self._reason = reason
-        self._log = _entry_log(hass, entry_id)
+        self._log = entry_id_logger(_LOGGER, hass, entry_id)
         self._cancel_timer: Callable[[], None] | None = None
 
     @callback
@@ -671,7 +714,7 @@ async def _async_read_bound_specs(hass: HomeAssistant, entry_id: str):
     subscriptions, while unreadable bindings should keep current ones.
     """
     store = find_store(hass)
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if store is None or not device_id:
         return None
 
@@ -685,7 +728,7 @@ async def _async_read_bound_specs(hass: HomeAssistant, entry_id: str):
             by_page[pid] = await store.async_get_assignments(device_id, pid)
         return bound_specs(by_page)
     except Exception as exc:  # noqa: BLE001 - an optimisation must never break setup
-        _entry_log(hass, entry_id).debug("Push trigger scan failed: %s", exc)
+        entry_id_logger(_LOGGER, hass, entry_id).debug("Push trigger scan failed: %s", exc)
         return None
 
 
@@ -751,7 +794,7 @@ class PushTriggers:
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         self._hass = hass
         self._entry_id = entry_id
-        self._log = _entry_log(hass, entry_id)
+        self._log = entry_id_logger(_LOGGER, hass, entry_id)
         self._refresh = _DelayedRefresh(hass, entry_id, _PUSH_DEBOUNCE, "source signal")
         self.specs: list = []
         self._unsubs: list = []
@@ -853,11 +896,11 @@ async def async_binding_summary(hass: HomeAssistant, entry_id: str) -> dict[str,
     }
 
     store = find_store(hass)
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if store is None or not device_id:
         return summary
 
-    log = _entry_log(hass, entry_id)
+    log = entry_id_logger(_LOGGER, hass, entry_id)
     try:
         pages = await store.async_get_pages(device_id)
     except Exception as exc:  # noqa: BLE001 - diagnostics must never raise

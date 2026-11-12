@@ -18,7 +18,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
     async_add_entities([LizaIPBrightnessAutomatic(connection, entry)])
 
 
@@ -36,11 +36,8 @@ class LizaIPBrightnessAutomatic(LizaIPEntity, SwitchEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._connection.register_brightness(self._handle_brightness_state)
+        self.async_on_remove(self._connection.register_brightness(self._handle_brightness_state))
 
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_brightness(self._handle_brightness_state)
-        await super().async_will_remove_from_hass()
 
     def _handle_brightness_state(self, value: float, automatic: bool) -> None:
         self._attr_is_on = automatic

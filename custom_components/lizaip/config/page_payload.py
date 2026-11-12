@@ -18,7 +18,7 @@ from homeassistant.core import HomeAssistant
 
 from ..action_controller.toggle import runtime_assign
 from ..device.services import _selected_entry_ids
-from ..runtime import _get_store, entry_device_id
+from ..runtime import get_store, entry_device_id
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ..shared.logs import device_logger
@@ -176,7 +176,7 @@ async def build_sync_context(
     *assignments* carries the buttons of pages the store does not hold -- the
     placeholders of :mod:`default_pages`.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     device_id = entry_device_id(entry)
 
     return SyncContext(
@@ -230,7 +230,7 @@ async def _build_page_payload_in_scope(
     build it once and pass it in; left out, it is built here, which is what the
     single-page callers want.
     """
-    store = _get_store(hass)
+    store = get_store(hass)
     device_id = entry_device_id(entry)
     if not device_id:
         return {"page_id": page_id, "img_title": "", "buttons": [], "hash": 0}
@@ -284,7 +284,10 @@ async def _build_page_payload_in_scope(
             # tiles; a button only acts once it carries a command step.
             assign_icon = with_resolved_icon(assign, hass).get("icon")
             img_tile = (
-                resolve_icon_url(assign_icon, color=page_color, theme=theme_id)
+                resolve_icon_url(
+                    assign_icon, color=page_color, theme=theme_id,
+                    radius=style_options.radius,
+                )
                 if assign_icon else ""
             )
             buttons.append({
@@ -350,6 +353,7 @@ async def _build_page_payload_in_scope(
             color=tile_style.color,
             percent=tile_style.percent,
             theme=theme_id,
+            radius=style_options.radius,
         )
 
         # Tooltip: dynamic next-state label

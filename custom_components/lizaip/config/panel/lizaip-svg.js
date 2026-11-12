@@ -132,15 +132,15 @@ function createFaceDrag(container, svg, opts) {
     else host?.classList?.remove?.(name);
   };
 
+  /** The HTML icon overlay for a face key, which is where a button's picture
+   *  lives -- the SVG holds only the shape. */
+  const iconFor = (key) => container.querySelector?.(`img.pg-btn-img[data-key="${key}"]`);
+
   /**
    * A copy of the dragged button, flying with the pointer: the shape cloned
    * into the same `<svg>` and its icon cloned into the same container, so the
    * thumbnail's own `transform` and clipping apply to both as to the face.
    */
-  /** The HTML icon overlay for a face key, which is where a button's picture
-   *  lives -- the SVG holds only the shape. */
-  const iconFor = (key) => container.querySelector?.(`img.pg-btn-img[data-key="${key}"]`);
-
   const makeGhost = () => {
     const ghost = state.el.cloneNode?.(false);
     if (!ghost) return;
@@ -352,7 +352,7 @@ function createFaceDrag(container, svg, opts) {
  * @param {number} selectedIdx - Selected button index (-1 = none)
  * @param {Function} hasAction - (buttonKey) => boolean
  * @param {Function} onSelect - (idx) callback
- * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor, onHover}
+ * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor}
  *
  * Accessibility: with `interactive` the shapes become real controls —
  * `role="button"`, a tab stop, a name from `nameFor`, and Enter/Space/context
@@ -377,10 +377,6 @@ function createFaceDrag(container, svg, opts) {
  * `canDrag(key)` and `onDrop(fromKey, toKey)` wire the drag shortcut, and only
  * when both are given. The optional `canDrop(toKey, fromKey)` narrows what may
  * *receive* one. See `createFaceDrag`.
- *
- * `onHover(key, el, on)` is pointer and keyboard interest in a shape: enter
- * and focus, then the matching leave, blur and Escape. One callback, because
- * the card it drives has one state.
  */
 export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, opts) {
   if (!container || !blueprint) return;
@@ -418,9 +414,8 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
     // exposed as a group, which is the bug that had a reader saying the page
     // twice and then "group". The shapes inside keep their own roles.
     svg.setAttribute("role", "presentation");
-    // No <title>: the browser drew the page's over whichever shape the pointer
-    // rested on, which is two tooltips for one gesture once the hover card
-    // arrived. The page keeps its own on the thumbnails.
+    // No <title>: the browser would draw the page's over whichever shape the
+    // pointer rested on, answering a hover about a button with the page.
   } else {
     // A picture of another page. Nothing inside it is a control here.
     svg.setAttribute("aria-hidden", "true");
@@ -484,24 +479,13 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
       // writing "3 of 40" into the name means saying it on every single shape.
       if (selected) el.setAttribute("aria-current", "true");
 
-      // The hover card. Focus and blur go to the same callback as the
-      // pointer, so a keyboard user is not the one person who cannot see it.
-      // Focus skips the delay: it is a deliberate arrival, not a fly-over.
-      if (opts?.onHover) {
-        const hover = (on, instant) => opts.onHover(btn.key, el, on, instant);
-        el.addEventListener("mouseenter", () => hover(true));
-        el.addEventListener("mouseleave", () => hover(false));
-        el.addEventListener("focus", () => hover(true, true));
-        el.addEventListener("blur", () => hover(false));
-      }
-
       el.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {
           // Space scrolls the page by default, and the face is tall enough to
           // scroll — so activating a button would also jump the view away from it.
           e.preventDefault();
           e.stopPropagation();
-          onSelect(idx, { keyboard: true });
+          onSelect(idx);
         } else if (opts?.onContext && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
           // The menu is otherwise reachable only by right-click or long-press,
           // so without this the whole secondary action is pointer-only.

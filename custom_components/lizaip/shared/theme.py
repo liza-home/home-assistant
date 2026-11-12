@@ -28,7 +28,7 @@ shipped theme is edited, by standing in for it rather than being overwritten.
 The registry at the bottom is module state, set once during setup, because
 ``imgserv`` resolves a ``theme=`` query parameter while drawing and has no
 ``hass`` to look a theme up with -- the same reason
-``const.set_custom_icon_prefixes`` exists.
+``source_parse.set_custom_icon_prefixes`` exists.
 """
 from __future__ import annotations
 
@@ -187,10 +187,6 @@ class Theme:
     #: The theme's own icon overrides, as read from the file. Kept so the panel
     #: can be told what a theme changes; :attr:`icons` is what a renderer reads.
     icon_overrides: dict[str, dict] = field(default_factory=dict)
-
-    @property
-    def is_default(self) -> bool:
-        return self.theme_id == DEFAULT_THEME_ID
 
     @cached_property
     def icons(self) -> IconDefaults:

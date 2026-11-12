@@ -111,12 +111,12 @@ pages:
         goto_page: digits
 
       button_9:
-        icon: mdi:rewind
-        tooltip: {translate: previous}
+        icon: mdi:volume-mute
+        tooltip: {translate: mute}
         config:
           - action: remote.send_command
             data:
-              command: Rewind
+              command: Mute
 
       button_10:
         icon: mdi:arrow-down-bold-outline

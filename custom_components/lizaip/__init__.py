@@ -44,7 +44,16 @@ from .config.entity_rename import async_setup_entity_rename
 from .imgserv import async_setup_imgserv
 from .shared.logs import device_logger
 from .shared.numbers import to_float
-from .runtime import find_store, install_store, panel_language, renamed_device
+from .data import LizaIPConfigEntry, LizaIPRuntimeData
+from .runtime import (
+    entry_connection,
+    entry_panel,
+    find_store,
+    get_store,
+    install_store,
+    panel_language,
+    renamed_device,
+)
 from .shared.i18n import set_default_language
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,9 +67,6 @@ PLATFORMS = [
     Platform.UPDATE,
 ]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-
-type LizaIPConfigEntry = ConfigEntry[LizaIPConnection]
-
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """One-time setup: register WS endpoint, services, panel, and load imgserv."""
@@ -100,7 +106,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # The user's own templates, beside the remotes' configuration rather than
     # inside the integration, so an update leaves them alone.
     from .config.page_templates import set_user_templates_dir
-    from .config.page_templates.generate import preload_templates
+    from .config.page_templates.catalog import preload_templates
     set_user_templates_dir(hass.config.path("lizaip", "templates"))
     await hass.async_add_executor_job(preload_templates)
 
@@ -185,18 +191,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
         )
 
     connection = LizaIPConnection(hass, entry, device.id)
-    entry.runtime_data = connection
+    # A setup that failed part-way is never unloaded, so its panel state is
+    # carried over for the config side's setup to close (`add_panel_entry`).
+    entry.runtime_data = LizaIPRuntimeData(connection, panel=entry_panel(entry))
 
     # The registry entry created above carries the model this integration last
     # saw. Keeping it current is `_persist_hello_facts`' job rather than a
     # listener's: the device may open the handshake itself, and that path is
     # answered in place without firing the hello event.
 
-    # Initialize per-device store (lazy-loading, no upfront load needed)
-    store = find_store(hass)
-    if store is None:
-        store = LizaRemoteStore(hass)
-        install_store(hass, store)
+    # The shared store, installed by `async_setup` (lazy-loading per device).
+    store = get_store(hass)
 
     # Ensure a default storage file exists for this device (with all button slots)
     await store.async_ensure_default(device.id)
@@ -241,10 +246,11 @@ def _options_listener(device_id: str, entry: LizaIPConfigEntry):
         if updated.title != last_title:
             last_title = updated.title
             _follow_entry_title(hass, device_id, updated.title)
-            # A rename alone changes nothing the remote is sent: its own name is
-            # on no page, so there is nothing to sync.
-            if dict(updated.options) == last_options:
-                return
+        # A rename alone changes nothing the remote is sent: its own name is on
+        # no page. Data-only writes (hello facts, zeroconf versions) land here
+        # too, and the hello that caused them already syncs.
+        if dict(updated.options) == last_options:
+            return
         last_options = dict(updated.options)
 
         demo_mode = bool(updated.options.get(CONF_DEMO_MODE, False))
@@ -259,7 +265,7 @@ def _options_listener(device_id: str, entry: LizaIPConfigEntry):
             or demo_swipe_cmp != (last_demo_swipe if last_demo_mode else None)
         ):
             try:
-                await updated.runtime_data.set_demo_mode(
+                await updated.runtime_data.connection.set_demo_mode(
                     demo_mode,
                     dwell_time=demo_dwell if demo_mode else None,
                     swipe_time=demo_swipe if demo_mode else None,
@@ -361,7 +367,7 @@ def _watch_queue_targets(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await async_sync_sensors(hass)
 
     entry.async_on_unload(hass.bus.async_listen(CONFIG_CHANGED_EVENT, _sync))
-    hass.async_create_task(_sync())
+    entry.async_create_background_task(hass, _sync(), "lizaip queue sensors")
 
 
 def _watch_server_language(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -422,7 +428,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> b
         # register themselves in `hass.data` with a strong reference, so nothing
         # reclaims them once the entry stops being reachable.
         await action_controller.async_unload_scripts(hass, entry.entry_id)
-        await entry.runtime_data.disconnect()
+        await entry.runtime_data.connection.disconnect()
     return ok
 
 
@@ -437,7 +443,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     connection would otherwise remain reachable via `_find_connection()` in
     `device/websocket.py` even though the device it belongs to is gone.
     """
-    connection = getattr(entry, "runtime_data", None)
+    connection = entry_connection(entry)
     if connection is not None:
         # Defensive: normally already done by `async_unload_entry`, but a failed
         # or skipped unload would otherwise strand the compiled Scripts.

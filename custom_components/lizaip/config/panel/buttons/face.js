@@ -10,9 +10,7 @@ import {
   FIXED_CONTROL_KEYS,
   hasOverride,
   DEFAULT_BUTTON_ICONS,
-  matchControl,
   SLIDER_VERTICAL_KEY,
-  sliderFollows,
   SLIDER_ICON_HIDDEN_KEY,
   resolveSliderIcon,
   sliderIconFor,
@@ -28,6 +26,17 @@ import {
 } from "../lizaip-svg.js";
 
 export const ButtonsFaceMixin = {
+  // Which nesting mark, if any, the face should put on `key`.
+  //
+  // Since the read-only list came off the grid button's card, this is the *only*
+  // thing that says which fixed controls are overridden — so it is the whole
+  // affordance rather than half of it, and the reason it still asks
+  // `hasOverride` / `sliderRetarget` rather than a rule of its own is that
+  // those are what the executor's twins agree with.
+  //
+  // Returns null when no grid button is in context: without one, "overridden"
+  // has nothing to be relative to, and a permanent mark would say the fixed
+  // buttons are special even on pages that never nest anything.
   _faceMark(key, pageAssigns) {
     // An armed move outranks the nesting marks, and is the one mark that shows
     // with nothing in context. It answers a question the user is holding right
@@ -69,7 +78,7 @@ export const ButtonsFaceMixin = {
    * asks again, so it stayed a broken-image glyph.
    */
 
-  _tileImg(pageIdx, key, img) {
+  _tileImg(key, img) {
     const { src, key: devKey } = typeof img === "string" ? { src: img, key: "" } : img;
     const el = document.createElement("img");
     if (src) el.setAttribute("src", src);
@@ -103,15 +112,9 @@ export const ButtonsFaceMixin = {
     apply();
   },
 
-  // What the hover card says about a slider, answered here because
-  // `sliderFollows` and `matchControl` are module-local. `entity` is the
-  // fallback for a following slider and the only device for a pinned one.
-
   _refreshSVG() {
     const bp = this._blueprint;
     if (!bp) return;
-    // The shape the card describes is one of the ones about to be discarded.
-    this._hideButtonTip?.();
     // The tiles below are about to be rebuilt, so what the icon pass learned
     // from the previous ones no longer describes anything on screen.
     this._invalidateFaceCaches();
@@ -195,8 +198,8 @@ export const ButtonsFaceMixin = {
       // thumbnail's own handler could see it. Both faces answer the same
       // gesture now; the far one just has a page to cross first.
       const onSelect = isActive
-        ? (idx, how) => this._selectFaceKeyBy(bp.buttons[idx]?.key, how)
-        : (idx) => this._switchPageTo(pageIdx, bp.buttons[idx]?.key);
+        ? (idx) => this._selectFaceKey(bp.buttons[idx]?.key)
+        : (idx) => this._switchPageTo(this._pageIdxOf(container), bp.buttons[idx]?.key);
       const getIcon = (key) => {
         if (isSliderCtx(key)) return sliderCtxIcon();
         const assign = assignFor(key);
@@ -265,9 +268,6 @@ export const ButtonsFaceMixin = {
         // page, and clearing a button on a page the user is not editing is not
         // a gesture anyone reaches for by accident.
         onContext: isActive ? (idx, ev) => this._showFaceMenu(bp.buttons[idx], ev) : null,
-        // Only the open page, like `onContext`: the card reads the edit slot,
-        // so a thumbnail would describe its shapes with another page's config.
-        onHover: isActive ? (key, el, on) => this._onButtonHover(key, el, on) : null,
         // Only the open page, for the reason `onContext` is: a move reads the
         // open page's assignments, and a thumbnail is a picture of another.
         canDrag: isActive ? (key) => this._canMoveButton(key) : null,
@@ -294,7 +294,7 @@ export const ButtonsFaceMixin = {
             clip.className = 'pg-title-clip';
             clip.style.cssText = overlayStyle(b, b.w, b.h);
 
-            const el = this._tileImg(pageIdx, 'slider_horizontal', sliderImageUrl);
+            const el = this._tileImg('slider_horizontal', sliderImageUrl);
             el.className = 'pg-btn-img pg-title-img';
             const natural = (this._titleNaturalByUrl ||= new Map());
             const applySize = () => {
@@ -338,7 +338,7 @@ export const ButtonsFaceMixin = {
         );
         // "" is nothing to draw; null is a URL still being asked for.
         if (tile.src === "") return;
-        const el = this._tileImg(pageIdx, btn.key, tile);
+        const el = this._tileImg(btn.key, tile);
         el.className = 'pg-btn-img';
         // Dimmed while the firmware glyph is all there is. Read through
         // `storesConfig`, like the tint above: a fixed key configured inline,
@@ -486,27 +486,6 @@ export const ButtonsFaceMixin = {
   },
 
   /**
-   * A face button chosen with Enter or Space goes one step further than a
-   * click: focus moves to the editor's *first* control, text field or not,
-   * because the keyboard user asked to work on it. Enter on the button that is
-   * already open does the same instead of closing it.
-   */
-  _selectFaceKeyBy(key, how) {
-    if (!how?.keyboard) return this._selectFaceKey(key);
-    const idx = this._faceIdxFor(key);
-    if (idx >= 0 && idx === this._selectedButtonIdx) {
-      this._a11yFocusConfigViewOnce({ firstControl: true });
-      return true;
-    }
-    this._a11yFirstControlNext = true;
-    try {
-      return this._selectFaceKey(key);
-    } finally {
-      this._a11yFirstControlNext = false;
-    }
-  },
-
-  /**
    * `{src, key}` for a button face: the tile the remote is sent (`_deviceImg`).
    * An untinted tile -- a default the page leaves unassigned -- is asked for
    * without the colour.
@@ -522,36 +501,45 @@ export const ButtonsFaceMixin = {
 
   // --- Wiring ---
 
+  /**
+   * The blueprint index of a button key — what `_selectButton` speaks in.
+   * Read off the live blueprint rather than carried through the menu, because
+   * the menu outlives the render that opened it only by microseconds but the
+   * key is the stable thing either way.
+   */
   _faceIdxFor(key) {
     const buttons = this._blueprint?.buttons || [];
     return buttons.findIndex(b => b.key === key);
   },
 
-  // The host `_refreshButtonEntitySections` rebuilds: everything on the button
-  // card derived from the button's *entity*, which is chosen inside the action
-  // editor. That editor reports changes through value-changed, but a full
-  // _render() would tear it down mid-edit (`_mountEditor` clears its container
-  // and builds a new ha-automation-action), so this subtree is rebuilt on its
-  // own instead. A stable id, not a class, because the refresh has to find
-  // exactly one of them.
-  //
-  // The Button image and the per-state icon list share this one host. They are
-  // alternatives to each other, and while they briefly lived in separate
-  // regions with a host each, refreshing one without the other could show both
-  // at once. One host makes that unstateable rather than merely handled.
-  //
-  // The Label input is deliberately *not* in the host. It is a sibling, so an
-  // entity change cannot discard a name that has been typed but not yet
-  // confirmed.
-  ENTITY_SECTION_HOST: "#config-card-appearance",
-
-  // The press list's host. A second one, not a second region of the first: the
-  // rows render after the Tooltip and the Tooltip is deliberately not inside a
-  // host at all (see above), so the only way for the list to follow it is to
-  // have a host of its own. Refreshed alongside the first because each row's
-  // derived glyph is resolved against the button's entity domain.
-  PRESS_SECTION_HOST: "#config-card-presses",
-
+  /**
+   * What clicking a control on the face means, wherever the click came from.
+   *
+   * `slider_horizontal` is Page Settings, not a button: clicking it always
+   * lands on the page card, so it deselects rather than selecting. It also
+   * drops the context, because Page Settings is not a nested state and a face
+   * still marked under it would be claiming otherwise.
+   *
+   * It is additionally the one control that *is* the page's title, so it is
+   * what opens the title row on that card. Selecting a page thumbnail leaves
+   * the row closed; this strip toggles it, which is the same "click the thing
+   * again to put it away" every other control has.
+   *
+   * Everything else hands to `_selectButton`, including the click that
+   * deselects. That delegation is the fix for a real bug: this used to clear
+   * `_selectedButtonIdx` itself and return, which skipped `_selectButton`'s
+   * context handling entirely — so deselecting a grid button on the face left
+   * `_contextKey` set and the highlight stuck on with nothing selected. Two
+   * implementations of "what deselect means", one of which forgot half the
+   * state. One owner now — and that owner is why a click on an *inactive*
+   * page's face can land on the button it hit rather than only on the page:
+   * `_switchPageTo` replays the very same gesture once the page is current.
+   *
+   * @returns {boolean} Whether the key named a control — and so whether this
+   *   rendered. A caller that has changed something else first (the page, in
+   *   `_switchPageTo`'s case) has to draw that change itself when the answer is
+   *   no, or a key naming nothing would leave the new page unpainted.
+   */
   _selectFaceKey(key) {
     if (!key) return false;
     // A move is armed: this click is the second half of it, whatever it lands
@@ -594,11 +582,4 @@ export const ButtonsFaceMixin = {
     this._selectButton(idx);
     return true;
   },
-
-  /**
-   * The blueprint index of a button key — what `_selectButton` speaks in.
-   * Read off the live blueprint rather than carried through the menu, because
-   * the menu outlives the render that opened it only by microseconds but the
-   * key is the stable thing either way.
-   */
 };

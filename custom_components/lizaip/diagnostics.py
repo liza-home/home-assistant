@@ -41,12 +41,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from .config.log_tail import filter_lines, read_log_tail, supervisor_log
 from .config.page_templates import refresh as template_refresh
 from .const import DOMAIN
 from .device import report as device_report
 from .device.const import MODEL_ID
 from .device.connection import LizaIPConnection
-from .runtime import find_store, _resolve_device_id
+from .runtime import find_store, resolve_device_id
 from .shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
@@ -155,7 +156,7 @@ def _traffic_snapshot(connection: LizaIPConnection) -> dict[str, Any] | None:
     remote that said nothing, which is a different and much worse fault.
     """
     log = device_logger(_LOGGER, connection)
-    protocol = getattr(connection, "_protocol", None)
+    protocol = getattr(connection, "protocol", None)
     traffic = getattr(protocol, "traffic", None)
     if traffic is None:
         return None
@@ -228,23 +229,18 @@ async def _async_log_lines(hass: HomeAssistant) -> dict[str, Any]:
     Shares the bundle's readers rather than growing a second pair that could
     drift from them -- including the supervisor fallback, which is the normal
     case rather than the exception: Home Assistant OS keeps no log file at all.
-
-    Imported inside the function because the bundle imports this module; at
-    module level the two would be a cycle.
     """
-    from .config.diagnostics_bundle import _filter_lines, _read_log_tail, _supervisor_log
-
     mask = _entity_id_mask(hass)
     try:
         path = hass.config.path("home-assistant.log")
         if await hass.async_add_executor_job(os.path.isfile, path):
-            text = await hass.async_add_executor_job(_read_log_tail, path)
+            text = await hass.async_add_executor_job(read_log_tail, path)
             source = "home-assistant.log"
         else:
-            journal = await _supervisor_log(hass)
+            journal = await supervisor_log(hass)
             if journal is None:
                 return {"available": False, "reason": "no log file and no supervisor"}
-            text, source = _filter_lines(journal), "supervisor"
+            text, source = filter_lines(journal), "supervisor"
     except Exception as err:  # noqa: BLE001 — diagnostics must never raise
         return {"available": False, "error": f"{err.__class__.__name__}: {err}"}
 
@@ -413,7 +409,7 @@ async def _async_config_summary(hass: HomeAssistant, entry: ConfigEntry) -> dict
     }
 
     store = find_store(hass)
-    device_id = _resolve_device_id(hass, entry.entry_id)
+    device_id = resolve_device_id(hass, entry.entry_id)
     if store is None or not device_id:
         return summary
 
@@ -537,7 +533,7 @@ async def async_get_config_entry_diagnostics(
     ``probe`` and ``prefetched`` are what the ZIP already read off the remote;
     passing them spares the device a second round of the same requests.
     """
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
 
     device_report = await _async_device_report(
         hass, connection, probe=probe, prefetched=prefetched

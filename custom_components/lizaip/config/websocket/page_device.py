@@ -9,7 +9,6 @@ one, moves it as **Change device…** moves a template page.
 from __future__ import annotations
 
 import logging
-import re
 from collections import Counter
 from typing import Any
 
@@ -18,17 +17,17 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from ...runtime import _get_store, _resolve_device_id
+from ...runtime import get_store, resolve_device_id
 from ...shared.logs import device_id_logger
 from ..const import PAGE_ID_SCHEMA
 from ..device_entities import _resolve_device_domain_entities
 from ..events import fire_config_changed
-from .common import refresh_state_listener, requires_device, schedule_push_rescan
+from ..listeners import refresh_state_listener, schedule_push_rescan
+from .common import requires_device, send_failure
+from ..template_targets import device_entry_ids, eligible_devices, entry_domains
 from .templates import (
-    _device_entry_ids,
-    _eligible_devices,
-    _entry_domains,
     _referenced_entities,
+    _reference_pattern,
     _retarget_mapping,
     _rewrite_assignments,
 )
@@ -47,8 +46,8 @@ _PRIMARY_DOMAINS = (
 
 def _owner_integration(hass: HomeAssistant, device: Any) -> str | None:
     """The integration that set *device* up."""
-    domains = _entry_domains(hass)
-    for entry_id in sorted(_device_entry_ids(device)):
+    domains = entry_domains(hass)
+    for entry_id in sorted(device_entry_ids(device)):
         if entry_id in domains:
             return domains[entry_id]
     return None
@@ -118,11 +117,11 @@ async def ws_list_all_devices(hass: HomeAssistant, connection, msg: dict) -> Non
     Given the page, ``suggested`` is the device most of its buttons act on.
     """
     suggested = ""
-    device_id = _resolve_device_id(hass, msg["entry_id"])
+    device_id = resolve_device_id(hass, msg["entry_id"])
     if device_id and msg.get("page_id") is not None:
-        assignments = await _get_store(hass).async_get_assignments(device_id, msg["page_id"]) or {}
+        assignments = await get_store(hass).async_get_assignments(device_id, msg["page_id"]) or {}
         suggested = suggest_device(hass, assignments)
-    devices = _eligible_devices(hass, {})
+    devices = eligible_devices(hass, {})
     if suggested not in {d["id"] for d in devices}:
         suggested = ""
     connection.send_result(msg["id"], {"devices": devices, "suggested": suggested})
@@ -148,7 +147,7 @@ async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, devi
     """
     entry_id = msg["entry_id"]
     page_id = msg["page_id"]
-    store = _get_store(hass)
+    store = get_store(hass)
     pages = await store.async_get_pages(device_id)
     page = _page_of(pages, page_id)
     if page is None:
@@ -181,19 +180,19 @@ async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, devi
             _referenced_entities(assignments, set()),
         )
         if mapping:
-            pattern = re.compile(
-                r"(?<![A-Za-z0-9_])("
-                + "|".join(re.escape(k) for k in sorted(mapping, key=len, reverse=True))
-                + r")(?![A-Za-z0-9_])"
-            )
-            rewritten = _rewrite_assignments(assignments, pattern, mapping)
+            rewritten = _rewrite_assignments(assignments, _reference_pattern(mapping), mapping)
             buttons_changed = sum(1 for key in rewritten if rewritten[key] != assignments.get(key))
-            if buttons_changed:
-                await store.async_set_assignments(device_id, page_id, rewritten)
 
     page["template"] = {**page_template, "target": new_target}
-    await store.async_set_pages(device_id, pages)
-    await store.async_recompute_page_hash(device_id, page_id)
+    try:
+        if buttons_changed:
+            await store.async_set_assignments(device_id, page_id, rewritten)
+        await store.async_set_pages(device_id, pages)
+    except Exception as err:  # noqa: BLE001
+        send_failure(
+            hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Binding the page to a device",
+        )
+        return
 
     device_id_logger(_LOGGER, hass, device_id).info(
         "Bound page %s to device %s (was %s): %d button(s) changed",

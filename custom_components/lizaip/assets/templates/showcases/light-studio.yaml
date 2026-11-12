@@ -4,7 +4,7 @@
 # whichever lamp it was created for, and every value is live.
 #
 #   1      the lamp itself: the icon takes the lamp's own colour and fills to
-#          its brightness on its own; the tooltip prints `${_state}`
+#          its brightness on its own; the tooltip prints `{translate: ${_state}}`
 #   2      brightness as big text, computed from 0-255: `round(x * 100 / 255)`
 #   3      colour temperature in kelvin, straight from an attribute
 #   4      device facts rather than state: manufacturer, model, firmware
@@ -35,7 +35,7 @@ pages:
     buttons:
       button_1:
         icon: mdi:lightbulb
-        tooltip: "${_device} ${_state}"
+        tooltip: "${_device} {translate: ${_state}}"
         config:
           - action: light.toggle
 

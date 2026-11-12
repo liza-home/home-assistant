@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 
 from ..shared.logs import DeviceLogger, device_logger
 from ._state import remote_state
-from .helpers import _get_store, _resolve_device_id
+from ..runtime import get_store, resolve_device_id
 from .overrides import (
     is_grid_button,
     may_be_context,
@@ -98,11 +98,11 @@ async def _record_selection(
     against the state as it is then.
     """
     log = device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
-    device_id = _resolve_device_id(hass, entry_id)
+    device_id = resolve_device_id(hass, entry_id)
     if not device_id:
         return
 
-    assignments = await _get_store(hass).async_get_assignments(device_id, page_id)
+    assignments = await get_store(hass).async_get_assignments(device_id, page_id)
     assign = assignments.get(button_key)
 
     _update_context(entry_id, button_key, assign, interaction, log)

@@ -14,28 +14,26 @@ from __future__ import annotations
 
 import logging
 import math
+from copy import deepcopy
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from ..const import generate_page_id
 from .compose import ComposedPage, async_compose_part
-from .generate import (
+from .catalog import async_load_template, page_source, template_pages
+from .generate import PAGE_LINK_KEY
+from .parts import (
     NEXT_PART,
-    PAGE_LINK_KEY,
     PREVIOUS_PART,
-    async_load_template,
     page_max_parts,
-    page_source,
     has_more_parts,
     part_buttons,
     part_items,
     paginated_placeholder,
-    template_pages,
 )
 from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
-from .resolver import parse_token, template_bindings
-from .sources import async_resolve_source
+from .resolver import async_cached_resolve, parse_token, template_bindings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,10 +104,12 @@ async def async_paginate(
     store: Any,
     *,
     page_id: int | None = None,
+    cache: dict[Any, Any] | None = None,
 ) -> bool:
     """Give every paginated page set the parts its items need. True if any moved.
 
-    With *page_id*, only the set that page belongs to.
+    With *page_id*, only the set that page belongs to. *cache* holds the
+    source answers the refresh before it already read (see `resolve_binding`).
     """
     pages = await store.async_get_pages(device_id)
     changed = False
@@ -127,7 +127,7 @@ async def async_paginate(
         try:
             changed |= await _async_fit(
                 hass, entry_id, device_id, store, template_id, template,
-                name, page_def, placeholder, instance, parts, pages,
+                name, page_def, placeholder, instance, parts, pages, cache,
             )
         except Exception as exc:  # noqa: BLE001 - one set must not stop the rest
             _LOGGER.debug("Paginating %s page %r failed: %s", template_id, name, exc)
@@ -175,6 +175,7 @@ async def _async_count(
     first: dict,
     max_items: int,
     domain_entities: dict[str, str] | None = None,
+    cache: dict[Any, Any] | None = None,
 ) -> int | None:
     """How many items the placeholder has now, or ``None`` if it cannot say."""
     keys = _placeholder_keys(buttons, placeholder)
@@ -187,8 +188,8 @@ async def _async_count(
     binding = next((bindings[k] for k in keys if k in bindings), None)
     if not binding:
         return None
-    result = await async_resolve_source(
-        hass, binding["source"], binding.get("spec") or {}, max_items=max_items,
+    result = await async_cached_resolve(
+        hass, binding["source"], binding.get("spec") or {}, max_items, cache,
     )
     if result.error:
         return None
@@ -208,6 +209,7 @@ async def _async_fit(
     instance: int,
     parts: list[dict],
     pages: list[dict],
+    cache: dict[Any, Any] | None = None,
 ) -> bool:
     shared, buttons = await _async_page_source(hass, template_id, template, page_def)
     span, extra = part_items(buttons, placeholder)
@@ -221,7 +223,7 @@ async def _async_fit(
     domain_entities = _domain_entities(hass, target)
     count = await _async_count(
         hass, shared, item_buttons, placeholder, parts[0], span * max_parts + extra,
-        domain_entities,
+        domain_entities, cache,
     )
     if count is None:
         return False
@@ -280,7 +282,7 @@ async def _async_fit(
                 page["template"] = {**page["template"], "instance": instance}
         await store.async_set_pages(device_id, stored)
     if new:
-        from ..websocket.templates import async_store_template_pages
+        from ..template_writes import async_store_template_pages
 
         await async_store_template_pages(
             hass, entry_id, device_id, template_id, template, new,
@@ -338,30 +340,34 @@ async def _async_drop_empty_parts(
 async def _async_relink(
     store: Any, device_id: str, page_id: int, composed: ComposedPage, keys: list[str],
 ) -> None:
-    """Write a part's link buttons as *composed* has them, where they changed."""
-    assignments = await store.async_get_assignments(device_id, page_id) or {}
-    changed = False
-    for key in keys:
-        new = composed.assignments.get(key)
-        if new is None or assignments.get(key) == new:
-            continue
-        if not _is_link_or_empty(assignments.get(key)):
-            continue
-        assignments[key] = new
-        changed = True
-    if not changed:
-        return
-    library = await store.async_get_action_library(device_id)
-    known = {a.get("id") for a in library}
-    added = [a for a in composed.actions if a.get("id") not in known]
-    if added:
-        await store.async_set_action_library(device_id, [*library, *added])
-    await store.async_set_assignments(device_id, page_id, assignments)
-    await store.async_recompute_page_hash(device_id, page_id)
+    """Write a part's link buttons as *composed* has them, where they changed.
+
+    Read and written under the store's lock, so a panel save in between is not
+    overwritten with the page as it was before it.
+    """
+    async with store.device_lock(device_id):
+        assignments = deepcopy(await store.async_get_assignments(device_id, page_id) or {})
+        changed = False
+        for key in keys:
+            new = composed.assignments.get(key)
+            if new is None or assignments.get(key) == new:
+                continue
+            if not _is_link_or_empty(assignments.get(key)):
+                continue
+            assignments[key] = new
+            changed = True
+        if not changed:
+            return
+        library = await store.async_get_action_library(device_id)
+        known = {a.get("id") for a in library}
+        added = [a for a in composed.actions if a.get("id") not in known]
+        if added:
+            await store.async_set_action_library_locked(device_id, [*library, *added])
+        await store.async_set_assignments_locked(device_id, page_id, assignments)
 
 
 async def _reserved(store: Any, device_id: str, pages: list[dict]) -> set[int]:
-    from ..websocket.common import reserved_page_ids
+    from ..page_list import reserved_page_ids
 
     return await reserved_page_ids(
         store, device_id, {p["id"] for p in pages if isinstance(p, dict) and "id" in p},

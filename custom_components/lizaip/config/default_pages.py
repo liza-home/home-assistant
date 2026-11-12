@@ -32,10 +32,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from ..device.protocol import MIN_PAGE_ID
-from ..runtime import _get_store, entry_device_id
+from ..runtime import get_store, entry_device_id
 from ..shared.logs import device_logger
 from .page_templates import async_compose_pages, template_pages
-from .page_templates.generate import TEMPLATES_DIR
+from .page_templates.catalog import TEMPLATES_DIR
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ async def async_effective_pages(
     if not device_id:
         return EffectivePages([])
 
-    pages = await _get_store(hass).async_get_pages(device_id)
+    pages = await get_store(hass).async_get_pages(device_id)
     if pages:
         return EffectivePages(pages)
 
@@ -130,6 +130,6 @@ async def _async_placeholder_pages(
     if not composed:
         return EffectivePages([])
     return EffectivePages(
-        [{"id": c.page_id, "title": c.title, "hash": 0} for c in composed],
+        [{"id": c.page_id, "title": c.title} for c in composed],
         {c.page_id: c.assignments for c in composed},
     )

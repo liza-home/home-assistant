@@ -185,24 +185,4 @@ export const STYLES_SLIDER = `
     align-self: flex-start;
     margin-top: 10px;
   }
-  /* Says which scope a section writes to, for the one card where a section's
-     scope differs from the card's. Same shape as .slider-advanced-tag but
-     neutral: that one flags a state worth fixing, this one is a plain fact
-     about where an edit lands. Lowercase against the uppercase heading, so it
-     reads as an aside rather than as part of the title. */
-  .config-scope-tag {
-    display: inline-flex;
-    align-items: center;
-    min-height: 16px;
-    margin-left: 6px;
-    padding: 0 6px;
-    border-radius: 8px;
-    font-size: var(--liza-font-xs);
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
-    background: color-mix(in srgb, var(--secondary-text-color, #888) 14%, transparent);
-    color: var(--liza-muted-text);
-    cursor: help;
-  }
 `;

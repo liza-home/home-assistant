@@ -7,35 +7,33 @@ from __future__ import annotations
 
 import copy
 import logging
-from copy import deepcopy
-from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from ...action_controller.toggle import TOGGLE_KEY
-from ...runtime import _get_store, entry_connection
-from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_LONGTOUCH_KEY
+from ...runtime import get_store, entry_connection
 from ...shared.logs import device_id_logger
 from ..blueprint import async_get_blueprint
 from ..const import (
+    EMPTY_BUTTON,
     PAGE_ID_SCHEMA,
     PAGE_SUBPAGE_KEY,
     PAGES_SCHEMA,
     generate_page_id,
-    is_subpage,
 )
 from ..device_sync import is_ready
 from ..events import fire_config_changed
-from .common import (
-    EMPTY_BUTTON,
-    entry_log,
-    refresh_state_listener,
-    requires_device,
+from ..listeners import refresh_state_listener, schedule_push_rescan
+from ..page_list import (
+    async_drop_links_to,
+    device_holds_every_page,
+    deliverable_main_pages,
+    push_page_list,
     reserved_page_ids,
-    schedule_push_rescan,
+    send_main_pages,
 )
+from .common import requires_device, send_failure
 from ..access import require_device_access
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,44 +54,8 @@ async def _empty_page_assignments(
 @websocket_api.async_response
 @requires_device
 async def ws_get_pages(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
-    store = _get_store(hass)
+    store = get_store(hass)
     connection.send_result(msg["id"], {"pages": await store.async_get_pages(device_id)})
-
-
-def _deliverable_main_pages(conn, pages: list) -> list[int] | None:
-    """The main-page order to push straight from the panel, or ``None``.
-
-    `set_main_pages` is all-or-nothing -- naming one page the device does not
-    hold makes it reject the whole order -- and a rejection arrives without a
-    `seq_id`, costing the caller a ten-second timeout. So this shortcut is
-    taken only when the device holds every main page and nothing has to be
-    added first.
-
-    Returning ``None`` costs nothing: the full sync that follows filters the
-    order down to the pages that actually landed and sends it from there,
-    which is what lets a remote with one unstorable page still be reordered.
-    """
-    if not pages:
-        # The user deleted their last page, so the placeholders are about to
-        # take its place. Pushing an empty order first would blank the remote
-        # for as long as the sync behind this takes.
-        return None
-    if not _device_holds_every_page(conn, pages):
-        return None
-    return [p["id"] for p in pages if not is_subpage(p)]
-
-
-def _device_holds_every_page(conn, pages: list) -> bool:
-    """Whether the device holds every main page, so a sync has nothing to add.
-
-    Narrowing a `config_changed` event to "order only" lets the sync skip
-    rebuilding page payloads, which is only safe once there is nothing else
-    for it to do. While one page is missing it still has to retry adding it.
-    """
-    known = conn.page_cache.pages
-    return known is not None and all(
-        p["id"] in known for p in pages if not is_subpage(p)
-    )
 
 
 def _reordered_pages(stored: list, incoming: list) -> list | None:
@@ -138,10 +100,10 @@ async def _reorder_pages_fast(
 ) -> None:
     """Persist and push a page reorder, answering the panel before touching the device.
 
-    Order is two lists of ids on disk (``page_order.yaml``, ``main_pages.yaml``)
-    and one ``set_main_pages`` on the wire — PROTOCOL.md §"display order is
-    defined solely by `set_main_pages`" — and page order is not part of
-    ``compute_page_hash``, so no page payload changes and none needs resending.
+    Order is one list of ids on disk (``page_order.yaml``) and one
+    ``set_main_pages`` on the wire — PROTOCOL.md §"display order is defined
+    solely by `set_main_pages`" — and page order is not part of a page's
+    payload, so no page payload changes and none needs resending.
 
     The reply goes out first. Everything after it is bookkeeping the panel does
     not have to wait on, and used to add a device round trip plus a full
@@ -153,7 +115,7 @@ async def _reorder_pages_fast(
     conn = entry_connection(hass.config_entries.async_get_entry(msg["entry_id"]))
     order_only = False
     deliverable = (
-        _deliverable_main_pages(conn, pages)
+        deliverable_main_pages(conn, pages)
         if is_ready(conn)
         else None
     )
@@ -161,23 +123,13 @@ async def _reorder_pages_fast(
         # Already the order the device holds. `set_main_pages` makes it rewrite
         # its whole page setup, so sending it again is work with no effect.
         deliverable = None
-        order_only = _device_holds_every_page(conn, pages)
+        order_only = device_holds_every_page(conn, pages)
     if deliverable is not None:
-        try:
-            await conn.set_main_pages(deliverable)
-            conn.page_cache.main_pages = list(deliverable)
-            order_only = _device_holds_every_page(conn, pages)
-        except Exception as err:  # noqa: BLE001
-            device_id_logger(_LOGGER, hass, device_id).warning(
-                "set_main_pages after reorder failed: %s", err,
-            )
-            # Forgetting the order is what makes the next sync notice it is
-            # wrong and resend it; remembering a value we failed to write
-            # would make the device's real order invisible. The page contents
-            # go with it: a device that refused this is not a device we can
-            # still claim to know.
-            conn.page_cache.pages = None
-            conn.page_cache.main_pages = None
+        if await send_main_pages(
+            conn, deliverable, device_id_logger(_LOGGER, hass, device_id),
+            "set_main_pages after reorder failed: %s",
+        ):
+            order_only = device_holds_every_page(conn, pages)
 
     # Other open panels still learn about the move from this. It no longer sits
     # between the drop and the reply, which is the part that was felt, and when
@@ -205,7 +157,7 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
 
     pages = msg["pages"]
 
-    store = _get_store(hass)
+    store = get_store(hass)
 
     stored_pages = await store.async_get_pages(device_id)
     reordered = _reordered_pages(stored_pages, pages)
@@ -239,7 +191,7 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
     for p, fresh in zip(pages, is_new):
         base = {} if fresh else dict(stored_by_id.get(p["id"], {}))
         base.update(p)
-        page = {"id": base["id"], "title": base.get("title", ""), "hash": base.get("hash", 0)}
+        page = {"id": base["id"], "title": base.get("title", "")}
         page.update({k: v for k, v in base.items() if k not in page})
         merged.append(page)
     pages = merged
@@ -276,7 +228,9 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
         # the dead page's buttons, fully configured and invisible in the panel
         # until the user opened it.
         if p["id"] in minted_ids or p["id"] not in existing_assignments:
-            await store.async_set_assignments(device_id, p["id"], empty)
+            # A copy each: the store keeps what it is given, and pages sharing
+            # one dict would change together.
+            await store.async_set_assignments(device_id, p["id"], copy.deepcopy(empty))
 
     await store.async_set_pages(device_id, pages)
     # A page that is gone takes the links to it along: a page link left behind
@@ -295,150 +249,11 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
     # scheduled, so it stays here rather than behind the device round trip.
     schedule_push_rescan(hass, msg["entry_id"])
     try:
-        await _push_page_list(hass, msg["entry_id"], pages, order_only)
+        await push_page_list(hass, msg["entry_id"], pages, order_only)
     except Exception:  # noqa: BLE001 - the reply has gone; a raise would send a second one
         device_id_logger(_LOGGER, hass, device_id).exception(
             "Pushing the page list after set_pages failed",
         )
-
-
-#: The command a page link runs.
-_GOTO_PAGE = "lizaip.goto_page"
-
-
-def _opens_removed(steps: Any, removed: set[int]) -> bool:
-    """Whether *steps* is a page link to one of the *removed* pages."""
-    if not isinstance(steps, list) or not steps or not isinstance(steps[0], dict):
-        return False
-    step = steps[0]
-    if (step.get("action") or step.get("service")) != _GOTO_PAGE:
-        return False
-    raw = (step.get("data") or {}).get("page_id")
-    try:
-        return int(raw) in removed
-    except (TypeError, ValueError):
-        return False
-
-
-def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
-    """*assign* without its links to *removed* pages, or None if it had none.
-
-    A long touch, a fixed control's override or a toggle step that opens a
-    removed page goes; a click that opens one empties the button, keeping a
-    long touch that still leads somewhere. A button filled by a dynamic source
-    (a Table of contents tile) is left to that source's own refresh.
-    """
-    if not isinstance(assign, dict) or isinstance(assign.get(ASSIGNMENT_DYNAMIC_KEY), dict):
-        return None
-    result = deepcopy(assign)
-    changed = False
-    if _opens_removed(result.get(ASSIGNMENT_LONGTOUCH_KEY), removed):
-        result.pop(ASSIGNMENT_LONGTOUCH_KEY)
-        changed = True
-    overrides = result.get("overrides")
-    if isinstance(overrides, dict):
-        for key in [k for k, o in overrides.items()
-                    if isinstance(o, dict) and _opens_removed(o.get("config"), removed)]:
-            overrides.pop(key)
-            changed = True
-        if not overrides:
-            result.pop("overrides")
-    toggle = result.get(TOGGLE_KEY)
-    rules = toggle.get("rules") if isinstance(toggle, dict) else None
-    if isinstance(rules, list):
-        kept = [r for r in rules if not (isinstance(r, dict) and _opens_removed(r.get("config"), removed))]
-        if len(kept) != len(rules):
-            changed = True
-            if kept:
-                toggle["rules"] = kept
-            else:
-                result.pop(TOGGLE_KEY)
-    if _opens_removed(result.get("config"), removed):
-        longtouch = result.get(ASSIGNMENT_LONGTOUCH_KEY)
-        result = dict(EMPTY_BUTTON)
-        if longtouch:
-            result[ASSIGNMENT_LONGTOUCH_KEY] = longtouch
-        changed = True
-    return result if changed else None
-
-
-async def async_drop_links_to(
-    hass: HomeAssistant, entry_id: str, store, device_id: str, removed: set[int],
-) -> list[int]:
-    """Remove every link to the *removed* pages from the pages left; return those changed.
-
-    A link to a page that is gone does nothing on the remote, and in the editor
-    it kept an options page's long touch "in use" after the page was deleted.
-    """
-    if not removed:
-        return []
-    changed_pages: list[int] = []
-    everything = await store.async_get_all_assignments(device_id) or {}
-    for page in await store.async_get_pages(device_id):
-        page_id = page.get("id") if isinstance(page, dict) else None
-        if page_id is None or page_id in removed:
-            continue
-        assignments = everything.get(page_id) or {}
-        cleaned = {}
-        for key, assign in assignments.items():
-            fixed = drop_links_to(assign, removed)
-            if fixed is not None:
-                cleaned[key] = fixed
-        if cleaned:
-            await store.async_set_assignments(device_id, page_id, {**assignments, **cleaned})
-            await store.async_recompute_page_hash(device_id, page_id)
-            changed_pages.append(page_id)
-    if changed_pages:
-        # A dropped link can be a button's last dynamic binding.
-        schedule_push_rescan(hass, entry_id)
-    return changed_pages
-
-
-async def _push_page_list(
-    hass: HomeAssistant, entry_id: str, pages: list, order_only: bool
-) -> None:
-    """Tell the device and the other panels about a page list already stored."""
-    log = entry_log(_LOGGER, hass, entry_id)
-    conn = entry_connection(hass.config_entries.async_get_entry(entry_id))
-    order_pushed = False
-    page_ids = None
-    if conn is not None and conn.connected:
-        # PROTOCOL.md §set_main_pages: every id must already exist on the
-        # device, and the call is all-or-nothing -- naming one page it does not
-        # hold makes it reject the whole order, which is how reordering pages
-        # 1-20 silently failed while a refused page sat in the list. So the
-        # order carries only the pages the device actually holds, and goes out
-        # under the lock the full sync holds so the two never interleave.
-        page_ids = _deliverable_main_pages(conn, pages)
-        if page_ids == conn.page_cache.main_pages:
-            # Unchanged: `set_main_pages` makes the device rewrite its whole
-            # page setup, so it goes out only when the list actually moved --
-            # not on every edit.
-            page_ids = None
-            order_pushed = _device_holds_every_page(conn, pages)
-    if page_ids is None:
-        log.debug(
-            "Leaving the page order to the full sync: the device does not "
-            "hold every page yet",
-        )
-    else:
-        async with conn.page_cache.lock:
-            try:
-                await conn.set_main_pages(page_ids)
-                # Keep cache in sync so the next full sync does not see stale order.
-                conn.page_cache.main_pages = list(page_ids)
-                order_pushed = _device_holds_every_page(conn, pages)
-            except Exception as err:
-                log.warning("set_main_pages after set_pages failed: %s", err)
-                # Both, not just the order: a half-remembered device state is
-                # what made the next sync diff against pages it no longer knew
-                # the device held.
-                conn.page_cache.pages = None
-                conn.page_cache.main_pages = None
-
-    fire_config_changed(
-        hass, entry_id, order_only=order_only and order_pushed
-    )
 
 
 @websocket_api.websocket_command({
@@ -463,27 +278,21 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
 
     page_id = msg["page_id"]
 
-    store = _get_store(hass)
-    pages = await store.async_get_pages(device_id)
-    page = next((p for p in pages if p["id"] == page_id), None)
-    if not page:
+    store = get_store(hass)
+    # Written whether true or false: the store only keeps the subpage key when
+    # it is true, so clearing it is how a page becomes a main page again.
+    fields = {key: msg[key] for key in ("title", "default_color", PAGE_SUBPAGE_KEY) if key in msg}
+    try:
+        pages = await store.async_update_page(device_id, page_id, fields)
+    except Exception as err:  # noqa: BLE001
+        send_failure(hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Saving the page")
+        return
+    if pages is None:
         connection.send_error(msg["id"], "page_not_found", f"Page {page_id} not found")
         return
-
-    if "title" in msg:
-        page["title"] = msg["title"]
-    if "default_color" in msg:
-        page["default_color"] = msg["default_color"]
-    if PAGE_SUBPAGE_KEY in msg:
-        # Written whether true or false: the store only keeps the key when it is
-        # true, so clearing it is how a page becomes a main page again.
-        page[PAGE_SUBPAGE_KEY] = msg[PAGE_SUBPAGE_KEY]
-
-    await store.async_set_pages(device_id, pages)
-    await store.async_recompute_page_hash(device_id, page_id)
-    pages = await store.async_get_pages(device_id)
     fire_config_changed(hass, msg["entry_id"])
 
+    page = next(p for p in pages if p["id"] == page_id)
     device_id_logger(_LOGGER, hass, device_id).debug(
         "Updated page %s: title=%s, default_color=%s",
         page_id, page.get("title", ""), page.get("default_color", ""),
@@ -512,7 +321,7 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
     entry_id = msg["entry_id"]
     source_id = msg["page_id"]
 
-    store = _get_store(hass)
+    store = get_store(hass)
     pages = await store.async_get_pages(device_id)
     source_idx = next(
         (i for i, p in enumerate(pages) if isinstance(p, dict) and p.get("id") == source_id),
@@ -529,18 +338,19 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
     )
     new_page = copy.deepcopy(pages[source_idx])
     new_page["id"] = new_page_id
-    new_page["hash"] = 0
     # The copy is its own page: it stays a template page, but it does not
     # belong to the set the original came from, so deleting that set leaves
     # the copy alone.
     if isinstance(new_page.get("template"), dict):
         new_page["template"].pop("instance", None)
-    pages.insert(source_idx + 1, new_page)
-
     assignments = copy.deepcopy(await store.async_get_assignments(device_id, source_id))
-    await store.async_set_assignments(device_id, new_page_id, assignments)
-    await store.async_set_pages(device_id, pages)
-    await store.async_recompute_page_hash(device_id, new_page_id)
+    try:
+        await store.async_insert_page(device_id, new_page, assignments, after=source_id)
+    except Exception as err:  # noqa: BLE001
+        send_failure(
+            hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Duplicating the page",
+        )
+        return
 
     await refresh_state_listener(hass, entry_id)
     fire_config_changed(hass, entry_id)

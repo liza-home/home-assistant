@@ -18,7 +18,7 @@ export const ThemeDownloadMixin = {
   /** Fetch the theme's own file and hand it to the browser as `<id>.yaml`. */
   async _downloadTheme(themeId) {
     if (!themeId) return;
-    await this._runBusy("_themeDownloadBusy", "settings_theme_download_failed", async () => {
+    await this._runBusy("_themeDownloadBusy", async () => {
       const r = await this._hass.callWS({
         type: "lizaip_config/export_theme", theme_id: themeId,
       });
@@ -26,7 +26,7 @@ export const ThemeDownloadMixin = {
       this._saveDiagnosticsFile({ url, filename: `${themeId}.yaml` });
       // The anchor has been clicked by now, so the blob has done its job.
       setTimeout(() => URL.revokeObjectURL(url), 10000);
-    });
+    }, { toast: "settings_theme_download_failed" });
   },
   /** Add a dropped file as a new theme of the user's own. The backend picks
    * a free name, so nothing already there is written over. */
@@ -44,13 +44,13 @@ export const ThemeDownloadMixin = {
       this._toast(this._t("settings_theme_import_failed", { error: String(e?.message || e) }));
       return;
     }
-    await this._runBusy("_themeImportBusy", "settings_theme_import_failed", async () => {
+    await this._runBusy("_themeImportBusy", async () => {
       const r = await this._hass.callWS({ type: "lizaip_config/import_theme", text });
       if (this._textSettings) this._textSettings.themes = r.themes;
       this._forgetDeviceUrls?.();
       this._toast(this._t("settings_theme_import_done",
         { name: this._themeById(r.id)?.name || r.id }));
-    });
+    }, { toast: "settings_theme_import_failed" });
   },
 
   /** Make *el* take a dropped theme file, or a theme tile dragged onto it,

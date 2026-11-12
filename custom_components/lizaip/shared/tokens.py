@@ -202,9 +202,9 @@ def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
         return text
     text = _with_page_device(text, hass)
     text = FUNCTION_TOKEN_RE.sub(lambda m: _function_value(hass, m), text)
-    return ENTITY_TOKEN_RE.sub(
+    return translate_inline(ENTITY_TOKEN_RE.sub(
         lambda m: entity_token_value(hass, m.group(1).lower(), m.group(2)), text,
-    )
+    ))
 
 
 def _template_target(template: Any) -> dict:
@@ -658,7 +658,7 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
         missing = missing or not value
         return value
 
-    resolved = ENTITY_TOKEN_RE.sub(_value, text).strip()
+    resolved = translate_inline(ENTITY_TOKEN_RE.sub(_value, text)).strip()
     return None if missing or not resolved else resolved
 
 
@@ -690,10 +690,15 @@ def substitute_tooltip_tokens(
     if is_media_source(text):
         # A picture keeps its entity variables for `finish_tooltip`, which
         # reads them by the picture rules (no unit inside an icon name).
-        return TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
+        return translate_inline(
+            TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text),
+        )
     if hass is not None:
         text = substitute_entity_tokens(text, hass)
-    substituted = TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text)
+    # `{translate: ${_state}}` waited for its value; it is looked up now.
+    substituted = translate_inline(
+        TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text),
+    )
     # A token that collapsed can leave a separator joining nothing — a goto
     # whose page was deleted printed a dangling "Go to page:". Trimmed here
     # rather than in `clean_tooltip_text`, which sees the text *after* this and

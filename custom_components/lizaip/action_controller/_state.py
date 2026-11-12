@@ -10,11 +10,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..const import DEFAULT_PAGE_ID
+
 _LOGGER = logging.getLogger(__name__)
 
 
-#: Pages are 1-based; a page dict missing "id" is treated as the first page.
-_DEFAULT_PAGE_ID = 1
+_DEFAULT_PAGE_ID = DEFAULT_PAGE_ID
 
 #: Coalesce bursty state/attribute changes into one icon update.
 _STATE_DEBOUNCE_SECONDS = 0.2
@@ -44,6 +45,13 @@ _SELECTING_INTERACTIONS: frozenset[str] = frozenset({"touch", "click"})
 
 # Stale gestures are abandoned so the next touch cannot use an old zero-point.
 SLIDER_GESTURE_TIMEOUT = 5.0
+
+#: A pressed key says so with a ``repeat`` every ~0.24 s; one silent for longer
+#: has come up, whether or not the event saying so arrived.
+REPEAT_HEARTBEAT_TIMEOUT = 0.4
+
+#: No hold is this long; a repeat loop still running by then is stopped anyway.
+REPEAT_MAX_SECONDS = 60.0
 
 
 @dataclass

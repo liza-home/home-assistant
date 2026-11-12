@@ -24,7 +24,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    connection: LizaIPConnection = entry.runtime_data
+    connection: LizaIPConnection = entry.runtime_data.connection
     async_add_entities(
         [
             LizaIPBatterySensor(connection, entry),
@@ -60,11 +60,8 @@ class LizaIPBatterySensor(LizaIPEntity, RestoreSensor):
         await super().async_added_to_hass()
         if self._attr_native_value is None and (last := await self.async_get_last_sensor_data()):
             self._attr_native_value = last.native_value
-        self._connection.register_sensor("battery", self._handle_update)
+        self.async_on_remove(self._connection.register_sensor("battery", self._handle_update))
 
-    async def async_will_remove_from_hass(self) -> None:
-        self._connection.unregister_sensor("battery")
-        await super().async_will_remove_from_hass()
 
     def _handle_update(self, value: float) -> None:
         self._attr_native_value = value

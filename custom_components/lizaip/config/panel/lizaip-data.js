@@ -94,7 +94,7 @@ export const DataMixin = {
   },
 
   async _loadIconDefaults(withShipped = true) {
-    // Both in one await: a second await point would let the caller's palette
+    // Both in one await: a second await point would let a concurrent caller's
     // read land between them. The shipped table is read once and never
     // themed -- a themed one would call a theme's own glyph "seeded".
     const wantShipped = withShipped && !this._shippedIconDefaults;
@@ -122,23 +122,6 @@ export const DataMixin = {
   },
 
   /**
-   * Icon-tint swatches, derived server-side from imgserv's COLOR_NAMES.
-   *
-   * Left null on failure rather than defaulted to a local copy: a hardcoded
-   * fallback palette here would silently drift from the colours imgserv renders,
-   * which is the whole reason this is fetched. The picker falls back to the
-   * free-form hex input, which still works.
-   */
-  async _loadPalette() {
-    try {
-      this._palette = (await this._hass.callWS({
-        type: "lizaip_config/get_palette", entry_id: this._currentEntry || undefined,
-      }))?.colors || null;
-    }
-    catch (e) { this._palette = null; }
-  },
-
-  /**
    * The action wordings the panel prints, from the integration's translations.
    *
    * Loaded rather than hardcoded so the panel and the device cannot disagree:
@@ -160,6 +143,7 @@ export const DataMixin = {
         language: this._uiLanguage(),
       });
       this._buttonTooltips = r?.tooltips || {};
+      this._stateWords = r?.state_words || {};
       // The language the backend resolved -- the device's, which may outrank
       // this browser.
       this._buttonTooltipsLang = r?.language || "";
@@ -206,13 +190,51 @@ export const DataMixin = {
       // The title previews are drawn in the remote's text settings.
       this._loadTextSettings(),
       this._loadIconOptions(),
-      // Both are the selected remote's theme's, so they are re-read on every
-      // switch rather than kept from the panel's first load.
+      // The selected remote's theme's, so it is re-read on every switch
+      // rather than kept from the panel's first load.
       this._loadIconDefaults(),
-      this._loadPalette(),
     ]);
-    await this._loadAssignments();
-    await this._loadGlobalUsage();
+    await this._loadAssignmentsAndUsage();
+  },
+
+  /**
+   * `_loadAssignments` then `_loadGlobalUsage`, with one request between
+   * them where there used to be two: when the scan is going to read every
+   * page in bulk anyway, the current page is taken from that same answer
+   * (`get_all_assignments` holds each page exactly as `get_assignments`
+   * returns it, and `{}` for a page with none stored). Without other pages
+   * to read, or when the bulk read fails, it is the two calls as before.
+   */
+  async _loadAssignmentsAndUsage() {
+    const entry = this._currentEntry;
+    const pageId = this._currentPageId;
+    const needsBulk = !!pageId
+      && this._pages.some((p) => p.id !== pageId && !this._pageCache?.[p.id]);
+    const bulk = needsBulk ? await this._fetchAllAssignments() : null;
+    if (!bulk) {
+      await this._loadAssignments();
+      // A bulk read that just failed is not asked for again.
+      await this._loadGlobalUsage(false, needsBulk ? null : undefined);
+      return;
+    }
+    // The same guard as `_loadAssignments`: an answer for a remote or page
+    // that is no longer current is nobody's, and the scan then reads afresh.
+    if (this._currentEntry !== entry || this._currentPageId !== pageId) {
+      await this._loadGlobalUsage();
+      return;
+    }
+    this._assignments = bulk[String(pageId)] || {};
+    await this._loadGlobalUsage(false, bulk);
+  },
+
+  /** Every page's assignments by page id (as a string), or null on failure. */
+  async _fetchAllAssignments() {
+    try {
+      const r = await this._hass.callWS({ type: "lizaip_config/get_all_assignments", entry_id: this._currentEntry });
+      return r?.assignments || {};
+    } catch (e) {
+      return null;
+    }
   },
 
   /**
@@ -234,12 +256,30 @@ export const DataMixin = {
     this._iconOptions = r;
   },
 
-  async _loadPages() {
+  /**
+   * Read the page list. Opening a remote lands on its first page; with
+   * *keepOpen* (a part the pagination added behind the panel's back) the open
+   * page stays open, found by id since pages may have come before it.
+   */
+  async _loadPages(keepOpen = false) {
+    const entry = this._currentEntry;
+    let pages = null;
     try {
-      const r = await this._hass.callWS({ type: "lizaip_config/get_pages", entry_id: this._currentEntry });
-      this._pages = r?.pages || [];
-    } catch (e) { this._pages = []; }
-    this._currentPageIdx = 0;
+      const r = await this._hass.callWS({ type: "lizaip_config/get_pages", entry_id: entry });
+      pages = r?.pages;
+    } catch (e) { /* handled below */ }
+    if (!keepOpen) {
+      this._pages = pages || [];
+      this._currentPageIdx = 0;
+      return;
+    }
+    // Same guard as `_loadAssignments`; the open page is read on arrival, so a
+    // switch made while the list was in flight is the one kept.
+    if (this._currentEntry !== entry || !Array.isArray(pages)) return;
+    const open = this._currentPageId;
+    this._pages = pages;
+    const at = pages.findIndex((q) => q.id === open);
+    this._currentPageIdx = at >= 0 ? at : Math.min(this._currentPageIdx, Math.max(pages.length - 1, 0));
   },
 
   async _loadActions() {
@@ -261,10 +301,17 @@ export const DataMixin = {
   async _loadAssignments() {
     const pageId = this._pages[this._currentPageIdx]?.id;
     if (!pageId) { this._assignments = {}; return; }
+    const entry = this._currentEntry;
+    let assigns;
     try {
-      const r = await this._hass.callWS({ type: "lizaip_config/get_assignments", entry_id: this._currentEntry, page_id: pageId });
-      this._assignments = r?.assignments || {};
-    } catch (e) { this._assignments = {}; }
+      const r = await this._hass.callWS({ type: "lizaip_config/get_assignments", entry_id: entry, page_id: pageId });
+      assigns = r?.assignments || {};
+    } catch (e) { assigns = {}; }
+    // A reply for a page that stopped being current while it was in flight
+    // belongs to nobody now: written here it would become the new page's
+    // buttons, and the next autosave would store them there.
+    if (this._currentEntry !== entry || this._pages[this._currentPageIdx]?.id !== pageId) return;
+    this._assignments = assigns;
   },
 
   /**
@@ -288,19 +335,16 @@ export const DataMixin = {
    * rename on a hundred-page remote cost a hundred of them. A failed bulk
    * read falls through to the per-page path, which has the fallbacks.
    */
-  async _loadGlobalUsage(refresh = false) {
+  async _loadGlobalUsage(refresh = false, prefetched = undefined) {
     const details = {};
     let complete = true;
-    let bulk = null;
+    // `prefetched`: a bulk answer already in hand, or null for one that has
+    // just failed and is not worth asking again; undefined asks for it here.
+    let bulk = prefetched ?? null;
     const needsBackend = this._pages.some(
       (p) => p.id !== this._currentPageId && (refresh || !this._pageCache[p.id]),
     );
-    if (needsBackend) {
-      try {
-        const r = await this._hass.callWS({ type: "lizaip_config/get_all_assignments", entry_id: this._currentEntry });
-        bulk = r?.assignments || {};
-      } catch (e) { bulk = null; }
-    }
+    if (needsBackend && prefetched === undefined) bulk = await this._fetchAllAssignments();
     for (let pi = 0; pi < this._pages.length; pi++) {
       const page = this._pages[pi];
       let assigns;
@@ -444,16 +488,19 @@ export const DataMixin = {
     // The page and its buttons as they are now, before the first round trip:
     // a page switch or delete may move `_currentPageId` while the actions
     // save, and the edits belong to the page they were made on.
+    // The entry likewise: leaving the remote clears `_currentEntry` without
+    // waiting for this save.
+    const entryId = this._currentEntry;
     const pageId = this._currentPageId;
     const assignments = this._assignments;
     try {
-      await this._saveActionsToBackend();
-      await this._saveAssignments(assignments, pageId);
+      await this._saveActionsToBackend(entryId);
+      await this._saveAssignments(assignments, pageId, entryId);
       if (!silent) this._toast(this._t("saved"));
     } catch (e) { this._toast(this._t("save_failed", { error: e.message || e })); }
   },
 
-  async _saveActionsToBackend() {
+  async _saveActionsToBackend(entryId = this._currentEntry) {
     for (let ai = 0; ai < this._actions.length; ai++) {
       const action = this._actions[ai];
       const service = action.service || "";
@@ -462,7 +509,8 @@ export const DataMixin = {
       // Only a fixed-icon action gets an icon written. A state-varying one is
       // left with no `states`: a stored rule outranks the theme, so seeding
       // froze the shipped glyphs onto the button for good.
-      if (this._internalCommand(service) || this._isStatelessService(svc)) {
+      const internal = this._internalCommand(service);
+      if (internal || this._isStatelessService(svc)) {
         if (!action.icon) {
           action.icon = this._getServiceIcon(service);
         }
@@ -473,13 +521,13 @@ export const DataMixin = {
     // it can know the reply will not make it.
     this._markSelfSave();
     try {
-      await this._hass.callWS({ type: "lizaip_config/save_actions", entry_id: this._currentEntry, actions: this._actions });
+      await this._hass.callWS({ type: "lizaip_config/save_actions", entry_id: entryId, actions: this._actions });
     } finally {
       this._markSelfSave();
     }
   },
 
-  async _saveAssignments(assignments = null, pageId = null) {
+  async _saveAssignments(assignments = null, pageId = null, entryId = this._currentEntry) {
     const source = assignments || this._assignments;
     const cleaned = {};
     for (const [btnKey, assign] of Object.entries(source)) {
@@ -521,7 +569,7 @@ export const DataMixin = {
     this._markSelfSave();
     try {
       await this._hass.callWS({
-        type: "lizaip_config/save_assignments", entry_id: this._currentEntry,
+        type: "lizaip_config/save_assignments", entry_id: entryId,
         page_id: targetPageId, assignments: cleaned,
         language: this._uiLanguage(),
       });
@@ -837,8 +885,7 @@ export const DataMixin = {
    * target be corrected.
    */
   async _createPage(create, { reloadActions = false } = {}) {
-    this._pageOpInFlight = true;
-    try {
+    return this._runPageOp(async () => {
       // Awaited: the save writes the whole action library, and so may adding
       // a template; run side by side, one would overwrite the other's actions.
       await this._flushAutoSave();
@@ -882,9 +929,7 @@ export const DataMixin = {
       this._render();
       this._scrollActivePageIntoView();
       return result;
-    } finally {
-      this._endPageOp();
-    }
+    });
   },
 
   _scrollActivePageIntoView() {
@@ -904,8 +949,7 @@ export const DataMixin = {
    * because what the server now holds is no longer what the panel showed.
    */
   async _retargetTemplatePage(page, target, targetKind = "device") {
-    this._pageOpInFlight = true;
-    try {
+    return this._runPageOp(async () => {
       await this._flushAutoSave();
       const result = await this._hass.callWS({
         type: "lizaip_config/retarget_template_page",
@@ -921,9 +965,7 @@ export const DataMixin = {
       for (const id of moved) delete this._pageCache[id];
       if (moved.includes(this._currentPageId)) await this._loadAssignments();
       return result;
-    } finally {
-      this._endPageOp();
-    }
+    });
   },
 
   /**
@@ -987,8 +1029,7 @@ export const DataMixin = {
    * autosave landing afterwards would put the old device back.
    */
   async _bindPageDevice(page, target) {
-    this._pageOpInFlight = true;
-    try {
+    return this._runPageOp(async () => {
       await this._flushAutoSave();
       const result = await this._hass.callWS({
         type: "lizaip_config/assign_page_device",
@@ -1002,8 +1043,6 @@ export const DataMixin = {
       for (const id of moved) delete this._pageCache[id];
       if (moved.includes(this._currentPageId)) await this._loadAssignments();
       return result;
-    } finally {
-      this._endPageOp();
-    }
+    });
   },
 };

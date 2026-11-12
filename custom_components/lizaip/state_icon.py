@@ -16,6 +16,7 @@ what the panel has always done via ``_getTargetEntityFromConfig``.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Final
 
 from homeassistant.core import HomeAssistant, State
 
@@ -33,6 +34,23 @@ from .state_color import (
     is_tintable,
     read_color_enabled,
 )
+
+
+#: Corner radius of a whole picture on a tile, in percent, 100 being a circle.
+CONF_ICON_CORNER_RADIUS: Final = "icon_corner_radius"
+#: 0 is square, 50 is a circle; the default is the circle imgserv has always drawn.
+DEFAULT_ICON_CORNER_RADIUS: Final = 0
+ICON_CORNER_RADIUS_MIN: Final = 0
+ICON_CORNER_RADIUS_MAX: Final = 100
+
+
+def read_corner_radius(options: object) -> int:
+    """The configured corner radius, the default for anything unusable."""
+    get = getattr(options, "get", None)
+    raw = get(CONF_ICON_CORNER_RADIUS) if get else None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return DEFAULT_ICON_CORNER_RADIUS
+    return max(ICON_CORNER_RADIUS_MIN, min(ICON_CORNER_RADIUS_MAX, raw))
 
 
 @dataclass(frozen=True)
@@ -80,6 +98,7 @@ class IconStyleOptions:
     step: int
     fill: bool
     tint: bool
+    radius: int = DEFAULT_ICON_CORNER_RADIUS
 
 
 def read_icon_style_options(options: object) -> IconStyleOptions:
@@ -92,6 +111,7 @@ def read_icon_style_options(options: object) -> IconStyleOptions:
         step=read_fill_step(options),
         fill=read_fill_enabled(options),
         tint=read_color_enabled(options),
+        radius=read_corner_radius(options),
     )
 
 
