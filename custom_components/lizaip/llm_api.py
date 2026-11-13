@@ -332,7 +332,7 @@ class ListRemotesTool(llm.Tool):
     parameters = vol.Schema({})
 
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.page_templates.sources import page_name
+        from .config.page_templates.page_source import page_name
         from .runtime import get_store
 
         store = get_store(hass)
@@ -602,7 +602,7 @@ class DeletePageTool(llm.Tool):
 
     @_serialized
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.page_templates.sources import page_name
+        from .config.page_templates.page_source import page_name
         from .config.listeners import schedule_push_rescan
         from .config.page_list import async_drop_links_to, push_page_list
         from .runtime import get_store
@@ -843,7 +843,7 @@ class UpdatePageTool(llm.Tool):
     async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
         from .config.const import PAGE_SUBPAGE_KEY
         from .config.events import fire_config_changed
-        from .config.page_templates.sources import page_name, title_parts
+        from .config.page_templates.page_source import page_name, title_parts
         from .config.page_list import push_page_list
         from .runtime import get_store
 

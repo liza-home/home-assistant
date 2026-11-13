@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from ...runtime import get_store, resolve_device_id
+from ...shared.authorship import current_user
 from ...shared.logs import device_id_logger
 from ..const import PAGE_ID_SCHEMA
 from ..device_entities import _resolve_device_domain_entities
@@ -188,6 +189,10 @@ async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, devi
         if buttons_changed:
             await store.async_set_assignments(device_id, page_id, rewritten)
         await store.async_set_pages(device_id, pages)
+        # Its bound buttons will be refreshed into whatever the new device
+        # offers: whoever chose the device wrote those steps.
+        if (user := current_user.get()) is not None and not user.is_admin:
+            await store.async_stamp_restored(device_id, user, {page_id}, bound_only=True)
     except Exception as err:  # noqa: BLE001
         send_failure(
             hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Binding the page to a device",

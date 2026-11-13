@@ -42,14 +42,54 @@ from .shared.slider_throttle import (
     DEFAULT_SLIDER_MIN_INTERVAL_MS,
     SLIDER_MIN_INTERVAL_MS_MAX,
 )
-from . import provisioning
+from . import issues, provisioning
 from .device.http import device_session, device_url
 from .shared.logs import DeviceLogger, device_logger
 from .shared.numbers import to_float
 from .runtime import entry_connection
 from .device.const import LIZAIP_AVAILABILITY_EVENT, MODEL
+from .device.protocol import PROTOCOL_VERSION, device_id_from_mac
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _discovered_device_id(service_name: str, properties: Mapping[str, Any]) -> str:
+    """The ``device_id`` a discovered remote connects with.
+
+    The remote names itself by MAC in the TXT ``device_id`` and, today, in the
+    service instance name too. TXT wins: it is specified as the MAC, while the
+    instance name is free to become something friendlier. Either spelling
+    (``a4:cf:…`` or ``a4cf…``) yields the 12-hex form the remote puts in its
+    WebSocket URL, so the entry and the connection always agree.
+    """
+    instance = service_name.split(".")[0]
+    txt = device_id_from_mac(properties.get("device_id"))
+    if txt is None:
+        return device_id_from_mac(instance) or instance
+    if (label := device_id_from_mac(instance)) is not None and label != txt:
+        _LOGGER.warning(
+            "Remote advertises as %s but its TXT record names %s; using %s",
+            instance, properties.get("device_id"), txt,
+        )
+    return txt
+
+
+def _warn_on_protocol_version(device_id: str, advertised: Any) -> None:
+    """Note a remote whose advertised protocol differs from ours.
+
+    Discovery still proceeds: the hello repeats the check once connected and
+    raises the repair issue there.
+    """
+    try:
+        version = int(advertised)
+    except (TypeError, ValueError):
+        return
+    if version != PROTOCOL_VERSION:
+        _LOGGER.warning(
+            "Discovered remote %s speaks protocol version %s, Home Assistant "
+            "speaks %s; some features may not work until both are updated",
+            device_id, version, PROTOCOL_VERSION,
+        )
 
 
 class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -107,7 +147,8 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         firmware_name = properties.get("name")
         self.sw_version = properties.get("version")
 
-        unique_id = discovery_info.name.split(".")[0]
+        unique_id = _discovered_device_id(discovery_info.name, properties)
+        _warn_on_protocol_version(unique_id, properties.get("protocol_version"))
         await self.async_set_unique_id(unique_id)
 
         if any(e.unique_id == unique_id for e in self._async_current_entries()):
@@ -155,7 +196,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 elif await self._async_address_is_stale(cfg, unique_id):
                     self._spawn_provisioning(
                         self._reprovision_unless_it_connects(
-                            unique_id, self.discovered_ips
+                            unique_id, self.discovered_ips, cfg
                         ),
                         what="stale_address",
                     )
@@ -167,6 +208,13 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="already_configured")
 
         self._abort_if_unique_id_configured(updates={"sw_version": self.sw_version})
+
+        if await self._async_claimed_elsewhere(self.discovered_ips):
+            self._log_for(unique_id).info(
+                "Device is already provisioned to another Home Assistant — "
+                "not offering it",
+            )
+            return self.async_abort(reason="already_provisioned_elsewhere")
 
         # Fetch full device info (capabilities, version) per PROTOCOL.md section 2
         self.device_info = await self._fetch_device_info(self.discovered_ips)
@@ -216,6 +264,22 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return await provisioning.async_read_ha_config(
             self.hass, device_ips, self._device_port
         )
+
+    async def _async_claimed_elsewhere(self, device_ips: list[str]) -> bool:
+        """Whether the device is already aimed at a different Home Assistant.
+
+        The firmware refuses a different ``ha_hostname`` until a factory reset
+        (see provisioning), so such a device cannot be added here. A device we
+        cannot ask is still offered: unreachable is not the same as claimed.
+        """
+        if not device_ips:
+            return False
+        cfg = await self._async_read_ha_config(device_ips)
+        stored_host = str(cfg.get("ha_hostname") or "").strip() if cfg else ""
+        if not stored_host:
+            return False
+        wanted_host, _ = await self._async_ha_address()
+        return stored_host.rstrip(".").casefold() != wanted_host.rstrip(".").casefold()
 
     # ------------------------------------------------------------------
     # HA address resolution — what we send to the device
@@ -303,7 +367,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return None
 
     async def _reprovision_unless_it_connects(
-        self, unique_id: str, device_ips: list[str]
+        self, unique_id: str, device_ips: list[str], held: dict | None = None
     ) -> None:
         """Push the address to an advertising device that is not getting through.
 
@@ -317,7 +381,24 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "Device connected on its own — leaving its address alone",
             )
             return
-        await self._try_reprovision(device_ips)
+        outcome = await self._try_reprovision(device_ips)
+        if outcome is not provisioning.ProvisionOutcome.CONFLICT:
+            return
+        # The firmware keeps a hostname until it is factory-reset, so this
+        # remote cannot be repaired from here; tell the user how to.
+        entry = next(
+            (e for e in self._async_current_entries() if e.unique_id == unique_id),
+            None,
+        )
+        if entry is None:
+            return
+        held = held or {}
+        wanted_host, wanted_port = await self._async_ha_address()
+        issues.async_raise(
+            self.hass, entry, issues.ADDRESS_LOCKED,
+            held=f"{held.get('ha_hostname') or '?'}:{held.get('ha_port') or '?'}",
+            wanted=f"{wanted_host}:{wanted_port}",
+        )
 
     def _availability_matches(self, event, unique_id: str) -> bool:
         """Whether an availability event says *this* device just connected."""
@@ -354,7 +435,9 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Provisioning — POST /api/config/ha on the device
     # ------------------------------------------------------------------
 
-    async def _try_reprovision(self, device_ips: list[str]) -> bool:
+    async def _try_reprovision(
+        self, device_ips: list[str]
+    ) -> provisioning.ProvisionOutcome:
         """Push HA's address to the device so it can open its WebSocket.
 
         Needs a port from the mDNS SRV record: without one there is no evidence
@@ -365,7 +448,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
         if not self.discovered_port:
             _LOGGER.debug("No device port known — skipping provisioning")
-            return False
+            return provisioning.ProvisionOutcome.FAILED
 
         return await provisioning.async_provision(
             self.hass, device_ips, self._device_port

@@ -22,7 +22,7 @@
     "fonttools>=4.50.0",
     "brotli>=1.1.0"
   ],
-  "version": "2026.11.2b2",
+  "version": "2026.11.2",
   "zeroconf": [
     {
       "type": "_lizaip._tcp.local."

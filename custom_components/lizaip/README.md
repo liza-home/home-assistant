@@ -501,7 +501,21 @@ imgserv://hue:bulb-group?size=tile&fg=FFD700
 
 #### `logo:<name>` — Brand logos
 
-Renders bundled brand logos. Two rendering modes:
+Renders bundled brand logos and your own logos. Drop `.svg` or `.png` files into
+`/config/www/logos/`, alongside the existing `/config/www/fonts/` directory.
+For example, `/config/www/logos/my_logo.png` is used as `logo:my_logo`.
+Create the directory if needed. Files survive integration updates and appear in
+the picture field's `logo:` suggestions without restarting Home Assistant.
+Names are case-sensitive and use ASCII letters, digits, `_`, `-`, `+` or `.`
+(no spaces, leading dots or `..`). Use a flat directory without subdirectories.
+A user logo takes precedence over a bundled logo with the same name,
+including its shape variants. Add `my_logo_wide.svg` (or `.png`) for a wide
+variant chosen automatically for wider canvases. Updated files are read on the
+next uncached request; clients can retain an existing image for up to an hour.
+Like fonts under `www`, these files are publicly available through HA's
+`/local/logos/` URL, so do not put private images there.
+
+Two rendering modes:
 
 - **Native colour** — when no `fg`/`color` parameter is specified, the logo is rendered
   with its original colours (PNG preferred, or SVG via `cairosvg` if installed).
@@ -600,10 +614,13 @@ value is either the **path** portion of an HA-internal URL (starting with `/`) o
 `http(s)://` URL; no other scheme is fetched.
 
 > **imgserv is open by design.** It answers anyone who can reach port 8123, without
-> authentication, because the remote fetches its pictures without a token — and so
-> `media:` fetches any `http(s)` picture it is asked for. This is a deliberate decision;
-> a signature on outside addresses was tried and removed. Port 8123 is the boundary:
-> keep it off networks you do not trust. What is limited: HA paths must be one of HA's
+> authentication, because the remote fetches its pictures without a token. This is a
+> deliberate decision; a signature on outside addresses was tried and removed. `media:`
+> fetches any `http(s)` picture on a *public* host. A host that resolves to a loopback,
+> private or link-local address is fetched only if Home Assistant itself put that host and
+> port into a picture it built (a TV's app icons, say), so a request cannot make Home
+> Assistant read a camera or switch a device on the LAN. Upstream failures all answer the
+> same `502`. What is also limited: HA paths must be one of HA's
 > picture paths (`/local/`, `/api/media_player_proxy/`, `/api/camera_proxy/`,
 > `/api/image_proxy/`, `/api/image/serve/`, `/media/`) and follow no redirect.
 > An outside picture follows at most three redirects, to another host only when
@@ -1193,6 +1210,7 @@ and the AST pins in `tests/test_remote_access.py`).
 | `lizaip_config/set_pages` | Replace the pages list |
 | `lizaip_config/update_page` | Update a page's `title` and/or default colour |
 | `lizaip_config/get_settings` | Get a device's title/tooltip text settings, with the defaults, the installed fonts, the size limits, the theme list and the resolved theme |
+| `lizaip_config/list_logos` | Sorted bundled and user-provided logo names, read afresh from disk |
 | `lizaip_config/set_settings` | Validate and save the text settings and push them to the device |
 | `lizaip_config/image_urls` | The `imgserv://` URL the device is sent for each `{value, kind: tile\|title\|tooltip, color, percent}`, built by the same `resolve_icon_url` / `resolve_title_url` / `resolve_tooltip_url` as the page sync |
 | `lizaip_config/sync_custom_icons` | Report the browser's extra icon sets (`window.customIcons`); answers the names the remote asked for that imgserv has no shape for yet |
@@ -1705,13 +1723,15 @@ data:
 
 - **No slider-set command** — Protocol v1 does not support setting a slider value from HA
   to the device. Sliders are device→HA direction only.
-- **Single connection per device** — Each device maintains one WebSocket. A second connection
-  attempt is rejected while the existing one is still alive (detected via WebSocket heartbeat);
-  it only takes over once the previous connection has actually gone stale.
+- **Single connection per device** — Each device maintains one WebSocket. A new connection
+  for the same `device_id` replaces the existing one, so a remote that rebooted is not locked
+  out by its own stale socket.
 - **No device→HA authentication** — HA's WebSocket endpoint trusts a connecting client based on
-  `device_id` and local network reachability; there is no bearer token or credential check on
-  incoming device connections in this protocol version (see `Document/PROTOCOL.md` § Transport
-  Security).
+  `device_id`, which is the remote's MAC and is broadcast over mDNS. Connections are accepted
+  only from loopback, private and link-local addresses, never through Home Assistant Cloud;
+  behind a reverse proxy, list it in `trusted_proxies` so HA sees the real client address.
+  Anyone on the local network can still pose as a remote: there is no credential check in this
+  protocol version (see `Document/PROTOCOL.md` § Transport Security).
 - **Certificate pinning only applies when HA terminates its own TLS** — during provisioning HA
   pushes its certificate (`wss_cert`) so the device can pin HA's identity, but only if HA's
   `http` integration has `ssl_certificate` configured directly. If HA sits behind a reverse

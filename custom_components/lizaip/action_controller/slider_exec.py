@@ -21,6 +21,7 @@ from ._state import (
     get_selected_factor,
 )
 from ..runtime import get_store, resolve_device_id
+from ..shared.authorship import AUTHOR_KEY, async_press_context, author_of
 from ..shared.logs import DeviceLogger, device_logger
 from ..shared.services import split_service
 from .sliders import (
@@ -131,6 +132,8 @@ class _Mechanics:
     val_max: float
     #: Sliding up lowers the value; see ``SliderControl.invert``.
     invert: bool = False
+    #: Who wrote this slider's service, if not an administrator.
+    author: str | None = None
 
     @classmethod
     def from_config(cls, slider_cfg: dict) -> "_Mechanics":
@@ -148,6 +151,7 @@ class _Mechanics:
             val_min=_slider_num(slider_cfg, "min", 0.0),
             val_max=_slider_num(slider_cfg, "max", 1.0),
             invert=control_inverts(service, data_key),
+            author=author_of(slider_cfg),
         )
 
     def has_usable_range(self, slider_key: str) -> bool:
@@ -206,10 +210,18 @@ class _Mechanics:
         # tile move while the command is still in flight. Still done here for
         # callers that have not predicted -- a lift committing the tail of a
         # drag is the one that matters, being the final resting value.
+        context = await async_press_context(hass, self.author)
+        if context is None:
+            _LOGGER.warning(
+                "Not calling %s: the slider was written by a user who no longer "
+                "exists or is disabled", self.service,
+            )
+            return
         if predict:
             self.predict(hass, value)
         await hass.services.async_call(
             domain, svc, {"entity_id": self.target_entity, self.data_key: round(value, 3)},
+            context=context,
         )
 
 
@@ -361,6 +373,10 @@ async def _load_slider_cfg(
     follows = slider_follows(slider_key, assign)
     if not isinstance(slider_cfg, dict) or not slider_cfg:
         return (last_touched_slider_actions(1.0) if follows else None), follows
+    # The service a slider calls is the button author's choice, so it runs
+    # with their permissions, as a press does.
+    if author := author_of(assign):
+        slider_cfg = {**slider_cfg, AUTHOR_KEY: author}
     return slider_cfg, follows
 
 

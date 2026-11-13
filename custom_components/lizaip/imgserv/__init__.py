@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import IMG_PATH
 from .httpsocket import LizaIPImageView
+from .render_logo import set_user_logos_dir
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ async def async_setup_imgserv(hass: HomeAssistant) -> None:
     # Here, not at the top: it needs the root const, which imports this package.
     from .render_custom import async_setup_custom_icons
 
+    await hass.async_add_executor_job(
+        set_user_logos_dir, hass.config.path("www", "logos"),
+    )
     await async_setup_custom_icons(hass)
     hass.http.register_view(LizaIPImageView)
     _LOGGER.info("lizaIP Image Server registered at %s", IMG_PATH)

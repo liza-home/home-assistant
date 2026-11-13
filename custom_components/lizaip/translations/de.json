@@ -15,7 +15,8 @@
     "abort": {
       "already_configured": "Gerät ist bereits konfiguriert.",
       "discovery_only": "Manuelle Einrichtung wird nicht unterstützt. Das Gerät muss automatisch über mDNS erkannt werden.",
-      "reconfigure_successful": "Konfiguration aktualisiert."
+      "reconfigure_successful": "Konfiguration aktualisiert.",
+      "already_provisioned_elsewhere": "Das Gerät ist bereits mit einem anderen Home Assistant verbunden."
     }
   },
   "options": {
@@ -384,5 +385,19 @@
     "repeat_off": "Wiederholen aus",
     "repeat_all": "alle wiederholen",
     "repeat_one": "eines wiederholen"
+  },
+  "issues": {
+    "address_locked": {
+      "title": "{name} kann die neue Adresse von Home Assistant nicht übernehmen",
+      "description": "Die Fernbedienung soll Home Assistant unter `{held}` erreichen, das funktioniert nicht mehr; Home Assistant ist jetzt unter `{wanted}` erreichbar. Zum Schutz vor Übernahme nimmt die Fernbedienung keinen anderen Hostnamen an, daher lässt sie sich von hier aus nicht aktualisieren.\n\nSetze die Fernbedienung auf Werkseinstellungen zurück (POWER und Taste 9 länger als 3 Sekunden gedrückt halten) und kopple sie erneut."
+    },
+    "address_stale": {
+      "title": "{name} verliert Home Assistant beim nächsten Neustart",
+      "description": "Die Fernbedienung soll Home Assistant unter `{held}` erreichen. Dieser Name zeigt jetzt auf {resolved}, nicht auf dieses Home Assistant ({own}); verbunden ist sie nur noch, weil sie sich die alte Adresse merkt.\n\nGib diesem Home-Assistant-Host seinen alten Namen zurück oder setze die Fernbedienung auf Werkseinstellungen zurück (POWER und Taste 9 länger als 3 Sekunden gedrückt halten) und kopple sie erneut. Einen gespeicherten Hostnamen ändert die Fernbedienung nur nach dem Zurücksetzen."
+    },
+    "protocol_mismatch": {
+      "title": "{name} spricht eine andere Protokollversion",
+      "description": "Die Fernbedienung spricht lizaIP-Protokollversion {device}, Home Assistant Version {ha}. Manche Funktionen arbeiten eventuell nicht. Aktualisiere die Firmware der Fernbedienung oder die lizaIP-Integration, damit beide übereinstimmen."
+    }
   }
 }

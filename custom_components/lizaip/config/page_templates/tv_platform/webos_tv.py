@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .base import TvPlatform
+
 
 #: Where an app's picture is found in what a player knows about one of its
 #: sources, best first. LG webOS keeps each app's details by the name in
@@ -74,3 +76,19 @@ def in_device_order(entity: Any, source_list: list) -> list:
         return source_list
     rank = {title: i for i, title in enumerate(record)}
     return sorted(source_list, key=lambda title: rank.get(title, len(rank)))
+
+
+class WebOsTv(TvPlatform):
+    integration = "webostv"
+
+    def source_artwork(self, entity: Any, source: str) -> str:
+        return source_artwork(entity, source)
+
+    def source_ids(self, entity: Any, title: str) -> tuple[str, ...]:
+        return source_ids(entity, title)
+
+    def is_input(self, entity: Any, title: str) -> bool:
+        return is_input(entity, title)
+
+    def source_order(self, entity: Any, titles: list) -> list:
+        return in_device_order(entity, titles)

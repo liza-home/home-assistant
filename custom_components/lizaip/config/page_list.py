@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from ..action_controller.toggle import TOGGLE_KEY
 from ..runtime import entry_connection
 from ..shared.assignment import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_LONGTOUCH_KEY
+from ..shared.authorship import as_system
 from ..shared.logs import entry_id_logger
 from .const import EMPTY_BUTTON, is_subpage, step_service
 from .events import fire_config_changed
@@ -164,7 +165,9 @@ async def async_drop_links_to(
             if fixed is not None:
                 cleaned[key] = fixed
         if cleaned:
-            await store.async_set_assignments(device_id, page_id, {**assignments, **cleaned})
+            # Only links went: whoever asked did not write the steps that stay.
+            with as_system():
+                await store.async_set_assignments(device_id, page_id, {**assignments, **cleaned})
             changed_pages.append(page_id)
     if changed_pages:
         # A dropped link can be a button's last dynamic binding.

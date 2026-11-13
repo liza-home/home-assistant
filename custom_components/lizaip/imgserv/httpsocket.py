@@ -57,7 +57,7 @@ from PIL import Image, ImageChops, ImageDraw
 
 from ..shared import theme as theme_registry
 from ..shared.history import is_servable
-from . import media_refs
+from . import media_hosts, media_refs
 from .const import (
     parse_color,
     COLOR_NAMES,
@@ -992,13 +992,42 @@ async def _fetch_and_scale(
     return img
 
 
+async def _check_first_host(hass, url: str) -> None:
+    """Refuse an outside picture on a non-public host HA did not hand out.
+
+    imgserv answers without authentication, so a request naming a LAN address
+    must not make Home Assistant fetch it: that reads cameras and switches
+    devices that answer a GET. A host is public when every address it resolves
+    to is; otherwise it must be one ``media_hosts`` saw Home Assistant put into
+    a picture itself, such as a TV's app icons. A name that does not resolve is
+    left to fail on its own.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    try:
+        addresses = {ipaddress.ip_address(host.split("%", 1)[0])}
+    except ValueError:
+        try:
+            infos = await hass.loop.getaddrinfo(host, parts.port or 443)
+            addresses = {ipaddress.ip_address(i[4][0].split("%", 1)[0]) for i in infos}
+        except (OSError, ValueError):
+            return
+    if not addresses or all(addr.is_global for addr in addresses):
+        return
+    if media_hosts.is_known(url):
+        return
+    raise _ImgservError(403, "media: host is not public")
+
+
 async def _download(hass, url: str, value: str, *, internal: bool = False) -> bytes:
     """The bytes at *url*, following only redirects imgserv allows."""
     session = async_get_clientsession(hass)
     current = url
     host = _host_of(url)
+    if not internal:
+        await _check_first_host(hass, url)
     if _unreachable.get(host, 0.0) > _media_clock():
-        raise _ImgservError(502, "Upstream is not reachable")
+        raise _ImgservError(502, "Failed to fetch media image")
     try:
         for _hop in range(_MEDIA_MAX_REDIRECTS + 1):
             async with session.get(
@@ -1015,7 +1044,7 @@ async def _download(hass, url: str, value: str, *, internal: bool = False) -> by
                     continue
                 if resp.status != 200:
                     _warn_upstream_once(value, resp.status)
-                    raise _ImgservError(502, f"Upstream returned {resp.status}")
+                    raise _ImgservError(502, "Failed to fetch media image")
                 img_bytes = await _read_capped(resp)
                 break
         else:

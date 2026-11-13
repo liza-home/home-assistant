@@ -25,6 +25,7 @@ support), see [`README.md`](https://github.com/liza-home/home-assistant/blob/mai
   - [Restoring a configuration](#restoring-a-configuration)
   - [Letting somebody else configure a remote](#letting-somebody-else-configure-a-remote)
 - [How to use mdi, text, media](#how-to-use-mdi-text-media)
+  - [Adding your own logos](#adding-your-own-logos)
   - [Options for a `media:` picture](#options-for-a-media-picture)
   - [Spreading one picture over several buttons](#spreading-one-picture-over-several-buttons)
   - [Combining several things in one picture](#combining-several-things-in-one-picture)
@@ -57,7 +58,7 @@ iPhone and Android while no device has been added; the same three steps are belo
    own.
 2. **Connect to it.** The network is open, so no Wi-Fi password is needed for this
    step. Your phone may warn that the network has no internet access; that is expected.
-3. **Open the setup page.** Scan the QR code on the remote, or go to `172.16.10.1` in
+3. **Open the setup page.** If it isn't shown automatically, go to `172.16.10.1` in
    a browser. Then pick your home Wi-Fi, enter its password and confirm the IP
    settings.
 
@@ -229,7 +230,9 @@ Every TV's **Apps** page holds eleven apps, and the last one a twelfth on button
 three), button 12 leading on to the next and Back going back a page, and from the first
 to the remote keys. Pages like these come and go as their items do: they are counted
 whenever the remote refreshes, and while the device cannot be reached, nothing changes. A TV
-that is off keeps the apps, and their icons, it showed last.
+that is off keeps the apps, and their icons, it showed last. Where a TV lists Android's own
+launcher, store and settings, or its maker's demo and help tiles, among its apps, those are
+left off the page, so the apps you installed are not crowded out.
 
 A template is only offered while Home Assistant has a device it can be bound to — without
 a Sonos speaker, the Sonos templates are simply not in the list.
@@ -849,7 +852,7 @@ pasted into another field. It accepts one of these schemes:
 |---|---|---|
 | `mdi:<icon-name>` | A [Material Design Icon](https://pictogrammers.com/library/mdi/) | `mdi:lightbulb`, `mdi:page-next` |
 | `<set>:<icon-name>` | An icon from any icon set a dashboard plugin registered in Home Assistant, such as [custom-brand-icons](https://github.com/elax46/custom-brand-icons) or [hass-hue-icons](https://github.com/arallsopp/hass-hue-icons) | `phu:ceiling-fan`, `hue:bulb-group` |
-| `logo:<name>` | A bundled brand logo, in its native colours | `logo:sonos`, `logo:netflix`, `logo:spotify` |
+| `logo:<name>` | A bundled brand logo or one of your own, in its native colours | `logo:sonos`, `logo:netflix`, `logo:my_logo` |
 | `text:<content>` | Plain text, rendered as an image. Plain words need no prefix: `Kitchen` is stored as you typed it and drawn as text | `text:22°C`, `Kitchen` |
 | `media:<url-or-path>` | A live thumbnail — album art, a camera snapshot, anything HA can fetch. Takes [options](#options-for-a-media-picture) such as `?size=200x200` | `media:${media_player.living_room.entity_picture}` |
 | `history:<entity-id>` | A graph of an entity's recent history. `?hours=` or `?days=` sets how far back it looks | `history:sensor.outdoor_temperature`, `history:sensor.house_power?days=7` |
@@ -859,8 +862,9 @@ Editing works the same in all three fields:
 
 - **Enter, or leaving the field, saves it.** Escape undoes the edit.
 - **A suggestion list opens once you type an icon prefix** Home Assistant knows —
-  `mdi:`, plus any icon set an add-on registered, such as `phu:`. It lists the
-  names Home Assistant's own icon picker offers. Click a suggestion, or pick one
+  `mdi:`, plus any icon set a dashboard plugin registered, such as `phu:`.
+  Typing `logo:` lists bundled logos and your own files.
+  Click a suggestion, or pick one
   with the arrow keys and Enter, and it is saved straight away. For anything else
   (words, a URL) no list gets in the way.
 - **In a title naming several things, the list follows the caret.** Typing
@@ -886,9 +890,10 @@ Notes:
   [variable](#how-to-use-variables-with-examples)
   makes up at run time (`hue:battery-${…}`) is fetched the next time you open
   the editor; until then the remote shows nothing for it.
-- **`logo:` has a fixed set:** `disney`, `dreame`, `hue`, `knx`, `netflix`, `prime`,
-  `sonos`, `spotify`, `unifi`, `youtube`. Add a colour (`logo:sonos?fg=white`) to render it
-  monochrome instead of in its original colours.
+- **`logo:` includes bundled brands and your own files.** Type `logo:` to see
+  the available names, including `hue`, `netflix`, `sonos` and `spotify`.
+  Add a colour (`logo:sonos?fg=white`) to render an SVG monochrome instead of in
+  its original colours. See [Adding your own logos](#adding-your-own-logos).
 - **`text:` always keeps room for accents and tails.** The image is cut to the highest
   any letter of the font can reach (`Ä`) and the lowest (`g`), whether or not the text
   contains such letters, so two short labels of different shape (`Hi` vs `Hg`) stay the
@@ -900,6 +905,51 @@ Notes:
   onto a button; it is usually filled in automatically by a template page rather than
   typed by hand. To scale it or change how it is drawn, see
   [Options for a `media:` picture](#options-for-a-media-picture).
+
+### Adding your own logos
+
+Logos go beside your custom fonts: fonts live in `/config/www/fonts/`, and
+logos in **`/config/www/logos/`**. If your Home Assistant configuration directory
+is elsewhere, use its `www/logos/` folder instead.
+
+1. Create `www/logos/` inside your Home Assistant configuration directory if it
+   does not exist.
+2. Copy an SVG or PNG into it, for example `my_logo.png`. Keep files directly in
+   this folder, not in subfolders.
+3. In a button's **Icon**, its **Tooltip**, or a page's **title**, type
+   `logo:my_logo`, or start with `logo:` and choose it from the suggestions.
+   Leave off the filename extension.
+
+```text
+/config/www/
+  fonts/
+  logos/
+    my_logo.png
+    my_logo_wide.png
+```
+
+New files are available without restarting Home Assistant and survive integration
+updates. Names are case-sensitive; use ASCII letters, digits, `_`, `-`, `+` or
+`.` without spaces, a leading dot or `..`. Use lowercase `.svg` and `.png`
+extensions. A transparent background usually works best.
+
+**Colours and shapes.** PNG files keep their own colours. An SVG can be drawn
+monochrome with `logo:my_logo?fg=white`; full-colour SVG rendering requires
+`cairosvg`, otherwise SVGs fall back to monochrome. An optional
+`my_logo_wide.png` or `my_logo_wide.svg` is chosen automatically when its
+proportions fit the canvas better. Write `logo:my_logo_wide` to select it explicitly.
+
+**Replacing a bundled logo.** A user file with the same name wins over the
+bundled logo, including its whole upright/wide family. Supply any variants you
+want to keep; missing variants are not borrowed from the bundle. Remove your
+override files to use the bundled logo again.
+
+**After replacing a file**, the next uncached request reads the new image.
+Existing images can remain cached by clients for up to an hour.
+
+> **Public files:** Home Assistant also serves these files under
+> `/local/logos/`, just as it serves fonts under `/local/fonts/`. Do not put
+> private images in this directory.
 
 ### Options for a `media:` picture
 

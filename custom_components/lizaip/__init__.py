@@ -29,7 +29,7 @@ from .device import (
     WS_PATH,
     async_register_services,
 )
-from . import action_controller
+from . import action_controller, issues
 from .const import (
     CONF_DEMO_MODE,
     CONF_DEMO_MODE_DWELL_TIME,
@@ -449,6 +449,11 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
         # or skipped unload would otherwise strand the compiled Scripts.
         await action_controller.async_unload_scripts(hass, entry.entry_id)
         await connection.disconnect()
+
+    issues.async_clear(
+        hass, entry,
+        issues.ADDRESS_LOCKED, issues.ADDRESS_STALE, issues.PROTOCOL_MISMATCH,
+    )
 
     dev_reg = dr.async_get(hass)
     device = dev_reg.async_get_device_by_identifier(

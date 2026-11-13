@@ -50,7 +50,9 @@ async def ws_resolve_variables(hass: HomeAssistant, connection, msg: dict) -> No
     a second implementation of the rules, so it asks. *texts* are tooltips and
     titles (:func:`substitute_entity_tokens`), *images* are pictures
     (:func:`resolve_image_tokens`, None when a variable has no value). *entities*
-    lists every entity the answers read, so the panel knows when to ask again.
+    lists every entity the answers read, so the panel knows when to ask again;
+    *depends* says which item read which, so it asks again only for those --
+    one countdown in one title must not re-ask every variable on every page.
     """
     _reply_variables(hass, connection, msg)
 
@@ -59,9 +61,12 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
     texts = msg["texts"][:_MAX_VARIABLE_ITEMS]
     images = msg["images"][:_MAX_VARIABLE_ITEMS]
     entities: set[str] = set()
+    depends: dict[str, list[str]] = {}
     for item in (*texts, *images):
-        entities |= entity_token_entities(item)
-        entities |= history_entities(item)
+        read = entity_token_entities(item) | history_entities(item)
+        if read:
+            depends[item] = sorted(read)
+        entities |= read
     # `{translate: …}` reads as the remote the panel shows prints it.
     language = None
     if any("{translate:" in item for item in (*texts, *images)):
@@ -74,6 +79,7 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
             "texts": {t: substitute_entity_tokens(translate_inline(t), hass) for t in texts},
             "images": {i: resolve_image_tokens(i, hass) for i in images},
             "entities": sorted(entities),
+            "depends": depends,
         }
     connection.send_result(msg["id"], answer)
 

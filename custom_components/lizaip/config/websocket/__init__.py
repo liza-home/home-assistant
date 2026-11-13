@@ -59,6 +59,7 @@ def register_commands(hass: HomeAssistant) -> None:
         settings.ws_get_icon_options,
         settings.ws_set_icon_options,
         settings.ws_get_icon_defaults,
+        settings.ws_list_logos,
         settings.ws_save_theme,
         settings.ws_delete_theme,
         settings.ws_export_theme,

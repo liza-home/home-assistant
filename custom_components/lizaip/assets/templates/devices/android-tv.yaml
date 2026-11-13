@@ -45,26 +45,6 @@ pages:
   remote:
     title: "logo:android ${_device.area_name}"
     buttons:
-      button_1:
-        icon: media:https://play-lh.googleusercontent.com/eZkMp2Ogz8wN3deIwGFmLRqxBjR6iMkqszaWBTezpwFKnDsTmgaqMvuZ08uS5yzyigdGTjqm2LFmn9NNIM7nGQ=w240-h480
-        tooltip: ORF ON
-        config:
-          - action: media_player.play_media
-            # A cold TV silently drops the launch: androidtv_remote writes to the
-            # socket without waking or checking state, and reports `on` about a
-            # second before it can service an intent. The executor infers the wake
-            # and the settle from the action itself, so nothing declares them here
-            # — which also covers the same button built by hand in the panel.
-            #
-            # Deep link, not application ID: a package name is sent as
-            # `market://launch?id=…` and the Play Store stopped honouring that in
-            # mid-August 2026. `on.orf.at` is delegated to the ORF app in ORF's
-            # assetlinks.json, so App Links opens the app rather than a browser.
-            data:
-              media:
-                media_content_id: https://on.orf.at/
-                media_content_type: url
-
       button_2:
         icon: mdi:arrow-up-bold-outline
         tooltip: {translate: up}

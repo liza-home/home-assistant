@@ -2157,11 +2157,11 @@ export const STRINGS = {
     es: "Configurar",
   },
   setup_provision_text: {
-    en: "Scan the QR code, or open <strong>172.16.10.1</strong> in a web browser. Pick your home Wi-Fi network.",
-    de: "Scanne den QR-Code oder öffne <strong>172.16.10.1</strong> in einem Webbrowser. Wähle dein Heim-WLAN aus.",
-    fr: "Scannez le code QR ou ouvrez <strong>172.16.10.1</strong> dans un navigateur web. Choisissez votre réseau Wi-Fi domestique.",
-    it: "Scansiona il codice QR oppure apri <strong>172.16.10.1</strong> in un browser web. Scegli la tua rete Wi-Fi di casa.",
-    es: "Escanea el código QR o abre <strong>172.16.10.1</strong> en un navegador web. Elige tu red Wi-Fi doméstica.",
+    en: "If the setup page isn't shown automatically, open <strong>172.16.10.1</strong> in a web browser. Pick your home Wi-Fi network.",
+    de: "Wird die Einrichtungsseite nicht automatisch angezeigt, öffne <strong>172.16.10.1</strong> in einem Webbrowser. Wähle dein Heim-WLAN aus.",
+    fr: "Si la page de configuration ne s'affiche pas automatiquement, ouvrez <strong>172.16.10.1</strong> dans un navigateur web. Choisissez votre réseau Wi-Fi domestique.",
+    it: "Se la pagina di configurazione non viene mostrata automaticamente, apri <strong>172.16.10.1</strong> in un browser web. Scegli la tua rete Wi-Fi di casa.",
+    es: "Si la página de configuración no se muestra automáticamente, abre <strong>172.16.10.1</strong> en un navegador web. Elige tu red Wi-Fi doméstica.",
   },
 
   // ── a list with none of them assigned to you ───────────────────────

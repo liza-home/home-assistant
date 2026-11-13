@@ -24,6 +24,8 @@ from typing import Any, Final
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .base import TvPlatform
+
 _LOGGER = logging.getLogger(__name__)
 
 LOOKUP_URL: Final = "https://itunes.apple.com/lookup"
@@ -167,3 +169,10 @@ async def add_app_icons(hass: HomeAssistant, raw: list[dict]) -> None:
     for r in raw:
         if not r.get("thumbnail") and (icon := icons.get(r.get("media_content_id", ""))):
             r["thumbnail"] = icon
+
+
+class AppleTv(TvPlatform):
+    integration = "apple_tv"
+
+    async def decorate(self, hass: HomeAssistant, rows: list[dict]) -> None:
+        await add_app_icons(hass, rows)

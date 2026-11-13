@@ -66,6 +66,8 @@ class IconPushQueue:
         self._pending: dict[int, _PageButtons] = {}
         # A page title waiting to go out with its page's buttons, if any.
         self._titles: dict[int, str] = {}
+        # What is on its way and not yet answered, per page: see `outstanding`.
+        self._inflight: dict[int, tuple[_PageButtons, str | None]] = {}
         self._task: asyncio.Task | None = None
         # Whether a drain is running, tracked separately from the task handle.
         # Home Assistant starts background tasks eagerly, so `create_task` runs
@@ -102,6 +104,20 @@ class IconPushQueue:
                 continue
             previous = page.get(name)
             page[name] = {**previous, **btn} if previous else dict(btn)
+
+    def outstanding(self, page_id: int) -> tuple[_PageButtons, str | None]:
+        """What *page_id* is about to show: sent but unanswered, then pending.
+
+        The device's copy is only recorded once it acknowledges, so a change
+        compared against that copy alone is sent again while its first send is
+        still on the way -- or, if the value has moved back meanwhile, not sent
+        at all, leaving the in-between value on screen.
+        """
+        flying, title = self._inflight.get(page_id, ({}, None))
+        merged = {name: dict(fields) for name, fields in flying.items()}
+        for name, fields in self._pending.get(page_id, {}).items():
+            merged[name] = {**merged.get(name, {}), **fields}
+        return merged, self._titles.get(page_id, title)
 
     def schedule(self, create_task: Callable[[Awaitable], asyncio.Task]) -> None:
         """Start draining if nothing is draining already.
@@ -158,6 +174,7 @@ class IconPushQueue:
                 # next pass rather than being lost.
                 buttons = self._pending.pop(page_id)
                 title = self._titles.pop(page_id, None)
+                self._inflight[page_id] = (buttons, title)
                 try:
                     if title is None:
                         await self._send(page_id, list(buttons.values()))
@@ -172,6 +189,8 @@ class IconPushQueue:
                     self._log.warning(
                         "set_page (partial) failed for page %s: %s", page_id, err,
                     )
+                finally:
+                    self._inflight.pop(page_id, None)
         finally:
             # Nothing can have been submitted between the loop test and here:
             # the event loop is single-threaded and this stretch does not await,
@@ -185,6 +204,7 @@ class IconPushQueue:
         self._closed = True
         self._pending.clear()
         self._titles.clear()
+        self._inflight.clear()
         self._draining = False
         task, self._task = self._task, None
         if task is not None and not task.done():

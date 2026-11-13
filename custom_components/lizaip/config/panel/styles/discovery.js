@@ -68,12 +68,7 @@ export const STYLES_DISCOVERY = `
 
   /* ── The list with nothing in it ─────────────────────────────────── */
 
-  /* The steps, and the QR code right after their text -- level with
-     Provision, the step it is for -- or below them where the card is too
-     narrow. */
-  .no-devices-setup { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 32px; }
   .no-devices {
-    flex: 0 1 auto;
     list-style: none; margin: 0; padding: 8px 0;
     display: flex; flex-direction: column; gap: 16px;
     color: var(--liza-muted-text);
@@ -84,7 +79,6 @@ export const STYLES_DISCOVERY = `
   .setup-step-icon { flex: none; width: 24px; height: 24px; color: var(--primary-text-color); }
   .setup-step-title { margin: 0 0 2px; font-size: 1rem; color: var(--primary-text-color); }
   .setup-step p { margin: 0; line-height: 1.5; }
-  .setup-qr { flex: none; width: 96px; height: 96px; border-radius: 12px; background: #fff; }
 
   /* ── The toolbar control that leads back to the list ─────────────── */
 

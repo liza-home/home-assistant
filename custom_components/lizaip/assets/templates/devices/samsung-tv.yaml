@@ -34,7 +34,7 @@ target_selector:
 # its `apps` browse folder where it has one, else its `source_list` -- where
 # the Samsung integration lists TV and HDMI first, then the apps. Those two
 # are its inputs. A newer TV lists no apps there, so it is asked about each
-# app of Samsung's store for its country (page_templates/samsung_tv.py),
+# app of Samsung's store for its country (page_templates/tv_platform/samsung_tv.py),
 # with the store's icons.
 placeholders:
   app:

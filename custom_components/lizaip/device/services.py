@@ -117,7 +117,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         sends, so it is started over the TV's REST API; any other player gets
         ``media_player.play_media`` with an ``app``.
         """
-        from ..config.page_templates.samsung_tv import launch, samsung_host
+        from ..config.page_templates.tv_platform.samsung_tv import launch, samsung_host
 
         app_id = call.data["app_id"]
         for entity_id in call.data["entity_id"]:

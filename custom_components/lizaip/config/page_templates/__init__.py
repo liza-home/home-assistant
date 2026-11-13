@@ -17,7 +17,13 @@ The modules, in pipeline order:
   expansion, token parsing, and ``resolve_template_variables``, which grows a
   template past what its file literally lists.
 * :mod:`.sources` — supply. Where the items a token resolves to come from:
-  the entity registry, a media player's browse tree, a speaker's favourites.
+  the source table, a media player's browse tree, a speaker's favourites, a
+  TV's apps and inputs. :mod:`.items` is the :class:`DynamicItem` every source
+  returns; :mod:`.entity_source` lists entities from the registries and
+  :mod:`.page_source` a remote's own pages. What differs between TV
+  integrations is in :mod:`.tv_platform`: one module per integration, each a
+  ``TvPlatform`` subclass (``webos_tv``, ``samsung_tv``, ``apple_tv``,
+  ``bravia_tv``, ``android_tv``).
 * :mod:`.generate` — evaluation. ``generate_assignments`` walks a page's
   buttons and emits the action-library entries and stored assignments it is
   made of; ``page_buttons`` turns ``goto_page:`` links into commands.

@@ -132,6 +132,15 @@ override in this mode, not the page default underneath it.
 - To rename a page, click its **title** for the editor — plain text, an `mdi:` icon, a `logo:` name or an
   image URL.
 
+**Your own logos:** drop SVG or PNG files into `/config/www/logos/`, alongside
+`/config/www/fonts/`. A file named `my_logo.png` is used as `logo:my_logo` in a
+button image, tooltip or page title. Type `logo:` for suggestions; new files need
+no Home Assistant restart and survive integration updates. User files override
+bundled logos with the same name. See
+[Adding your own logos](https://github.com/liza-home/home-assistant/blob/main/custom_components/lizaip/docs/USER_GUIDE.md#adding-your-own-logos)
+in the user guide for naming, wide variants, colours and caching.
+Files under `www` are public through `/local/`, so do not store private images there.
+
 Some template pages stay **live**: a Sonos page follows the speaker's favourites, and
 refills itself when you change them. **Sonos Radio** and **Sonos Playlists** do the same
 with only your favourite radio stations or only your favourite playlists, twelve to a page,

@@ -34,11 +34,13 @@ SCAN_INTERVAL = timedelta(hours=4)
 # tracks the correct product variant.
 # Override with LIZAIP_FIRMWARE_RELEASE_API env var to point to a self-hosted server:
 #   export LIZAIP_FIRMWARE_RELEASE_API=http://192.168.1.50:8090/api/release/latest
+# HTTPS by default: the answer names the image the remote is told to install,
+# so it must not be something a machine on the way can rewrite.
 import os as _os
 
 FIRMWARE_RELEASE_API = _os.environ.get(
     "LIZAIP_FIRMWARE_RELEASE_API",
-    f"http://firmware.api.ruwido.com/{MODEL_ID}/?latest=true",
+    f"https://firmware.api.ruwido.com/{MODEL_ID}/?version=latest",
 )
 
 _TITLE = "lizaIP Firmware"
@@ -85,12 +87,34 @@ def _normalize_version(version: str | None) -> str | None:
     return ".".join(segments)
 
 
+def _trusted_asset(url: Any) -> bool:
+    """Whether *url* is an http(s) image on the release server's own host.
+
+    The remote downloads the image itself, so whatever a release names is
+    what it installs; a release pointing at another host is not followed.
+    """
+    if not isinstance(url, str):
+        return False
+    try:
+        asset, api = URL(url), URL(FIRMWARE_RELEASE_API)
+    except ValueError:
+        return False
+    return asset.scheme in ("http", "https") and bool(asset.host) and asset.host == api.host
+
+
 def _firmware_asset_url(release: dict) -> str | None:
     """The OTA image of a release: its .bin asset, or else its .tar one."""
     fallback: str | None = None
     for asset in release.get("assets", []):
         name = asset.get("name", "")
         url = asset.get("browser_download_url") or asset.get("url")
+        if not _trusted_asset(url):
+            if url:
+                _LOGGER.warning(
+                    "Ignoring firmware asset %s: not on the release server %s",
+                    url, URL(FIRMWARE_RELEASE_API).host,
+                )
+            continue
         if name.endswith(".bin"):
             return url
         if name.endswith(".tar") and not fallback:

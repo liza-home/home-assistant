@@ -89,7 +89,8 @@
     "abort": {
       "already_configured": "Device is already configured.",
       "discovery_only": "Manual setup is not supported. The device must be discovered automatically via mDNS.",
-      "reconfigure_successful": "Configuration updated."
+      "reconfigure_successful": "Configuration updated.",
+      "already_provisioned_elsewhere": "Il dispositivo è già collegato a un altro Home Assistant."
     }
   },
   "options": {
@@ -384,5 +385,19 @@
     "repeat_off": "ripeti disattivo",
     "repeat_all": "ripeti tutto",
     "repeat_one": "ripeti uno"
+  },
+  "issues": {
+    "address_locked": {
+      "title": "{name} non può accettare il nuovo indirizzo di Home Assistant",
+      "description": "Il telecomando è impostato per raggiungere Home Assistant su `{held}`, che non funziona più; Home Assistant ora è su `{wanted}`. Per proteggersi da un'acquisizione, il telecomando non accetta un altro nome host, quindi non può essere aggiornato da qui.\n\nRipristina il telecomando alle impostazioni di fabbrica (tieni premuti POWER e il tasto 9 per più di 3 secondi) e associalo di nuovo."
+    },
+    "address_stale": {
+      "title": "{name} perderà Home Assistant al prossimo riavvio",
+      "description": "Il telecomando è impostato per raggiungere Home Assistant su `{held}`. Quel nome ora punta a {resolved}, non a questo Home Assistant ({own}); è ancora connesso solo perché ricorda il vecchio indirizzo.\n\nRidai a questo host di Home Assistant il suo vecchio nome, oppure ripristina il telecomando alle impostazioni di fabbrica (tieni premuti POWER e il tasto 9 per più di 3 secondi) e associalo di nuovo. Il telecomando cambia un nome host salvato solo dopo un ripristino."
+    },
+    "protocol_mismatch": {
+      "title": "{name} usa un'altra versione del protocollo",
+      "description": "Il telecomando usa la versione {device} del protocollo lizaIP, Home Assistant la versione {ha}. Alcune funzioni potrebbero non funzionare. Aggiorna il firmware del telecomando o l'integrazione lizaIP in modo che coincidano."
+    }
   }
 }

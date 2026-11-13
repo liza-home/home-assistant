@@ -15,7 +15,8 @@
     "abort": {
       "already_configured": "El dispositivo ya está configurado.",
       "discovery_only": "La configuración manual no es compatible. El dispositivo debe detectarse automáticamente mediante mDNS.",
-      "reconfigure_successful": "Configuración actualizada."
+      "reconfigure_successful": "Configuración actualizada.",
+      "already_provisioned_elsewhere": "El dispositivo ya está conectado a otro Home Assistant."
     }
   },
   "options": {
@@ -384,5 +385,19 @@
     "repeat_off": "repetir desactivado",
     "repeat_all": "repetir todo",
     "repeat_one": "repetir una"
+  },
+  "issues": {
+    "address_locked": {
+      "title": "{name} no puede aceptar la nueva dirección de Home Assistant",
+      "description": "El mando está configurado para llegar a Home Assistant en `{held}`, que ya no funciona; Home Assistant está ahora en `{wanted}`. Para protegerse de que otro lo tome, el mando no acepta otro nombre de host, así que no se puede actualizar desde aquí.\n\nRestablece el mando a los valores de fábrica (mantén pulsados POWER y el botón 9 más de 3 segundos) y vuelve a emparejarlo."
+    },
+    "address_stale": {
+      "title": "{name} perderá Home Assistant en su próximo reinicio",
+      "description": "El mando está configurado para llegar a Home Assistant en `{held}`. Ese nombre ahora apunta a {resolved}, no a este Home Assistant ({own}); sigue conectado solo porque recuerda la dirección anterior.\n\nDevuelve a este host de Home Assistant su nombre anterior, o restablece el mando a los valores de fábrica (mantén pulsados POWER y el botón 9 más de 3 segundos) y vuelve a emparejarlo. El mando solo cambia un nombre de host guardado tras un restablecimiento."
+    },
+    "protocol_mismatch": {
+      "title": "{name} usa otra versión del protocolo",
+      "description": "El mando usa la versión {device} del protocolo lizaIP y Home Assistant la versión {ha}. Algunas funciones pueden no funcionar. Actualiza el firmware del mando o la integración lizaIP para que coincidan."
+    }
   }
 }

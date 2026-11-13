@@ -112,7 +112,12 @@ export const ButtonsFaceMixin = {
     apply();
   },
 
+  /** Redraw every face; what the faces read is what the next face-only redraw covers. */
   _refreshSVG() {
+    return this._readingFaces ? this._readingFaces(() => this._drawFaces(), true) : this._drawFaces();
+  },
+
+  _drawFaces() {
     const bp = this._blueprint;
     if (!bp) return;
     // The tiles below are about to be rebuilt, so what the icon pass learned
@@ -383,6 +388,10 @@ export const ButtonsFaceMixin = {
   },
 
   _refreshSVGIcons() {
+    return this._readingFaces ? this._readingFaces(() => this._refreshFaceIcons(), false) : this._refreshFaceIcons();
+  },
+
+  _refreshFaceIcons() {
     // Incremental update: refresh only state-driven icon <img src> values
     // without a full redraw (avoids re-fetching images that haven't changed).
     if (!this._blueprint) return;

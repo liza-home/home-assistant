@@ -13,6 +13,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import get_store, entry_connection
+from ...shared.authorship import as_system
 from ...shared.logs import device_id_logger
 from ..blueprint import async_get_blueprint
 from ..const import (
@@ -345,7 +346,9 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
         new_page["template"].pop("instance", None)
     assignments = copy.deepcopy(await store.async_get_assignments(device_id, source_id))
     try:
-        await store.async_insert_page(device_id, new_page, assignments, after=source_id)
+        # A copy keeps its source's authors; copying writes no steps.
+        with as_system():
+            await store.async_insert_page(device_id, new_page, assignments, after=source_id)
     except Exception as err:  # noqa: BLE001
         send_failure(
             hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Duplicating the page",

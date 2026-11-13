@@ -24,6 +24,8 @@ from typing import Any, Final
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .base import TvPlatform
+
 _LOGGER = logging.getLogger(__name__)
 
 PORT: Final = 8001
@@ -226,3 +228,10 @@ async def entity_apps(hass: HomeAssistant, entity: Any) -> list[dict]:
     """The apps of the Samsung TV behind the media player *entity*."""
     host = samsung_host(hass, getattr(entity, "entity_id", "") or "")
     return await installed_apps(hass, host) if host else []
+
+
+class SamsungTv(TvPlatform):
+    integration = "samsungtv"
+
+    async def fallback_apps(self, hass: HomeAssistant, entity: Any) -> list[dict]:
+        return await entity_apps(hass, entity)

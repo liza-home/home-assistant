@@ -19,6 +19,7 @@ currently holds), and two copies of that would be two chances to disagree.
 """
 from __future__ import annotations
 
+import enum
 import importlib
 import ipaddress
 import logging
@@ -346,14 +347,31 @@ async def async_build_payload(hass: HomeAssistant) -> dict[str, object]:
     return payload
 
 
+class ProvisionOutcome(enum.Enum):
+    """How a ``POST /api/config/ha`` went.
+
+    Truthy only for ``OK``, so ``if await async_provision(...)`` reads as
+    "did it take".
+    """
+
+    OK = "ok"
+    #: The device answered 409: it holds a different hostname and changes it
+    #: only after a factory reset ([LZIP-29] in the firmware).
+    CONFLICT = "conflict"
+    FAILED = "failed"
+
+    def __bool__(self) -> bool:
+        return self is ProvisionOutcome.OK
+
+
 async def async_provision(
     hass: HomeAssistant, device_ips: list[str], port: int = DEVICE_HTTP_PORT
-) -> bool:
+) -> ProvisionOutcome:
     """Push HA's address to the device so it can open its WebSocket.
 
-    Returns whether any of *device_ips* accepted it. Tries them in order and
-    stops at the first success: they are candidate addresses for one device, not
-    several devices to configure.
+    Tries *device_ips* in order and stops at the first that answers: they are
+    candidate addresses for one device, not several devices to configure. A 409
+    is an answer too -- the device is there and refuses -- so it ends the loop.
     """
     session = device_session(hass)
     payload = await async_build_payload(hass)
@@ -368,10 +386,17 @@ async def async_provision(
                         device_ip, port,
                         payload["ha_hostname"], payload["ha_port"],
                     )
-                    return True
+                    return ProvisionOutcome.OK
+                if resp.status == 409:
+                    _LOGGER.warning(
+                        "Device at %s:%d refused %s: it is locked to another "
+                        "Home Assistant address until it is factory-reset",
+                        device_ip, port, payload["ha_hostname"],
+                    )
+                    return ProvisionOutcome.CONFLICT
                 _LOGGER.debug("POST %s returned %s", url, resp.status)
         except Exception as err:
             _LOGGER.debug("POST %s failed: %s", url, err)
 
     _LOGGER.warning("Provisioning failed for all IPs %s (port %d)", device_ips, port)
-    return False
+    return ProvisionOutcome.FAILED

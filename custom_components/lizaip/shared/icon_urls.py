@@ -14,6 +14,7 @@ from ..imgserv.source_parse import (
     names_a_source,
     split_source_parts,
 )
+from ..imgserv import media_hosts
 from ..imgserv.fonts import DEFAULT_FONT_ID
 from .i18n import translate_inline
 from .theme import DEFAULT_THEME, DEFAULT_THEME_ID, get_theme
@@ -197,6 +198,7 @@ def encode_media_source(url: str) -> str:
     an encoded one.  The value is returned with its original casing either way, so
     signed URLs stay byte-exact.
     """
+    media_hosts.remember(url)
     if quote(unquote(url), safe="").lower() == url.lower():
         return f"media:{url}"
     return f"media:{quote(url, safe='')}"
@@ -402,15 +404,16 @@ def _spelled(colour: str, theme: str) -> str:
 
 
 def _monochrome_logo(icon: str) -> bool:
-    """Whether *icon* is a lone logo shipped only as an SVG, which imgserv
+    """Whether *icon* is a lone logo available only as an SVG, which imgserv
     draws in the foreground; one with a PNG keeps the PNG's colours."""
     if not icon.startswith("logo:") or len(split_source_parts(icon)) > 1:
         return False
-    from ..imgserv.render_logo import LOGOS_DIR, WIDE_SUFFIX
+    from ..imgserv.render_logo import WIDE_SUFFIX, logo_directory
 
     name = icon[len("logo:"):].split("?", 1)[0].removesuffix(".svg")
+    directory = logo_directory(name)
     return any(
-        (LOGOS_DIR / f"{n}.svg").is_file() and not (LOGOS_DIR / f"{n}.png").is_file()
+        (directory / f"{n}.svg").is_file() and not (directory / f"{n}.png").is_file()
         for n in (name, f"{name}{WIDE_SUFFIX}")
     )
 

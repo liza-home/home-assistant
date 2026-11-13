@@ -760,6 +760,24 @@ def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
     return changes
 
 
+def _with_outstanding(sent: dict, queue: Any, page_id: int) -> dict:
+    """*sent* as it will be once what *queue* holds for *page_id* has landed."""
+    buttons, title = queue.outstanding(page_id)
+    if not buttons and title is None:
+        return sent
+    ahead = {
+        name: {k: v for k, v in fields.items() if k in _LIVE_BUTTON_FIELDS}
+        for name, fields in buttons.items()
+    }
+    copy = {
+        **sent,
+        "buttons": [{**b, **ahead.get(b.get("name"), {})} for b in sent.get("buttons", ())],
+    }
+    if title is not None:
+        copy["img_title"] = title
+    return copy
+
+
 def patched_page(
     conn, page_id: int, buttons: list[dict], img_title: str | None = None,
 ) -> dict | None:
@@ -878,6 +896,7 @@ async def async_push_variable_pages(
         if sent is None:
             await sync_config_to_device(hass, entry)
             return
+        sent = _with_outstanding(sent, queue, page_id)
         built = await build_page_payload(hass, entry, page_id, page_config, pages, ctx=ctx)
         changes = _live_button_changes(sent, built)
         if changes is None:
@@ -888,10 +907,10 @@ async def async_push_variable_pages(
         title = built.get("img_title")
         title = title if title != sent.get("img_title") else None
         if changes or title is not None:
-            log.debug(
-                "Variables moved on page %s: %s%s", page_id,
-                [c["name"] for c in changes], " and its title" if title is not None else "",
-            )
+            moved = [c["name"] for c in changes]
+            if title is not None:
+                moved.append("title")
+            log.debug("Variables moved on page %s: %s", page_id, ", ".join(moved))
             queue.submit(page_id, changes, img_title=title)
             pushed = True
     if pushed:

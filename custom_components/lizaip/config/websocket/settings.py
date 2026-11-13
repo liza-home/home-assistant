@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from ...action_controller import serialized_controls
 from ...const import DOMAIN
 from ...imgserv.fonts import list_fonts, www_fonts_dir
+from ...imgserv.render_logo import list_logos
 from ...runtime import get_store, resolve_device_id, find_store
 from ...shared.i18n import button_tooltips, get_ui_language, state_words
 from ...shared.icon_defaults import icon_defaults
@@ -276,6 +277,20 @@ async def ws_get_icon_defaults(
 
 async def async_list_fonts(hass: HomeAssistant) -> list[dict[str, str]]:
     return await hass.async_add_executor_job(list_fonts, www_fonts_dir(hass))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/list_logos",
+})
+@require_any_device_access
+@websocket_api.async_response
+async def ws_list_logos(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """List the bundled and user-provided logo names for the picture field."""
+    connection.send_result(msg["id"], await hass.async_add_executor_job(list_logos))
 
 
 async def _entry_theme(hass: HomeAssistant, entry_id: str | None):

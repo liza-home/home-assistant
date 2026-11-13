@@ -186,16 +186,20 @@ let _mediaListSeq = 0;
 /**
  * The icon names HA itself offers for *set*, from the lists its own icon
  * picker reads: the frontend's `mdi` list, or the registered provider's
- * `getIconList()`. Asked each time, not cached here: the browser caches the
+ * `getIconList()`. Logos come from imgserv's bundled and user directories.
+ * Asked each time, not cached here: the browser caches the
  * static file and a provider keeps its list in memory.
  */
-async function iconNameList(set) {
+async function iconNameList(set, hass) {
   const toNames = (list) => (Array.isArray(list) ? list : [])
     .map((i) => (typeof i === "string" ? i : i?.name))
     .filter(Boolean);
   if (set === "mdi") {
     const res = await fetch("/static/mdi/iconList.json");
     return res.ok ? toNames(await res.json()) : [];
+  }
+  if (set === "logo") {
+    return hass.callWS({ type: "lizaip_config/list_logos" });
   }
   const getIconList = customIconRegistry()[set]?.getIconList;
   return typeof getIconList === "function" ? toNames(await getIconList()) : [];
@@ -215,14 +219,14 @@ function domainLabel(hass, domain) {
 }
 
 /**
- * Every icon prefix HA knows: its built-in `mdi`, plus each provider a plugin
+ * The built-in `mdi` and imgserv's `logo`, plus each provider a plugin
  * registered in `window.customIcons` (`phu` from custom-brand-icons, `hue`,
  * ...) that can list its icons.
  */
 export function iconProviders() {
   const custom = Object.keys(customIconRegistry())
     .filter((k) => typeof customIconRegistry()[k]?.getIconList === "function");
-  return ["mdi", ...custom.filter((k) => k !== "mdi")];
+  return ["mdi", "logo", ...custom.filter((k) => k !== "mdi" && k !== "logo")];
 }
 
 /** imgserv's own source types; a browser icon set by one of these names never shadows it. */
@@ -417,7 +421,7 @@ export function matchIconNames(names, term, limit = ICON_SUGGESTION_LIMIT) {
   const starts = [];
   const contains = [];
   for (const n of names) {
-    const i = n.indexOf(term);
+    const i = n.toLowerCase().indexOf(term);
     if (i === 0) starts.push(n);
     else if (i > 0) contains.push(n);
     if (starts.length >= limit) break;
@@ -1266,7 +1270,7 @@ export const HelpersMixin = {
       if (!query || !list) return close();
       const mine = ++seq;
       let names = [];
-      try { names = await iconNameList(query.set); } catch (e) { /* no list, no suggestions */ }
+      try { names = await iconNameList(query.set, this._hass); } catch (e) { /* no list, no suggestions */ }
       if (mine !== seq) return;
       matches = matchIconNames(names, query.term).map(n => `${query.set}:${n}`);
       variable = null;

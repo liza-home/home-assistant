@@ -1,4 +1,4 @@
-"""Logo renderer - bundled SVG/PNG logos from the ``logos/`` directory.
+"""Logo renderer - bundled logos and SVG/PNG files from ``www/logos``.
 
 Supports three rendering modes:
   1. **Native-colour PNG** - if a ``.png`` exists, serve it directly.
@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import re
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
@@ -39,12 +40,55 @@ _LOGGER = logging.getLogger(__name__)
 # checks containment against it — an unresolved base (a symlinked install path)
 # would make every containment test fail and turn every logo into a 404.
 LOGOS_DIR = (Path(__file__).resolve().parents[1] / "assets" / "logos").resolve()
+_user_logos_dir: Path | None = None
 
-# Some brands publish two marks: an upright one and a wide wordmark. A file
-# named ``<logo>_wide`` beside ``<logo>`` is taken as the second, and whichever
-# fits the requested canvas better is used. Nothing has to be registered — the
-# file being there is the whole declaration.
+# A companion ``<name>_wide`` is selected when it fits the canvas better.
 WIDE_SUFFIX = "_wide"
+
+
+def set_user_logos_dir(directory: str) -> None:
+    """Set the user's logo directory during image-server setup."""
+    global _user_logos_dir
+    _user_logos_dir = Path(directory).resolve()
+
+
+def _valid_name(name: str) -> bool:
+    return re.fullmatch(r"[A-Za-z0-9_+-][A-Za-z0-9_.+-]*", name) is not None and ".." not in name
+
+
+def logo_directory(name: str) -> Path:
+    """User files take precedence over a bundled logo's whole shape family."""
+    if _user_logos_dir is not None and _valid_name(name):
+        stem = name.removesuffix(".svg").removesuffix(".png")
+        family = stem.removesuffix(WIDE_SUFFIX)
+        for variant in (family, f"{family}{WIDE_SUFFIX}"):
+            for suffix in (".svg", ".png"):
+                path = _resolve_under(_user_logos_dir, f"{variant}{suffix}")
+                if path is not None and path.is_file():
+                    return _user_logos_dir
+    return LOGOS_DIR
+
+
+def list_logos() -> list[str]:
+    """Read both directories afresh so newly dropped files need no restart."""
+    names: set[str] = set()
+    for directory in (LOGOS_DIR, _user_logos_dir):
+        if directory is None or not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if path.suffix not in (".svg", ".png") or not _valid_name(path.stem):
+                continue
+            resolved = _resolve_under(directory, path.name)
+            if resolved is not None and resolved.is_file():
+                names.add(path.stem)
+    return sorted(
+        name for name in names
+        if any(
+            (path := _resolve_under(logo_directory(name), f"{name}{suffix}")) is not None
+            and path.is_file()
+            for suffix in (".svg", ".png")
+        )
+    )
 
 
 def render_logo(
@@ -55,7 +99,7 @@ def render_logo(
     native_color: bool = False,
     prefer_native_png: bool = False,
 ) -> Image.Image | None:
-    """Render a bundled logo and return the image.
+    """Render a user-provided or bundled logo and return the image.
 
     When *native_color* is ``True`` the original colours are preserved
     (PNG preferred, then cairosvg).  Otherwise the logo is rendered in
@@ -67,10 +111,10 @@ def render_logo(
     set without an explicit ``?fg=`` - the PNG's own colours are appropriate.
     """
     # A logo is a bare name in the flat logos directory, never a path.
-    if not logo_name or "/" in logo_name or "\\" in logo_name or ".." in logo_name:
+    if not _valid_name(logo_name):
         _LOGGER.warning("Rejected logo_name that is a path: %r", logo_name)
         return None
-    logos_dir = LOGOS_DIR
+    logos_dir = logo_directory(logo_name)
     logo_name = _pick_shape(logos_dir, logo_name, width, height)
     svg_path = _resolve_under(logos_dir, logo_name if logo_name.endswith(".svg") else f"{logo_name}.svg")
     png_path = _resolve_under(logos_dir, logo_name if logo_name.endswith(".png") else f"{logo_name}.png")
@@ -114,12 +158,10 @@ def render_logo(
 # -- Internal helpers -------------------------------------------------------
 
 @lru_cache(maxsize=64)
-def _natural_aspect(path_str: str) -> float | None:
+def _natural_aspect(path_str: str, _mtime_ns: int) -> float | None:
     """Width over height of a logo file, from its viewBox or its pixels.
 
-    Cached on the path: the logos ship with the integration and do not change
-    under a running instance, so this is one parse per file per process rather
-    than one per request.
+    Cached per file version so replacing a user logo updates its shape too.
     """
     path = Path(path_str)
     try:
@@ -138,8 +180,8 @@ def _shape_of(logos_dir: Path, name: str) -> float | None:
     """The aspect ratio a bare logo name renders at, SVG first."""
     for suffix in (".svg", ".png"):
         candidate = _resolve_under(logos_dir, f"{name}{suffix}")
-        if candidate is not None and candidate.exists():
-            aspect = _natural_aspect(str(candidate))
+        if candidate is not None and candidate.is_file():
+            aspect = _natural_aspect(str(candidate), candidate.stat().st_mtime_ns)
             if aspect:
                 return aspect
     return None

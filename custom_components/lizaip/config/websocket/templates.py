@@ -21,6 +21,7 @@ from homeassistant.helpers import device_registry as dr
 
 from ...runtime import get_store
 from ...shared.assignment import ASSIGNMENT_LONGTOUCH_KEY, ASSIGNMENT_DYNAMIC_KEY
+from ...shared.authorship import current_user
 from ...shared.logs import device_id_logger
 from ..const import PAGE_ID_SCHEMA
 from ..device_entities import _resolve_device_domain_entities
@@ -512,6 +513,12 @@ async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, 
     for group_page in group:
         group_page["template"] = {**group_page["template"], "target": new_target}
     await store.async_set_pages(device_id, pages)
+    # Their bound buttons will be refreshed into whatever the new target
+    # offers: whoever chose it wrote those steps.
+    if (user := current_user.get()) is not None and not user.is_admin:
+        await store.async_stamp_restored(
+            device_id, user, {p["id"] for p in group}, bound_only=True,
+        )
 
     device_id_logger(_LOGGER, hass, device_id).info(
         "Moved template page %s (%s) from %s to %s: %d button(s) changed",

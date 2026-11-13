@@ -33,6 +33,7 @@ from ..action_controller import (
     sanitize_slider_override,
     sanitize_toggle,
 )
+from ..shared.authorship import stamp_all, stamp_page
 from ..shared.logs import device_id_logger
 from ..shared.assignment import (
     longtouch_steps,
@@ -1221,6 +1222,7 @@ class LizaRemoteStore:
         """
         await self._ensure_loaded(device_id)
         entry = self._ensure_device(device_id)
+        assignments = stamp_page(entry.get("assignments", {}).get(page_id), assignments)
         pages = entry.get("pages", [])
         page_meta = next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
         if page_meta is None:
@@ -1264,6 +1266,38 @@ class LizaRemoteStore:
             pages.insert(at, page)
             await self.async_set_assignments_locked(device_id, page["id"], assignments)
             await self.async_set_pages_locked(device_id, pages)
+
+    async def async_stamp_restored(
+        self, device_id: str, user: Any, page_ids: set[int] | None = None,
+        *, bound_only: bool = False,
+    ) -> None:
+        """Mark buttons as written by *user*, who restored or retargeted them.
+
+        A restored archive is written to disk as it came, stamps included, so
+        its stamps say nothing about who chose these steps; the person
+        restoring did. A retargeted page's bound buttons will be refreshed
+        into whatever its new target offers, which the person retargeting
+        chose (*page_ids*, *bound_only*). The caller holds ``device_lock``
+        for a restore.
+
+        Nothing happens for an administrator or the system: that only ever
+        clears stamps, and a binding a non-admin wrote stays theirs.
+        """
+        if user is None or user.is_admin:
+            return
+        await self._ensure_loaded(device_id)
+        entry = self._ensure_device(device_id)
+        pages = {p.get("id"): p for p in entry.get("pages", []) if isinstance(p, dict)}
+        for page_id, page in list(entry.get("assignments", {}).items()):
+            if page_ids is not None and page_id not in page_ids:
+                continue
+            stamped = stamp_all(page, user, bound_only=bound_only)
+            if stamped == page:
+                continue
+            path = self._page_path(device_id, page_id)
+            if not await self._async_write_page(path, pages.get(page_id, {"id": page_id}), stamped):
+                raise StoreWriteError(path)
+            entry["assignments"][page_id] = stamped
 
     async def async_get_all_assignments(self, device_id: str) -> dict[int, dict[str, dict]]:
         """Every page's buttons by page id, as a new dict a caller may change."""

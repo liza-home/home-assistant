@@ -13,6 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.script import SCRIPT_MODE_PARALLEL, Script
 
 from ..config.internal_commands import get_internal_command
+from ..shared.authorship import AUTHOR_KEY, async_press_context, author_of
 from ..config.text_style import longtouch_enabled, settings_theme, toggle_enabled
 from ..const import CONF_OPTIMISTIC_UPDATES, DOMAIN, SIGNAL_ICON_UPDATE
 from ..shared.preludes import (
@@ -365,7 +366,7 @@ def _launch_step(hass: HomeAssistant, step: Any) -> dict | None:
     Such a TV drops the launch ``media_player.play_media`` sends, so the step
     is rerouted when the button runs; the button keeps its ``play_media``.
     """
-    from ..config.page_templates.samsung_tv import samsung_host
+    from ..config.page_templates.tv_platform.samsung_tv import samsung_host
 
     if not isinstance(step, dict):
         return None
@@ -690,8 +691,17 @@ async def resolve_button_assignment(
     if not device_id:
         return None, None
     assignments = await get_store(hass).async_get_assignments(device_id, page_id)
-    assign = resolve_fixed_action(assignments, get_selected_button(entry_id), button_key)
-    return device_id, assign if isinstance(assign, dict) else None
+    selected = get_selected_button(entry_id)
+    assign = resolve_fixed_action(assignments, selected, button_key)
+    if not isinstance(assign, dict):
+        return device_id, None
+    # An override comes from the selected button, a synthesised one too; its
+    # author is that button's. Either stamp restricts the press.
+    author = author_of(assign, assignments.get(selected) if selected else None,
+                       assignments.get(button_key))
+    if author and assign.get(AUTHOR_KEY) != author:
+        assign = {**assign, AUTHOR_KEY: author}
+    return device_id, assign
 
 
 async def longtouch_assignment(
@@ -733,6 +743,21 @@ def _bind_internal_steps(actions: list, entry_id: str) -> list:
     return bound
 
 
+async def _press_context(
+    hass: HomeAssistant, log, assign: Mapping | None, page_id: int, button_key: str,
+) -> Context | None:
+    """The context a press runs with, or ``None`` when it must not run."""
+    author = author_of(assign)
+    context = await async_press_context(hass, author)
+    if context is None:
+        log.warning(
+            "Not running %s/%s: it was written by a user who no longer exists "
+            "or is disabled; an administrator has to save it again",
+            page_id, button_key,
+        )
+    return context
+
+
 async def execute_longtouch(
     hass: HomeAssistant,
     entry_id: str,
@@ -759,12 +784,16 @@ async def execute_longtouch(
     )
     if script is None:
         return
+    _device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
+    context = await _press_context(hass, log, assign, page_id, button_key)
+    if context is None:
+        return
     log.info(
         "Executing %s (%d steps) for page=%s button=%s",
         script.name, len(script.sequence), page_id, button_key,
     )
     try:
-        await script.async_run(context=Context())
+        await script.async_run(context=context)
     except Exception:
         log.exception("Long touch failed for %s/%s", page_id, button_key)
 
@@ -913,6 +942,9 @@ async def execute_action(
     )
     if script is None:
         return
+    context = await _press_context(hass, log, assign, page_id, button_key)
+    if context is None:
+        return
     log.info(
         "Executing %s (%d steps) for page=%s button=%s",
         script.name, len(script.sequence), page_id, button_key,
@@ -930,8 +962,9 @@ async def execute_action(
             hass, device_id, page_id, button_key, assign, own_actions, entry_id,
         )
     try:
-        # Context lets HA trace resulting service calls back to this press.
-        await script.async_run(context=Context())
+        # The author's context, so HA applies that person's permissions and
+        # traces the resulting calls back to them.
+        await script.async_run(context=context)
     except Exception:
         # User-authored action failures must not tear down device event dispatch.
         log.exception("Action failed for %s/%s", page_id, button_key)

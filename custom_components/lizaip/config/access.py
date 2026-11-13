@@ -14,8 +14,9 @@ user's own ``hiddenPanels`` preference instead. A user who un-hides the item
 themselves reaches a panel with no remotes in it, never someone else's.
 
 Scoping is panel-level, not entity-level: an assigned user configuring a button
-can still target any entity they may already call services on. Home Assistant's
-own entity permissions are unchanged.
+can target any entity they may already call services on, and no more. A button
+a non-admin wrote runs with that user's context (``shared/authorship.py``), so
+Home Assistant applies their permissions -- admin-only actions included.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from ..const import CONF_ASSIGNED_USERS, DOMAIN, PANEL_URL_PATH
+from ..shared.authorship import current_user
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,18 +124,29 @@ def _guarded(func: Callable, allowed: Callable) -> Callable:
         connection.send_error(msg["id"], "unauthorized", _UNAUTHORIZED)
         return True
 
+    # The caller is recorded for the store, which stamps the buttons this
+    # request changes with their author (see ``shared/authorship.py``). Set
+    # here, before the handler schedules its task, so the task inherits it.
     if iscoroutinefunction(func):
         @wraps(func)
         async def async_guard(hass: HomeAssistant, connection, msg: dict) -> None:
             if not refused(hass, connection, msg):
-                await func(hass, connection, msg)
+                token = current_user.set(getattr(connection, "user", None))
+                try:
+                    await func(hass, connection, msg)
+                finally:
+                    current_user.reset(token)
 
         return async_guard
 
     @wraps(func)
     def guard(hass: HomeAssistant, connection, msg: dict) -> None:
         if not refused(hass, connection, msg):
-            func(hass, connection, msg)
+            token = current_user.set(getattr(connection, "user", None))
+            try:
+                func(hass, connection, msg)
+            finally:
+                current_user.reset(token)
 
     return guard
 

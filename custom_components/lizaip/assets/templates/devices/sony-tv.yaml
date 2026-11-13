@@ -12,7 +12,9 @@
 # them. They are subpages: not in the remote's page order, only reached from
 # those buttons; on each, the remote's Back button leads back.
 #   - Apps: the TV's apps, each opening with `media_player.play_media`; more
-#     than twelve get more Apps pages, button 12 leading on.
+#     than twelve get more Apps pages, button 12 leading on. Android's own
+#     launcher, store and settings, and Sony's demo, promo and help tiles,
+#     are left out.
 #   - Inputs: the TV's inputs (HDMI and the like, under the names given them
 #     on the TV) -- every source the integration lists -- each chosen with
 #     `media_player.select_source`.

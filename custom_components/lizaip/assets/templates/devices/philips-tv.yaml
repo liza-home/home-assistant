@@ -12,8 +12,9 @@
 # those buttons; on each, the remote's Back button leads back.
 #   - Apps: the apps the TV has installed, each opening with
 #     `media_player.play_media`; more than twelve get more Apps pages, button
-#     12 leading on. A Google TV set lists them with their own icons; a Saphi
-#     or Titan OS set lists none and the page stays empty.
+#     12 leading on. Android's own launcher, store and settings, and the set's
+#     own menus, are left out. A Google TV set lists them with their own
+#     icons; a Saphi or Titan OS set lists none and the page stays empty.
 #   - Inputs: the TV's inputs (HDMI and the like, under the names given them
 #     on the TV) -- every source the integration lists -- each chosen with
 #     `media_player.select_source`.

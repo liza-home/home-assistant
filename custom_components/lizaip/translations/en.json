@@ -15,7 +15,8 @@
     "abort": {
       "already_configured": "Device is already configured.",
       "discovery_only": "Manual setup is not supported. The device must be discovered automatically via mDNS.",
-      "reconfigure_successful": "Configuration updated."
+      "reconfigure_successful": "Configuration updated.",
+      "already_provisioned_elsewhere": "Device is already connected to another Home Assistant."
     }
   },
   "options": {
@@ -384,5 +385,19 @@
     "repeat_off": "repeat off",
     "repeat_all": "repeat all",
     "repeat_one": "repeat one"
+  },
+  "issues": {
+    "address_locked": {
+      "title": "{name} cannot take Home Assistant's new address",
+      "description": "The remote is set to reach Home Assistant at `{held}`, which no longer works, and Home Assistant is now at `{wanted}`. The remote refuses a different hostname to protect itself from being taken over, so it cannot be updated from here.\n\nFactory-reset the remote (hold POWER and button 9 for more than 3 seconds) and pair it again."
+    },
+    "address_stale": {
+      "title": "{name} will lose Home Assistant at its next restart",
+      "description": "The remote is set to reach Home Assistant at `{held}`. That name now resolves to {resolved}, not to this Home Assistant ({own}); the remote is still connected only because it remembers the old address.\n\nGive this Home Assistant host its old name back, or factory-reset the remote (hold POWER and button 9 for more than 3 seconds) and pair it again. The remote changes a stored hostname only after a factory reset."
+    },
+    "protocol_mismatch": {
+      "title": "{name} speaks a different protocol version",
+      "description": "The remote speaks lizaIP protocol version {device}, Home Assistant speaks version {ha}. Some features may not work. Update the remote's firmware or the lizaIP integration so both match."
+    }
   }
 }

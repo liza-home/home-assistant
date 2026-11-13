@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -35,6 +36,21 @@ class _NoTraffic:
 
 # Protocol constants
 PROTOCOL_VERSION = 1
+
+_MAC_HEX = re.compile(r"[0-9a-f]{12}")
+
+
+def normalise_mac(mac: str) -> str:
+    """A MAC as the remote's ``device_id``: 12 lowercase hex, no separators."""
+    return mac.replace(":", "").replace("-", "").lower()
+
+
+def device_id_from_mac(value: Any) -> str | None:
+    """``normalise_mac`` of ``value`` if that is a MAC, else ``None``."""
+    if not isinstance(value, str):
+        return None
+    mac = normalise_mac(value.strip())
+    return mac if _MAC_HEX.fullmatch(mac) else None
 PING_INTERVAL = 29
 
 #: Default deadline for a request/response round trip, counted while the remote

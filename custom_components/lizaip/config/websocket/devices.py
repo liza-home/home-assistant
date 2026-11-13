@@ -536,6 +536,11 @@ async def _apply_restore(
             await async_restore_files(hass, device_id, parsed["files"])
             if store is not None:
                 store.async_forget_device(device_id)
+                # The archive's own stamps are not evidence of anything; a
+                # non-admin restoring it is the author of every step in it.
+                user = getattr(connection, "user", None)
+                if user is not None and not user.is_admin:
+                    await store.async_stamp_restored(device_id, user)
     except OSError as err:
         log.exception("Restoring the configuration failed")
         connection.send_error(msg["id"], "failed", str(err))

@@ -7,7 +7,12 @@
  * rather than carry a second implementation that could drift. Answers are kept
  * in a cache the render code reads synchronously; a miss shows the fallback
  * (no picture, no variable text) and is asked for in one batched request, after
- * which the view is drawn again. A change to an entity an answer read asks again.
+ * which the view is drawn again. A change to an entity an answer read asks
+ * again for the answers that read it -- not every answer: one countdown in one
+ * title would otherwise re-ask every variable on every page each second -- and
+ * the view is drawn again only when an answer it actually showed changed. An
+ * answer only the remote faces show redraws just the faces, in place: a full
+ * render would replace the page strip every second and take its focus along.
  *
  * Only the words `${_state}`, `${_name}` and `${_cmd}` are still resolved here
  * (`_substituteTooltipTokens`): they depend on the button being edited, not on
@@ -36,8 +41,13 @@ const REFRESH_MS = 1000;
 
 export const VariablesMixin = {
   _variableState() {
+    // `deps`: the entities each answer read, by key. `drawn`: the keys the
+    // current view read outside the faces, since the last render; `faces`:
+    // those the faces read, since they were last drawn. Only these warrant a
+    // redraw, and `faces` only of the faces.
     return (this._variables ||= {
       values: new Map(), items: new Map(), entities: new Set(), states: {}, timer: null, queued: new Set(),
+      deps: new Map(), drawn: new Set(), faces: new Set(), inFaces: false,
     });
   },
 
@@ -54,6 +64,7 @@ export const VariablesMixin = {
   _variableValue(kind, text) {
     const v = this._variableState();
     const key = this._variableKey(kind, text);
+    (v.inFaces ? v.faces : v.drawn).add(key);
     if (v.values.has(key)) return { found: true, value: v.values.get(key) };
     v.items.set(key, { kind, text });
     this._queueVariables([key], 0);
@@ -85,6 +96,15 @@ export const VariablesMixin = {
     return r.found ? r.value : unanswered(text);
   },
 
+  /** Run *draw*, counting what it reads as read by the faces; *fresh*: it redraws them all. */
+  _readingFaces(draw, fresh) {
+    const v = this._variableState();
+    if (fresh) v.faces = new Set();
+    const outer = v.inFaces;
+    v.inFaces = true;
+    try { return draw(); } finally { v.inFaces = outer; }
+  },
+
   _queueVariables(keys, delay) {
     const v = this._variableState();
     keys.forEach((k) => v.queued.add(k));
@@ -110,13 +130,26 @@ export const VariablesMixin = {
       if (this._currentEntry) ask.entry_id = this._currentEntry;
       answer = await this._hass.callWS(ask);
     } catch (e) { /* unanswered: fall through to the fallback */ }
-    if (v.values.size > CACHE_LIMIT) { v.values.clear(); v.items.clear(); v.entities.clear(); }
-    let changed = false;
+    if (v.values.size > CACHE_LIMIT) {
+      v.values.clear(); v.items.clear(); v.entities.clear(); v.deps.clear();
+    }
+    // "page": something outside the faces shows a changed answer; "faces":
+    // only the faces do.
+    let changed = null;
     const remember = (kind, text, value) => {
       const key = this._variableKey(kind, text);
-      if (!v.values.has(key) || v.values.get(key) !== value) changed = true;
+      if (!v.values.has(key) || v.values.get(key) !== value) {
+        // A new answer only matters to a view that showed the old one.
+        if (v.drawn.has(key) || (!v.values.has(key) && !v.faces.has(key))) changed = "page";
+        else if (v.faces.has(key) && changed !== "page") changed = "faces";
+      }
       v.values.set(key, value);
       v.items.set(key, { kind, text });
+      if (answer) {
+        // A backend without `depends` gets the old behaviour: every entity.
+        const read = answer.depends ? (answer.depends[text] || []) : (answer.entities || []);
+        v.deps.set(key, new Set(read));
+      }
     };
     for (const text of texts) {
       remember("text", text, answer ? (answer.texts?.[text] ?? "") : unanswered(text));
@@ -130,7 +163,7 @@ export const VariablesMixin = {
         v.states[e] = this._hass?.states?.[e];
       }
     }
-    if (changed) this._variablesLoaded();
+    if (changed) this._variablesLoaded(changed);
   },
 
   /** Ask again for every answer when an entity one of them read has changed. */
@@ -138,17 +171,36 @@ export const VariablesMixin = {
     const v = this._variables;
     if (!v || !v.entities.size) return;
     const states = this._hass?.states || {};
-    let changed = false;
+    const moved = new Set();
     for (const e of v.entities) {
-      if (states[e] !== v.states[e]) { v.states[e] = states[e]; changed = true; }
+      if (states[e] !== v.states[e]) { v.states[e] = states[e]; moved.add(e); }
     }
-    if (changed) this._queueVariables([...v.items.keys()], REFRESH_MS);
+    if (!moved.size) return;
+    const keys = [];
+    for (const key of v.items.keys()) {
+      const read = v.deps.get(key);
+      // Not answered yet, or unknown what it read: ask, to be safe.
+      if (!read || [...read].some((e) => moved.has(e))) keys.push(key);
+    }
+    if (keys.length) this._queueVariables(keys, REFRESH_MS);
   },
 
-  /** New answers arrived: draw what depends on them again, without stealing an edit. */
-  _variablesLoaded() {
+  /**
+   * New answers arrived: draw what depends on them again, without stealing an
+   * edit. *scope* "faces" means only the remote faces showed them, and only
+   * those are redrawn, in place.
+   */
+  _variablesLoaded(scope = "page") {
     this._refreshSVGIcons?.();
     if (!this._initialized || this._loading) return;
+    if (scope === "faces" && this._refreshSVG) {
+      // A tile on the open face is rebuilt too; its focus comes back with it.
+      const focus = this._a11yCaptureFocus?.();
+      this._refreshSVG();
+      this._applyDeviceUrls?.();
+      if (focus) this._a11yRestoreFocus?.(focus);
+      return;
+    }
     const active = this.shadowRoot?.activeElement;
     // A field still holding what the last render put there loses nothing to a
     // render (focus is put back), and it is usually the very field whose
@@ -165,7 +217,7 @@ export const VariablesMixin = {
           root.removeEventListener("change", retry, true);
           root.removeEventListener("focusout", retry, true);
           this._variablesRetry = null;
-          this._variablesLoaded();
+          this._variablesLoaded(scope);
         };
         this._variablesRetry = retry;
         root.addEventListener("change", retry, true);

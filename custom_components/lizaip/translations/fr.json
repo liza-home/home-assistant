@@ -89,7 +89,8 @@
     "abort": {
       "already_configured": "Device is already configured.",
       "discovery_only": "Manual setup is not supported. The device must be discovered automatically via mDNS.",
-      "reconfigure_successful": "Configuration updated."
+      "reconfigure_successful": "Configuration updated.",
+      "already_provisioned_elsewhere": "L'appareil est déjà connecté à un autre Home Assistant."
     }
   },
   "options": {
@@ -384,5 +385,19 @@
     "repeat_off": "répétition désactivée",
     "repeat_all": "répéter tout",
     "repeat_one": "répéter un"
+  },
+  "issues": {
+    "address_locked": {
+      "title": "{name} ne peut pas accepter la nouvelle adresse de Home Assistant",
+      "description": "La télécommande est configurée pour joindre Home Assistant à `{held}`, ce qui ne fonctionne plus ; Home Assistant est désormais à `{wanted}`. Pour se protéger contre une prise de contrôle, la télécommande refuse un autre nom d'hôte et ne peut donc pas être mise à jour d'ici.\n\nRéinitialisez la télécommande aux paramètres d'usine (maintenez POWER et la touche 9 plus de 3 secondes) et appairez-la à nouveau."
+    },
+    "address_stale": {
+      "title": "{name} perdra Home Assistant à son prochain redémarrage",
+      "description": "La télécommande est configurée pour joindre Home Assistant à `{held}`. Ce nom pointe maintenant vers {resolved}, et non vers ce Home Assistant ({own}) ; elle n'est encore connectée que parce qu'elle se souvient de l'ancienne adresse.\n\nRedonnez à cet hôte Home Assistant son ancien nom, ou réinitialisez la télécommande aux paramètres d'usine (maintenez POWER et la touche 9 plus de 3 secondes) et appairez-la à nouveau. La télécommande ne change un nom d'hôte enregistré qu'après une réinitialisation."
+    },
+    "protocol_mismatch": {
+      "title": "{name} utilise une autre version du protocole",
+      "description": "La télécommande utilise la version {device} du protocole lizaIP, Home Assistant la version {ha}. Certaines fonctions peuvent ne pas fonctionner. Mettez à jour le micrologiciel de la télécommande ou l'intégration lizaIP pour qu'elles correspondent."
+    }
   }
 }

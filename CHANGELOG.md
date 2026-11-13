@@ -11,7 +11,7 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
-## [2026.11.2b2] - 2026-11-12
+## [2026.11.2] - 2026-11-13
 
 ### Added
 
@@ -41,6 +41,13 @@ that were removed are always listed under **Removed**, new ones under **Added**.
 
 ### Fixed
 
+- **Setting up a new remote no longer shows a QR code.** The setup page and
+  the panel now tell you to open `172.16.10.1` in a browser if the setup
+  page isn't shown automatically.
+- **An app set's labels with escapes are read as written**, and each app is
+  shown once.
+- **Rolling a remote back to a firmware version** no longer fails with
+  "no version" for a release the server has.
 - **A Sony Bravia's or Philips TV's Apps page shows its apps** rather than
   its HDMI inputs, including for a Bravia that was in standby.
 - **A second Apps page appears in the panel as soon as it is added**, without

@@ -17,109 +17,44 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import hashlib
+import html
 import json
 import logging
 import unicodedata
-import re
 import time
-from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field, fields
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import asdict, dataclass, fields
 from typing import Any, Final
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
 
 from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
-from .webos_tv import in_device_order, is_input, source_artwork, source_ids
+from .entity_source import (
+    _AREA_LABEL_PARAMS,
+    _ENTITIES_PARAMS,
+    registry_subscriber,
+    resolve_entities,
+    resolve_scenes,
+    resolve_scripts,
+    subscribe_entity_registry,
+)
+from .items import (  # noqa: F401 - re-exported
+    DEFAULT_MAX_ITEMS,
+    DEFAULT_TRACKED_FIELDS,
+    DynamicItem,
+    ResolveResult,
+    SourceUnavailable,
+)
+from .page_source import resolve_pages, subscribe_pages
+from .tv_platform import platform_of
+from .tv_platform.android_tv import is_system_app
 
 _LOGGER = logging.getLogger(__name__)
 
 MEDIA_PLAYER_DOMAIN = "media_player"
 
-#: How many items a source is asked for when nothing narrower is requested.
-#: Deliberately not part of the cache key: pages whose highest tokens differ
-#: must still share one browse result.
-DEFAULT_MAX_ITEMS = 24
-
-#: Fields a new binding tracks unless its source opts into more.
-#:
-#: ``action`` is excluded here and added back per source: most sources use one
-#: service for every item, while entity-backed sources may vary by domain.
-DEFAULT_TRACKED_FIELDS = ("tooltip", "icon", "data")
-
 _WARNED_EMPTY: set[str] = set()
-
-
-def _squash(title: str) -> str:
-    """A title reduced to its letters and digits, for table lookups.
-
-    Integrations spell the same input half a dozen ways — ``Line-in``,
-    ``Line In``, ``LINE_IN`` — and which one arrives depends on the speaker's
-    firmware, so matching on the literal would work on one device and not the
-    next.
-    """
-    return "".join(ch for ch in title.lower() if ch.isalnum())
-
-
-#: Sources that are a socket rather than a recording, keyed by squashed title.
-#:
-#: These never have artwork and never will: browsing a line-in returns nothing
-#: to illustrate, so without this the button sits among the album covers as a
-#: text tile forever. An icon is the honest answer, not a placeholder.
-_TITLE_ICONS: dict[str, str] = {
-    "linein": "mdi:audio-input-stereo-minijack",
-    "analogin": "mdi:audio-input-stereo-minijack",
-}
-
-
-@dataclass
-class DynamicItem:
-    title: str = ""
-    thumbnail: str = ""
-    action: str = ""
-    data: dict[str, Any] = field(default_factory=dict)
-    identity: str = ""
-    #: What the button's tooltip stores, when it is not the title itself.
-    tooltip: str = ""
-
-    @property
-    def button_tooltip(self) -> str:
-        return self.tooltip or self.title
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "title": self.title,
-            "thumbnail": self.thumbnail,
-            "action": self.action,
-            "data": dict(self.data),
-            "identity": self.identity or self.title,
-        }
-
-    @property
-    def icon(self) -> str:
-        """Button-icon form of the thumbnail.
-
-        Artwork URLs are wrapped in ``media:`` so imgserv can resize them.
-        ``mdi:`` names are already device icons; wrapping them would produce
-        ``media:mdi:palette`` and a 404. Missing artwork falls back to a known
-        icon for the handful of sources that can never have any, and otherwise
-        to a text tile so the button is not blank.
-        """
-        thumb = self.thumbnail
-        if thumb and not thumb.startswith("media:"):
-            return f"media:{thumb}" if thumb.startswith(("http", "/")) else thumb
-        if thumb:
-            return thumb
-        if not self.title:
-            return ""
-        return _TITLE_ICONS.get(_squash(self.title)) or f"text:{self.title}"
-
-
-@dataclass
-class ResolveResult:
-    items: list[DynamicItem] = field(default_factory=list)
-    error: str | None = None
-    succeeded_at: float = 0.0
 
 
 #: Content types integrations expose favorites under, tried in order.
@@ -154,7 +89,6 @@ _APP_FOLDERS: Final = ("apps", "app_list", "applications")
 #: ``MediaPlayerEntityFeature.SELECT_SOURCE``, named rather than imported so
 #: that this module keeps to Home Assistant's core.
 _SELECT_SOURCE: Final = 2048
-
 
 # ── entity lookup ─────────────────────────────────────────────────────
 
@@ -260,6 +194,16 @@ def bound_specs(
 # ── browse helpers ────────────────────────────────────────────────────
 
 
+def _display_title(raw: Any) -> str:
+    """A browse child's title as its owner means it to read.
+
+    A set is free to hand its labels out XML-escaped, and a Bravia does, so
+    an app named "Timer & Uhr" can arrive as "Timer &amp; Uhr" and would
+    otherwise reach the button, its tooltip and its drawn icon that way.
+    """
+    return html.unescape(str(raw or ""))
+
+
 def _extract_playable_items(result, max_items: int) -> list[dict]:
     items: list[dict] = []
     if not hasattr(result, "children") or not result.children:
@@ -267,7 +211,7 @@ def _extract_playable_items(result, max_items: int) -> list[dict]:
     for child in result.children:
         if getattr(child, "can_play", False):
             items.append({
-                "title": child.title or "",
+                "title": _display_title(child.title),
                 "thumbnail": child.thumbnail or "",
                 "media_content_id": child.media_content_id or "",
                 "media_content_type": str(child.media_content_type or ""),
@@ -427,21 +371,34 @@ async def _browse_app_folders(entity, entity_id: str) -> tuple[Any, bool]:
 
 
 def _app_rows(result, max_items: int) -> list[dict]:
-    """The apps among a browse result's children.
+    """The apps among a browse result's children, each of them once.
 
     Android TV Remote marks its apps unplayable, so an app is taken by its
     type rather than by ``can_play``.
+
+    A set may hand one app out twice, and a Bravia does. The first of each
+    name stands.
     """
-    return [
-        {
-            "title": child.title or "",
+    rows: dict[str, dict] = {}
+    for child in (getattr(result, "children", None) or []):
+        if not (child.media_content_type == "app" or getattr(child, "can_play", False)):
+            continue
+        title = _display_title(child.title)
+        app_id = str(child.media_content_id or "")
+        # A repeat can carry a second launch id, so apps are told apart by
+        # name, read as written -- an unnamed one by the id it launches.
+        key = title.casefold() or app_id
+        if key in rows:
+            continue
+        rows[key] = {
+            "title": title,
             "thumbnail": child.thumbnail or "",
-            "media_content_id": child.media_content_id or "",
+            "media_content_id": app_id,
             "media_content_type": str(child.media_content_type or ""),
         }
-        for child in (getattr(result, "children", None) or [])
-        if child.media_content_type == "app" or getattr(child, "can_play", False)
-    ][:max_items]
+        if len(rows) >= max_items:
+            break
+    return list(rows.values())
 
 
 def _sources_unread(entity) -> bool:
@@ -475,7 +432,7 @@ async def _browse_apps(entity, entity_id: str, max_items: int) -> tuple[list[dic
         return [], False
     result, browses = await _browse_app_folders(entity, entity_id)
     rows = _app_rows(result, max_items)
-    if rows or not _sources_unread(entity):
+    if rows or not platform_of(entity).reads_sources_on_root_browse or not _sources_unread(entity):
         return rows, browses
     try:
         await _browse(entity, None, None, 15)
@@ -484,11 +441,6 @@ async def _browse_apps(entity, entity_id: str, max_items: int) -> tuple[list[dic
         return rows, browses
     result, browses = await _browse_app_folders(entity, entity_id)
     return _app_rows(result, max_items), browses
-
-
-def _platform(entity: Any) -> str:
-    """The integration an entity belongs to, or ``""``."""
-    return getattr(getattr(entity, "platform", None), "platform_name", "") or ""
 
 
 async def get_browse_thumbnails(entity, entity_id: str) -> dict[str, str]:
@@ -523,12 +475,35 @@ async def get_browse_thumbnails(entity, entity_id: str) -> dict[str, str]:
     return thumbnails
 
 
-def _excluded(names: tuple[str, ...], patterns: list[str]) -> bool:
+def _excluded(names: tuple[str, ...], patterns: Sequence[str]) -> bool:
     """Whether any of *names* matches one of *patterns* (``*`` wildcards, any case)."""
     return any(
         fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
         for name in names for pattern in patterns
     )
+
+
+def _system_app(row: dict) -> bool:
+    """Whether a browsed app belongs to the set itself rather than to its owner."""
+    return is_system_app(row.get("media_content_id", ""))
+
+
+def _owners_apps(rows: list[dict], entity_id: str) -> list[dict]:
+    """*rows* without the set's own plumbing, naming what went for the log.
+
+    A set lists its apps by package name but shows them by title, so the log
+    is the only place the two can be told apart when a page looks wrong.
+    """
+    kept, own = [], []
+    for row in rows:
+        (own if _system_app(row) else kept).append(row)
+    if own:
+        _LOGGER.debug(
+            "%s: %d of %d apps are the set's own and stay off its page: %s",
+            entity_id, len(own), len(rows),
+            ", ".join(sorted(r.get("media_content_id", "") for r in own)),
+        )
+    return kept
 
 
 def _alphabetical(title: str) -> tuple[str, str]:
@@ -571,6 +546,7 @@ async def read_source_list(
     if sort_key is not None:
         source_list = sorted(source_list, key=sort_key)
 
+    tv = platform_of(entity)
     thumbnails: dict[str, str] = {}
     if entity is not None and hasattr(entity, "async_browse_media"):
         thumbnails = await get_browse_thumbnails(entity, entity_id)
@@ -578,7 +554,7 @@ async def read_source_list(
     return [
         DynamicItem(
             title=source,
-            thumbnail=thumbnails.get(source) or source_artwork(entity, source),
+            thumbnail=thumbnails.get(source) or tv.source_artwork(entity, source),
             action="media_player.select_source",
             data={"source": source},
             identity=f"source:{source}",
@@ -653,14 +629,6 @@ _ENTITY_PARAM = {
 }
 
 
-class SourceUnavailable(RuntimeError):
-    """The source could not be read, as opposed to having nothing to give.
-
-    Resolution treats this as a hard error, keeps last-known button content and
-    marks it stale instead of blanking it as an empty source.
-    """
-
-
 #: Unreachable states, kept literal so test-stubbed HA modules can import this.
 _UNREACHABLE_STATES = {"unavailable", "unknown", "none"}
 
@@ -686,20 +654,21 @@ async def _read_tv_sources(
     the template names them under `include`.
     """
     include = _patterns(spec.get("include")) if inputs else []
+    tv = platform_of(entity)
 
     def wanted_input(title: str) -> bool:
         if include:
-            return _excluded(source_ids(entity, title), include)
-        return is_input(entity, title)
+            return _excluded(tv.source_ids(entity, title), include)
+        return tv.is_input(entity, title)
 
     items = await read_source_list(
         hass, entity_id, max_items, entity,
         keep=lambda title: wanted_input(title) == inputs
-        and not _excluded(source_ids(entity, title), exclude),
+        and not _excluded(tv.source_ids(entity, title), exclude),
         sort_key=None if inputs else _alphabetical,
     )
     if inputs and items:
-        order = in_device_order(entity, [i.title for i in items])
+        order = tv.source_order(entity, [i.title for i in items])
         items.sort(key=lambda i: order.index(i.title))
     return items
 
@@ -716,6 +685,10 @@ async def _resolve_apps(
     Only a TV that browses no apps at all lists them as sources instead; one
     that keeps them in a browse folder has none to show rather than its own
     HDMI sockets, and sockets kept from before are dropped.
+
+    A set's own plumbing -- Android's launcher, store and settings, and what
+    its maker adds on top -- is left out wherever the TV hands out its
+    installed packages unasked; a hand-written list is taken as it stands.
     """
     from .app_cache import async_get, async_put, cache_key
 
@@ -723,15 +696,17 @@ async def _resolve_apps(
     key = cache_key(entity_id, exclude)
     every = DEFAULT_MAX_ITEMS * 4
     raw, browses = await _browse_apps(entity, entity_id, every)
+    platform = platform_of(entity)
     raw = [r for r in raw if not _excluded((r.get("title", ""), r.get("media_content_id", "")), exclude)]
-    if raw and _platform(entity) == "apple_tv":
-        from .apple_tv import add_app_icons
-
-        await add_app_icons(hass, raw)
-    if not raw and _platform(entity) == "samsungtv":
-        from .samsung_tv import entity_apps
-
-        raw = [r for r in await entity_apps(hass, entity) if not _excluded((r["title"], r["media_content_id"]), exclude)]
+    if not platform.keeps_system_apps:
+        raw = _owners_apps(raw, entity_id)
+    if raw:
+        await platform.decorate(hass, raw)
+    else:
+        raw = [
+            r for r in await platform.fallback_apps(hass, entity)
+            if not _excluded((r["title"], r["media_content_id"]), exclude)
+        ]
     if raw:
         items = _items_from_browse(sorted(raw, key=lambda r: _alphabetical(r.get("title", ""))))
     elif browses:
@@ -827,332 +802,6 @@ async def resolve_favorites(
     return []
 
 
-# ── registry-backed entities source ───────────────────────────────────
-#
-# One parameterised source covers scenes, scripts and filtered entity lists.
-
-
-_ENTITIES_PARAMS: dict[str, dict[str, Any]] = {
-    "domain": {
-        "type": "string",
-        "required": False,
-        "description": "Entity domain to include, e.g. scene, script or light",
-    },
-    "area": {
-        "type": "string",
-        "required": False,
-        "description": "Area id or name to restrict to",
-    },
-    "label": {
-        "type": "string",
-        "required": False,
-        "description": "Label id or name to restrict to",
-    },
-    "config_entry": {
-        "type": "string",
-        "required": False,
-        "description": (
-            "Config entry id to restrict to, e.g. one Hue bridge's entry"
-        ),
-    },
-    "device_class": {
-        "type": "string",
-        "required": False,
-        "description": (
-            "Device class to restrict to, e.g. battery, temperature or "
-            "signal_strength"
-        ),
-    },
-    "translation_key": {
-        "type": "string",
-        "required": False,
-        "description": (
-            "Which of an integration's entities, by the key it names them "
-            "with, e.g. ip_address -- for telling apart sensors that share "
-            "a config entry and no device class"
-        ),
-    },
-}
-
-_AREA_LABEL_PARAMS: dict[str, dict[str, Any]] = {
-    key: _ENTITIES_PARAMS[key] for key in ("area", "label")
-}
-
-#: Service a domain's items are activated with. Anything not listed falls back
-#: to ``homeassistant.turn_on``.
-#:
-#: ``homeassistant.turn_on`` skips domains without their own ``turn_on``
-#: service, so cover/button/valve need explicit services. Domains left to the
-#: fallback do register ``turn_on`` with the intended meaning: light, switch,
-#: input_boolean, fan, vacuum, climate, siren, humidifier and water_heater.
-#:
-#: ``lock`` is deliberately absent: choosing lock vs unlock on a physical
-#: remote is a security decision for the user.
-_DOMAIN_ACTIONS = {
-    "automation": "automation.trigger",
-    "button": "button.press",
-    "cover": "cover.open_cover",
-    "scene": "scene.turn_on",
-    "script": "script.turn_on",
-    "valve": "valve.open_valve",
-}
-
-#: Icon used when neither the registry nor state carries one; blank icons look
-#: like broken bindings.
-#:
-#: Literal table on purpose: ``async_get_icons`` is async, while ``_entity_item``
-#: is sync and loops over the registry.
-_DOMAIN_ICONS = {
-    "automation": "mdi:robot",
-    "button": "mdi:gesture-tap-button",
-    "climate": "mdi:thermostat",
-    "cover": "mdi:window-shutter",
-    "fan": "mdi:fan",
-    "humidifier": "mdi:air-humidifier",
-    "input_boolean": "mdi:toggle-switch-outline",
-    "light": "mdi:lightbulb",
-    "lock": "mdi:lock",
-    "media_player": "mdi:speaker",
-    "scene": "mdi:palette",
-    "script": "mdi:script-text",
-    "siren": "mdi:bullhorn",
-    "switch": "mdi:toggle-switch",
-    "vacuum": "mdi:robot-vacuum",
-    "valve": "mdi:valve",
-    "water_heater": "mdi:water-boiler",
-}
-_DEFAULT_ICON = "mdi:shape"
-
-
-def _domain_of(entity_id: str) -> str:
-    return entity_id.split(".", 1)[0] if "." in entity_id else ""
-
-
-def _wanted_domains(spec: dict[str, Any]) -> set[str]:
-    raw = spec.get("domain") or spec.get("domains") or ""
-    if isinstance(raw, str):
-        raw = [raw]
-    return {str(item).strip() for item in raw if str(item).strip()}
-
-
-def _registries(hass: HomeAssistant) -> tuple[Any, Any, Any, Any]:
-    """The four registries this source reads, imported lazily.
-
-    The helpers are heavy and absent from unit-test stubs, so module-scope
-    imports would break collection.
-    """
-    from homeassistant.helpers import area_registry as ar
-    from homeassistant.helpers import device_registry as dr
-    from homeassistant.helpers import entity_registry as er
-
-    try:
-        from homeassistant.helpers import label_registry as lr
-    except ImportError:  # pragma: no cover - HA older than labels
-        lr = None
-
-    def _get(module):
-        if module is None:
-            return None
-        try:
-            return module.async_get(hass)
-        except Exception:  # pragma: no cover - registry not loaded
-            return None
-
-    return _get(er), _get(ar), _get(dr), _get(lr)
-
-
-def _reg_mapping(registry, attr: str) -> dict:
-    """A registry's id→entry mapping as a real dict."""
-    raw = getattr(registry, attr, None) if registry is not None else None
-    if isinstance(raw, dict):
-        return raw
-    try:
-        return dict(raw)
-    except Exception:
-        return {}
-
-
-def _match_area_ids(area_reg, wanted: str) -> set[str]:
-    """Area ids matching *wanted*, which may be an id or a display name."""
-    if not wanted or area_reg is None:
-        return set()
-    needle = wanted.strip().casefold()
-    matched = {
-        area.id
-        for area in _reg_mapping(area_reg, "areas").values()
-        if str(getattr(area, "id", "")).casefold() == needle
-        or str(getattr(area, "name", "")).casefold() == needle
-    }
-    # Unknown names must not silently widen to "everything".
-    return matched or {wanted.strip()}
-
-
-def _match_label_ids(label_reg, wanted: str) -> set[str]:
-    if not wanted:
-        return set()
-    needle = wanted.strip().casefold()
-    matched = {
-        label.label_id
-        for label in _reg_mapping(label_reg, "labels").values()
-        if str(getattr(label, "label_id", "")).casefold() == needle
-        or str(getattr(label, "name", "")).casefold() == needle
-    }
-    return matched or {wanted.strip()}
-
-
-def _entry_area_id(entry, device_reg) -> str:
-    area_id = getattr(entry, "area_id", None)
-    if area_id:
-        return str(area_id)
-    device_id = getattr(entry, "device_id", None)
-    if device_id and device_reg is not None:
-        device = device_reg.async_get(device_id)
-        if device is not None and getattr(device, "area_id", None):
-            return str(device.area_id)
-    return ""
-
-
-def _entity_item(hass: HomeAssistant, entity_id: str, entry) -> DynamicItem:
-    domain = _domain_of(entity_id)
-    try:
-        state = hass.states.get(entity_id)
-    except Exception:  # pragma: no cover - state machine unavailable
-        state = None
-    raw_attrs = getattr(state, "attributes", None) if state is not None else None
-    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
-
-    title = (
-        (getattr(entry, "name", None) if entry is not None else None)
-        or (getattr(entry, "original_name", None) if entry is not None else None)
-        or attrs.get("friendly_name")
-        or entity_id
-    )
-    icon = (
-        (getattr(entry, "icon", None) if entry is not None else None)
-        or (getattr(entry, "original_icon", None) if entry is not None else None)
-        or attrs.get("icon")
-        or _DOMAIN_ICONS.get(domain, _DEFAULT_ICON)
-    )
-
-    return DynamicItem(
-        title=str(title),
-        thumbnail=str(icon),
-        action=_DOMAIN_ACTIONS.get(domain, "homeassistant.turn_on"),
-        data={"entity_id": entity_id},
-        identity=entity_id,
-        # A variable, not the name as it is now: the button follows a rename
-        # the moment it happens, and is a tooltip like any other -- never the
-        # library entry's name, which twelve lamps on a Hue page share.
-        tooltip=f"${{{entity_id}.friendly_name}}",
-    )
-
-
-async def resolve_entities(
-    hass: HomeAssistant,
-    spec: dict[str, Any],
-    max_items: int = DEFAULT_MAX_ITEMS,
-) -> list[DynamicItem]:
-    """Entities from the registries, filtered by domain, area and/or label.
-
-    ``config_entry`` narrows to one integration instance — for example one Hue
-    bridge — which makes it usable as a template target before a page exists.
-    Results are sorted by friendly name then entity id because bindings are by
-    position, not identity.
-    """
-    spec = dict(spec or {})
-    domains = _wanted_domains(spec)
-    area = str(spec.get("area") or "").strip()
-    label = str(spec.get("label") or "").strip()
-    config_entry = str(spec.get("config_entry") or "").strip()
-
-    device_class = str(spec.get("device_class") or "").strip().lower()
-    translation_key = str(spec.get("translation_key") or "").strip()
-    entity_reg, area_reg, device_reg, label_reg = _registries(hass)
-
-    area_ids = _match_area_ids(area_reg, area) if area else set()
-    label_ids = _match_label_ids(label_reg, label) if label else set()
-
-    found: dict[str, DynamicItem] = {}
-
-    entries = _reg_mapping(entity_reg, "entities")
-    for entity_id, entry in entries.items():
-        entity_id = str(entity_id)
-        if domains and _domain_of(entity_id) not in domains:
-            continue
-        if getattr(entry, "disabled_by", None) or getattr(entry, "hidden_by", None):
-            continue
-        if config_entry and str(getattr(entry, "config_entry_id", "") or "") != config_entry:
-            continue
-        if area_ids and _entry_area_id(entry, device_reg) not in area_ids:
-            continue
-        if label_ids and not (set(getattr(entry, "labels", None) or ()) & label_ids):
-            continue
-        if device_class and _device_class(hass, entity_id, entry) != device_class:
-            continue
-        if translation_key and str(getattr(entry, "translation_key", "") or "") != translation_key:
-            continue
-        found[entity_id] = _entity_item(hass, entity_id, entry)
-
-    # YAML scenes/scripts live only in states. Widen only when no registry-only
-    # filter (area, label, config entry) is active.
-    # A translation key is registry-only too: a state carries none.
-    if not area_ids and not label_ids and not config_entry and not translation_key:
-        for state in _all_states(hass):
-            entity_id = str(getattr(state, "entity_id", "") or "")
-            if not entity_id or entity_id in found:
-                continue
-            if domains and _domain_of(entity_id) not in domains:
-                continue
-            if device_class and _device_class(hass, entity_id, None) != device_class:
-                continue
-            found[entity_id] = _entity_item(hass, entity_id, None)
-
-    items = sorted(found.values(), key=lambda it: (it.title.casefold(), it.identity))
-    return items[:max_items]
-
-
-def _device_class(hass: HomeAssistant, entity_id: str, entry) -> str:
-    """What kind of value *entity_id* reports: the user's choice, then the
-    integration's, then whatever its state says."""
-    value = (
-        (getattr(entry, "device_class", None) if entry is not None else None)
-        or (getattr(entry, "original_device_class", None) if entry is not None else None)
-    )
-    if not value:
-        try:
-            state = hass.states.get(entity_id)
-        except Exception:  # pragma: no cover - state machine unavailable
-            state = None
-        attrs = getattr(state, "attributes", None) if state is not None else None
-        value = attrs.get("device_class") if isinstance(attrs, dict) else None
-    return str(value or "").strip().lower()
-
-
-def _all_states(hass: HomeAssistant) -> list[Any]:
-    try:
-        return list(hass.states.async_all() or [])
-    except Exception:  # pragma: no cover - state machine unavailable
-        return []
-
-
-def _fixed_domain_resolver(domain: str):
-    async def _resolve(
-        hass: HomeAssistant,
-        spec: dict[str, Any],
-        max_items: int = DEFAULT_MAX_ITEMS,
-    ) -> list[DynamicItem]:
-        merged = dict(spec or {})
-        merged["domain"] = domain
-        return await resolve_entities(hass, merged, max_items)
-
-    _resolve.__name__ = f"resolve_{domain}s"
-    return _resolve
-
-
-resolve_scenes = _fixed_domain_resolver("scene")
-resolve_scripts = _fixed_domain_resolver("script")
-
-
 # ── push subscriptions ────────────────────────────────────────────────
 #
 # Hooks fire for source-specific data changes; refresh owns debounce, re-resolve
@@ -1199,357 +848,6 @@ def subscribe_favorites(hass: HomeAssistant, specs, on_change) -> Any | None:
 
     _LOGGER.debug("Watching %s for source list changes", entities)
     return async_track_state_change_event(hass, entities, _on_state)
-
-
-def _spec_wants_entity(hass: HomeAssistant, spec: dict[str, Any], entity_id: str) -> bool:
-    """Whether *entity_id* could appear in *spec*'s result set.
-
-    Conservative both ways: a false positive costs one resolve, while a false
-    negative leaves a stale button until the next generic trigger. Domain is
-    checked before registry-backed filters.
-    """
-    domains = _wanted_domains(spec)
-    if domains and _domain_of(entity_id) not in domains:
-        return False
-
-    area = str(spec.get("area") or "").strip()
-    label = str(spec.get("label") or "").strip()
-    config_entry = str(spec.get("config_entry") or "").strip()
-    if not area and not label and not config_entry:
-        return True
-
-    try:
-        entity_reg, area_reg, device_reg, label_reg = _registries(hass)
-        entry = entity_reg.async_get(entity_id)
-    except Exception:  # noqa: BLE001 - a filter must never break the event loop
-        return True
-
-    # Removed or state-only entries may still matter.
-    if entry is None:
-        return True
-
-    if config_entry and str(getattr(entry, "config_entry_id", "") or "") != config_entry:
-        return False
-    if area:
-        if _entry_area_id(entry, device_reg) not in _match_area_ids(area_reg, area):
-            return False
-    if label:
-        wanted = _match_label_ids(label_reg, label)
-        if not (set(getattr(entry, "labels", None) or ()) & wanted):
-            return False
-    return True
-
-
-def registry_subscriber(pinned_domain: str = ""):
-    """A registry hook for a source whose resolver pins the domain.
-
-    ``scenes`` and ``scripts`` store no ``domain`` key, so filtering must add
-    the same pin the resolver adds or every entity would look relevant.
-    """
-
-    def _subscribe(hass: HomeAssistant, specs, on_change) -> Any | None:
-        pinned = []
-        for spec in specs:
-            spec = dict(spec)
-            spec["domain"] = pinned_domain
-            pinned.append(spec)
-        return subscribe_entity_registry(hass, pinned, on_change)
-
-    _subscribe.__name__ = f"subscribe_{pinned_domain}_registry"
-    return _subscribe
-
-
-def subscribe_entity_registry(hass: HomeAssistant, specs, on_change) -> Any | None:
-    """Fire when a registry change could alter a listed item.
-
-    Registry events are filtered before debounce because every integration's
-    entities may fire on restart. YAML scenes/scripts never enter the registry,
-    so edits to them still rely on navigation/reconnect triggers.
-    """
-    from homeassistant.helpers.entity_registry import EVENT_ENTITY_REGISTRY_UPDATED
-
-    specs = list(specs)
-    if not specs:
-        return None
-
-    def _on_registry_event(event: Any) -> None:
-        data = getattr(event, "data", None) or {}
-        entity_id = str(data.get("entity_id") or "")
-        if not entity_id:
-            return
-        # "update" carries the changed keys; a move that touched neither the
-        # name, the icon nor the area cannot change what we render.
-        if data.get("action") == "update":
-            changed = data.get("changes") or {}
-            if isinstance(changed, dict) and changed and not (
-                changed.keys() & {"name", "original_name", "icon", "original_icon",
-                                  "area_id", "labels", "entity_id", "disabled_by",
-                                  "hidden_by"}
-            ):
-                return
-        if not any(_spec_wants_entity(hass, spec, entity_id) for spec in specs):
-            return
-        _LOGGER.debug(
-            "Entity registry change for %s matches a binding; scheduling refresh",
-            entity_id,
-        )
-        on_change()
-
-    _LOGGER.debug("Watching the entity registry for %d bound spec(s)", len(specs))
-    return hass.bus.async_listen(EVENT_ENTITY_REGISTRY_UPDATED, _on_registry_event)
-
-
-# ── pages ─────────────────────────────────────────────────────────────
-
-#: What a page tile says when its page's title has no picture: short enough to
-#: stay legible on a 50×52 tile.
-_SHORT_TEXT = 10
-
-_TOKEN_RE = re.compile(r"\$\{[^}]*\}")
-
-
-def _is_graphic_part(part: str) -> bool:
-    """Whether *part* of a title is a picture rather than words."""
-    from ...imgserv.source_parse import PART_SOURCE_TYPES, is_address
-    from ...shared.icon_urls import custom_icon_scheme
-
-    if is_address(part) or custom_icon_scheme(part):
-        return True
-    m = re.match(r"^([a-z][a-z0-9_]*):", part)
-    return bool(m) and m.group(1) in PART_SOURCE_TYPES and m.group(1) not in ("text", "ref")
-
-
-def _short_text(name: str) -> str:
-    """*name*, short enough for a tile: whole, else its first word, else cut."""
-    if len(name) <= _SHORT_TEXT:
-        return name
-    first = name.split()[0] if name.split() else name
-    return first if len(first) <= _SHORT_TEXT + 2 else name[:_SHORT_TEXT]
-
-
-def title_parts(title: str) -> tuple[list[str], str]:
-    """The words and the first picture of a page's title.
-
-    Variables are left out -- they would be read against the overview, not the
-    page -- and so are a part's options (``text:demo?percent=47``).
-    """
-    from ...imgserv.source_parse import split_source_parts
-
-    words: list[str] = []
-    picture = ""
-    for part in split_source_parts(_TOKEN_RE.sub("", title or "").strip()):
-        part = part.split("?", 1)[0].strip()
-        if not part or part in ("+", "-"):
-            continue
-        if part.startswith("text:"):
-            words.append(part[len("text:"):].strip())
-        elif _is_graphic_part(part):
-            picture = picture or part
-        else:
-            words.append(part)
-    return [w for w in words if w and w not in ("+", "-")], picture
-
-
-def page_name(title: str, page_id: Any = None) -> str:
-    """A page's name, read off its title: its words, else its first picture.
-
-    The plumbing of schemes is left out, as :func:`title_parts` leaves out
-    variables and options. ``logo:sonos + ${_device}`` is "Sonos".
-    """
-    words, picture = title_parts(title)
-    name = " ".join(words).strip(" +-")
-    if not name and picture and not picture.startswith(("media:", "/", "http")):
-        slug = picture.split(":", 1)[1]
-        name = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_]+", slug) if w)
-    return name or (f"Page {page_id}" if page_id is not None else "")
-
-
-def page_tile(title: str, name: str) -> str:
-    """The tile for a button that opens a page whose title is *title*.
-
-    The first picture in the title -- a logo, an icon, a cover -- or, for a
-    title of words alone, a short text of the page's name. A part holding a
-    variable is passed over: it would be read against the page the tile is on,
-    not the page it opens.
-    """
-    from ...imgserv.source_parse import split_source_parts
-
-    for part in split_source_parts((title or "").strip()):
-        if "${" not in part and _is_graphic_part(part):
-            return part
-    return f"text:{_short_text(name)}" if name else ""
-
-
-def _listed_pages(pages: list, exclude: str, overviews: set | frozenset = frozenset()) -> list[dict]:
-    """The main pages an overview lists: no subpages, no overview pages.
-
-    An overview is recognised by what it does -- *overviews* are the pages with
-    a button bound to this source -- because a page made from an unbound
-    template is stored without a ``template:`` key to recognise it by.
-    """
-    from ..const import is_subpage
-
-    listed = []
-    for page in pages or []:
-        if not isinstance(page, dict) or is_subpage(page) or page.get("id") is None:
-            continue
-        if page["id"] in overviews:
-            continue
-        template = page.get("template")
-        if isinstance(template, dict) and template.get("type") == exclude:
-            continue
-        listed.append(page)
-    return listed
-
-
-async def _remote_pages(hass: HomeAssistant, entry_id: str) -> tuple[list, set]:
-    """The remote's pages, and the ids of those that are overviews themselves."""
-    from ...runtime import resolve_device_id, find_store
-    from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
-
-    store = find_store(hass)
-    device_id = resolve_device_id(hass, entry_id)
-    if store is None or not device_id:
-        raise SourceUnavailable(f"remote {entry_id} is not loaded")
-    pages = await store.async_get_pages(device_id)
-    overviews: set = set()
-    for page in pages:
-        if not isinstance(page, dict) or page.get("id") is None:
-            continue
-        assignments = await store.async_get_assignments(device_id, page["id"]) or {}
-        if any(
-            isinstance(a, dict)
-            and isinstance(a.get(ASSIGNMENT_DYNAMIC_KEY), dict)
-            and a[ASSIGNMENT_DYNAMIC_KEY].get("source") == "pages"
-            for a in assignments.values()
-        ):
-            overviews.add(page["id"])
-    return pages, overviews
-
-
-def _exclude(spec: dict[str, Any]) -> str:
-    return str(spec.get("exclude_template") or "toc")
-
-
-async def resolve_pages(
-    hass: HomeAssistant, spec: dict[str, Any], max_items: int,
-) -> list[DynamicItem]:
-    """The remote's main pages, in page order, each as a "go to page" item.
-
-    ``spec["remote"]`` is the remote's config entry (``@remote_entry`` in a
-    template). Subpages are not main pages, and a page made from the template
-    named by ``exclude_template`` (``toc`` by default) is the table of contents
-    itself, which must not link to itself or to another overview.
-    """
-    entry_id = str(spec.get("remote") or "").strip()
-    if not entry_id or entry_id.startswith("@"):
-        raise SourceUnavailable("no remote to list the pages of")
-
-    pages, overviews = await _remote_pages(hass, entry_id)
-    items: list[DynamicItem] = []
-    for page in _listed_pages(pages, _exclude(spec), overviews):
-        page_id = page["id"]
-        name = page_name(str(page.get("title") or ""), page_id)
-        items.append(DynamicItem(
-            title=name,
-            thumbnail=page_tile(str(page.get("title") or ""), name),
-            action="lizaip.goto_page",
-            data={"page_id": page_id},
-            identity=f"page:{page_id}",
-        ))
-        if len(items) >= max_items:
-            break
-    return items
-
-
-def pages_fingerprint(
-    pages: list, exclude: str = "toc", overviews: set | frozenset = frozenset(),
-) -> frozenset:
-    """What an overview depends on: which main pages there are, and their titles.
-
-    Order is deliberately not part of it -- moving pages around does not call
-    for a refresh, and neither does any edit to a page's buttons.
-    """
-    return frozenset(
-        (page["id"], str(page.get("title") or ""))
-        for page in _listed_pages(pages, exclude, overviews)
-    )
-
-
-#: The page list each watched remote was last seen with, by ``(entry, exclude)``.
-#: Kept across subscriptions on purpose: deleting a page that has bound buttons
-#: of its own re-subscribes every hook, and a hook that took its starting point
-#: from the list *after* that deletion would see nothing to refresh for.
-_PAGES_SEEN: dict[tuple[str, str], frozenset] = {}
-
-
-def subscribe_pages(hass: HomeAssistant, specs, on_change) -> Any | None:
-    """Fire when a listed remote gains or loses a main page, or one is retitled.
-
-    Every saved change to a remote announces itself with ``CONFIG_CHANGED_EVENT``,
-    but most of them -- a button edited, pages reordered, the overview's own
-    refresh -- leave the page list as it was. Each announcement is compared
-    against a fingerprint of the page list (:func:`pages_fingerprint`) and only
-    a different one schedules a refresh.
-    """
-    from ..const import CONFIG_CHANGED_EVENT
-
-    watched: dict[str, str] = {}
-    for spec in specs:
-        if isinstance(spec, dict) and spec.get("remote"):
-            watched.setdefault(str(spec["remote"]), _exclude(spec))
-    if not watched:
-        return None
-    # What the returned unsubscribe stops: a check still reading the store
-    # when the page goes away must not schedule a refresh after it.
-    closed = False
-    tasks: set[asyncio.Task] = set()
-
-    async def _check(entry_id: str, prime: bool = False) -> None:
-        key = (entry_id, watched[entry_id])
-        if prime and key in _PAGES_SEEN:
-            return
-        try:
-            pages, overviews = await _remote_pages(hass, entry_id)
-        except SourceUnavailable:
-            return
-        if closed:
-            return
-        fingerprint = pages_fingerprint(pages, watched[entry_id], overviews)
-        before = _PAGES_SEEN.get(key)
-        _PAGES_SEEN[key] = fingerprint
-        if not prime and fingerprint != before:
-            _LOGGER.debug("Pages of %s changed; refreshing its overview", entry_id)
-            on_change()
-
-    def _start(entry_id: str, prime: bool = False) -> None:
-        task = hass.async_create_task(_check(entry_id, prime))
-        if task is not None:
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-
-    for entry_id in watched:
-        _start(entry_id, prime=True)
-
-    # On the loop: HA runs a listener not marked as a callback in a worker
-    # thread, where scheduling the check is not allowed.
-    @callback
-    def _on_config_changed(event: Any) -> None:
-        entry_id = (getattr(event, "data", None) or {}).get("entry_id")
-        if entry_id in watched and not closed:
-            _start(entry_id)
-
-    unlisten = hass.bus.async_listen(CONFIG_CHANGED_EVENT, _on_config_changed)
-
-    def _unsubscribe() -> None:
-        nonlocal closed
-        closed = True
-        unlisten()
-        for task in list(tasks):
-            task.cancel()
-        tasks.clear()
-
-    return _unsubscribe
 
 
 # ── the source table ──────────────────────────────────────────────────

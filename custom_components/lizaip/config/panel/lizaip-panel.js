@@ -30,7 +30,7 @@ import { GuideViewMixin, PANEL_MIN } from "./lizaip-guide-view.js";
 import { DiscoveryMixin } from "./lizaip-discovery.js";
 import { PeopleViewMixin } from "./lizaip-people-view.js";
 import { RouteMixin, ROUTE_PREFIX } from "./lizaip-route.js";
-import { SETUP_STEP_ICONS, SETUP_QR } from "./lizaip-setup-steps.js";
+import { SETUP_STEP_ICONS } from "./lizaip-setup-steps.js";
 import { AddPageMixin, registerTemplateActions } from "./lizaip-add-page.js";
 import { PagesMixin } from "./lizaip-pages.js";
 import { MenuMixin } from "./lizaip-menu.js";
@@ -2698,6 +2698,8 @@ class LizaRemotePanel extends HTMLElement {
   // =================== RENDERING ===================
   _render() {
     try {
+      // What this render reads is what the next variable answers may redraw.
+      if (this._variables) this._variables.drawn = new Set();
       // Every render replaces the shadow tree wholesale, so the icon pass's
       // record of which entities are on screen describes markup that is about
       // to stop existing.
@@ -2935,7 +2937,7 @@ class LizaRemotePanel extends HTMLElement {
 
   /**
    * The list with nothing in it: the first three steps of the setup page
-   * (wake up, connect, provision), with its icons and QR code. Nothing here
+   * (wake up, connect, provision), with its icons. Nothing here
    * for the user to press; a remote joining the network announces itself and
    * Home Assistant hands it to the panel.
    */
@@ -2958,14 +2960,9 @@ class LizaRemotePanel extends HTMLElement {
             <p>${this._t(`setup_${key}_text`)}</p>
           </div>
         </li>`;
-    // Beside the list rather than in the Provision row, so its height does
-    // not push that row away from the others.
     return `
-      <div class="no-devices-setup">
-        <ol class="no-devices">${step("wake")}${step("connect")}${step("provision")}
-        </ol>
-        <img class="setup-qr" src="${SETUP_QR}" alt="" width="96" height="96">
-      </div>`;
+      <ol class="no-devices">${step("wake")}${step("connect")}${step("provision")}
+      </ol>`;
   }
 
   /**

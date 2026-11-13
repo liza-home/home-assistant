@@ -24,7 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
-from .. import provisioning
+from .. import issues, provisioning
 from .http import device_session, device_url, error_detail
 
 
@@ -66,12 +66,14 @@ from .const import LIZAIP_AVAILABILITY_EVENT, LIZAIP_EVENT, LIZAIP_HELLO_EVENT
 from .page_cache import PageCache
 from .protocol import (
     DEFAULT_REQUEST_TIMEOUT,
+    ERR_CONFLICT,
     ERR_INTERNAL,
     ERR_NOT_FOUND,
     PROTOCOL_VERSION,
     LizaIPProtocol,
     ProtocolError,
     fire_and_forget,
+    normalise_mac,
     validate_page_id,
 )
 
@@ -371,9 +373,16 @@ class LizaIPConnection:
 
         read_task = asyncio.create_task(self._read_loop(ws))
         try:
-            await self._send_hello()
-            self._consecutive_failures = 0  # successful hello — clear failure count
-            await read_task
+            if await self._send_hello():
+                self._consecutive_failures = 0
+                await read_task
+            else:
+                # Close rather than idle on a socket nothing will be sent over:
+                # the remote reconnects at once instead of waiting out its own
+                # hello timeout, and the failure counts towards MAX_FAILURES.
+                await ws.close(
+                    code=WSCloseCode.POLICY_VIOLATION, message=b"hello failed",
+                )
         finally:
             # Cancelled *and* awaited: a bare cancel() returns before the loop
             # has unwound, which can leave a half-finished write behind and
@@ -766,13 +775,36 @@ class LizaIPConnection:
                 self._logger.warning("WebSocket error: %s", ws.exception())
                 break
 
-    async def _send_hello(self) -> None:
+    def _mac_matches(self, reported: Any) -> bool:
+        """Whether the MAC a hello names is the one this socket was admitted as.
+
+        The socket is admitted on the ``device_id`` query parameter (12 hex
+        digits); the hello answer carries the same MAC, which some firmware
+        writes with colons. A remote that cannot read its MAC sends nothing
+        usable, which is not taken as a mismatch.
+        """
+        expected = self._entry.unique_id
+        if not isinstance(reported, str) or not reported or not isinstance(expected, str):
+            return True
+        if normalise_mac(reported) == normalise_mac(expected):
+            return True
+        self._logger.error(
+            "Hello names device %s, but the connection was opened as %s; "
+            "closing it",
+            reported, expected,
+        )
+        return False
+
+    async def _send_hello(self) -> bool:
+        """Run the handshake; return whether the connection may be used."""
         try:
             # The remote has just opened this socket, so it is awake: a hello
             # that goes unanswered is a failure, not a doze.
             result = await self._protocol.send_request("hello", {
                 "protocol_version": PROTOCOL_VERSION,
             }, wait_while_silent=False)
+            if not self._mac_matches(result.get("device_id")):
+                return False
             self._hello_ws = self._ws
             self._device_protocol_version = result.get("protocol_version")
             self._device_mac = result.get("device_id")
@@ -795,6 +827,13 @@ class LizaIPConnection:
                     "integration are updated to match.",
                     self._device_protocol_version, PROTOCOL_VERSION,
                 )
+                issues.async_raise(
+                    self._hass, self._entry, issues.PROTOCOL_MISMATCH,
+                    device=str(self._device_protocol_version),
+                    ha=str(PROTOCOL_VERSION),
+                )
+            else:
+                issues.async_clear(self._hass, self._entry, issues.PROTOCOL_MISMATCH)
             # Notify listeners (e.g. config/panel.py) that hello completed — triggers page sync
             self._hass.bus.async_fire(LIZAIP_HELLO_EVENT, {"entry_id": self._entry.entry_id})
             fire_and_forget(self.async_refresh_brightness())
@@ -803,6 +842,8 @@ class LizaIPConnection:
                 fire_and_forget(self._repair_ha_address(self._peer_ip))
         except ProtocolError as err:
             self._logger.error("Hello handshake failed: %s", err)
+            return False
+        return True
 
     async def _repair_ha_address(self, peer_ip: str) -> None:
         """Write our address to a device that is not holding one.
@@ -841,7 +882,12 @@ class LizaIPConnection:
             )
             return
 
-        if str(cfg.get("ha_hostname") or "").strip():
+        # It got here, so whatever it holds works today.
+        issues.async_clear(self._hass, self._entry, issues.ADDRESS_LOCKED)
+
+        held = str(cfg.get("ha_hostname") or "").strip()
+        if held:
+            await self._check_held_address(held)
             return
 
         self._logger.info(
@@ -851,6 +897,40 @@ class LizaIPConnection:
         )
         await provisioning.async_provision(
             self._hass, [peer_ip], self._device_http_port
+        )
+
+    async def _check_held_address(self, held: str) -> None:
+        """Warn when the ``.local`` name the remote holds no longer leads here.
+
+        A connected remote has proved its address -- but for an mDNS name it
+        may be living on a cached IP. If the name now resolves somewhere else
+        (Home Assistant's host was renamed, another host took the name), the
+        remote loses Home Assistant at its next restart, and the firmware only
+        takes a different hostname after a factory reset. Saying so while it
+        still works is the only warning the user will get.
+
+        Only a name that resolves *elsewhere* counts: one that does not resolve
+        from here at all says more about this host's mDNS (a container
+        without it, say) than about the remote. DNS names and IPs are left
+        alone; a reverse proxy can make either legitimately point elsewhere.
+        """
+        name = held.rstrip(".")
+        if provisioning.is_ip(name) or not name.lower().endswith(provisioning.MDNS_DOMAIN):
+            issues.async_clear(self._hass, self._entry, issues.ADDRESS_STALE)
+            return
+        own_ip = await self._hass.async_add_executor_job(provisioning.local_ip)
+        resolved = await self._hass.async_add_executor_job(provisioning.resolve_all, name)
+        if not own_ip or not resolved or own_ip in resolved:
+            issues.async_clear(self._hass, self._entry, issues.ADDRESS_STALE)
+            return
+        self._logger.warning(
+            "Holds %s, which now resolves to %s, not to this Home Assistant "
+            "(%s); it will not find Home Assistant after its next restart",
+            held, ", ".join(sorted(resolved)), own_ip,
+        )
+        issues.async_raise(
+            self._hass, self._entry, issues.ADDRESS_STALE,
+            held=held, resolved=", ".join(sorted(resolved)), own=own_ip,
         )
 
     async def _probe_device(self, peer_ip: str) -> None:
@@ -948,6 +1028,9 @@ class LizaIPConnection:
             self._logger.debug("Device registry update after hello failed: %s", err)
 
     def _on_hello_request(self, seq_id: int, data: dict) -> None:
+        if not self._mac_matches(data.get("device_id")):
+            fire_and_forget(self._refuse_hello(seq_id))
+            return
         self._device_protocol_version = data.get("protocol_version")
         self._device_mac = data.get("device_id")
         self._device_version = data.get("version")
@@ -956,6 +1039,14 @@ class LizaIPConnection:
         fire_and_forget(
             self._protocol.send_response("hello", seq_id, {"protocol_version": PROTOCOL_VERSION})
         )
+
+    async def _refuse_hello(self, seq_id: int) -> None:
+        ws = self._ws
+        await self._protocol.send_error(
+            "hello", seq_id, ERR_CONFLICT, "device_id does not match this connection",
+        )
+        if ws is not None:
+            await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"hello failed")
 
     def _on_get_pages_request(self, seq_id: int, data: dict) -> None:
         """Answer the remote's own ``get_pages`` with an id/hash listing."""

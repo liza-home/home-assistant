@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import logging
+from ipaddress import ip_address
 
 from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.network import is_cloud_connection
 
 from .connection import LizaIPConnection
 from ..const import DOMAIN
@@ -17,9 +19,26 @@ from .protocol import PING_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
-# Device MUST ping every PING_INTERVAL seconds (see PROTOCOL.md § Keepalive). Give it some
-# slack over one interval before aiohttp declares the peer dead and closes the socket.
+# The remote pings every PING_INTERVAL seconds once connected (PROTOCOL.md § Keepalive).
+# aiohttp's heartbeat sits on top as a backstop: it pings a peer that has gone quiet and
+# closes the socket if no pong follows. Two intervals keeps it from racing the remote's own.
 _HEARTBEAT_SECONDS = PING_INTERVAL * 2
+
+
+def _from_local_network(hass: HomeAssistant, request: web.Request) -> bool:
+    """Whether *request* comes from a loopback, private or link-local address.
+
+    ``request.remote`` is the client as Home Assistant's own HTTP setup sees
+    it: behind a reverse proxy listed in ``trusted_proxies`` it is the real
+    client. A request relayed by Home Assistant Cloud is never local.
+    """
+    if is_cloud_connection(hass):
+        return False
+    try:
+        address = ip_address(request.remote or "")
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
 
 
 class LizaIPWebSocketView(HomeAssistantView):
@@ -36,6 +55,16 @@ class LizaIPWebSocketView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.WebSocketResponse:
         hass: HomeAssistant = request.app["hass"]
+        # A remote is on the same network as Home Assistant. Without this, the
+        # MAC alone -- broadcast over mDNS -- would let anyone who reaches the
+        # HTTP port from the internet take its place and press its buttons.
+        if not _from_local_network(hass, request):
+            _LOGGER.info(
+                "Refusing a device connection from %s: not on the local network",
+                request.remote,
+            )
+            return web.Response(status=403, text="Devices connect from the local network")
+
         device_id = request.query.get("device_id", "")
 
         if not device_id:
