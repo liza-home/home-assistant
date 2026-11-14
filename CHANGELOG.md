@@ -11,6 +11,30 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
+## [2026.11.3b1] - 2026-11-14
+
+For slow smartphone browsers such as the Home Assistant app, where page
+thumbnails stayed blank or showed only default icons.
+
+### Added
+
+- **Two editor switches for variables** under Settings → Editor, kept by the
+  browser. *Update only visible pages* (on by default) updates a changed
+  variable only on the pages you can see; the others catch up when you scroll
+  to them. *Live values in the editor* (off by default) keeps the editor's
+  previews following their entities.
+
+### Fixed
+
+- **Page thumbnails could stay blank in the Home Assistant app.** Pictures
+  that were still loading were replaced every second; they are now kept, and
+  one that fails is tried again.
+- **Variable pictures and titles could stay on their fallback** -- the
+  action's own icon, an empty title -- until the page was reloaded. The panel
+  now asks again.
+- **TV app icons stayed blank once the TV was off**, on an LG webOS TV's Apps
+  pages for example. The icons are kept again for while the TV is off.
+
 ## [2026.11.2] - 2026-11-13
 
 ### Added

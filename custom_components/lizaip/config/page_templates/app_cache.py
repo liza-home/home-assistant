@@ -34,6 +34,8 @@ class _Cache:
         self.store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self.lists: dict[str, list[dict]] = {}
         self.icons: set[str] = set()
+        #: The lists whose icons were prefetched since Home Assistant started.
+        self.prefetched: set[str] = set()
         self.loaded = False
         self.lock = asyncio.Lock()
 
@@ -45,6 +47,7 @@ class _Cache:
             lists = data.get("lists") if isinstance(data, dict) else None
             self.lists = lists if isinstance(lists, dict) else {}
             self.icons = {_icon_key(i.get("thumbnail")) for v in self.lists.values() for i in v} - {""}
+            _remember_hosts(self.icons)
             self.loaded = True
 
 
@@ -75,6 +78,22 @@ def _norm(value: str) -> str:
         return value
     query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "token"])
     return urlunsplit(parts._replace(query=query))
+
+
+def _remember_hosts(icons: set[str]) -> None:
+    """Let imgserv fetch from the hosts these icons are on.
+
+    imgserv fetches from a LAN host only once Home Assistant has handed out a
+    picture there (``imgserv/media_hosts.py``). An app list is exactly that --
+    the TV integration's own answer -- but its icons were not registered until
+    a page spelled them, so the prefetch that keeps them was refused, and a TV
+    that was then switched off had no icon to fall back on. Also run on load,
+    since the record does not survive a restart.
+    """
+    from ...imgserv import media_hosts
+
+    for icon in icons:
+        media_hosts.remember(icon)
 
 
 def _icon_key(thumbnail: Any) -> str:
@@ -112,10 +131,16 @@ async def async_put(hass, key: str, items: list[dict]) -> None:
             row["thumbnail"] = old["thumbnail"]
         rows.append(row)
     if cache.lists.get(key) == rows:
-        return
-    cache.lists[key] = rows
-    cache.icons = {_icon_key(i.get("thumbnail")) for v in cache.lists.values() for i in v} - {""}
-    cache.store.async_delay_save(lambda: {"lists": cache.lists}, 5)
+        # Unchanged, but once a session its icons are fetched all the same: one
+        # refused or missed before is otherwise never asked for again.
+        if key in cache.prefetched:
+            return
+    else:
+        cache.lists[key] = rows
+        cache.icons = {_icon_key(i.get("thumbnail")) for v in cache.lists.values() for i in v} - {""}
+        _remember_hosts(cache.icons)
+        cache.store.async_delay_save(lambda: {"lists": cache.lists}, 5)
+    cache.prefetched.add(key)
     # Fetched as listed: the proxy's token is what lets imgserv in.
     new = [unquote(str(r.get("thumbnail") or "")).removeprefix("media:") for r in rows]
     hass.async_create_background_task(

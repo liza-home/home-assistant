@@ -367,26 +367,34 @@ const SettingsTabMixin = {
    * device setting. Its header says so once, so no hint below has to.
    */
   _htmlSettingsEditorCard() {
-    const id = "liza-settings-page-links";
-    const hintId = `${id}-hint`;
-    const labelId = `${id}-label`;
     return `
       <ha-card outlined class="settings-card">
         ${this._htmlCardHeader("settings_editor", { icon: "mdi:monitor-edit", level: 3 })}
         <div class="settings-body">
           <div class="settings-switch-list">
-            <div class="settings-switch-row">
-              <div class="settings-switch-text">
-                <label id="${labelId}" for="${id}">${this._esc(this._t("settings_page_links"))}</label>
-                <span class="config-field-hint" id="${hintId}">${this._esc(this._t("settings_page_links_hint"))}</span>
-              </div>
-              <ha-switch id="${id}" class="settings-pagelinks-switch"
-                         ${this._pageLinksEnabled() ? "checked" : ""}
-                         aria-labelledby="${labelId}" aria-describedby="${hintId}"></ha-switch>
-            </div>
+            ${this._htmlEditorSwitch("page-links", "settings-pagelinks-switch", "settings_page_links", this._pageLinksEnabled())}
+            ${this._htmlEditorSwitch("visible-faces", "settings-visiblefaces-switch", "settings_visible_faces", this._editorPref("visibleFaces"))}
+            ${this._htmlEditorSwitch("live-values", "settings-livevalues-switch", "settings_live_values", this._editorPref("liveValues"))}
           </div>
         </div>
       </ha-card>`;
+  },
+
+  /** One switch of this browser's own: nothing is saved to the backend. */
+  _htmlEditorSwitch(name, cls, labelKey, on) {
+    const id = `liza-settings-${name}`;
+    const hintId = `${id}-hint`;
+    const labelId = `${id}-label`;
+    return `
+            <div class="settings-switch-row">
+              <div class="settings-switch-text">
+                <label id="${labelId}" for="${id}">${this._esc(this._t(labelKey))}</label>
+                <span class="config-field-hint" id="${hintId}">${this._esc(this._t(`${labelKey}_hint`))}</span>
+              </div>
+              <ha-switch id="${id}" class="${cls}"
+                         ${on ? "checked" : ""}
+                         aria-labelledby="${labelId}" aria-describedby="${hintId}"></ha-switch>
+            </div>`;
   },
 
   /**
@@ -779,6 +787,10 @@ const SettingsTabMixin = {
     // busy state to wait on or failure to report.
     root.querySelector(".settings-pagelinks-switch")?.addEventListener("change", (ev) =>
       this._setPageLinksEnabled(ev.currentTarget.checked === true));
+    root.querySelector(".settings-visiblefaces-switch")?.addEventListener("change", (ev) =>
+      this._setEditorPref("visibleFaces", ev.currentTarget.checked === true));
+    root.querySelector(".settings-livevalues-switch")?.addEventListener("change", (ev) =>
+      this._setEditorPref("liveValues", ev.currentTarget.checked === true));
     // A click on a name reaches the setting through its switch's own change
     // handler, so each kind of switch keeps one meaning.
     this._wireSwitchLabels(root, ".settings-switch-text label");

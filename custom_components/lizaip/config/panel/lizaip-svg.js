@@ -352,7 +352,7 @@ function createFaceDrag(container, svg, opts) {
  * @param {number} selectedIdx - Selected button index (-1 = none)
  * @param {Function} hasAction - (buttonKey) => boolean
  * @param {Function} onSelect - (idx) callback
- * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor}
+ * @param {Object} [opts] - {markFor, onContext, onDrop, canDrag, canDrop, interactive, nameFor, keep}
  *
  * Accessibility: with `interactive` the shapes become real controls —
  * `role="button"`, a tab stop, a name from `nameFor`, and Enter/Space/context
@@ -384,7 +384,16 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
   const bp = blueprint;
   const svgNS = "http://www.w3.org/2000/svg";
 
-  container.innerHTML = "";
+  // `keep` is a selector for the overlays the caller patches in place. They
+  // stay attached: a picture detached mid-load is dropped by the browser, and
+  // a redraw comes once a second while a variable counts down.
+  if (opts?.keep) {
+    for (const child of Array.from(container.children || [])) {
+      if (!child.matches?.(opts.keep)) child.remove?.();
+    }
+  } else {
+    container.innerHTML = "";
+  }
 
   const svg = document.createElementNS(svgNS, "svg");
   const vb = bp.viewBox || "0 0 400 800";
@@ -628,7 +637,12 @@ export function drawSVG(container, blueprint, selectedIdx, hasAction, onSelect, 
     }
   }
 
-  container.appendChild(svg);
+  // Under the overlays it kept, which are drawn on top of it.
+  if (opts?.keep && container.firstChild && container.insertBefore) {
+    container.insertBefore(svg, container.firstChild);
+  } else {
+    container.appendChild(svg);
+  }
 }
 
 /** The button area of a face, without the casing around it. */

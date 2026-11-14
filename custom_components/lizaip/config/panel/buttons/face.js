@@ -25,6 +25,13 @@ import {
   tileFit,
 } from "../lizaip-svg.js";
 
+/** How often, and how far apart, a tile picture that failed is asked for again. */
+const TILE_RETRIES = 2;
+const TILE_RETRY_MS = 1500;
+
+/** The overlays `_drawFaces` patches in place; `drawSVG` leaves them attached. */
+const FACE_OVERLAYS = "img.pg-btn-img[data-key], .pg-title-clip";
+
 export const ButtonsFaceMixin = {
   // Which nesting mark, if any, the face should put on `key`.
   //
@@ -68,36 +75,70 @@ export const ButtonsFaceMixin = {
 
   // --- SVG refresh methods ---
   /**
-   * A fresh `img` for one tile on a page thumbnail.
+   * The `img` for one tile on a page thumbnail, patched in place.
    *
-   * Deliberately not reused across renders: imgserv answers with
-   * `Cache-Control: max-age`, so the browser's own cache already makes a
-   * redraw cheap, and a new element always issues its own request. Reusing
-   * nodes was what broke pictures -- a load the redraw detached mid-flight is
-   * dropped by the browser, and a node handed back with the same `src` never
-   * asks again, so it stayed a broken-image glyph.
+   * *onFace* holds the tile pictures already on this face, by key; the one
+   * for *key* is taken from it and kept attached, so a redraw -- once a second
+   * while a variable counts down -- never detaches a load in flight, which
+   * the browser would drop. Its `src` is written only when it changed: the
+   * same value written again would load it again.
+   *
+   * A URL still being asked for (`src` null) leaves a kept tile showing its
+   * old picture until `_applyDeviceUrls` has the answer.
    */
 
-  _tileImg(key, img) {
+  _tileImg(key, img, onFace = null) {
     const { src, key: devKey } = typeof img === "string" ? { src: img, key: "" } : img;
-    const el = document.createElement("img");
-    if (src) el.setAttribute("src", src);
-    // Not known yet: `_applyDeviceUrls` sets `src` once the URL arrives.
+    let el = onFace?.get(key);
+    onFace?.delete(key);
+    if (!el) {
+      el = document.createElement("img");
+      // Decoration: the shape underneath already names it, and these are
+      // `pointer-events: none`. Unnamed, a reader would announce the imgserv
+      // src once per button.
+      el.setAttribute("alt", "");
+      el.setAttribute("data-key", key);
+      el.addEventListener?.("error", () => this._retryTileImg(el));
+    }
+    if (src && el.getAttribute("src") !== src) {
+      el.style?.removeProperty?.("visibility");
+      el.setAttribute("src", src);
+    }
+    // Cleared when known: a stale one would let `_applyDeviceUrls` put back
+    // the picture this tile just moved on from.
     if (devKey) el.setAttribute("data-dev-key", devKey);
-    // Decoration: the shape underneath already names it, and these are
-    // `pointer-events: none`. Unnamed, a reader would announce the imgserv
-    // src once per button.
-    el.setAttribute("alt", "");
-    el.setAttribute("data-key", key);
+    else el.removeAttribute?.("data-dev-key");
     return el;
+  },
+
+  /**
+   * Ask once more for a tile picture that failed, a little later each time.
+   *
+   * A phone on a slow or switching network loses requests that a reload
+   * would answer; without this the tile stays blank until the next redraw
+   * happens to change its `src`.
+   */
+
+  _retryTileImg(el) {
+    const src = el.getAttribute("src");
+    // Counted per `src`: `_applyDeviceUrls` writes one too.
+    if (el._retry?.src !== src) el._retry = { src, n: 0 };
+    if (!src || el._retry.n >= TILE_RETRIES) return;
+    const n = ++el._retry.n;
+    setTimeout(() => {
+      if (!el.isConnected || el.getAttribute("src") !== src) return;
+      // Removed first: some engines skip a `src` set to the value it has.
+      el.removeAttribute("src");
+      el.setAttribute("src", src);
+    }, TILE_RETRY_MS * n);
   },
 
   /**
    * Size *el* over shape *b* from its own pixels, as the device draws it.
    *
-   * Remembered per picture because every render builds a new `img`, whose
-   * `naturalWidth` is 0 until `load` -- a 60x62 cover slice would otherwise
-   * open at the 50x52 default on every redraw and then snap to size.
+   * Remembered per picture because a new `img` has `naturalWidth` 0 until
+   * `load` -- a 60x62 cover slice would otherwise open at the 50x52 default
+   * on every page switch and then snap to size.
    */
 
   _fitTileImg(el, b, key, extraCss = "") {
@@ -108,29 +149,42 @@ export const ButtonsFaceMixin = {
       el.style.cssText = tileFit(b, el.naturalWidth || known?.w, el.naturalHeight || known?.h)
         + extraCss;
     };
+    // One listener per element, since a kept picture is fitted again.
+    if (el._fitOnLoad) el.removeEventListener?.("load", el._fitOnLoad);
+    el._fitOnLoad = apply;
     el.addEventListener?.("load", apply);
     apply();
   },
 
-  /** Redraw every face; what the faces read is what the next face-only redraw covers. */
-  _refreshSVG() {
-    return this._readingFaces ? this._readingFaces(() => this._drawFaces(), true) : this._drawFaces();
+  /**
+   * Redraw the faces -- every one, or only the page indices in *pages*; what
+   * the faces read is what the next face-only redraw covers.
+   */
+  _refreshSVG(pages = null) {
+    const draw = () => this._drawFaces(pages);
+    return this._readingFaces ? this._readingFaces(draw, !pages) : draw();
   },
 
-  _drawFaces() {
+  _drawFaces(pages = null) {
     const bp = this._blueprint;
     if (!bp) return;
     // The tiles below are about to be rebuilt, so what the icon pass learned
     // from the previous ones no longer describes anything on screen.
     this._invalidateFaceCaches();
     this._prefetchOptionsFit?.();
+    // Every face is drawn again, so what the pages read starts over.
+    if (!pages) this._variables?.pageKeys.clear();
+    const containers = [...this.shadowRoot.querySelectorAll(".pg-svg-container")];
 
-    this.shadowRoot.querySelectorAll(".pg-svg-container").forEach(container => {
+    containers.forEach(container => {
       const pageIdx = parseInt(container.dataset.pageIdx);
+      if (pages && !pages.has(pageIdx)) return;
+      // Drawn now, so nothing is owed to it when it comes into view.
+      this._facesDirty?.delete(pageIdx);
       const isActive = pageIdx === this._currentPageIdx;
       const page = this._pages[pageIdx];
       if (!page) return;
-
+      this._facePageStart?.(pageIdx);
       const currentPageId = this._pages[this._currentPageIdx]?.id;
       const pageAssigns = (page.id === currentPageId)
         ? this._assignments
@@ -278,9 +332,16 @@ export const ButtonsFaceMixin = {
         canDrag: isActive ? (key) => this._canMoveButton(key) : null,
         canDrop: isActive ? (key, fromKey) => this._canDropButtonOn(fromKey, key) : null,
         onDrop: isActive ? (from, to) => this._dropButtonOn(from, to) : null,
+        keep: FACE_OVERLAYS,
       });
 
       cropFace(container.querySelector("svg"));
+
+      // The pictures the last draw left, by key. Each one this draw still
+      // wants is taken out by `_tileImg`; what remains is removed below.
+      const onFace = new Map();
+      container.querySelectorAll("img[data-key]")
+        .forEach(el => onFace.set(el.getAttribute("data-key"), el));
 
       // Title PNG (slider_horizontal area). `titleFit` draws it at the size
       // the device does; the clip bounds a title too long for the bar, which
@@ -295,11 +356,12 @@ export const ButtonsFaceMixin = {
         if (sliderBtn) {
           const b = getPathBounds(sliderBtn.d);
           if (b) {
-            const clip = document.createElement('div');
+            const el = this._tileImg('slider_horizontal', sliderImageUrl, onFace);
+            const kept = el.parentNode?.classList?.contains('pg-title-clip');
+            const clip = kept ? el.parentNode : document.createElement('div');
             clip.className = 'pg-title-clip';
             clip.style.cssText = overlayStyle(b, b.w, b.h);
 
-            const el = this._tileImg('slider_horizontal', sliderImageUrl);
             el.className = 'pg-btn-img pg-title-img';
             const natural = (this._titleNaturalByUrl ||= new Map());
             const applySize = () => {
@@ -311,11 +373,15 @@ export const ButtonsFaceMixin = {
                 b, el.naturalWidth || known?.w, el.naturalHeight || known?.h,
               ));
             };
+            if (el._titleOnLoad) el.removeEventListener?.('load', el._titleOnLoad);
+            el._titleOnLoad = applySize;
             el.addEventListener('load', applySize);
             applySize();
 
-            clip.appendChild(el);
-            container.appendChild(clip);
+            if (!kept) {
+              clip.appendChild(el);
+              container.appendChild(clip);
+            }
           }
         }
       }
@@ -343,7 +409,7 @@ export const ButtonsFaceMixin = {
         );
         // "" is nothing to draw; null is a URL still being asked for.
         if (tile.src === "") return;
-        const el = this._tileImg(btn.key, tile);
+        const el = this._tileImg(btn.key, tile, onFace);
         el.className = 'pg-btn-img';
         // Dimmed while the firmware glyph is all there is. Read through
         // `storesConfig`, like the tint above: a fixed key configured inline,
@@ -351,9 +417,44 @@ export const ButtonsFaceMixin = {
         const dim = DEFAULT_BUTTON_ICONS[btn.key] && !storesConfig(overlayAssign);
         this._fitTileImg(el, b, tile.key,
           'pointer-events:none;' + (dim ? 'opacity:0.3;' : ''));
-        container.appendChild(el);
+        if (el.parentNode !== container) container.appendChild(el);
       });
+
+      // Tiles this draw no longer has, and a title together with its clip.
+      onFace.forEach(el => {
+        const clip = el.parentNode?.classList?.contains('pg-title-clip') ? el.parentNode : null;
+        (clip || el).remove?.();
+      });
+      this._facePageEnd?.();
     });
+    this._observeFaces(containers);
+  },
+
+  /**
+   * Tell the variables which pages are in view (`_faceVisible`), so a change
+   * on a page scrolled away is asked for and drawn once it is scrolled back.
+   *
+   * Clipping by the page strip counts: an observer without a root clips the
+   * target by every scrolling ancestor, not only by the viewport.
+   */
+  _observeFaces(containers) {
+    if (typeof IntersectionObserver !== "function") return;
+    this._faceObserver ||= new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const el = entry.target;
+        // A face the last render replaced reports itself out of view too, and
+        // must not speak for the new one at its index.
+        if (!el.isConnected) {
+          this._faceObserver.unobserve(el);
+          continue;
+        }
+        const idx = parseInt(el.dataset.pageIdx);
+        const was = this._faceVisible(idx);
+        (this._faceVisibility ||= new Map()).set(idx, entry.isIntersecting);
+        if (entry.isIntersecting && !was) this._faceShown?.(idx);
+      }
+    });
+    for (const c of containers) this._faceObserver.observe(c);
   },
 
   // Which shape on the face carries the selection highlight.
@@ -426,6 +527,8 @@ export const ButtonsFaceMixin = {
         ? this._assignments
         : (this._pageCache[page.id] || {});
 
+      // Added to what the page's face read, not in place of it.
+      this._facePageStart?.(pageIdx, false);
       container.querySelectorAll("img.pg-btn-img[data-key]").forEach(img => {
         const key = img.getAttribute("data-key");
         if (key === 'slider_horizontal') return;
@@ -459,6 +562,7 @@ export const ButtonsFaceMixin = {
           img.setAttribute('data-dev-key', tile.key);
         }
       });
+      this._facePageEnd?.();
     });
 
     this._svgIconDeps = deps;

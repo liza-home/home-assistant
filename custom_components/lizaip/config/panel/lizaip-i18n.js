@@ -1010,6 +1010,34 @@ export const STRINGS = {
     it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono.",
     es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella.",
   },
+  settings_visible_faces: {
+    en: "Update only visible pages",
+    de: "Nur sichtbare Seiten aktualisieren",
+    fr: "Mettre à jour uniquement les pages visibles",
+    it: "Aggiorna solo le pagine visibili",
+    es: "Actualizar solo las páginas visibles",
+  },
+  settings_visible_faces_hint: {
+    en: "Variables on pages scrolled out of view are updated when you scroll back to them. Saves work on phones and on remotes with many pages.",
+    de: "Variablen auf Seiten außerhalb des sichtbaren Bereichs werden aktualisiert, sobald du zu ihnen zurückscrollst. Spart Arbeit auf Smartphones und bei Fernbedienungen mit vielen Seiten.",
+    fr: "Les variables des pages hors de vue sont mises à jour lorsque vous y revenez. Allège le travail sur les téléphones et les télécommandes à nombreuses pages.",
+    it: "Le variabili delle pagine fuori vista vengono aggiornate quando torni a scorrerle. Riduce il lavoro sugli smartphone e sui telecomandi con molte pagine.",
+    es: "Las variables de las páginas fuera de la vista se actualizan cuando vuelves a ellas. Ahorra trabajo en móviles y en mandos con muchas páginas.",
+  },
+  settings_live_values: {
+    en: "Live values in the editor",
+    de: "Live-Werte im Editor",
+    fr: "Valeurs en direct dans l’éditeur",
+    it: "Valori in tempo reale nell’editor",
+    es: "Valores en directo en el editor",
+  },
+  settings_live_values_hint: {
+    en: "Keeps the variable values in the editor's previews and hints up to date while they change. When off, they are filled in each time the editor is drawn.",
+    de: "Hält die Variablenwerte in den Vorschauen und Hinweisen des Editors aktuell, während sie sich ändern. Ausgeschaltet werden sie bei jedem Neuzeichnen des Editors eingesetzt.",
+    fr: "Tient à jour les valeurs des variables dans les aperçus et les indications de l’éditeur pendant qu’elles changent. Désactivé, elles sont renseignées à chaque affichage de l’éditeur.",
+    it: "Mantiene aggiornati i valori delle variabili nelle anteprime e nei suggerimenti dell’editor mentre cambiano. Se disattivato, vengono inseriti ogni volta che l’editor viene ridisegnato.",
+    es: "Mantiene al día los valores de las variables en las vistas previas y las indicaciones del editor mientras cambian. Desactivado, se rellenan cada vez que se dibuja el editor.",
+  },
 
   settings_icons: {
     en: "Icon options", de: "Symbol-Optionen", fr: "Options d'icône", it: "Opzioni icona", es: "Opciones de icono",
