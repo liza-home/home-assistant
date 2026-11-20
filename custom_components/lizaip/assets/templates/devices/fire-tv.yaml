@@ -2,22 +2,20 @@
 #
 # The remote page follows the LG webOS TV template: the arrow keys around OK,
 # Home below them, and the TV's further pages on the right-hand column --
-# Apps (button 4), Digits (button 8) and Inputs (button 12) where the TV has
-# them. They are subpages: not in the remote's page order, only reached from
-# those buttons; on each, the remote's Back button leads back.
+# Apps (button 4) where the TV has them. It is a subpage: not in the remote's
+# page order, only reached from that button; on it, the remote's Back button
+# leads back.
 #   - Apps: the apps the integration lists as the media player's sources,
 #     each opening with `media_player.select_source`; more than twelve get
 #     more Apps pages, button 12 leading on.
-#   - Digits: 1–9 and 0 as on a phone keypad, with Channel up and down.
-#   A Fire TV lists no inputs, so there is no Inputs page; button 12 is empty.
+#   A Fire TV has no digit keys over this protocol, so there is no Digits
+#   page; and it lists no inputs, so there is no Inputs page. Buttons 8 and
+#   12 are empty.
 
-# Keys go through the Android Debug Bridge integration's `remote.send_command`,
-# which knows the names in its own key table (UP, CENTER, MENU, REWIND, …)
-# and sends anything else to the device as a shell command -- which is how
-# the keys missing from that table (play/pause, digits, channels) are pressed:
-# `input keyevent KEYCODE_…`.
-#
-# Reference: https://www.home-assistant.io/integrations/androidtv
+# Keys go through the fireTV (firetv_dial) integration's
+# `remote.send_command`, which speaks the same DIAL + REST protocol as the
+# official Fire TV phone app. It refuses any name outside its own key table
+# (UP, CENTER, MENU, …) and its extras (PLAY_PAUSE, FAST_FORWARD, REWIND).
 
 version: 2
 name: Amazon Fire TV
@@ -28,7 +26,7 @@ description: Control your Amazon Fire TV / Fire TV Stick
 # expose a 'remote' entity, which is what this template's actions run on.
 target_selector:
   device:
-    integration: androidtv
+    integration: firetv_dial
     primary_domain: remote
 
 # The `apps` kind of the favourites source reads the apps the player lists:
@@ -66,11 +64,11 @@ pages:
         config:
           - action: remote.send_command
             data:
-              command: input keyevent KEYCODE_MEDIA_PLAY_PAUSE
+              command: PLAY_PAUSE
 
       button_4:
         icon: mdi:apps
-        tooltip: {translate: apps}
+        tooltip: "{translate: apps}…"
         goto_page: apps
 
       button_5:
@@ -98,11 +96,6 @@ pages:
           - action: remote.send_command
             data:
               command: RIGHT
-
-      button_8:
-        icon: mdi:dialpad
-        tooltip: {translate: digits}
-        goto_page: digits
 
       button_9:
         icon: mdi:volume-mute
@@ -155,14 +148,6 @@ pages:
             data:
               command: VOLUME_DOWN
 
-      button_voice:
-        icon: mdi:microphone
-        tooltip: Alexa
-        config:
-          - action: remote.send_command
-            data:
-              command: SEARCH
-
       button_back:
         icon: mdi:keyboard-return
         tooltip: {translate: back}
@@ -193,7 +178,7 @@ pages:
         placeholder: "@app[12]"
         more_parts:
           icon: mdi:dots-horizontal
-          tooltip: {translate: more}
+          tooltip: "{translate: more}…"
           goto_page: next
 
       button_power:
@@ -226,136 +211,3 @@ pages:
         icon: mdi:arrow-left
         tooltip: {translate: back}
         goto_page: [previous, remote]
-
-  digits:
-    subpage: true
-    title: "mdi:dialpad ${_device.area_name}"
-    buttons:
-      button_1:
-        icon: 1
-        tooltip: 1
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_1
-
-      button_2:
-        icon: 2
-        tooltip: 2
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_2
-
-      button_3:
-        icon: 3
-        tooltip: 3
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_3
-
-      button_4:
-        icon: mdi:chevron-up
-        tooltip: CH+
-        key_repeat: true
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_CHANNEL_UP
-
-      button_5:
-        icon: 4
-        tooltip: 4
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_4
-
-      button_6:
-        icon: 5
-        tooltip: 5
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_5
-
-      button_7:
-        icon: 6
-        tooltip: 6
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_6
-
-      button_8:
-        icon: mdi:chevron-down
-        tooltip: CH-
-        key_repeat: true
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_CHANNEL_DOWN
-
-      button_9:
-        icon: 7
-        tooltip: 7
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_7
-
-      button_10:
-        icon: 8
-        tooltip: 8
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_8
-
-      button_11:
-        icon: 9
-        tooltip: 9
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_9
-
-      button_12:
-        icon: 0
-        tooltip: 0
-        config:
-          - action: remote.send_command
-            data:
-              command: input keyevent KEYCODE_0
-
-      button_power:
-        icon: mdi:power
-        tooltip: {translate: power}
-        config:
-          - action: remote.send_command
-            data:
-              command: POWER
-
-      button_volume_up:
-        icon: mdi:volume-plus
-        tooltip: {translate: volume_up}
-        key_repeat: true
-        config:
-          - action: remote.send_command
-            data:
-              command: VOLUME_UP
-
-      button_volume_down:
-        icon: mdi:volume-minus
-        tooltip: {translate: volume_down}
-        key_repeat: true
-        config:
-          - action: remote.send_command
-            data:
-              command: VOLUME_DOWN
-
-      button_back:
-        icon: mdi:arrow-left
-        tooltip: {translate: remote}
-        goto_page: remote

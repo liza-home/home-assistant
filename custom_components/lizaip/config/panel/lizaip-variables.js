@@ -72,6 +72,14 @@ export const VariablesMixin = {
     });
   },
 
+  /** Forget every answer: the remote's Variables switch changed what they are. */
+  _resetVariables() {
+    const v = this._variables;
+    if (!v) return;
+    if (v.timer) clearTimeout(v.timer);
+    this._variables = null;
+  },
+
   /** An `EDITOR_PREFS` switch, read once; blocked storage gives its default. */
   _editorPref(name) {
     const prefs = (this._editorPrefs ||= {});

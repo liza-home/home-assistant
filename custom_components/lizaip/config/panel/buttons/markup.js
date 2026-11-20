@@ -137,7 +137,7 @@ export const ButtonsMarkupMixin = {
     return `
       <div class="config-layout">
         <ha-card outlined class="pages-card">
-          <div class="pages-list" style="flex-wrap:nowrap;overflow-x:auto;min-height:350px;">
+          <div class="pages-list" style="flex-wrap:nowrap;overflow-x:auto;">
             <svg class="goto-link-layer" aria-hidden="true" focusable="false"></svg>
 ${pagesHtml}
             <div class="page-add-btn" role="button" tabindex="0"
@@ -1343,16 +1343,17 @@ ${pagesHtml}
             // service is what keeps them agreeing: a press has no action-library
             // entry the backend can see, so the step's service is the only
             // service both sides can read.
-            const pressService = rule.config?.[0]?.action || "";
+            const pressService = this._stepService(rule.config);
             const pressAction = { service: pressService };
             const pressEntity = this._stepEntity(rule, selBtn.key);
+            const pressFieldValue = rule.tooltip || this._pressTemplateTooltip(rule);
             // What the device falls back to when this press stores nothing of
             // its own. Asked through the same helper the picker is mounted
             // with, so the box and the field it labels cannot drift apart.
             const derivedIcon = this._stepDerivedIcon(rule, selBtn.key);
             // What the remote prints for this press right now, tokens read.
             const pressResolved = this._displayTooltip(
-              rule.tooltip || "", pressAction, pressEntity, rule.config, rule, true,
+              pressFieldValue, pressAction, pressEntity, rule.config, rule, true,
             );
             // The same three lessons press 1's Tooltip offers, on the same
             // conditions. They used to be withheld here on the grounds that a
@@ -1361,15 +1362,15 @@ ${pagesHtml}
             // The tokens collapsed only because both backend producers passed
             // an empty value map, which is now fixed, so withholding the hint
             // would be hiding a feature that works.
-            const pressShowsState = this._tooltipHasStateToken(rule.tooltip || "")
+            const pressShowsState = this._tooltipHasStateToken(pressFieldValue)
               && !!this._displayTooltip("${_state}", pressAction, pressEntity, rule.config, rule, true);
-            const pressShowsName = this._tooltipHasNameToken(rule.tooltip || "")
+            const pressShowsName = this._tooltipHasNameToken(pressFieldValue)
               && !!this._displayTooltip("${_name}", pressAction, pressEntity, rule.config, rule, true);
-            const pressShowsVariable = this._hasEntityToken(rule.tooltip || "");
+            const pressShowsVariable = this._hasEntityToken(pressFieldValue);
             // Same discovery rule as the Label field: the two track tokens are
             // only meaningful on a media player, so the press's own target
             // decides whether naming them is help or noise.
-            const pressHasMedia = this._tooltipHasMediaToken(rule.tooltip || "");
+            const pressHasMedia = this._tooltipHasMediaToken(pressFieldValue);
             const pressShowsMedia = pressHasMedia
               || (pressShowsState && this._targetsMediaPlayer(rule.config));
             const pressNowReads = (pressShowsState || pressShowsName || pressShowsVariable || pressShowsMedia)
@@ -1418,17 +1419,12 @@ ${pagesHtml}
                 // beside a field promising a name, while the device prints the
                 // derived caption perfectly well.
                 value: pressResolved || derivedTooltip,
-                inputValue: rule.tooltip || derivedTooltip,
+                inputValue: pressFieldValue,
                 inputClass: "toggle-press-tooltip",
                 // What the device draws when this press names no tooltip:
                 // the subject the step points at, read the same way press 1's
-                // field reads it, with the service's name when there is no
-                // subject to name. The heading above asks the same question
-                // of the same helper, so an untouched press reads the same in
-                // both places.
-                // Still set, for the one case the prefill does not cover:
-                // a user who clears the field is shown what clearing it buys
-                // them rather than an empty box.
+                // field reads it. Shown once the field is cleared, so clearing
+                // it names what that buys rather than leaving an empty box.
                 placeholder: derivedTooltip,
                 color: this._currentPageColor(),
                 shape: { size: "tooltip", box: { w: TITLE_PREVIEW_W, h: TOOLTIP_PREVIEW_H } },

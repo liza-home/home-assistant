@@ -101,6 +101,25 @@ async def _repeat_loop(
 # Public setup / teardown
 # ---------------------------------------------------------------------------
 
+def _on_diag(hass: HomeAssistant, data: dict) -> None:
+    """Picked up: resend the page the remote shows, as on a page change.
+
+    The remote may have dropped that page's images while it lay still; picking
+    it up is when they are about to be looked at. Only a page already known
+    from the remote's own events is sent -- after a restart nothing is, until
+    it reports one.
+    """
+    if data.get("diag") != "in_hand" or not data.get("value"):
+        return
+    entry_id = _resolve_entry_id(hass, data)
+    page_id = get_current_page(entry_id) if entry_id else None
+    if page_id is None:
+        return
+    from ..config.page_resend import schedule_page_resend
+
+    schedule_page_resend(hass, entry_id, page_id)
+
+
 def setup(hass: HomeAssistant) -> None:
     """Subscribe to device button and slider events.
 
@@ -109,6 +128,9 @@ def setup(hass: HomeAssistant) -> None:
     async def _on_device_event(event: Event) -> None:
         data = event.data
         event_type = data.get("type")
+        if event_type == "diag":
+            _on_diag(hass, data)
+            return
         if event_type not in ("button", "slider", "goto_page"):
             return
 
@@ -136,6 +158,11 @@ def setup(hass: HomeAssistant) -> None:
             # were on, because the device is telling us it moved.
             clear_slider_state(entry_id)
             _note_page(entry_id, raw_page_id)
+            # The remote draws a page from its image cache only, so images it
+            # dropped stay blank until the page is sent to it again.
+            from ..config.page_resend import schedule_page_resend
+
+            schedule_page_resend(hass, entry_id, raw_page_id)
             return
 
         # Not every page change is announced. Firmware may omit `goto_page`

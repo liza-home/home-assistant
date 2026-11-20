@@ -194,9 +194,42 @@ def apply_percent_tint(
     return Image.fromarray(np.clip(np.round(rgba), 0, 255).astype(np.uint8), "RGBA")
 
 
+def fade(size: tuple[int, int], colours: tuple[tuple, ...]) -> Image.Image:
+    """A *size* canvas through *colours*, spaced evenly from top to bottom."""
+    width, height = size
+    stops = np.array(colours, dtype=np.float64)
+    rows = np.linspace(0.0, 1.0, height)
+    at = np.linspace(0.0, 1.0, len(colours))
+    column = np.stack([np.interp(rows, at, stops[:, c]) for c in range(4)], axis=1)
+    pixels = np.repeat(np.round(column).astype(np.uint8)[:, None], width, axis=1)
+    return Image.fromarray(pixels, "RGBA")
+
+
+def fade_ink(img: Image.Image, colours: tuple[tuple, ...] | None) -> Image.Image:
+    """*img* with what was drawn in ``colours[0]`` fading through *colours*.
+
+    The fade spans the ink's own height. Only pixels of exactly the first
+    colour change, so the parts that keep colours of their own (an emoji, a
+    logo, a cover) stay as they are; alpha is kept.
+    """
+    if not colours or len(colours) < 2:
+        return img
+    rgba = np.array(img.convert("RGBA"))
+    ink = (rgba[:, :, :3] == colours[0][:3]).all(axis=2) & (rgba[:, :, 3] > 0)
+    rows = np.nonzero(ink.any(axis=1))[0]
+    if not rows.size:
+        return img
+    top, bottom = int(rows[0]), int(rows[-1]) + 1
+    band = np.array(fade((rgba.shape[1], bottom - top), colours))
+    painted = rgba[top:bottom]
+    painted[ink[top:bottom], :3] = band[ink[top:bottom], :3]
+    return Image.fromarray(rgba, "RGBA")
+
+
 def mount(
     img: Image.Image,
     bg_color: tuple | None = None,
+    bg_fade: tuple[tuple, ...] | None = None,
 ) -> Image.Image:
     """Step 4: composite the foreground onto its background.
 
@@ -205,12 +238,13 @@ def mount(
     case the mount is a no-op and the alpha survives to :func:`save_png`.
 
     Percent dimming is done earlier in :func:`finalize_png`, before mounting,
-    so an opaque background stays fully opaque.
+    so an opaque background stays fully opaque. With *bg_fade* the background
+    runs through its colours from top to bottom instead.
     """
     bg = bg_color or TRANSPARENT
     rgba = img.convert("RGBA")
     if bg[3] != 0:
-        canvas = Image.new("RGBA", rgba.size, bg)
+        canvas = fade(rgba.size, bg_fade) if bg_fade else Image.new("RGBA", rgba.size, bg)
         rgba = Image.alpha_composite(canvas, rgba)
     return rgba
 
@@ -221,6 +255,7 @@ def finalize_png(
     percent: int | None = None,
     bg_color: tuple | None = None,
     crop: bool | str = False,
+    bg_fade: tuple[tuple, ...] | None = None,
 ) -> tuple[bytes, str]:
     """Steps 2–5: crop, percent, mount, encode. **The one exit from every render path.**
 
@@ -235,7 +270,7 @@ def finalize_png(
        the letters -- or, without one, evenly at top and bottom
     3. ``apply_percent_tint`` — when ``percent`` is set, upper rows are dimmed
        via alpha to :data:`PERCENT_TINT_ALPHA`
-    4. ``mount`` onto ``bg_color``
+    4. ``mount`` onto ``bg_color``, or the fade through ``bg_fade``
     5. ``save_png``, flattening unless ``keep_alpha``
 
     That is why the renderers carry none of these parameters in their
@@ -250,7 +285,7 @@ def finalize_png(
     elif crop:
         img = autocrop(img, TRANSPARENT)
     img = apply_percent_tint(img, percent)
-    img = mount(img, bg_color)
+    img = mount(img, bg_color, bg_fade)
     return (save_png(img, keep_alpha), "image/png")
 
 

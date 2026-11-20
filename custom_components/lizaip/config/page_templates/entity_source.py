@@ -7,10 +7,12 @@ change could alter what it lists.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from .hue_scenes import hue_scene_icon
 from .items import DEFAULT_MAX_ITEMS, DynamicItem
 
 
@@ -31,7 +33,7 @@ _ENTITIES_PARAMS: dict[str, dict[str, Any]] = {
     "area": {
         "type": "string",
         "required": False,
-        "description": "Area id or name to restrict to",
+        "description": "Area id or name to restrict to, or an entity (e.g. @target) for its area",
     },
     "label": {
         "type": "string",
@@ -202,6 +204,19 @@ def _entry_area_id(entry, device_reg) -> str:
     return ""
 
 
+def _spec_area(spec: dict[str, Any], entity_reg, device_reg) -> str:
+    """The area *spec* narrows to; an entity id in ``area`` names the one it sits in.
+
+    An entity in no area gives its own id, which no area matches: the list
+    comes out empty rather than widening to the whole house.
+    """
+    area = str(spec.get("area") or "").strip()
+    if not re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", area):
+        return area
+    entry = entity_reg.async_get(area) if entity_reg is not None else None
+    return (_entry_area_id(entry, device_reg) if entry is not None else "") or area
+
+
 def _entity_item(hass: HomeAssistant, entity_id: str, entry) -> DynamicItem:
     domain = _domain_of(entity_id)
     try:
@@ -221,6 +236,7 @@ def _entity_item(hass: HomeAssistant, entity_id: str, entry) -> DynamicItem:
         (getattr(entry, "icon", None) if entry is not None else None)
         or (getattr(entry, "original_icon", None) if entry is not None else None)
         or attrs.get("icon")
+        or (hue_scene_icon(hass, entity_id) if domain == "scene" else None)
         or _DOMAIN_ICONS.get(domain, _DEFAULT_ICON)
     )
 
@@ -251,13 +267,13 @@ async def resolve_entities(
     """
     spec = dict(spec or {})
     domains = _wanted_domains(spec)
-    area = str(spec.get("area") or "").strip()
     label = str(spec.get("label") or "").strip()
     config_entry = str(spec.get("config_entry") or "").strip()
 
     device_class = str(spec.get("device_class") or "").strip().lower()
     translation_key = str(spec.get("translation_key") or "").strip()
     entity_reg, area_reg, device_reg, label_reg = _registries(hass)
+    area = _spec_area(spec, entity_reg, device_reg)
 
     area_ids = _match_area_ids(area_reg, area) if area else set()
     label_ids = _match_label_ids(label_reg, label) if label else set()
@@ -354,15 +370,15 @@ def _spec_wants_entity(hass: HomeAssistant, spec: dict[str, Any], entity_id: str
     if domains and _domain_of(entity_id) not in domains:
         return False
 
-    area = str(spec.get("area") or "").strip()
     label = str(spec.get("label") or "").strip()
     config_entry = str(spec.get("config_entry") or "").strip()
-    if not area and not label and not config_entry:
+    if not spec.get("area") and not label and not config_entry:
         return True
 
     try:
         entity_reg, area_reg, device_reg, label_reg = _registries(hass)
         entry = entity_reg.async_get(entity_id)
+        area = _spec_area(spec, entity_reg, device_reg)
     except Exception:  # noqa: BLE001 - a filter must never break the event loop
         return True
 

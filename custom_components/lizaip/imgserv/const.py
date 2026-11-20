@@ -259,6 +259,22 @@ def build_palette() -> list[dict[str, str]]:
 IMG_PATH: Final = "/api/imgserv"
 
 
+_GRADIENT: Final = re.compile(r"\s*linear_gradient\(([^()]*)\)\s*", re.IGNORECASE)
+
+
+def gradient_stops(value: str | None) -> tuple[str, ...]:
+    """The colours of ``linear_gradient(A,B,...)``, top to bottom.
+
+    A plain colour is a gradient of one, and so is anything naming fewer than
+    two colours; nothing is none.
+    """
+    match = _GRADIENT.fullmatch(value or "")
+    stops = tuple(s.strip() for s in match[1].split(",")) if match else ()
+    if len(stops) > 1 and all(stops):
+        return stops
+    return (value,) if value else ()
+
+
 def parse_color(color_str: str | None, names: dict | None = None) -> tuple | None:
     """Parse a color value and return RGBA, or None when invalid/missing.
 

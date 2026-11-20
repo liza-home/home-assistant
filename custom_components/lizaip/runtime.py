@@ -8,7 +8,6 @@ The state itself is typed in ``data``: these are its readers.
 """
 from __future__ import annotations
 
-import importlib.util
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -21,18 +20,6 @@ if TYPE_CHECKING:
     from .config.panel_entry import PanelEntry
     from .config.store import LizaRemoteStore
     from .device.connection import LizaIPConnection
-
-
-def debug_available() -> bool:
-    """Whether this build has the pre-release debug tools.
-
-    They are stripped from a stable release by `scripts/public_repo.sh`, so a
-    missing module is the expected state there rather than a broken install.
-    Checked by import rather than by version so that a build we deploy
-    ourselves -- which rsyncs the working tree, suffix or not -- always has the
-    tools it shipped.
-    """
-    return importlib.util.find_spec(f"{__package__}.config.debug_websocket") is not None
 
 
 def renamed_device(hass: HomeAssistant, event: Event) -> dr.DeviceEntry | None:

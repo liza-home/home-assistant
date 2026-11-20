@@ -14,6 +14,9 @@ const STATE_PLACEHOLDER_RE = /\{\s*translate\s*:\s*\$\{\s*_state\s*\}\s*\}|\$\{\
 const LEADING_SEPARATORS_RE = /^[\s:;,/\-–—]*$/;
 const TWO_WAY_SERVICES = ["toggle", "media_play_pause"];
 
+/** Above this many entries a list stops being scannable and gets a filter. */
+export const SEARCH_THRESHOLD = 8;
+
 /**
  * The two face keys drawn like buttons that hold no button record:
  * `slider_horizontal` is the page's title bar, and `slider_vertical` stores
@@ -86,6 +89,25 @@ export const ATTR_ACTION_MAP = Object.fromEntries(
     attr,
     Object.fromEntries(cycle.map(([value], i) => [value, cycle[(i + 1) % cycle.length][1]])),
   ]),
+);
+
+/**
+ * attribute -> a value -> the value the cycle arrives at it from. Mirrors
+ * `ATTR_PREVIOUS_VALUE`: `attribute_icons` is keyed by the value a press moves
+ * *on to*, so the face for a value a step writes is filed under its predecessor.
+ */
+export const ATTR_PREVIOUS_VALUE = Object.fromEntries(
+  Object.entries(ATTR_ACTION_CYCLES).map(([attr, cycle]) => [
+    attr,
+    Object.fromEntries(cycle.map(([value], i) => [cycle[(i + 1) % cycle.length][0], value])),
+  ]),
+);
+
+/** Mirrors `BOOLEAN_ATTRIBUTES`: attributes a setter can flip rather than set. */
+export const BOOLEAN_ATTRIBUTES = new Set(
+  Object.entries(ATTR_ACTION_CYCLES)
+    .filter(([, cycle]) => cycle.every(([value]) => value === "true" || value === "false"))
+    .map(([attr]) => attr),
 );
 
 /**
@@ -1203,14 +1225,20 @@ export const HelpersMixin = {
       const label = plain ? matchTooltipTokens(query.term, tokens) : [];
       // Offered inside a calculation too, where `_device.attribute` is a variable.
       const alias = query.stage === "entity" ? matchDeviceAlias(states, device, query.term) : [];
+      // With the remote's Variables switch off, other entities and
+      // calculations are not read, so they are not offered either; what the
+      // button and its page's device fill in still is.
+      const typed = this._variablesEnabled !== false;
       const found = query.stage === "attribute"
-        ? matchAttributes(states, query.entity, query.term).map((id) => ({ id, name: "" }))
+        ? (typed || /^_(device|queue)\b/.test(query.entity || "")
+          ? matchAttributes(states, query.entity, query.term).map((id) => ({ id, name: "" }))
+          : [])
         : [
           // First: a short, exact list of what this button can say, ahead of
           // hundreds of entities that merely start with the same letter.
           ...label,
           ...alias,
-          ...(query.term.startsWith("_device.") || query.term.startsWith("_queue.") ? [] : [
+          ...(!typed || query.term.startsWith("_device.") || query.term.startsWith("_queue.") ? [] : [
             ...matchFunctions(query.term),
             ...matchEntities(states, query.term),
           ]),
@@ -2307,7 +2335,12 @@ export const HelpersMixin = {
     }
     if (service) {
       const eid = this._getTargetEntityFromConfig(a.config) || "";
-      return this._getServiceIcon(service, eid) || fallback;
+      // The value this button writes, below the library entry's identity and
+      // above the service glyph -- the place `_icon_from_step_value` holds in
+      // the device's ladder, so a tile and the remote draw the same face.
+      return this._stepValueIcon(service, a.config, a.toggle?.mode === "cycle")
+        || this._getServiceIcon(service, eid)
+        || fallback;
     }
     return fallback;
   },
@@ -2504,6 +2537,64 @@ export const HelpersMixin = {
     return null;
   },
 
+  /** Mirrors `first_step`: a config's first step, the one face and label describe. */
+  _firstStep(config) {
+    return Array.isArray(config) && config[0] && typeof config[0] === "object" ? config[0] : {};
+  },
+
+  /** Mirrors `toggles_attribute`: the button flips the attribute rather than setting a value. */
+  _togglesAttribute(svc, data) {
+    const attribute = this._serviceToAttribute(svc);
+    if (!attribute) return false;
+    const stored = data && typeof data === "object" ? data : {};
+    if (!(attribute in stored)) return BOOLEAN_ATTRIBUTES.has(attribute);
+    return typeof stored[attribute] === "boolean";
+  },
+
+  /**
+   * Mirrors `names_stored_value`: the value a button stores is the one it
+   * runs, and so the one its face and its label both name.
+   *
+   * One predicate for both halves, as on the device -- a cycle press and a
+   * value setter name what they hold, a boolean setter inverts the live
+   * attribute and names that instead.
+   */
+  _namesStoredValue(svc, data, asPress) {
+    return !!asPress || !this._togglesAttribute(svc, data);
+  },
+
+  /**
+   * Mirrors `state_icon_override`: the step's own row for the state its target
+   * is in, keyed as the theme table is. The user's choice outranks every
+   * derived glyph, so this is asked before the stored value.
+   */
+  _stateIconOverride(service, entityId, stateIcons) {
+    if (!stateIcons || !entityId) return "";
+    const stateObj = this._hass?.states?.[entityId];
+    if (!stateObj) return "";
+    const svc = String(service || "").split(".")[1] || "";
+    const attribute = this._serviceToAttribute(svc);
+    const keyed = attribute
+      ? this._attrStr(stateObj.attributes?.[attribute])
+      : stateObj.state;
+    return stateIcons[keyed] || stateIcons[stateObj.state] || "";
+  },
+
+  /**
+   * Mirrors `_icon_from_step_value`: the glyph for the literal attribute value
+   * a step writes, so the preview names the value its label names.
+   */
+  _stepValueIcon(service, config, asPress) {
+    const svc = String(service || "").split(".")[1] || "";
+    const attribute = this._serviceToAttribute(svc);
+    if (!attribute) return "";
+    const data = this._firstStep(config).data;
+    if (!data || typeof data !== "object") return "";
+    if (!this._namesStoredValue(svc, data, asPress)) return "";
+    const previous = ATTR_PREVIOUS_VALUE[attribute]?.[this._attrStr(data[attribute])];
+    return (this._iconDefaults?.attribute_icons?.[attribute] || {})[previous] || "";
+  },
+
   /**
    * What the remote will actually print for a stored label.
    *
@@ -2535,13 +2626,13 @@ export const HelpersMixin = {
       || (entityId && this._hass?.states?.[entityId]) || null;
     const stateVal = stateObj?.state || "";
     const attributes = stateObj?.attributes || null;
-    // The first step's own service data, matching `_fill_tooltip_tokens`. Read
-    // for a cycle, which runs every face verbatim, and so names the direction
-    // it stores; a plain action toggles the attribute instead.
-    const step = Array.isArray(config) && config[0] && typeof config[0] === "object" ? config[0] : {};
-    const data = step.data || {};
+    // The first step's own service data, matching `_fill_tooltip_tokens`. A
+    // cycle and a value setter both run what they store, so the label names
+    // that value; a boolean setter flips the attribute and names nothing.
+    const data = this._firstStep(config).data || {};
     const asPress = press || assign?.toggle?.mode === "cycle";
-    const stateKey = this._stateTokenKey(svc, stateVal, attributes, asPress ? data : null);
+    const namesDirection = this._namesStoredValue(svc, data, asPress);
+    const stateKey = this._stateTokenKey(svc, stateVal, attributes, namesDirection ? data : null);
     name = this._translateState(name, stateKey, this._tooltipLang());
     const values = {
       _state: stateKey,

@@ -23,6 +23,7 @@ from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ..shared.logs import device_logger
 from ..shared.i18n import get_ui_language, language_scope
+from ..shared.variables_calc import variables_scope
 from ..shared.tokens import page_scope, substitute_device_token
 from ..state_icon import (
     IconStyle,
@@ -201,7 +202,9 @@ async def build_page_payload(
     """Build a set_page data payload, its tiles reading ``${_device}`` as the page has it."""
     template = page_config.get("template") if isinstance(page_config, dict) else None
     # `{translate: …}` is drawn in this remote's language.
-    with page_scope(template), language_scope(get_ui_language(hass, entry)):
+    with page_scope(template), language_scope(get_ui_language(hass, entry)), variables_scope(
+        getattr(entry, "options", None),
+    ):
         return await _build_page_payload_in_scope(
             hass, entry, page_id, page_config, all_pages, ctx=ctx,
         )

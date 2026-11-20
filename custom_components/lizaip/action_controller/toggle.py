@@ -77,6 +77,7 @@ from ..shared.services import (
     service_fixed_icon,
     service_name,
     service_to_attribute,
+    toggles_attribute,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -153,6 +154,24 @@ def toggle_mode(assign: Any) -> str | None:
     if mode != MODE_CYCLE:
         return None
     return mode if toggle_rules(assign) else None
+
+
+def names_stored_value(assign: Any, svc: str, data: Any) -> bool:
+    """Whether the value *assign* stores is the one it runs, and so names.
+
+    A cycle press and a value setter such as ``repeat_set`` both write what
+    they hold, so the face and the label name that value. A boolean setter
+    such as ``volume_mute`` inverts the live attribute instead and names it.
+
+    One predicate for both halves on purpose: whenever the label names the
+    stored value the face has to name it too, which is the parity the icon
+    ladder and :func:`config.button_rendering._fill_tooltip_tokens` share.
+    """
+    if isinstance(assign, dict) and assign.get("_press"):
+        return True
+    if toggle_mode(assign) == MODE_CYCLE:
+        return True
+    return not toggles_attribute(svc, data)
 
 
 def toggle_rules(assign: Any) -> list[dict]:
@@ -287,7 +306,7 @@ def step_icon(
     if override:
         return override
 
-    attr_icon = _attribute_step_icon(rule, svc_name, icons)
+    attr_icon = attribute_step_icon(rule, svc_name, icons)
     if attr_icon:
         return attr_icon
 
@@ -299,12 +318,20 @@ def step_icon(
     return (icons or icon_defaults).domain_icons.get(svc_domain)
 
 
-def _attribute_step_icon(rule: Any, svc_name: str, icons=None) -> str | None:
+def attribute_step_icon(
+    rule: Any, svc_name: str, icons=None, *, fallback: bool = True,
+) -> str | None:
     """The ``attribute_icons`` glyph for a step that sets an attribute.
 
     No service-icon table names `volume_mute`, so an iconless mute press used
     to fall through to its domain's glyph. The table the button reads has the
     answer, read under the value this press moves on from.
+
+    Shared with the plain-button ladder (``_icon_from_step_value``) so that a
+    stored value draws the same face wherever it was configured. A press with
+    no value of its own still wants a glyph rather than its domain's, which is
+    what ``fallback`` gives it; a plain button passes ``False`` and is left to
+    the live-state rungs instead of wearing an arbitrary one.
     """
     attribute = service_to_attribute(svc_name)
     table = (icons or icon_defaults).attribute_icons.get(attribute, {}) if attribute else {}
@@ -315,7 +342,9 @@ def _attribute_step_icon(rule: Any, svc_name: str, icons=None) -> str | None:
     data = (steps[0] if steps else {}).get("data") or {}
     value = attr_str(data.get(attribute)) if isinstance(data, dict) else ""
     previous = ATTR_PREVIOUS_VALUE.get(attribute, {}).get(value)
-    return table.get(previous) if previous else next(iter(table.values()), None)
+    if previous:
+        return table.get(previous)
+    return next(iter(table.values()), None) if fallback else None
 
 
 def rule_action_id(rule: Any) -> str | None:

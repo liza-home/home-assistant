@@ -105,16 +105,22 @@ def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
 
     A long touch, a fixed control's override or a toggle step that opens a
     removed page goes; a click that opens one empties the button, keeping a
-    long touch that still leads somewhere. A button filled by a dynamic source
-    (a Table of contents tile) is left to that source's own refresh.
+    long touch that still leads somewhere.
+
+    What a dynamic source wrote is left to that source's own refresh, so a
+    Table of contents tile keeps its click. Its long touch is not the source's
+    to rewrite -- the user hung it there with **Add options…** -- so deleting
+    the options page takes it off a bound tile as off any other button.
     """
-    if not isinstance(assign, dict) or isinstance(assign.get(ASSIGNMENT_DYNAMIC_KEY), dict):
+    if not isinstance(assign, dict):
         return None
     result = deepcopy(assign)
     changed = False
     if _opens_removed(result.get(ASSIGNMENT_LONGTOUCH_KEY), removed):
         result.pop(ASSIGNMENT_LONGTOUCH_KEY)
         changed = True
+    if isinstance(result.get(ASSIGNMENT_DYNAMIC_KEY), dict):
+        return result if changed else None
     overrides = result.get("overrides")
     if isinstance(overrides, dict):
         for key in [k for k, o in overrides.items()

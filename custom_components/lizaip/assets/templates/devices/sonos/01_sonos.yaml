@@ -49,11 +49,11 @@ pages:
       # the remote's own go-to-page command.
       button_3:
         icon: mdi:playlist-music
-        tooltip: {translate: playlists}
+        tooltip: "{translate: playlists}…"
         goto_page: playlists
       button_4:
         icon: mdi:radio
-        tooltip: {translate: radio}
+        tooltip: "{translate: radio}…"
         goto_page: radio
 
       button_9:
@@ -124,7 +124,7 @@ pages:
         placeholder: "@playlist[12]"
         more_parts:
           icon: mdi:dots-horizontal
-          tooltip: {translate: more}
+          tooltip: "{translate: more}…"
           goto_page: next
       button_back:
         icon: mdi:arrow-left
@@ -144,7 +144,7 @@ pages:
         placeholder: "@station[12]"
         more_parts:
           icon: mdi:dots-horizontal
-          tooltip: {translate: more}
+          tooltip: "{translate: more}…"
           goto_page: next
       button_back:
         icon: mdi:arrow-left

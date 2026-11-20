@@ -11,6 +11,69 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
+## [2026.11.3b2] - 2026-11-20
+
+### ⚠ Breaking changes
+
+- **The panel's Debug tab is gone.** The debug report, traffic, logging and
+  memory tools are no longer part of lizaIP.
+  **What to do:** for a support request, use **Download diagnostics** in the
+  panel's menu, as before.
+- **The Amazon Fire TV template needs the fireTV integration.** It now sends
+  its keys through fireTV (`firetv_dial`) instead of Android Debug Bridge
+  (`androidtv`), and its Digits page is gone: the Fire TV has no digit keys
+  that way.
+  **What to do:** add the Fire TV with the fireTV integration and add the
+  template's pages for that device.
+
+### Added
+
+- **Blank tiles come back.** The remote keeps about 400 images and drops the
+  oldest past that, which left tiles blank. Home Assistant now sends the remote
+  a page again when it opens it, or when the remote is picked up, so it fetches
+  the images it dropped. On by default: **Settings → Device → Reload on page
+  change**. Keep it on; the card warns while it is off.
+- **A Variables switch per remote**, under **Settings → Behaviour →
+  Variables**, on by default. Off, the variables you type -- `${sensor.x}`,
+  calculations -- are left out of tooltips, pictures and titles; what a
+  template fills in for its own device keeps working.
+- **Light options pages.** A long touch on a button bound to a light opens
+  pages fitted to the lamp: colours, brightness steps, white temperatures and
+  the scenes of its room.
+- **Colour gradients in pictures**: `fg` and `bg` accept
+  `linear_gradient(A,B,...)`, e.g. `bg=linear_gradient(FBE3A0,F2B14C)`.
+- **A `loxone` logo** for `logo:loxone`.
+- **A search field in the device picker** once the list is longer than eight
+  entries. It matches name, room, maker and model, ignoring case and accents.
+
+### Changed
+
+- **The page previews scale with the panel**: larger on a wide window, smaller
+  on a phone, where the open page stays large enough to tap its buttons, in
+  portrait and landscape alike.
+- **Page links in the shipped templates end in an ellipsis** -- Apps…,
+  Digits…, Inputs…, More… -- to say another page follows. Pages added before
+  keep their old labels until they are added again.
+- **Live icons follow the remote's Update interval** (500 ms by default)
+  instead of changing up to five times a second.
+- **Corner radius also rounds icons and logos drawn on a background**, at tile
+  size.
+- **The device picker shows each device's room, maker and model**, and marks
+  the current one when changing a page's device. Add-ons are no longer offered.
+
+### Removed
+
+- **The Debug tab** -- see Breaking changes.
+- **The Fire TV template's Digits page** -- see Breaking changes.
+
+### Fixed
+
+- **Mute, repeat, shuffle and cycle buttons show the right icon and
+  tooltip**; buttons set up before are corrected by themselves.
+- **Device names with quotation marks** read correctly in the device picker.
+- **A factory-reset remote connects again** while Home Assistant still has it
+  configured.
+
 ## [2026.11.3b1] - 2026-11-14
 
 For slow smartphone browsers such as the Home Assistant app, where page

@@ -29,7 +29,12 @@ from .page_templates import (
 )
 from .page_templates.parts import paginated_placeholder
 from .template_writes import async_store_template_pages
-from .template_targets import device_integration, selector_integrations
+from .template_targets import (
+    async_empty_placeholders,
+    device_integration,
+    prune_unusable_buttons,
+    selector_integrations,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -187,6 +192,17 @@ async def async_create_page_from_template(
     template = await hass.async_add_executor_job(load_template, template_id)
     if not template:
         raise TemplatePageError(f"Template '{template_id}' not found")
+    error, target_entity, domain_entities = resolve_template_target(
+        hass, template_id, template, target_device, target_config_entry,
+    )
+    if error:
+        code, message = error
+        raise TemplatePageError(message, code)
+
+    empty = await async_empty_placeholders(
+        hass, template, target_entity, domain_entities, target_config_entry,
+    )
+    template = prune_unusable_buttons(hass, template, target_entity, empty)
     pages_def = template_pages(template_id, template)
     if not pages_def:
         raise TemplatePageError(f"Template '{template_id}' names no pages under 'pages:'")
@@ -199,13 +215,6 @@ async def async_create_page_from_template(
             "a button's options page",
             "template_paginated",
         )
-
-    error, target_entity, domain_entities = resolve_template_target(
-        hass, template_id, template, target_device, target_config_entry,
-    )
-    if error:
-        code, message = error
-        raise TemplatePageError(message, code)
 
     # The title of a first page that states none: what the caller asked for,
     # else the icon the picker showed.

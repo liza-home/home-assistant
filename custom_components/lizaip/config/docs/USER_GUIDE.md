@@ -219,7 +219,7 @@ deeply as the folders do.
 | **Hue Lamp Options** | Hue | Brightness and colour-temperature presets for one lamp (**Add options…** only) |
 | **Android TV** | Android TV Remote | Laid out as the LG webOS TV template: remote keys and volume, with an **Apps** subpage (the apps configured in the integration's options) on button 4 and a **Digits** keypad with Channel up and down on button 8. The integration lists no inputs, so button 12 opens the TV's own input menu. Back returns to the remote keys |
 | **Apple TV** | Apple TV | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (its apps, with their App Store icons — App Store and Arcade show their own logos; Computers, Settings and Search, which the store does not list, get a lookalike in their home-screen colours) on button 4. An Apple TV has no digit keys and no inputs. Back returns to the remote keys |
-| **Amazon Fire TV** | Android Debug Bridge | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (the apps it lists as sources) on button 4 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
+| **Amazon Fire TV** | fireTV (firetv_dial) | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (the apps it lists as sources) on button 4. Back returns to the remote keys |
 | **Roku** | Roku | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (its apps and channels) on button 4 and, for a Roku TV, an **Inputs** subpage (Antenna TV, HDMI 1–4, AV) on button 12. A Roku has no digit keys. Back returns to the remote keys |
 | **Samsung TV** | Samsung Smart TV | Laid out as the LG webOS TV template: remote keys and volume, with an **Apps** subpage on button 4 (its apps, with the icons from Samsung's TV app store — a newer Samsung TV does not list its apps, so it is asked about every app of the store; the first look takes about half a minute, and an app built into the TV, such as Samsung TV Plus, does not show), an **Inputs** subpage (TV and HDMI) on button 12 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
 | **Sony Bravia TV** | Sony Bravia TV | Laid out as the LG webOS TV template: the TV's remote keys and volume, with an **Apps** subpage (its apps) on button 4, an **Inputs** subpage (its inputs, as named on the TV) on button 12 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
@@ -968,8 +968,8 @@ media:${_device.entity_picture}?size=200x200&bg=black
 | `fit` | `contain` keeps the picture's proportions inside the size, `fill` stretches it to the size. Without a `size` it is `contain`, with one `fill` | `fit=contain` |
 | `box` | Answers with one piece of it: `x,y,w,h` of the sized picture | `box=60,62,60,62` |
 | `mode` | `dark` (the default) or `light` background rendering | `mode=light` |
-| `fg` | Tint colour, for a monochrome picture | `fg=white`, `fg=FF8800` |
-| `bg` | Background colour behind the picture | `bg=black` |
+| `fg` | Tint colour, for a monochrome picture; a gradient runs through its colours, evenly spaced, top to bottom | `fg=white`, `fg=FF8800`, `fg=linear_gradient(FFD700,FF4500)` |
+| `bg` | Background colour behind the picture; a gradient runs through its colours, evenly spaced, top to bottom and rounds the corners | `bg=black`, `bg=linear_gradient(FBE3A0,F2B14C)` |
 | `crop` | `0` keeps the padding around the picture | `crop=0` |
 | `alpha` | `1` keeps the picture's transparency | `alpha=1` |
 | `percent` | Fill level `0`–`100`: the lower part stays solid, the part above is dimmed | `percent=40` |

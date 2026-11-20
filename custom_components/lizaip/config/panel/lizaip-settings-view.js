@@ -18,13 +18,14 @@
  * listener and the page sync read it from there.
  *
  * This file holds the tab itself -- its groups, search and cards; the theme
- * picker and editor live in `settings/theme.js`, and the font pickers
- * and Fontbook in `settings/fonts.js`.
+ * picker and editor live in `settings/theme.js`, the font pickers in
+ * `settings/fonts.js`, and the Fontbook group in `settings/fontbook.js`.
  */
 
 import { applyMixins } from "./lizaip-mixins.js";
 import { SettingsThemeMixin, THEME_BLANK } from "./settings/theme.js";
-import { SettingsFontsMixin, FONTBOOK_PANEL, FONTBOOK_ICON } from "./settings/fonts.js";
+import { SettingsFontsMixin } from "./settings/fonts.js";
+import { SettingsFontbookMixin } from "./settings/fontbook.js";
 
 /**
  * The tab's pages, one chip each. Only the chosen group is rendered, so a
@@ -233,9 +234,9 @@ const SettingsTabMixin = {
   },
 
   /**
-   * The Variables card: how often a value that keeps changing is sent.
-   * Variables are always read; empty when the backend sends no limits for the
-   * interval.
+   * The Variables card: the switch for the variables typed into buttons and
+   * titles (on by default), and under it how often a value that keeps
+   * changing is sent. Empty when the backend sends no limits for the interval.
    */
   _htmlSettingsVariablesCard() {
     const opts = this._iconOptions;
@@ -245,10 +246,15 @@ const SettingsTabMixin = {
     const hintId = `${id}-hint`;
     const value = opts.variables_interval_ms ?? opts.defaults?.variables_interval_ms;
     const fallback = opts.defaults?.variables_interval_ms ?? 500;
+    const on = opts.variables_enabled !== false;
     return `
       <ha-card outlined class="settings-card">
         ${this._htmlCardHeader("settings_variables", { icon: "mdi:code-braces", level: 3 })}
         <div class="settings-body">
+          <div class="settings-switch-list">
+            ${this._htmlIconSwitch("variables_enabled", "settings_variables_enabled", "settings_variables_enabled_hint")}
+          </div>
+          <div class="settings-switch-detail${on ? "" : " is-off"}">
           <div class="settings-sample">
             <code class="settings-sample-source">${this._esc(VARIABLE_SAMPLE)}</code>
             <ha-icon class="settings-sample-arrow" icon="mdi:arrow-right" aria-hidden="true"></ha-icon>
@@ -262,13 +268,14 @@ const SettingsTabMixin = {
                          label="${this._esc(this._t("settings_variables_interval"))}"
                          min="${limits.min}" max="${limits.max}" step="${limits.step || 100}"
                          value="${this._esc(value)}"
-                         ${this._iconOptionsBusy ? "disabled" : ""}></ha-slider>
+                         ${this._iconOptionsBusy || !on ? "disabled" : ""}></ha-slider>
               <output class="settings-step-unit settings-range-value" for="${id}">${this._esc(this._formatInterval(value))}</output>
             </div>
             <span class="config-field-hint" id="${hintId}">${this._esc(this._t("settings_variables_interval_hint", {
               min: this._formatInterval(limits.min), max: this._formatInterval(limits.max),
               default: this._formatInterval(fallback),
             }))}</span>
+          </div>
           </div>
         </div>
       </ha-card>`;
@@ -345,16 +352,20 @@ const SettingsTabMixin = {
    * A row rather than a `.config-field`, whose stacked label-above-input shape
    * is for inputs that fill the width and leaves a switch an orphan.
    */
-  _htmlIconSwitch(key, labelKey, hintKey) {
+  _htmlIconSwitch(key, labelKey, hintKey, noteKey = null) {
     const id = `liza-settings-${key.replace(/_/g, "-")}`;
     const hintId = `${id}-hint`;
     const labelId = `${id}-label`;
     const on = this._iconOptions?.[key] === true;
+    // A note that must not be missed: on a line of its own, in bold.
+    const note = noteKey
+      ? `<strong class="config-field-hint settings-switch-note">${this._esc(this._t(noteKey))}</strong>`
+      : "";
     return `
       <div class="settings-switch-row">
         <div class="settings-switch-text">
           <label id="${labelId}" for="${id}">${this._esc(this._t(labelKey))}</label>
-          <span class="config-field-hint" id="${hintId}">${this._esc(this._t(hintKey))}</span>
+          <span class="config-field-hint" id="${hintId}">${this._esc(this._t(hintKey))}${note}</span>
         </div>
         <ha-switch id="${id}" class="settings-icon-switch" data-key="${key}"
                    ${on ? "checked" : ""} ${this._iconOptionsBusy ? "disabled" : ""}
@@ -434,14 +445,11 @@ const SettingsTabMixin = {
         </ha-tab-group>`;
   },
 
-  /** The groups to offer: Fontbook's, beside Appearance, while it is installed. */
+  /** The groups to offer, with an embedded one placed after its neighbour. */
   _settingsGroups() {
-    const panel = this._fontbookPanel();
-    if (!panel) return SETTINGS_GROUPS;
-    const fontbook = {
-      id: FONTBOOK_PANEL, icon: panel.icon || FONTBOOK_ICON, title: panel.title || "Fontbook",
-    };
-    return SETTINGS_GROUPS.flatMap((g) => (g.id === "appearance" ? [g, fontbook] : [g]));
+    const extra = this._embeddedSettingsGroup?.();
+    if (!extra) return SETTINGS_GROUPS;
+    return SETTINGS_GROUPS.flatMap((g) => (g.id === extra.after ? [g, extra] : [g]));
   },
 
   /** The chosen group's cards. The pressed chip names it, so no heading
@@ -470,7 +478,7 @@ const SettingsTabMixin = {
       return [this._htmlSettingsButtonsCard(), this._htmlSettingsVariablesCard()];
     }
     if (id === "editor") return [this._htmlSettingsEditorCard()];
-    return [this._htmlSettingsDeviceCard()];
+    return [this._htmlSettingsResendCard(), this._htmlSettingsDeviceCard()];
   },
 
   /** Only the chosen group's cards are built. */
@@ -560,7 +568,7 @@ const SettingsTabMixin = {
     const group = this._settingsGroups().find((g) => g.id === this._settingsGroup())
       || SETTINGS_GROUPS.find((g) => g.id === SETTINGS_DEFAULT_GROUP);
     if (needle) return this._htmlSettingsResults(needle);
-    if (group.id === FONTBOOK_PANEL) return this._htmlFontbookSection();
+    if (group.embedded) return this._htmlEmbeddedSettingsSection();
     return this._htmlSettingsSection(group, this._htmlSettingsGroupCards(group.id));
   },
 
@@ -632,6 +640,27 @@ const SettingsTabMixin = {
     const next = structuredClone(current);
     next[kind] = { ...next[kind], [key]: value };
     this._saveTextSettings(next);
+  },
+
+  /**
+   * Whether the remote is sent a page again when it opens it. The remote keeps
+   * about 400 images and draws a page from that cache only, so an image it
+   * dropped stays blank until the page reaches it again. On by default; off,
+   * a warning says what that costs.
+   */
+  _htmlSettingsResendCard() {
+    if (!this._iconOptions) return "";
+    const off = this._iconOptions.resend_on_page_open === false;
+    return `
+      <ha-card outlined class="settings-card settings-warning-card">
+        ${this._htmlCardHeader("settings_resend_pages", { icon: "mdi:alert-outline", level: 3 })}
+        <div class="settings-body">
+          <div class="settings-switch-list">
+            ${this._htmlIconSwitch("resend_on_page_open", "settings_resend_on_page_open", "settings_resend_on_page_open_hint", "settings_resend_keep_on")}
+          </div>
+          ${off ? `<ha-alert alert-type="warning" class="settings-resend-warning">${this._esc(this._t("settings_resend_off_warning"))}</ha-alert>` : ""}
+        </div>
+      </ha-card>`;
   },
 
   /**
@@ -811,8 +840,8 @@ const SettingsTabMixin = {
       root.querySelectorAll(".settings-chip").forEach((el) =>
         el.addEventListener("click", () => this._setSettingsGroup(el.dataset.group)));
     }
-    const fontbook = root.querySelector(".fontbook-host");
-    if (fontbook) this._mountFontbook(fontbook);
+    const embedded = root.querySelector(".settings-embedded .embedded-host");
+    if (embedded) this._mountEmbeddedSettings(embedded);
     if (search) this._wireSettingsSearch(root);
   },
 
@@ -894,11 +923,12 @@ const SettingsTabMixin = {
   },
 };
 
-// The tab itself above; the theme editor and the fonts each in a slice of their
-// own, composed back into the one mixin the panel applies.
+// The tab itself above; the theme editor, the fonts and Fontbook each in a slice
+// of their own, composed back into the one mixin the panel applies.
 export const SettingsViewMixin = applyMixins(
   {},
   SettingsTabMixin,
   SettingsThemeMixin,
   SettingsFontsMixin,
+  SettingsFontbookMixin,
 );

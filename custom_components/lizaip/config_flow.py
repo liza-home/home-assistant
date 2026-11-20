@@ -53,7 +53,7 @@ from .device.protocol import PROTOCOL_VERSION, device_id_from_mac
 _LOGGER = logging.getLogger(__name__)
 
 
-def _discovered_device_id(service_name: str, properties: Mapping[str, Any]) -> str:
+def discovered_device_id(service_name: str, properties: Mapping[str, Any]) -> str:
     """The ``device_id`` a discovered remote connects with.
 
     The remote names itself by MAC in the TXT ``device_id`` and, today, in the
@@ -147,7 +147,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         firmware_name = properties.get("name")
         self.sw_version = properties.get("version")
 
-        unique_id = _discovered_device_id(discovery_info.name, properties)
+        unique_id = discovered_device_id(discovery_info.name, properties)
         _warn_on_protocol_version(unique_id, properties.get("protocol_version"))
         await self.async_set_unique_id(unique_id)
 

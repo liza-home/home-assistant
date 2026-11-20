@@ -258,7 +258,7 @@ change to a remote the user has already arranged:
 | Tint icons with the light's colour | off | A lit lamp's colour replaces the page colour. |
 | Fill icons with the light's brightness | off | Fills the icon from the bottom. |
 | Fill step | `5 %` | How much the fill advances per level. Range 1–25. |
-| Corner radius | `0 %` | Rounding of whole `media:` pictures (covers): 0 % square, 100 % round, 1 % steps, applied when the slider is released. Pictures cut into a `box` grid stay square. A `radius=` written on the picture wins. |
+| Corner radius | `0 %` | Rounding of whole `media:` pictures (covers) and of icons, logos and graphs on a `bg` (Hue scenes), never of words: 0 % square, 100 % round, 1 % steps, applied when the slider is released. Pictures cut into a `box` grid stay square. A `radius=` written on the picture wins. |
 
 The two switches are independent: the fill can be on with the tint off, and the reverse.
 The fill step applies only while the fill is on, so the gear tab greys it out otherwise.
@@ -399,9 +399,10 @@ which only mean something for `text:` and for the words of a pair.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `size` | `tile` (50×52), `title` (200×50), `tooltip` (200×40), `WxH` in pixels, or single integer (square) | `tile` |
-| `fg` | Foreground color: hex `RRGGBB` / `RRGGBBAA`, or name (see below) | `white` |
+| `fg` | Foreground color: hex `RRGGBB` / `RRGGBBAA`, or name (see below). `linear_gradient(A,B,...)` fades what is drawn in it through those colours, spaced evenly from its top to its bottom; parts in colours of their own (emoji, logos, covers) keep them | `white` |
 | `color` | Alias for `fg`. If both are given, `fg` wins | — |
-| `bg` | Background color mounted behind the subject: same format as `fg` | transparent |
+| `bg` | Background color mounted behind the subject: same format as `fg`. `linear_gradient(A,B,...)` runs through those colours, spaced evenly from the top to the bottom of the whole picture | transparent |
+| `radius` | Corner radius, 0–100 % of the shorter side (100 = round), of a whole picture: a `media:` picture, or any other on a `bg`. Never words (`text:`), never a `box` piece | `100` for `media:`, `0` otherwise |
 | `mode` | `dark` (white default fg) or `light` (black default fg) — sets the default **foreground only**, never the background | — |
 | `crop` | Trim the transparent margin: `1`/`true` or `0`/`false`/`no`. `text:` is cut to the font's full reach above and below the baseline, whatever the letters, and keeps its sides. Never cropped when `bg` paints a colour: the background fills the whole requested size, and a picture drawn smaller (`text:` is as wide as its words) is centred on it | `1` (enabled) |
 | `alpha` | Keep the alpha channel (`1`) instead of flattening onto black (`0`). Use `1` for browser previews, `0` for the device | `0` |
@@ -499,6 +500,12 @@ imgserv://hue:bulb-group?size=tile&fg=FFD700
 > **Note:** A name whose shape has not been uploaded yet returns 404, and is remembered
 > as missing so the panel fills it in the next time it opens.
 
+With `hue:` registered, a Hue scene the `scenes` source lists without an icon of
+its own is drawn as the Hue app draws it: the scene's glyph (`hue:scene-relax`,
+`hue:scene-read`, ..., read from the bridge's image id) in white on the app's
+colour fade (`bg=linear_gradient(top,bottom)`). A gallery scene, whose photo the bridge
+keeps, gets `mdi:palette` on a fade of its own two leading colours.
+
 #### `logo:<name>` — Brand logos
 
 Renders bundled brand logos and your own logos. Drop `.svg` or `.png` files into
@@ -531,7 +538,7 @@ imgserv://logo:spotify?size=tile&fg=green         # monochrome green
 imgserv://logo:sonos?size=tile&fg=white&alpha=1   # monochrome, transparent
 ```
 
-**Available logos:** `android`, `appletv`, `disney`, `dreame`, `firetv`, `hue`, `knx`, `lg`, `netflix`, `prime`, `roku`, `samsung`, `sonos`, `sony`, `spotify`, `unifi`, `youtube`
+**Available logos:** `android`, `appletv`, `disney`, `dreame`, `firetv`, `hue`, `knx`, `lg`, `loxone`, `netflix`, `prime`, `roku`, `samsung`, `sonos`, `sony`, `spotify`, `unifi`, `youtube`
 (`android`, `appletv`, `firetv`, `lg`, `roku`, `samsung` and `sony` are from [Simple Icons](https://simpleicons.org), CC0;
 the marks themselves remain their owners' trademarks)
 
@@ -889,6 +896,16 @@ page titles (`title` of a page) accept `${domain.object_id}` and
 `${domain.object_id.attribute}`. User documentation with examples, including a template
 helper for battery icons: [README.public.md → Live values on the remote](../../README.public.md#live-values-on-the-remote).
 
+- **The Variables switch** (Settings → Behaviour → Variables, option
+  `variables_enabled`, on by default). Off, the variables a user typed --
+  `${sensor.x}`, `${light.desk.brightness}`, calculations -- are not read: in words
+  they are left out, and a picture with one gives way to the button's normal icon
+  (`shared.tokens.silence_user_variables`). What a template fills in for its page's
+  device -- `${_device…}`, `${_queue…}`, also inside a calculation -- and the button's
+  own `${_state}`/`${_name}` are read either way. Set per remote with
+  `variables_scope(entry.options)` where its pages are built, its live icons
+  repainted and its panel previews answered; the panel offers no entity
+  suggestions while it is off.
 - **Value** (`const.entity_token_value`): the state rounded to the entity registry's
   `options.sensor.display_precision` (else `suggested_display_precision`) plus
   `unit_of_measurement`; an attribute as stored (lists joined with `, `, booleans
@@ -931,7 +948,27 @@ options subpages are templates under `assets/options/` (shipped) or
 `options/sonos.yaml` never clashes with the Sonos page template. The options
 folder works as the templates folder does -- subfolders, `_group.yaml`, `01_`
 ordering -- and a subfolder's id is `options/<name>`, apart from a template
-folder of the same name. A template
+folder of the same name. An options template may leave `integration` out of its
+`target_selector.device` -- it is reached only from a button that already drives
+the device, so naming the domain is enough. An options template may also name
+several pages: a button has one long touch and no more, so the first page is
+what it opens and the rest are subpages its tiles lead to -- which is how
+`options/light.yaml` offers a lamp's scenes behind the same button as its
+colours. A button the device cannot use is left out with its own `requires`:
+`requires: {capabilities: {supported_color_modes: [hs, rgb]}}` keeps it only
+for a device whose entity registry declares *any* of those, and
+`requires: {items: scene}` only when the `scene` placeholder lists something
+for the target. A slot may also list tiles, best first: the device gets the
+first it can use, so the light hub shows colours on a colour lamp and brightness
+steps on a white or dimmable one. A slot nothing fits stays empty, and a subpage
+whose last tile went with it is not created. Not everything needs a
+page: a tile that names a slider capability in its `overrides` arms the
+vertical slider while it is the selection, which is how the same file offers the whole 2000-6500 K white range
+without a grid of presets. Inside a placeholder's `spec`, `@target` is the
+entity the page was bound to and `@target_entry` its config entry --
+`spec: {area: "@target"}` on the `scenes` source is the scenes of the room
+the target sits in rather than the whole house's, and none for a target in no
+area. A template
 starts with `version: 2`, the template format it is written in: a file without one
 is format 1 (buttons at the top level, `unbound`, `name_key`), which is no longer
 read, and a file in a format this release does not know is skipped with a warning.
@@ -985,7 +1022,9 @@ it follows other words.
 keypad needs no quotes.
 
 A button with `goto_page: <name>` leads to that page of the same template; adding the
-template turns it into the remote's own go-to-page command. All pages are added
+template turns it into the remote's own go-to-page command. The shipped templates end
+a forward link's tooltip in an ellipsis (`"{translate: apps}…"`, read "Apps…") to say
+another page follows; back buttons keep a plain label. All pages are added
 as one set: **Change device…** on the first page moves them all, and deleting it
 deletes the pages that came with it.
 
@@ -999,8 +1038,8 @@ pages:
   now-playing:
     title: "logo:sonos + ${_device}"
     buttons:
-      button_3: {tooltip: Playlists, icon: mdi:playlist-music, goto_page: playlists}
-      button_4: {tooltip: Radio, icon: mdi:radio, goto_page: radio}
+      button_3: {tooltip: Playlists…, icon: mdi:playlist-music, goto_page: playlists}
+      button_4: {tooltip: Radio…, icon: mdi:radio, goto_page: radio}
       # … artwork and transport
   playlists:
     subpage: true
@@ -1051,6 +1090,24 @@ The gear icon at the right end of the panel's tabs opens the settings of the sel
 remote. While the [Fontbook](https://github.com/ruwidoaustria/lizaip_ha_fonts)
 integration is installed, its row of sections has a **Fontbook** group beside **Appearance**,
 showing Fontbook's own panel, where the fonts offered here are managed.
+
+**Device → Reload on page change → Send a page again when it is opened** (on by
+default). The remote keeps about 400 images and drops the oldest when it needs
+room; it draws a page from that cache only, so a dropped image would stay blank.
+With this on, each time the remote opens a page (and stays on it for half a
+second) Home Assistant sends it that page again, unchanged, and the remote
+fetches the images it is missing. The same happens when the remote is picked up
+(its *in hand* report), for the page it shows. Switched off, the card warns that lizaIP might
+not work as expected: on a remote with more than about 400 images, tiles can
+stay blank.
+
+### Devel tab
+
+The debug tools (report, traffic, logging, debug port, memory, random pages) live in the
+separate `lizaip_devel` integration. While it is installed the panel shows a **Devel** tab
+in place of the former Debug tab, showing `lizaip_devel`'s own panel. lizaIP loads it by
+itself when the folder is there: it is not added under **Devices & services**, has no
+entry of its own and adds no sidebar entry. Remove the folder to turn it off.
 
 The **font** and **font size** of page **titles** and of **tooltips** belong to the
 remote's [theme](#themes) and are edited there, not per remote: the font list holds
@@ -1383,7 +1440,7 @@ snaps between a handful of poses reads as a status light, not as a level:
   The old step of 20 used five of the available positions, jumping a fifth of
   the glyph at a time; 10 moved it ~4.8 px at a time, and that quantum was what
   remained of the "steppiness". Note none of this is a *frame-rate* choice —
-  `_STATE_MAX_WAIT_SECONDS` below caps pushes at ~5/sec whatever the step is.
+  the remote's *update interval* setting (`variables_interval_ms`, 500 ms by default) caps pushes whatever the step is.
   What a finer step buys is that each of those frames lands on the value the
   finger is at rather than on the nearest multiple of 10.
   `tests/test_render.py::test_every_level_the_quantiser_can_emit_is_its_own_picture`
@@ -1448,15 +1505,12 @@ snaps between a handful of poses reads as a status light, not as a level:
   is deliberately *fractional*: snapping it to a whole row would trade the old
   dead zone for a new one, since an ink-dense row would otherwise absorb a wide
   range of percentages into one identical picture.
-* **`_STATE_MAX_WAIT_SECONDS` (0.2)** caps how long a change may wait while more
-  keep arriving. The debounce beside it is *trailing*: each event cancels the
-  pending flush and restarts the wait. A burst with an end settles fine, but a
-  dimmer being held has no end, so the deadline receded on every frame and the
-  icon froze at whatever it showed when the ramp started, snapping to the final
-  value only once the user let go. The listener now also fires the *leading*
-  edge — the first change after a quiet spell goes out at once rather than
-  serving a debounce first, which is what makes switching a lamp on feel
-  immediate. `last_sent` still drops any flush that would change nothing.
+* **The remote's update interval** (`variables_interval_ms`, default 500 ms) is
+  the shortest gap between two live icon pushes; the listener never pushes more
+  often. The first change after a quiet spell goes out at once (*leading* edge),
+  later ones wait out what is left of the interval without restarting it, so a
+  held dimmer still updates once per interval. `last_sent` drops any flush that
+  would change nothing.
 
 `action_controller/buttons` is the third, evaluating the tint against the
 *predicted* state so a press that turns a lamp off does not briefly paint the off
@@ -1566,8 +1620,8 @@ would otherwise wait a full round-trip behind a page nobody can see.
 What remains is the device. With nothing queued inside the integration, the
 occasional 1–2 s acknowledgement has no log activity between send and reply at
 all — it is firmware or Wi-Fi, not something this code can schedule around.
-That is also why the listener's flush cap was left alone; see
-`_STATE_MAX_WAIT_SECONDS`, which records the arithmetic.
+That is why the listener paces pushes by the user's update interval setting
+and not by a tighter built-in cap.
 
 * **Settle on agreement, not on any update.** The prediction stands down when the
 lamp lands within `_SETTLE_TOLERANCE` of it, so a report from *mid-ramp* does not

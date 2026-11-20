@@ -4,9 +4,10 @@
 
 **Sources** — ``mdi:``, ``logo:``, ``text:``, ``media:``, ``history:``, and any
 icon set the browser registered, ``phu:`` among them (``render_custom.py``).
-A ``media:`` picture shown whole (no ``box``) is cut round (``radius=``, percent,
-0 square, 100 circle, the default); with ``box`` it stays
-square so the tiles meet.
+A picture of tile size (no ``box``) is cut by ``radius=`` (percent, 0 square,
+100 circle): a ``media:`` picture (default 100) and any other picture on a
+``bg`` (default 0), but never words (``text:``); any other size, and any
+``box`` piece, stays square so the tiles meet.
 
 **Options**, all optional, all shared by every source:
 
@@ -21,7 +22,7 @@ square so the tiles meet.
 ``alpha``               keep the alpha channel instead of flattening to black
 ``percent``             0–100 fill level via alpha: bottom stays opaque,
                         upper remainder is dimmed to ``PERCENT_TINT_ALPHA``
-``radius``              0–100 corner radius of a whole ``media:`` picture, 100 = round (default)
+``radius``              0–100 corner radius of a whole picture, 100 = round; see above
 ``font``                font ID, ``text:`` only
 ``font_size``           size in pixels, ``text:`` only (default: the symbolic
                         ``size``'s font size, else the image height)
@@ -29,6 +30,10 @@ square so the tiles meet.
 ``start_time``,         an absolute period for a ``history:`` graph, instead
 ``end_time``            of the moving one ``hours``/``days`` ask for
 ======================  ==================================================
+
+``fg`` and ``bg`` may each be ``linear_gradient(A,B,...)``, running through its
+colours spaced evenly from top to bottom: a ``bg`` over the whole picture, an
+``fg`` over the height of what was drawn in it.
 
 The query is parsed once into :class:`_Options`, each handler answers only
 "what does this subject look like", and :meth:`LizaIPImageView.get` finishes
@@ -60,6 +65,7 @@ from ..shared.history import is_servable
 from . import media_hosts, media_refs
 from .const import (
     parse_color,
+    gradient_stops,
     COLOR_NAMES,
     DEFAULT_BG_COLOR,
     DEFAULT_FG_COLOR,
@@ -77,7 +83,7 @@ from .source_parse import (
     is_address,
     split_source_parts,
 )
-from .render import finalize_png
+from .render import apply_percent_tint, fade_ink, finalize_png, mount
 from .render_caption import compose_parts
 from .render_history import (
     DEFAULT_HOURS,
@@ -200,10 +206,10 @@ def _default_font_size(size_str: str | None) -> int | None:
     return named.font_size if named else None
 
 
-def _parse_radius(raw: str | None) -> int:
-    """Parse the optional corner radius (0..100 %); anything else is the default."""
+def _parse_radius(raw: str | None) -> int | None:
+    """Parse the optional corner radius (0..100 %); anything else leaves the picture's default."""
     if raw is None or not raw.strip().isdigit():
-        return _MEDIA_CORNER_PERCENT
+        return None
     return min(int(raw), 100)
 
 
@@ -332,6 +338,12 @@ def _resolve_colors(
     return fg, bg
 
 
+def _fade(first: tuple, stops: tuple[str, ...], theme) -> tuple[tuple, ...] | None:
+    """*stops* as colours, *first* already resolved; ``None`` unless every one reads."""
+    rest = [parse_color(s, theme.colors) for s in stops[1:]]
+    return (first, *rest) if rest and all(rest) else None
+
+
 @dataclass(frozen=True)
 class _Options:
     """Everything the query string says, parsed once, before any rendering.
@@ -360,16 +372,22 @@ class _Options:
     fit: str = "contain"
     #: The emoji font: a font id, ``none`` for none, ``None`` to find one.
     emoji: str | None = None
-    #: Corner radius of a whole `media:` picture, percent of its shorter side.
-    radius: int = 100
+    #: Corner radius of a whole picture, percent of its shorter side;
+    #: ``None`` leaves each kind its default (see `_round_unless_boxed`).
+    radius: int | None = None
+    #: The colours ``fg`` and ``bg`` fade through, top to bottom, when given
+    #: as ``linear_gradient(A,B,...)``; the first is ``fg``/``bg`` itself.
+    fg_fade: tuple[tuple, ...] | None = None
+    bg_fade: tuple[tuple, ...] | None = None
 
     @classmethod
     def from_query(cls, query) -> _Options:
         """Parse a query mapping. Raises ``_ImgservError`` (400) on bad input."""
         mode = query.get("mode", "").lower()
         theme = theme_registry.get_theme(query.get("theme"))
-        fg_raw = _first_param(query, "fg", "color")
-        fg, bg = _resolve_colors(mode, fg_raw, _first_param(query, "bg"), theme)
+        fg_stops = gradient_stops(_first_param(query, "fg", "color"))
+        bg_stops = gradient_stops(_first_param(query, "bg"))
+        fg, bg = _resolve_colors(mode, *(s[0] if s else None for s in (fg_stops, bg_stops)), theme)
         font_size = _parse_font_size(query.get("font_size"))
 
         try:
@@ -392,12 +410,14 @@ class _Options:
             font_id=query.get("font", "").lower() or None,
             font_size=font_size or _default_font_size(query.get("size")),
             mode=mode,
-            explicit_fg=bool(fg_raw),
+            explicit_fg=bool(fg_stops),
             explicit_font_size=font_size is not None,
             period=period,
             fit=_parse_fit(query.get("fit")),
             emoji=query.get("emoji", "").strip().lower() or None,
             radius=_parse_radius(query.get("radius")),
+            fg_fade=_fade(fg, fg_stops, theme),
+            bg_fade=_fade(bg, bg_stops, theme) if bg[3] else None,
         )
 
     def untinted(self) -> _Options:
@@ -605,6 +625,7 @@ class LizaIPImageView(HomeAssistantView):
         response = _png_response(
             *await hass.async_add_executor_job(
                 _finish, image, options, _crop_mode(options, resolved),
+                not any(stype == "text" for stype, _value, _def in resolved),
             ),
             private=any(stype == "media" for stype, _value, _def in resolved),
         )
@@ -851,17 +872,21 @@ async def _handle_media(hass, value, options: _Options):
 
 #: Corner radius of a whole `media:` picture unless ``radius=`` says otherwise: 100 = half of its shorter side, a circle.
 _MEDIA_CORNER_PERCENT = 100
+#: Corner radius of a picture on a ``bg`` unless ``radius=`` says otherwise: square.
+_BG_CORNER_PERCENT = 0
 
 
-def _round_unless_boxed(image, options: _Options):
+def _round_unless_boxed(image, options: _Options, default: int = _MEDIA_CORNER_PERCENT):
     """*image* with rounded corners, unless a ``box=`` cuts it into pieces.
 
-    A cover shown whole gets a round cut; the tiles of one cut by ``box=`` must
-    meet edge to edge, so those stay square.
+    Only a picture sized for a tile gets ``radius`` (*default* when not
+    given); any other size stays square, and so do the pieces cut by
+    ``box=``, which must meet edge to edge.
     """
-    if options.box:
+    if options.box or (options.width, options.height) != SIZE_IDS["tile"][:2]:
         return image
-    radius = round(min(image.size) * options.radius / 200)
+    percent = default if options.radius is None else options.radius
+    radius = round(min(image.size) * percent / 200)
     if radius < 1:
         return image
     # Drawn at 4x and shrunk, so the curve is smooth rather than stair-stepped.
@@ -1093,16 +1118,30 @@ def _decode_and_scale(img_bytes: bytes, width: int, height: int, fit: str = "con
         return None
 
 
-def _finish(image, options: _Options, crop: bool | str) -> tuple[bytes, str]:
-    """Box, fill and finalize *image* -- every step after the renderer."""
+def _finish(
+    image, options: _Options, crop: bool | str, rounded: bool = True,
+) -> tuple[bytes, str]:
+    """Box, fill and finalize *image* -- every step after the renderer.
+
+    A picture on a painted ``bg`` is cut by ``radius`` as a cover is, unless
+    it is *rounded* ``False`` (words) or a ``box=`` piece.
+    """
     if options.box:
         # The piece asked for is the picture from here on: a `bg=` fills
         # the tile rather than the whole image it was cut from.
         image = _cut_box(image, options.box)
         options = replace(options, width=image.width, height=image.height)
 
-    image = _fill_requested_size(image, options)
-    return finalize_png(image, options.keep_alpha, options.percent, options.bg, crop=crop)
+    image = fade_ink(_fill_requested_size(image, options), options.fg_fade)
+    if rounded and options.bg[3]:
+        image = mount(apply_percent_tint(image, options.percent), options.bg, options.bg_fade)
+        return finalize_png(
+            _round_unless_boxed(image, options, _BG_CORNER_PERCENT), options.keep_alpha,
+        )
+    return finalize_png(
+        image, options.keep_alpha, options.percent, options.bg, crop=crop,
+        bg_fade=options.bg_fade,
+    )
 
 
 def _fill_requested_size(image, options: _Options):

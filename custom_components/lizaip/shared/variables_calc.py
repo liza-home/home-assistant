@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Final
 
@@ -40,6 +42,44 @@ DEFAULT_VARIABLES_INTERVAL: Final = 500
 VARIABLES_INTERVAL_MIN: Final = 100
 VARIABLES_INTERVAL_MAX: Final = 5000
 VARIABLES_INTERVAL_STEP: Final = 100
+
+#: Per remote: whether the variables typed into its buttons and titles --
+#: ``${sensor.x}`` and calculations -- are read. On by default. The values
+#: a template fills in for its own device (``${_device…}``, ``${_queue…}``)
+#: are read either way; see ``shared.tokens.silence_user_variables``.
+CONF_VARIABLES_ENABLED: Final = "variables_enabled"
+DEFAULT_VARIABLES_ENABLED: Final = True
+
+#: The remote being worked for reads its typed variables. The substitution
+#: helpers run deep inside page building and live pushes, where the config
+#: entry is out of reach; the places that start work for one remote set this
+#: with `variables_scope`, beside the remote's language. Outside any remote --
+#: a preview not tied to one -- variables are read.
+_VARIABLES_ENABLED: ContextVar[bool] = ContextVar("lizaip_variables_enabled", default=True)
+
+
+def read_variables_enabled(options: object) -> bool:
+    """Whether an entry's ``options`` keep typed variables on. Only a real False turns them off."""
+    get = getattr(options, "get", None)
+    if get is None:
+        return DEFAULT_VARIABLES_ENABLED
+    return get(CONF_VARIABLES_ENABLED) is not False
+
+
+def variables_enabled() -> bool:
+    """Whether the remote this code is working for reads its typed variables."""
+    return _VARIABLES_ENABLED.get()
+
+
+@contextmanager
+def variables_scope(options: object) -> Iterator[None]:
+    """Read typed variables as the entry with *options* has them set, inside the block."""
+    token = _VARIABLES_ENABLED.set(read_variables_enabled(options))
+    try:
+        yield
+    finally:
+        _VARIABLES_ENABLED.reset(token)
+
 
 def read_variables_interval(options: object) -> int:
     """An entry's variable update interval in ms; a damaged value reads as the default."""

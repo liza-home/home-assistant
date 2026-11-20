@@ -144,17 +144,17 @@ pages:
 
       button_4:
         icon: mdi:apps
-        tooltip: {translate: apps}
+        tooltip: "{translate: apps}…"
         goto_page: apps
 
       button_8:
         icon: mdi:dialpad
-        tooltip: {translate: digits}
+        tooltip: "{translate: digits}…"
         goto_page: digits
 
       button_12:
         icon: mdi:video-input-hdmi
-        tooltip: {translate: inputs}
+        tooltip: "{translate: inputs}…"
         goto_page: inputs
 
       button_11:
@@ -223,7 +223,7 @@ pages:
         placeholder: "@app[12]"
         more_parts:
           icon: mdi:dots-horizontal
-          tooltip: {translate: more}
+          tooltip: "{translate: more}…"
           goto_page: next
 
       button_power:

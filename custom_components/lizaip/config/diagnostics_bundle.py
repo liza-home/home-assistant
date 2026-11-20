@@ -58,7 +58,7 @@ from ..diagnostics import (
     async_get_config_entry_diagnostics,
     async_settings_snapshot,
 )
-from ..runtime import debug_available, entry_connection, find_store, resolve_device_id
+from ..runtime import entry_connection, find_store, resolve_device_id
 from ..data import lizaip_data
 from ..shared.logs import device_logger
 from ..shared.theme import USER_THEMES_SUBDIR, user_themes_dir
@@ -623,35 +623,6 @@ async def _add_system_log(collector: _Collector) -> None:
     await collector.section(LOG_ERRORS, build)
 
 
-async def _add_debug_dumps(collector: _Collector) -> None:
-    """What the debug tab can reach and a shipped build cannot.
-
-    Only a build carrying the debug tooling has any of it, so the import is
-    local and its absence is a skip rather than a failure to load this module.
-
-    The device's debug port is the whole of it. Everything else the tab shows is
-    already in a standard bundle: the report sections are in `remote/`, the log
-    levels in `remote/logging.json`, the traffic in `log_messages.json`. The
-    port's state is not, and it is the one that explains why a tab that normally
-    answers was silent.
-    """
-    async def build() -> None:
-        try:
-            from ..device import debug as device_debug
-        except ImportError:
-            collector.skip("debug/port.json", "This build ships without the debug tooling")
-            return
-
-        conn = entry_connection(collector.entry)
-        if conn is None:
-            collector.skip("debug/port.json", "The entry has no connection object")
-            return
-
-        collector.add("debug/port.json", _dumps(await device_debug.async_get_debug_port(conn)))
-
-    await collector.section("debug/port.json", build)
-
-
 async def _add_entities(collector: _Collector) -> None:
     """This entry's entities, with the state each is actually in."""
     async def build() -> None:
@@ -701,7 +672,6 @@ async def _add_environment(collector: _Collector) -> None:
             "python_version": sys.version,
             "platform": platform_name,
             "time_zone": str(hass.config.time_zone),
-            "debug_tooling": debug_available(),
         }
         if collector.whole_system:
             facts |= {
@@ -790,7 +760,6 @@ _INVENTORY: tuple[tuple[str, str], ...] = (
                                        "integration, and our setup times."),
     ("homeassistant/device_page.json", "The same report the device page's "
                                        '"Download diagnostics" button produces.'),
-    ("debug/port.json", "Whether the remote's debug port is open."),
 )
 
 #: Where the description column starts. Wide enough for every path above and no
@@ -1100,7 +1069,6 @@ BUNDLE_STEPS = (
     ("ha_log", _add_ha_log, _SUPPORT),
     ("system_log", _add_system_log, _SUPPORT),
     ("traffic", _add_traffic, _SUPPORT),
-    ("debug", _add_debug_dumps, _SUPPORT),
 )
 
 

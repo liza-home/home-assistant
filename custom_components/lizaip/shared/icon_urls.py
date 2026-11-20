@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any, Final
 from urllib.parse import quote, unquote, urlencode
 
-from ..imgserv.const import DEFAULT_FG_COLOR, SIZE_IDS, parse_color
+from ..imgserv.const import DEFAULT_FG_COLOR, SIZE_IDS, gradient_stops, parse_color
 from ..imgserv.source_parse import (
     _custom_icon_prefixes,
     is_address,
@@ -154,8 +154,10 @@ def split_media_options(value: str) -> tuple[str, dict[str, str]]:
 MEDIA_RENDER_VERSION: Final = "round1"
 
 
-#: The corner radius imgserv draws without being told; sent only when it differs.
+#: The corner radius imgserv draws without being told -- a `media:` picture
+#: round, any other picture on a `bg` square; sent only when it differs.
 _DEFAULT_RADIUS: Final = 100
+_BG_DEFAULT_RADIUS: Final = 0
 
 
 def _media_url(url: str, size: str, pct: str, radius: int | None = None) -> str:
@@ -298,8 +300,9 @@ def resolve_icon_url(
     a picture of the word "ftp://host/a.png".
 
     The optional `radius` (0-100) is the corner radius, in percent of the shorter
-    side, a whole `media:` picture is cut with; left out, imgserv's default
-    (a circle) applies and the URL is unchanged.
+    side, a whole `media:` picture or any other picture on a `bg=` is cut with --
+    words never are; left out, imgserv's default (a circle for `media:`, square
+    otherwise) applies and the URL is unchanged.
 
     The optional `percent` param (0-100) is imgserv's fill level: the bottom
     `percent`% of the finished image keeps its alpha and the rows above are
@@ -345,7 +348,19 @@ def resolve_icon_url(
     icon, colour = _drawn_in(icon, color.lstrip("#") if color else "", theme, _tintable(icon))
     # A lone `mdi:` icon is drawn in the foreground without being told to.
     mode = "" if composite is None and icon.startswith("mdi:") else "mode=dark"
-    return _with_emoji(_with_query(icon, _size_part(icon, size), mode, colour, pct), theme)
+    corners = _corner_part(icon, radius)
+    return _with_emoji(_with_query(icon, _size_part(icon, size), mode, colour, pct, corners), theme)
+
+
+def _corner_part(icon: str, radius: int | None) -> str:
+    """``radius=…`` for a picture on a ``bg``, which is cut as covers are; words are not."""
+    if radius is None or radius == _BG_DEFAULT_RADIUS or "radius=" in icon:
+        return ""
+    if not re.search(r"[?&]bg=[^&]", icon, re.IGNORECASE):
+        return ""
+    if any(part.startswith("text:") for part in split_source_parts(icon)):
+        return ""
+    return f"radius={radius}"
 
 
 def _with_emoji(url: str, theme: str) -> str:
@@ -380,7 +395,7 @@ def _drawn_in(icon: str, fg: str, theme: str, tinted: bool) -> tuple[str, str]:
         return icon[:own.start(1)] + _spelled(own.group(1), theme) + icon[own.end(1):], ""
     if fg and tinted:
         return icon, f"fg={_spelled(fg, theme)}"
-    if (tinted or _monochrome_logo(icon)) and not re.search(r"[?&]mode=light", icon, re.I):
+    if (tinted or _monochrome_logo(icon)) and not re.search(r"[?&]mode=light", icon, re.IGNORECASE):
         # Drawn in the theme's foreground.
         spelled = _spelled("", theme)
         return icon, f"fg={spelled}" if spelled else ""
@@ -392,8 +407,13 @@ def _spelled(colour: str, theme: str) -> str:
 
     As given while the remote's theme, the shipped default and the default
     imgserv has loaded all draw it the same -- so an untouched remote keeps
-    its addresses -- and otherwise as the exact hex the remote draws.
+    its addresses -- and otherwise as the exact hex the remote draws. A
+    ``linear_gradient(A,B,...)`` spells each of its colours so.
     """
+    stops = gradient_stops(colour)
+    if len(stops) > 1:
+        return f"linear_gradient({','.join(_spelled(s, theme) for s in stops)})"
+
     def drawn(t):
         return parse_color(colour, t.colors) or t.color("default") or DEFAULT_FG_COLOR
 

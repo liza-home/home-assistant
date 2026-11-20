@@ -103,8 +103,9 @@ def _payload_without_subject(value: Any, assignment: dict[str, Any]) -> Any:
     every refresh would write the payload back and then strip it again, and
     report a change each time — rewriting every page on every navigation.
 
-    Steps with no target keep it: ``script``/``scene`` steps drop their target,
-    so for them the payload is the only thing naming what to run.
+    Steps with no target keep it: a page made before the runnable became the
+    target, and any step whose payload names something other than what it
+    runs, have nothing else saying what to act on.
     """
     if not isinstance(value, dict) or "entity_id" not in value:
         return value

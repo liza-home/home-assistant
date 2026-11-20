@@ -405,7 +405,7 @@ export const ButtonsPressesMixin = {
         ? ""
         : this._displayTooltip(
             raw,
-            { service: rule?.config?.[0]?.action || "" },
+            { service: this._stepService(rule?.config) },
             this._getTargetEntityFromConfig(rule?.config || []),
             rule?.config,
             rule,
@@ -413,6 +413,29 @@ export const ButtonsPressesMixin = {
           );
       return tip || this._pressDefaultTooltip(rule, this._toggleRuleName(rule));
     });
+  },
+
+  /** The action, target and derived template one press's label is built from. */
+
+  _pressTooltipSource(rule) {
+    const action = rule?.action_id
+      ? (this._actions || []).find(a => a.id === rule.action_id) || null
+      : null;
+    const entity = this._getTargetEntityFromConfig?.(rule?.config) || "";
+    return { action, entity, derived: this._computeTooltip(action, entity, rule?.config) || "" };
+  },
+
+  /**
+   * The text a press's Tooltip field *holds* when it stores nothing of its own.
+   *
+   * The template, because press 1's field holds one and names its reading in
+   * the hint beneath. A press row prefilled the reading instead, so the same
+   * empty field read differently two rows apart -- and committing it froze a
+   * label that is meant to move with the entity.
+   */
+
+  _pressTemplateTooltip(rule) {
+    return this._pressTooltipSource(rule).derived;
   },
 
   /**
@@ -441,11 +464,7 @@ export const ButtonsPressesMixin = {
    */
 
   _pressDefaultTooltip(rule, fallback = "") {
-    const action = rule?.action_id
-      ? (this._actions || []).find(a => a.id === rule.action_id) || null
-      : null;
-    const entity = this._getTargetEntityFromConfig?.(rule?.config) || "";
-    const derived = this._computeTooltip(action, entity, rule?.config);
+    const { action, entity, derived } = this._pressTooltipSource(rule);
     if (!derived) return fallback;
     return this._displayTooltip(derived, action, entity, rule?.config, rule, true) || fallback;
   },
@@ -491,7 +510,7 @@ export const ButtonsPressesMixin = {
   },
 
   _toggleRuleName(rule) {
-    const svcPath = rule?.config?.[0]?.action || "";
+    const svcPath = this._stepService(rule?.config);
     const [svcDomain, svc] = svcPath.split(".");
     const haName = (svcDomain && svc)
       ? this._hass?.services?.[svcDomain]?.[svc]?.name
@@ -711,14 +730,15 @@ export const ButtonsPressesMixin = {
       || this._getTargetEntityFromConfig(assign.config || []);
   },
 
-  // What the device draws for a step that stores no icon of its own: the one
-  // for the state its target is in, or the step's service icon.
+  // What the device draws for a step that stores no icon of its own: its own
+  // row for the live state, the value this step writes, the one for the state
+  // its target is in, or the step's service icon.
   _stepDerivedIcon(step, key) {
-    const service = step.config?.[0]?.action || "";
-    return this._getDisplayIconForState(
-        { service },
-        this._stepEntity(step, key),
-        step.state_icons,
-      );
+    const service = this._stepService(step.config);
+    const asPress = this._toggleBlock(key)?.mode === MODE_CYCLE;
+    const entity = this._stepEntity(step, key);
+    return this._stateIconOverride(service, entity, step.state_icons)
+      || this._stepValueIcon(service, step.config, asPress)
+      || this._getDisplayIconForState({ service }, entity, step.state_icons);
   },
 };

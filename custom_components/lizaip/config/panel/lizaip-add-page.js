@@ -10,21 +10,7 @@
  * run with `this` bound to the panel element.
  */
 import { THEME_DEFAULT } from "./settings/theme.js";
-
-/**
- * Panel routines a template may name instead of a page to write.
- *
- * Empty here on purpose: a module that owns such a routine registers it when
- * it loads, the way a Home Assistant component registers its own services. So
- * a build that never loaded the debug tools holds no name for them, and the
- * card naming one it does not have is dropped before anything draws it.
- */
-const TEMPLATE_ACTIONS = {};
-
-/** Offer `{action: method}` names to the add-page dialog. */
-export function registerTemplateActions(actions) {
-  Object.assign(TEMPLATE_ACTIONS, actions);
-}
+import { SEARCH_THRESHOLD } from "./lizaip-helpers.js";
 
 export const AddPageMixin = {
   async _addPage() {
@@ -38,8 +24,7 @@ export const AddPageMixin = {
    * A folder directly under `presets/` is drawn on the first screen rather
    * than being left to be found inside another one; the backend marks it
    * `scope: option`. Nothing here knows their names, and a folder with
-   * nothing to offer grows no card -- which is what hides Debug from a
-   * release.
+   * nothing to offer grows no card.
    */
   _addPageOptions(templates) {
     const seen = new Map();
@@ -252,14 +237,15 @@ export const AddPageMixin = {
   /**
    * The routine a card runs instead of writing a page.
    *
-   * `undefined` for an ordinary template, the bound handler for one whose
-   * `action` this build knows, and `null` for one it does not -- which is how
-   * a card is dropped before anything counts or draws it.
+   * `undefined` for an ordinary template. The panel knows no routines of its
+   * own: one a template names is run by the Devel panel, which brings those
+   * templates. Without it the answer is `null` -- which is how a card is
+   * dropped before anything counts or draws it.
    */
   _templateAction(template) {
     if (!template?.action) return undefined;
-    const fn = this[TEMPLATE_ACTIONS[template.action]];
-    return typeof fn === "function" ? fn.bind(this) : null;
+    if (!this._develPanel?.()) return null;
+    return (meta, ctx) => this._runDevelTemplateAction(template.action, meta, ctx);
   },
 
   /**
@@ -358,8 +344,15 @@ export const AddPageMixin = {
    * `name_key` names an entry in the panel's translation table, which is how
    * a shipped folder keeps its translations. `_t` answers an unknown id with
    * the id itself, so a missing key falls back to the folder's own name.
+   * `name_i18n` is the words spelt out per language by a folder or template
+   * another integration brings, which has no entry in this table.
    */
   _groupLabel(group, { desc = false } = {}) {
+    const own = desc ? group.description_i18n : group.name_i18n;
+    if (own && typeof own === "object") {
+      const text = own[this._lang()] || own.en;
+      if (text) return String(text);
+    }
     const key = desc ? group.description_key : group.name_key;
     if (key) {
       const text = this._t(key);
@@ -623,10 +616,11 @@ export const AddPageMixin = {
    * changes what is listed rather than the shape of the dialog. Only a
    * folder carries a tail, where its count and a chevron say it opens.
    */
-  _templateRowHtml({ attr, icon, name, desc, hits, kind = "leaf", template = null }) {
+  _templateRowHtml({ attr, icon, name, desc, hits, badge = "", kind = "leaf", template = null }) {
     const nameHtml = `${hits?.length ? this._markHits(name, hits) : this._esc(name)}${this._templatePagesHtml(template)}`;
-    // A folder says it opens, and is the only kind with a tail.
-    const chevron = kind === "folder" ? '<span class="template-row-chevron"></span>' : "";
+    // A folder says it opens; a target may say it is the current one.
+    const end = kind === "folder" ? '<span class="template-row-chevron"></span>'
+      : badge ? `<span class="template-row-badge">${this._esc(badge)}</span>` : "";
     if (this._haLists()) {
       // Home Assistant's list row: the picture leads, the name and the line
       // under it are its headline and supporting text. A target is an option
@@ -637,12 +631,12 @@ export const AddPageMixin = {
           ${kind === "target" ? "" : `<span slot="start">${this._tilePlateHtml(icon)}</span>`}
           <span slot="headline" class="template-row-name">${nameHtml}</span>
           ${desc ? `<span slot="supporting-text" class="template-row-desc">${this._esc(desc)}</span>` : ""}
-          ${chevron ? `<span slot="end" class="template-row-tail">${chevron}</span>` : ""}
+          ${end ? `<span slot="end" class="template-row-tail">${end}</span>` : ""}
         </${tag}>`;
     }
     // A target is chosen rather than opened, so it wears a radio at its head:
     // the receipt above already carries the mark a plate would repeat.
-    const tail = chevron ? `<span class="template-row-tail">${chevron}</span>` : "";
+    const tail = end ? `<span class="template-row-tail">${end}</span>` : "";
     const head = kind === "target"
       ? '<span class="template-row-radio" aria-hidden="true"></span>'
       : this._tilePlateHtml(icon);
@@ -655,6 +649,21 @@ export const AddPageMixin = {
           </span>
           ${tail}
         </button>`;
+  },
+
+  /** "Samsung QE43Q60", without the maker twice when the model repeats it. */
+  _deviceProduct({ manufacturer, model } = {}) {
+    const maker = (manufacturer || "").trim();
+    const name = (model || "").trim();
+    return !maker || name.toLowerCase().startsWith(maker.toLowerCase()) ? name : `${maker} ${name}`.trim();
+  },
+
+  /** Whether every word of *query* is in the target's name or second line,
+   *  ignoring case and accents ("kuche" finds "Küche"). */
+  _targetMatches(target, query) {
+    const fold = (v) => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const hay = fold(`${target.name} ${target.desc || ""}`);
+    return fold(query).split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
   },
 
   /** Whether Home Assistant's own lists are loaded (they come with the
@@ -780,7 +789,7 @@ export const AddPageMixin = {
           if (!item) return;
           // One step down, in the same dialog, by the same call however deep
           // it goes -- the first screen's folders included, which used to be
-          // built by hand and lost the debug tools doing it.
+          // built by hand.
           const next = step.kind === "options"
             ? this._templateStep(step.all, { group: item.group, back: step, crumbs: step.crumbs })
             : this._addPageSubStep(step, item);
@@ -847,6 +856,8 @@ export const AddPageMixin = {
     // Where the devices come from, and which one to propose: a template's own
     // list by default; binding a page no template made offers every device.
     loadDevices = null,
+    // The device (or hub) a page being moved is on now: marked, never chosen.
+    current = "",
     onConfirm = async (target, kind) => {
       await this._addTemplatePage(templateId, target, kind, options);
       // The options path reports for itself: it toasts what it wrote, or why
@@ -877,6 +888,11 @@ export const AddPageMixin = {
     const field = `
         <div class="template-entity-picker">
           <p class="template-entity-caption" id="liza-template-target">${fieldLabel}</p>
+          <div class="template-target-search" hidden>
+            <ha-input-search appearance="outlined" class="template-target-search-input" autocomplete="off"
+                   accessible-label="${this._esc(this._t(entrySelector ? "search_hubs" : "search_devices"))}"
+                   placeholder="${this._esc(this._t(entrySelector ? "search_hubs" : "search_devices"))}"></ha-input-search>
+          </div>
           ${this._haLists()
             ? '<ha-list-selectable class="template-list template-target-list" aria-labelledby="liza-template-target"></ha-list-selectable>'
             : '<div class="template-list template-target-list" role="radiogroup" aria-labelledby="liza-template-target"></div>'}
@@ -959,6 +975,8 @@ export const AddPageMixin = {
     };
     const confirmBtn = overlay.querySelector(".template-confirm-btn");
     let chosen = "";
+    // A confirmation in flight: no redraw may re-enable the button meanwhile.
+    let busy = false;
     const getTarget = () => chosen;
     const targetKind = entrySelector ? "config_entry" : "device";
 
@@ -973,70 +991,113 @@ export const AddPageMixin = {
       el?.focus?.();
     };
 
-    /**
-     * The things this template can bind to, drawn as the rows every other
-     * step of the walk is made of.
-     *
-     * The server returns exactly the eligible ones, so the list needs no
-     * filtering and a pick needs no validating: choosing a row is the whole
-     * interaction. One candidate is not a choice, so it arrives already
-     * chosen and Add confirms it.
-     */
-    const paint = (targets, preselect = "") => {
+    const ha = this._haLists();
+    // Every target, the current one first in a long list; `rows` is what the query left of it.
+    let all = [];
+    let rows = [];
+    let query = "";
+    const mark = (id) => {
+      chosen = id;
+      rows.forEach((row) => {
+        const on = row.dataset.target === id;
+        if (ha) row.selected = on;
+        else {
+          row.classList.toggle("is-chosen", on);
+          row.setAttribute("aria-checked", on ? "true" : "false");
+          row.tabIndex = on ? 0 : -1;
+        }
+      });
+      // A radio group is one tab stop, even while its choice is filtered out.
+      if (!ha && rows.length && !rows.some((r) => r.tabIndex === 0)) rows[0].tabIndex = 0;
+      // Moving a page onto the device it is already on changes nothing.
+      confirmBtn.disabled = busy || !id || id === current;
+    };
+    if (ha) {
+      // Home Assistant's listbox: the arrow keys move between the rows,
+      // Enter, Space or a click chooses one.
+      list.addEventListener("ha-list-item-selected", (e) => {
+        const row = rows[Number(e.detail)];
+        if (row) mark(row.dataset.target);
+      });
+    } else {
+      const STEP = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+      list.addEventListener("keydown", (e) => {
+        const here = rows.indexOf(e.target.closest?.(".template-row"));
+        if (here < 0 || !rows.length) return;
+        const next = e.key in STEP
+          ? (here + STEP[e.key] + rows.length) % rows.length
+          : e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : -1;
+        if (next < 0) return;
+        e.preventDefault();
+        mark(rows[next].dataset.target);
+        rows[next].focus();
+      });
+    }
+
+    const draw = () => {
+      const shown = query ? all.filter((t) => this._targetMatches(t, query)) : all;
       // One list, one row height. Areas are optional per device, so without
       // this the group reads as a ragged stack rather than a column.
-      list.classList.toggle("is-two-line", targets.some((t) => t.desc));
-      const ha = this._haLists();
-      list.innerHTML = targets.map((t) => this._templateRowHtml({
+      list.classList.toggle("is-two-line", all.some((t) => t.desc));
+      list.innerHTML = shown.map((t) => this._templateRowHtml({
         attr: ha
           ? `value="${this._esc(t.id)}" data-target="${this._esc(t.id)}"`
           : `type="button" role="radio" aria-checked="false" tabindex="-1" data-target="${this._esc(t.id)}"`,
         name: t.name,
         desc: t.desc || "",
+        badge: t.id === current ? this._t("target_current") : "",
         kind: "target",
       })).join("");
-      const rows = [...list.querySelectorAll(".template-row")];
-      const mark = (id) => {
-        chosen = id;
-        rows.forEach((row) => {
-          const on = row.dataset.target === id;
-          if (ha) row.selected = on;
-          else {
-            row.classList.toggle("is-chosen", on);
-            row.setAttribute("aria-checked", on ? "true" : "false");
-            row.tabIndex = on ? 0 : -1;
+      rows = [...list.querySelectorAll(".template-row")];
+      if (!ha) {
+        for (const row of rows) row.addEventListener("click", () => mark(row.dataset.target));
+      }
+      mark(chosen);
+      if (query && !shown.length) {
+        hint.textContent = this._t("search_no_matches", { query });
+        hint.hidden = false;
+      } else {
+        settled();
+      }
+    };
+
+    /**
+     * Draws the server's eligible targets; a lone candidate arrives chosen.
+     * A long list gets a search, with the current row pinned on top.
+     */
+    const paint = (targets, preselect = "") => {
+      const long = targets.length > SEARCH_THRESHOLD;
+      const pin = long && targets.find((t) => t.id === current);
+      all = pin ? [pin, ...targets.filter((t) => t !== pin)] : targets;
+      chosen = preselect && preselect !== current ? preselect : "";
+      draw();
+      const chosenRow = () => rows.find((r) => r.dataset.target === chosen) || rows[0];
+      const search = overlay.querySelector(".template-target-search");
+      const field = overlay.querySelector(".template-target-search-input");
+      if (long && search && field) {
+        search.hidden = false;
+        const filter = (value) => {
+          query = value.trim();
+          draw();
+        };
+        field.addEventListener("input", () => filter(String(field.value ?? "")));
+        field.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && query) {
+            // Clears the search rather than closing the dialog.
+            e.stopPropagation();
+            e.preventDefault();
+            field.value = "";
+            filter("");
+          } else if (e.key === "ArrowDown" && rows.length) {
+            e.preventDefault();
+            chosenRow().focus?.();
+          } else if (e.key === "Enter" && query && rows.length) {
+            e.preventDefault();
+            mark(rows[0].dataset.target);
           }
         });
-        confirmBtn.disabled = !id;
-      };
-      if (ha) {
-        // Home Assistant's listbox: the arrow keys move between the rows,
-        // Enter, Space or a click chooses one.
-        list.addEventListener("ha-list-item-selected", (e) => {
-          const row = rows[Number(e.detail)];
-          if (row) mark(row.dataset.target);
-        });
-      } else {
-        for (const row of rows) {
-          row.addEventListener("click", () => mark(row.dataset.target));
-        }
-        // A radio group is one tab stop, and the arrows move within it.
-        const STEP = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
-        list.addEventListener("keydown", (e) => {
-          const here = rows.indexOf(e.target.closest?.(".template-row"));
-          if (here < 0 || !rows.length) return;
-          const next = e.key in STEP
-            ? (here + STEP[e.key] + rows.length) % rows.length
-            : e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : -1;
-          if (next < 0) return;
-          e.preventDefault();
-          mark(rows[next].dataset.target);
-          rows[next].focus();
-        });
-        if (rows[0]) rows[0].tabIndex = 0;
       }
-      if (preselect) mark(preselect);
-      claimFocus(rows.find((r) => r.dataset.target === preselect) || rows[0]);
+      claimFocus(long && field ? field : chosenRow());
     };
 
     if (!deviceSelector && !entrySelector) {
@@ -1093,7 +1154,6 @@ export const AddPageMixin = {
       if (options && proposed) return bindSilently(proposed);
       const only = entries.length === 1 ? entries[0].id : "";
       paint(entries.map((e) => ({ id: e.id, name: e.title })), proposed || only);
-      settled();
     } else {
       // Device-mode templates span several entity domains of one device. The
       // eligible-device list is resolved server-side against the device and
@@ -1117,19 +1177,22 @@ export const AddPageMixin = {
       // An options page is about one button, and the button already names its
       // device: there is no question left to ask.
       if (options && proposed) return bindSilently(proposed);
-      paint(devices.map((d) => ({ id: d.id, name: d.name, desc: d.area || "" })), proposed);
-      settled();
+      paint(devices.map((d) => ({
+        id: d.id, name: d.name, desc: [d.area, this._deviceProduct(d)].filter(Boolean).join(" · "),
+      })), proposed);
     }
 
     confirmBtn.addEventListener("click", async () => {
       const target = getTarget();
-      if (!target) return;
+      if (!target || busy) return;
+      busy = true;
       confirmBtn.disabled = true;
       confirmBtn.textContent = busyLabel;
       try {
         await commit(target);
       } catch (e) {
         this._toast(this._t("failed", { error: e.message || e }));
+        busy = false;
         confirmBtn.disabled = false;
         confirmBtn.textContent = confirmLabel;
       }

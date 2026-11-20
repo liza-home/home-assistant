@@ -37,6 +37,7 @@ from ..shared.tokens import (
     page_scope,
 )
 from ..shared.i18n import get_ui_language, language_scope
+from ..shared.variables_calc import variables_scope
 from ..shared.logs import device_id_logger, device_logger
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url
@@ -453,6 +454,8 @@ async def _fire_cycle_update(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
     ), language_scope(get_ui_language(
         hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
+    )), variables_scope(getattr(
+        hass.config_entries.async_get_entry(entry_id) if entry_id else None, "options", None,
     )):
         await _fire_cycle_update_in_scope(
             hass, device_id, page_id, button_key, assign, entry_id,
@@ -466,6 +469,32 @@ async def _page_meta(store: Any, device_id: str, page_id: int) -> tuple[Any, str
         if page.get("id", _DEFAULT_PAGE_ID) == page_id:
             return page.get("template"), page.get("default_color", "")
     return None, ""
+
+
+def _cycle_tooltip(rules, index, assign, hass, entry) -> str | None:
+    """The words a cycle button shows for the press at *index*.
+
+    Same order as ``icons.toggle_tooltip``: the press's own words, the ones it
+    derives from its step, then the button's label. Resolved, not just cleaned,
+    so a ``${sensor.x}`` is filled in rather than stripped.
+
+    Position 0 is the exception, for the reason the icon has one: press 1
+    mirrors ``config`` and wears the assignment's label, so words derived from
+    its step would shout over a name the user typed. The button's own ladder
+    answers it, without a ``button_ref`` -- that would re-enter the cycle.
+    """
+    if index == 0:
+        from ..config.button_rendering import _resolve_button_tooltip
+
+        return (
+            resolve_rule_tooltip(rules[0], hass, entry)
+            or _resolve_button_tooltip(dict(assign), hass, entry)
+        )
+    return (
+        resolve_rule_tooltip(rules[index], hass, entry)
+        or step_tooltip(rules[index], hass, entry)
+        or resolve_rule_tooltip(assign, hass, entry)
+    )
 
 
 async def _fire_cycle_update_in_scope(
@@ -504,6 +533,15 @@ async def _fire_cycle_update_in_scope(
         hass=hass, icons=theme.icons,
     )
     if not icon:
+        # Position 0, where `toggle_icon` answers `None` by contract because
+        # step 1 mirrors `config`. Returning here left the tile wearing the
+        # final step's glyph for good, so the cycle had no visible loop.
+        from ..config.button_rendering import _get_service_icons, _resolve_button_icon
+
+        icon = _resolve_button_icon(
+            dict(assign), hass, await _get_service_icons(hass), icons=theme.icons,
+        )
+    if not icon:
         # Rule icons are optional, and a cycle with none is a button the user
         # chose to leave looking constant. Firing a blank would erase the glyph
         # device_sync painted rather than leave it alone.
@@ -517,15 +555,8 @@ async def _fire_cycle_update_in_scope(
     if page_color is None:
         page_color = (await _page_meta(store, device_id, page_id))[1]
 
-    # Same order as `icons.toggle_tooltip`: the press's own words, the ones it
-    # derives from its step, then the button's label. Resolved, not just
-    # cleaned, so a `${sensor.x}` is filled in rather than stripped.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
-    tooltip = clean_tooltip_text(
-        resolve_rule_tooltip(rules[index], hass, entry)
-        or step_tooltip(rules[index], hass, entry)
-        or resolve_rule_tooltip(assign, hass, entry)
-    )
+    tooltip = clean_tooltip_text(_cycle_tooltip(rules, index, assign, hass, entry))
 
     device_id_logger(_LOGGER, hass, device_id).debug(
         "Cycle update: %s/%s → next step %d/%d icon=%s",
@@ -623,12 +654,14 @@ async def _fire_optimistic_update(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
     ), language_scope(get_ui_language(
         hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
+    )), variables_scope(getattr(
+        hass.config_entries.async_get_entry(entry_id) if entry_id else None, "options", None,
     )):
         # The sync's order, so a picture the user gave the button survives the
         # press instead of giving way to the predicted state's glyph.
         from ..config.button_rendering import library_names, live_button_icon
 
-        icon = live_button_icon(assign, predicted, service, action_icon, hass)
+        icon = live_button_icon(assign, predicted, service, action_icon, hass, theme.icons)
     if not icon:
         log.debug("Optimistic: predicted icon has no value — skipping")
         return

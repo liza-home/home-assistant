@@ -50,7 +50,6 @@ from ..shared.services import (
     is_attribute_state_service,
     is_state_toggle_service,
     is_two_way_service,
-    toggles_attribute,
     icon_varies_with_state,
     is_stateless_service,
     scope_action_states,
@@ -85,7 +84,7 @@ from ..action_controller import (
     subject_for_assign,
 )
 from ..action_controller.icons import toggle_icon, toggle_tooltip
-from ..action_controller.toggle import MODE_CYCLE, toggle_mode
+from ..action_controller.toggle import attribute_step_icon, names_stored_value
 from .internal_commands import (
     command_tooltip as internal_command_tooltip,
     command_target_name as internal_command_target_name,
@@ -223,8 +222,7 @@ def _fill_tooltip_tokens(
 
     # A cycle and a value setter both run what they store, so the label names
     # that value. A boolean setter flips the attribute, so it names nothing.
-    as_press = bool(assign.get("_press")) or toggle_mode(assign) == MODE_CYCLE
-    names_direction = as_press or not toggles_attribute(svc, data)
+    names_direction = names_stored_value(assign, svc, data)
     state_key = state_token_key(
         svc, current_state, attributes, data if names_direction else None,
     )
@@ -436,19 +434,32 @@ def button_identity_icon(assign: dict, svc_name: str) -> str | None:
 
 def live_button_icon(
     assign: dict, state: Any, service: str, fallback: str | None, hass: Any,
+    icons=None,
 ) -> str | None:
     """The glyph a live repaint sends, in the sync's order.
 
-    The button's own row for *state*, then its own image, then *fallback*
-    (the theme's glyph for the state). Each reads its variables; one with
-    no value falls to the next. Shared by the press and the state listener.
+    The button's own row for *state*, then its own image, then the value it
+    writes, then *fallback* (the theme's glyph for the state). Each reads its
+    variables; one with no value falls to the next. Shared by the press and the
+    state listener.
+
+    The stored value sits where ``_icon_from_step_value`` sits in the sync's
+    ladder: without it a fixed ``repeat_set`` button drew its value at sync
+    time and the live one on the next state change.
     """
+    step = first_step(assign)
     return (
         resolve_image_tokens(
             state_icon_override(assign.get("state_icons") or {}, state, service), hass,
         )
         or resolve_image_tokens(
             button_identity_icon(with_resolved_icon(assign, hass), service_name(service)), hass,
+        )
+        or resolve_image_tokens(
+            attribute_step_icon(assign, service_name(service), icons, fallback=False)
+            if names_stored_value(assign, service, step.get("data"))
+            else None,
+            hass,
         )
         or resolve_image_tokens(fallback, hass)
     )
@@ -616,6 +627,26 @@ def _icon_from_internal_command(s: _IconSubject) -> str | None:
     return s.internal_cmd.icon if s.internal_cmd is not None else None
 
 
+def _icon_from_step_value(s: _IconSubject) -> str | None:
+    """Rung 6: the glyph for the literal attribute value this button writes.
+
+    A value setter such as ``repeat_set`` with ``{repeat: all}`` runs that
+    value whatever the entity is doing, which is the value the tooltip names
+    (:func:`shared.tooltips.state_token_key`), so the face has to name it too.
+    Below the user's own pictures, above the live-state rungs that would
+    otherwise answer from the value the entity holds right now.
+
+    The test is :func:`action_controller.toggle.names_stored_value`, shared
+    with the label so the two can never disagree.
+    """
+    data = first_step(s.assign).get("data")
+    if not isinstance(data, dict):
+        return None
+    if not names_stored_value(s.assign, s.svc_name, data):
+        return None
+    return attribute_step_icon(s.assign, s.svc_name, s.icon_table, fallback=False)
+
+
 def _icon_from_configured_states(s: _IconSubject) -> str | None:
     """Rung 7: a user-configured per-state row matching the live state."""
     if not s.current_state:
@@ -701,6 +732,7 @@ _ICON_LADDER = (
     _icon_from_button_identity,
     _icon_for_unresolvable,
     _icon_from_internal_command,
+    _icon_from_step_value,
     _icon_from_configured_states,
     _icon_from_live_state,
     _icon_from_any_state_row,

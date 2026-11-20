@@ -138,28 +138,14 @@ export const STYLES_BASE = `
   .title-text {
     overflow-wrap: anywhere;
   }
-  /* Empty (and so invisible) unless the memory switch is on. */
-  .toolbar-memory {
-    display: flex;
-    flex-wrap: wrap;
+  /* Another integration's readout beside the name (the Devel memory meters).
+     It draws itself in the toolbar's text colour. */
+  .toolbar-devel {
+    display: inline-flex;
     align-items: center;
-    gap: 4px 12px;
-    margin-left: 16px;
-    font-size: var(--liza-font-13);
+    margin-left: 12px;
+    min-width: 0;
   }
-  .mem-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-  .mem-bar {
-    display: inline-block;
-    width: 56px; height: 8px;
-    border-radius: 4px;
-    overflow: hidden;
-    background: color-mix(in srgb, var(--app-header-text-color, #fff) 25%, transparent);
-  }
-  .mem-fill { display: block; height: 100%; background: var(--app-header-text-color, #fff); }
-  /* The percentage beside each bar carries the value; colour only adds to it. */
-  .mem-bar.warn .mem-fill { background: #ffb300; }
-  .mem-bar.crit .mem-fill { background: #ff5252; }
-  .mem-item:has(.mem-bar.unknown) { opacity: 0.6; }
   /* ha-tab-group draws the tabs and the active marker. Its track is the
      toolbar's own bottom edge, so it draws none of its own. */
   .toolbar-tabs {

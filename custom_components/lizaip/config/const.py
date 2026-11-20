@@ -193,7 +193,7 @@ def drop_redundant_subject(step: Any) -> bool:
 
     Only the exact duplicate goes. A payload naming a *different* entity is a
     deliberate override and is left alone, as is one on a step with no target —
-    ``script``/``scene`` steps drop their target and the payload is all they have.
+    there the payload is all the step has to say what it acts on.
     """
     if not isinstance(step, dict):
         return False

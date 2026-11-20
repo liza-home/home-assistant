@@ -260,24 +260,6 @@
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
     },
-    "log_level_unknown": {
-      "message": "{level} no es un nivel de registro que acepte este dispositivo."
-    },
-    "log_module_unknown": {
-      "message": "{module} no es un nombre de módulo que conozca este dispositivo."
-    },
-    "log_level_unreachable": {
-      "message": "El dispositivo no respondió al cambio de nivel: {error}"
-    },
-    "log_level_http": {
-      "message": "El dispositivo rechazó el cambio de nivel (HTTP {status})."
-    },
-    "log_level_refused": {
-      "message": "El dispositivo rechazó el cambio de nivel: {reason}"
-    },
-    "log_reset_no_modules": {
-      "message": "El dispositivo no informó de ningún módulo que restablecer."
-    },
     "app_not_started": {
       "message": "{entity_id} no ha abierto la app {app_id}."
     },
@@ -291,18 +273,21 @@
     "audiobooks": "Audiolibros",
     "back": "Atrás",
     "back_menu": "Atrás / Menú",
+    "blue": "Azul",
     "brighter": "Más brillo",
     "brightness": "Brillo",
     "candle": "Vela",
     "close": "Cerrar",
     "colour_temperature": "Temperatura de color",
     "cool_white": "Blanco frío",
+    "cyan": "Cian",
     "daylight": "Luz diurna",
     "digits": "Dígitos",
     "dimmer": "Menos brillo",
     "down": "Abajo",
     "exit": "Salir",
     "forward": "Adelante",
+    "green": "Verde",
     "home": "Inicio",
     "input": "Entrada",
     "inputs": "Entradas",
@@ -321,9 +306,11 @@
     "on": "Encendido",
     "open": "Abrir",
     "options": "Opciones",
+    "orange": "Naranja",
     "oscillate_off": "Oscilación desactivada",
     "oscillate_on": "Oscilación activada",
     "pause": "Pausa",
+    "pink": "Rosa",
     "play": "Reproducir",
     "play_pause": "Reproducir / Pausa",
     "playlists": "Listas de reproducción",
@@ -331,12 +318,14 @@
     "power": "Encendido",
     "previous": "Anterior",
     "radio": "Radio",
+    "red": "Rojo",
     "remote": "Mando",
     "repeat_all": "Repetir todo",
     "repeat_off": "Repetir desactivado",
     "repeat_one": "Repetir una",
     "reverse": "Atrás",
     "right": "Derecha",
+    "scenes": "Escenas",
     "search": "Buscar",
     "select": "Seleccionar",
     "shuffle": "Aleatorio",
@@ -353,11 +342,13 @@
     "unlock": "Desbloquear",
     "unmute": "Activar sonido",
     "up": "Arriba",
+    "violet": "Violeta",
     "voice_assistant": "Asistente de voz",
     "volume": "Volumen",
     "volume_down": "Bajar volumen",
     "volume_up": "Subir volumen",
-    "warm_white": "Blanco cálido"
+    "warm_white": "Blanco cálido",
+    "yellow": "Amarillo"
   },
   "page_titles": {
     "welcome": "¡bienvenido!"

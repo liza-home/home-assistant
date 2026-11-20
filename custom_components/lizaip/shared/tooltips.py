@@ -167,9 +167,9 @@ def state_token_key(
     cannot be read, still gets the answer it got before.
 
     *attributes* is the target entity's attribute dict. *data* is the step's
-    service data and is passed **only for a cycle press**, which is the one
-    place a stored direction is the user's choice rather than the value the
-    setter's form demands; a button's own action toggles instead.
+    service data and is passed whenever the stored value is what runs: a cycle
+    press, or a value setter such as ``repeat_set``. A boolean setter inverts
+    the live attribute instead, so its caller passes None.
     """
     attribute = service_to_attribute(svc)
     cycle = attribute_cycle_for(svc)

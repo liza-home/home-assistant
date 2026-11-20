@@ -76,11 +76,10 @@ export const STYLES_SETTINGS = `
     .settings-section-cards { grid-template-columns: 1fr; }
   }
   .settings-card { margin: 0; }
-  /* Fontbook's own panel, shown as a group: as wide as the section, and tall
-     enough to work in -- it was made to fill a page of its own. */
-  .settings-fontbook { display: block; width: 100%; }
-  .fontbook-host { display: block; min-height: 70vh; }
-  .fontbook-host > * { display: block; width: 100%; min-height: 70vh; }
+  /* Another integration's panel shown inside this one: as wide as its place. */
+  .settings-embedded { display: block; width: 100%; }
+  .embedded-host { display: block; width: 100%; }
+  .embedded-host > * { display: block; width: 100%; }
   /* Cards that belong together in one grid cell, one under the other. */
   .settings-card-stack { display: grid; gap: 16px; min-width: 0; }
   /* .actions-card-header spaces its children apart, which pushes a title that
@@ -527,4 +526,12 @@ export const STYLES_SETTINGS = `
   .settings-danger-card .settings-card-icon,
   .settings-danger-card .actions-card-title { color: var(--liza-error-text, var(--error-color)); }
 /* The red is variant="danger" now; nothing is left to say here. */
+  /* A workaround, not a setting like the others: framed in HA's warning
+     yellow. Only the frame and the triangle take the colour; yellow words on
+     a light card would not be readable. */
+  .settings-warning-card {
+    border: 2px solid var(--warning-color, #ffa600);
+  }
+  .settings-warning-card .settings-card-icon { color: var(--warning-color, #ffa600); }
+  .settings-switch-note { display: block; margin-top: 4px; font-weight: 700; }
 `;

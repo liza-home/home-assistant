@@ -99,10 +99,18 @@ def _text_entry(entry: dict[str, Any], data: dict[str, Any], field: str, default
 
     A translated one travels as ``<field>_key``, which the panel looks up; the
     plain field then holds *default*, what a reader without the table sees.
+    One spelt out per language travels as ``<field>_i18n``.
     """
     value = data.get(field)
     key = translate_key(value)
-    if key:
+    if isinstance(value, dict) and not key and value and all(
+        isinstance(k, str) and len(k) == 2 for k in value
+    ):
+        # `{en: …, de: …}`: words a template brings for itself, from outside
+        # the panel's table. English is what a reader without the language sees.
+        entry[field] = str(value.get("en") or default)
+        entry[f"{field}_i18n"] = {k: str(v) for k, v in value.items()}
+    elif key:
         entry[field] = translate_fallback(value, default)
         entry[f"{field}_key"] = key
     else:
@@ -256,6 +264,28 @@ def _user_options_dir() -> str | None:
     return os.path.join(os.path.dirname(_USER_TEMPLATES_DIR), "options")
 
 
+#: Template folders other integrations bring while they are loaded, by owner.
+#: Read like ``assets/templates/``: a folder at their top is a button on the
+#: add-page dialog's first screen. ``lizaip_devel`` offers its tools this way.
+_EXTRA_TEMPLATE_DIRS: dict[str, str] = {}
+
+
+def register_template_dir(owner: str, path: str) -> None:
+    """Offer the templates under *path* while *owner* is loaded."""
+    global _LISTED
+    _EXTRA_TEMPLATE_DIRS[owner] = path
+    _LISTED = None
+    _TEMPLATE_CACHE.clear()
+
+
+def unregister_template_dir(owner: str) -> None:
+    """Stop offering *owner*'s templates."""
+    global _LISTED
+    if _EXTRA_TEMPLATE_DIRS.pop(owner, None) is not None:
+        _LISTED = None
+        _TEMPLATE_CACHE.clear()
+
+
 def set_user_templates_dir(path: str | None) -> None:
     """Read the user's own templates from *path* (``None``: none)."""
     global _USER_TEMPLATES_DIR
@@ -308,6 +338,8 @@ def _template_dirs() -> list[tuple[str, tuple[str, ...]]]:
     # Loose at the top level like the templates; a folder of its own is
     # `options/<name>`, so it never merges with a template folder of that name.
     walk(OPTIONS_DIR, (), OPTION_FOLDER_PREFIX)
+    for owner in sorted(_EXTRA_TEMPLATE_DIRS):
+        walk(_EXTRA_TEMPLATE_DIRS[owner], ())
     if _USER_TEMPLATES_DIR:
         walk(_USER_TEMPLATES_DIR, USER_TEMPLATES_GROUP)
         walk(_user_options_dir(), USER_TEMPLATES_GROUP, OPTION_FOLDER_PREFIX)

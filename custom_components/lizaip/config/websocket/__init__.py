@@ -24,7 +24,6 @@ from __future__ import annotations
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from ...runtime import debug_available
 from . import (
     assignments, devices, page_device, people, templates, pages, settings,
 )
@@ -36,7 +35,6 @@ def register_commands(hass: HomeAssistant) -> None:
         devices.ws_list_devices,
         devices.ws_subscribe_devices,
         devices.ws_get_blueprint,
-        devices.ws_get_features,
         devices.ws_goto_page,
         devices.ws_clear_device_pages,
         devices.ws_build_diagnostics_bundle,
@@ -77,12 +75,3 @@ def register_commands(hass: HomeAssistant) -> None:
         page_device.ws_assign_page_device,
     ):
         websocket_api.async_register_command(hass, handler)
-
-    # The debug tools are not part of a stable release -- the build strips
-    # their files out -- so their absence is normal and must not be an error.
-    # Presence of the module is the switch; `ws_get_features` tells the panel
-    # the same thing so it can leave the tab out.
-    if debug_available():
-        from ..debug_websocket import register_debug_commands
-
-        register_debug_commands(hass)

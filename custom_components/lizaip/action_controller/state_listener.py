@@ -25,11 +25,9 @@ from ..state_icon import (
     is_styleable,
     read_icon_style_options,
 )
-from ._state import (
-    _DEFAULT_PAGE_ID,
-    _STATE_DEBOUNCE_SECONDS,
-    _STATE_MAX_WAIT_SECONDS,
-)
+from ..shared.variables_calc import read_variables_interval
+from ..shared.variables_calc import variables_scope
+from ._state import _DEFAULT_PAGE_ID
 from ..runtime import get_assignments, get_store, resolve_device_id
 from .helpers import _noop, resolve_target_entities
 from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
@@ -229,7 +227,9 @@ async def setup_state_listener(
                 # on a plain page the button's own entity.
                 with page_scope(template), button_scope(
                     targets[0] if targets else None, hass,
-                ), language_scope(get_ui_language(hass, entry)):
+                ), language_scope(get_ui_language(hass, entry)), variables_scope(
+                    getattr(entry, "options", None),
+                ):
                     # A toggle rule outranks every other source: it is
                     # the only one that knows the button is about to do
                     # something other than its declared action, so letting
@@ -249,7 +249,7 @@ async def setup_state_listener(
                         # by `toggle_icon`), then what `live_button_icon`
                         # gives.
                         icon = rule_glyph or live_button_icon(
-                            assign, state, service, action_icon, hass,
+                            assign, state, service, action_icon, hass, theme_icons,
                         )
                         if not icon:
                             continue
@@ -343,22 +343,19 @@ async def setup_state_listener(
             timer_handle[0].cancel()
             timer_handle[0] = None
 
+        # The remote's own "update interval" setting is the shortest gap
+        # between two pushes; never push more often than that.
+        window = read_variables_interval(getattr(entry, "options", None)) / 1000
         elapsed = time.monotonic() - last_flush[0]
-        # Leading edge. A change arriving after a quiet spell is the one the
-        # user is waiting to see -- a lamp switched on, a scene recalled -- and
-        # making it wait out a debounce is pure latency: there is no burst to
-        # coalesce yet. `last_sent` already drops flushes that change nothing,
-        # so flushing eagerly costs a push only when there is news.
-        if elapsed >= _STATE_MAX_WAIT_SECONDS:
+        # Leading edge: a change after a quiet spell goes out at once, as
+        # there is no burst to pace yet. `last_sent` drops no-op flushes.
+        if elapsed >= window:
             _flush()
             return
 
-        # Mid-burst. Still coalesce, but clamp the wait to what is left of the
-        # max so a held dimmer keeps updating instead of restarting the timer
-        # forever. See `_STATE_MAX_WAIT_SECONDS`.
-        delay = min(
-            _STATE_DEBOUNCE_SECONDS, max(0.0, _STATE_MAX_WAIT_SECONDS - elapsed),
-        )
+        # Mid-burst: wait out what is left of the window. Not restarted by
+        # later events, so a held dimmer keeps updating once per window.
+        delay = max(0.0, window - elapsed)
         timer_handle[0] = hass.loop.call_later(delay, _flush)
 
     @callback

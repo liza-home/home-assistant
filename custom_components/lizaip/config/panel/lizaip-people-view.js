@@ -10,8 +10,7 @@
  * administrators-only server-side; this is the way in, not the lock.
  */
 
-/** Above this many people the list stops being scannable and gets a filter. */
-const SEARCH_THRESHOLD = 8;
+import { SEARCH_THRESHOLD } from "./lizaip-helpers.js";
 
 /** How many faces a row draws before the rest become a counter, and how many
  *  names it spells out before they do. Past these the row grows with the

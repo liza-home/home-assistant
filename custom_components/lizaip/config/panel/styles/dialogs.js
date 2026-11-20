@@ -189,6 +189,14 @@ export const STYLES_DIALOGS = `
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
   }
+  .template-row-badge {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(3,169,244,.15);
+    color: var(--primary-text-color, #fff);
+    font-size: var(--liza-font-11);
+    white-space: nowrap;
+  }
   /* Drawn rather than a glyph, so it needs no icon round-trip to say "this
      one opens". */
   .template-row-chevron {
@@ -434,6 +442,17 @@ export const STYLES_DIALOGS = `
     color: var(--liza-muted-text);
   }
   .template-target-list { padding-bottom: 0; }
+  /* Sticky so it stays in reach while a long device list scrolls. */
+  .template-target-search {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    padding: 4px 0 6px;
+    background: var(--card-background-color, #1e1e1e);
+  }
+  .template-target-search[hidden] { display: none; }
+  .template-target-search > ha-input-search { flex: 1 1 auto; min-width: 0; }
   .template-entity-hint {
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);

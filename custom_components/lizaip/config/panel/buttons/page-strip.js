@@ -148,12 +148,21 @@ export const ButtonsPageStripMixin = {
    * strip shows two holes -- one where the thumb still sits and one where it is
    * going -- and neither reads as the answer. Moved, there is one picture: the
    * row in its prospective order, with the thumb ghosted on its landing slot.
-   * This is the one step that assumes the thumbs are equal width, which
-   * `.page-thumb`'s fixed 180px makes true; the displaced thumbs above do not.
+   * Its travel is read off *slots*, the measured boxes, when they are given:
+   * the open page is wider than the others on a narrow strip, so "n slots of
+   * my own width" would overshoot or fall short. Without them it assumes
+   * equal widths.
    */
 
-  _pageDragShift(idx, dragIdx, dropIdx, shift) {
-    if (idx === dragIdx) return (dropIdx - dragIdx) * shift;
+  _pageDragShift(idx, dragIdx, dropIdx, shift, slots = null) {
+    if (idx === dragIdx) {
+      const from = slots?.[dragIdx];
+      const to = slots?.[dropIdx];
+      if (!from || !to || dropIdx === dragIdx) return (dropIdx - dragIdx) * shift;
+      return dropIdx > dragIdx
+        ? (to.left + to.width) - (from.left + from.width)
+        : to.left - from.left;
+    }
     if (idx > dragIdx && idx <= dropIdx) return -shift;
     if (idx < dragIdx && idx >= dropIdx) return shift;
     return 0;
@@ -200,7 +209,7 @@ export const ButtonsPageStripMixin = {
       if (dragIdx === null || to === dropIdx) return;
       dropIdx = to;
       thumbs().forEach((t, i) => {
-        const dx = this._pageDragShift(i, dragIdx, to, shift);
+        const dx = this._pageDragShift(i, dragIdx, to, shift, slots);
         t.style.setProperty("--pg-shift", `${dx}px`);
       });
     };

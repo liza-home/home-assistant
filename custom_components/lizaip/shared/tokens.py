@@ -12,6 +12,7 @@ from .variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
     function_token_value,
+    variables_enabled,
 )
 from .history import versioned_history_image
 from .icon_urls import is_media_source
@@ -189,6 +190,47 @@ def entity_token_value(
     return f"{value} {unit}" if with_unit and isinstance(unit, str) and unit else value
 
 
+#: What a template fills in for the device its page is bound to: read even
+#: with a remote's Variables switch off, because the user did not type them.
+_TEMPLATE_VARIABLE_ROOTS: Final = frozenset({"_device", "_queue"})
+
+
+def is_user_variable(body: str) -> bool:
+    """Whether the ``${…}`` with *body* is one the user typed: an entity or a calculation.
+
+    ``${sensor.x}``, ``${light.desk.brightness}`` and ``${round(sensor.x)}`` are;
+    ``${_device.volume_level}``, ``${_queue.next_song}``, ``${_state}`` and
+    ``${_device}`` are not -- a template, or the button itself, fills those in.
+    A calculation over the page's own device only (``${_device.x * 100}``)
+    belongs to the template too.
+    """
+    roots = {m.group(1).split(".", 1)[0] for m in _EXPR_ENTITY_RE.finditer(body)}
+    if roots:
+        return not roots <= _TEMPLATE_VARIABLE_ROOTS
+    return bool(FUNCTION_TOKEN_RE.fullmatch("${" + body + "}"))
+
+
+def has_user_variables(text: Any) -> bool:
+    """Whether *text* holds a variable the user typed (see :func:`is_user_variable`)."""
+    return isinstance(text, str) and any(
+        is_user_variable(m.group(1)) for m in _VARIABLE_BODY_RE.finditer(text)
+    )
+
+
+def silence_user_variables(text: Any) -> Any:
+    """*text* without the variables the user typed, when the remote has them off.
+
+    The remote's **Variables** switch governs what reads other entities' states
+    on the user's say-so. Off, such a variable is not read: it is gone. What a
+    template fills in for its own device stays.
+    """
+    if variables_enabled() or not isinstance(text, str) or "${" not in text:
+        return text
+    return _VARIABLE_BODY_RE.sub(
+        lambda m: "" if is_user_variable(m.group(1)) else m.group(0), text,
+    )
+
+
 def _function_value(hass: HomeAssistant | None, match) -> str:
     return function_token_value(hass.states.get if hass is not None else None, match.group(1))
 
@@ -200,7 +242,7 @@ def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
     """
     if not isinstance(text, str) or "${" not in text:
         return text
-    text = _with_page_device(text, hass)
+    text = _with_page_device(silence_user_variables(text), hass)
     text = FUNCTION_TOKEN_RE.sub(lambda m: _function_value(hass, m), text)
     return translate_inline(ENTITY_TOKEN_RE.sub(
         lambda m: entity_token_value(hass, m.group(1).lower(), m.group(2)), text,
@@ -618,6 +660,10 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
     device unresolved. ``config.button_rendering`` imports *from* that module,
     so the shared piece cannot live in either.
     """
+    if not variables_enabled() and has_user_variables(image):
+        # Switched off for this remote: a picture that reads another entity
+        # is not drawn half-filled; it gives way to the button's normal icon.
+        return None
     image = versioned_history_image(_with_page_device(translate_inline(image), hass), hass)
     if not entity_token_entities(image):
         return image
@@ -685,6 +731,9 @@ def substitute_tooltip_tokens(
     text = translate_inline(text)
     if not text or "${" not in text:
         return text
+    # Before the queue alias, which turns `${_queue.x}` into a sensor variable
+    # that would no longer be told apart from one the user typed.
+    text = silence_user_variables(text)
     text = expand_queue_alias(text, subject)
     lookup = {k.lower(): v for k, v in values.items()}
     if is_media_source(text):

@@ -40,7 +40,6 @@ from ..diagnostics_bundle import (
 )
 from ...runtime import (
     resolve_device_id,
-    debug_available,
     entry_connection,
     find_store,
     remember_panel_language,
@@ -65,19 +64,6 @@ from .common import live_connection, send_failure
 from .settings import async_reload_themes
 
 _LOGGER = logging.getLogger(__name__)
-
-
-@websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_features"})
-@require_any_device_access
-@websocket_api.async_response
-async def ws_get_features(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Report which optional features this build carries.
-
-    The panel cannot infer this: its own files are served from disk regardless,
-    so it has to be told whether the backing commands exist before it offers a
-    tab that would only produce "unknown command".
-    """
-    connection.send_result(msg["id"], {"debug_tools": debug_available()})
 
 
 #: How long the signed download URL stays valid. It is followed by the click

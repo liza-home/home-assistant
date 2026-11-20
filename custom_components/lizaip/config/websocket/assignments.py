@@ -5,6 +5,7 @@ Also previews ``${…}`` variables for the button editor.
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from typing import Final
 
 import voluptuous as vol
@@ -14,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from ...runtime import get_store, remember_panel_language
 from ...shared.history import history_entities
 from ...shared.i18n import get_ui_language, language_scope, translate_inline
+from ...shared.variables_calc import variables_scope
 from ...shared.logs import device_id_logger
 from ...shared.tokens import (
     entity_token_entities,
@@ -67,14 +69,16 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
         if read:
             depends[item] = sorted(read)
         entities |= read
-    # `{translate: …}` reads as the remote the panel shows prints it.
+    # `{translate: …}` reads as the remote the panel shows prints it, and its
+    # Variables switch applies to the preview as it does on the remote.
+    entry_id = msg.get("entry_id")
+    entries = getattr(hass, "config_entries", None)
+    entry = entries.async_get_entry(entry_id) if entry_id and entries is not None else None
     language = None
     if any("{translate:" in item for item in (*texts, *images)):
-        entry_id = msg.get("entry_id")
-        entries = getattr(hass, "config_entries", None)
-        entry = entries.async_get_entry(entry_id) if entry_id and entries is not None else None
         language = get_ui_language(hass, entry)
-    with language_scope(language):
+    scope = variables_scope(entry.options) if entry is not None else nullcontext()
+    with language_scope(language), scope:
         answer = {
             "texts": {t: substitute_entity_tokens(translate_inline(t), hass) for t in texts},
             "images": {i: resolve_image_tokens(i, hass) for i in images},

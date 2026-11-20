@@ -5,18 +5,21 @@
     "audiobooks": "Audiolibri",
     "back": "Indietro",
     "back_menu": "Indietro / Menu",
+    "blue": "Blu",
     "brighter": "Più luminoso",
     "brightness": "Luminosità",
     "candle": "Candela",
     "close": "Chiudi",
     "colour_temperature": "Temperatura colore",
     "cool_white": "Bianco freddo",
+    "cyan": "Ciano",
     "daylight": "Luce diurna",
     "digits": "Cifre",
     "dimmer": "Più scuro",
     "down": "Giù",
     "exit": "Esci",
     "forward": "Avanti",
+    "green": "Verde",
     "home": "Home",
     "input": "Ingresso",
     "inputs": "Ingressi",
@@ -35,9 +38,11 @@
     "on": "Acceso",
     "open": "Apri",
     "options": "Opzioni",
+    "orange": "Arancione",
     "oscillate_off": "Oscillazione disattiva",
     "oscillate_on": "Oscillazione attiva",
     "pause": "Pausa",
+    "pink": "Rosa",
     "play": "Riproduci",
     "play_pause": "Riproduci / Pausa",
     "playlists": "Playlist",
@@ -45,12 +50,14 @@
     "power": "Accensione",
     "previous": "Precedente",
     "radio": "Radio",
+    "red": "Rosso",
     "remote": "Telecomando",
     "repeat_all": "Ripeti tutto",
     "repeat_off": "Ripeti disattivo",
     "repeat_one": "Ripeti uno",
     "reverse": "Indietro",
     "right": "Destra",
+    "scenes": "Scene",
     "search": "Cerca",
     "select": "Seleziona",
     "shuffle": "Casuale",
@@ -67,11 +74,13 @@
     "unlock": "Sblocca",
     "unmute": "Riattiva audio",
     "up": "Su",
+    "violet": "Viola",
     "voice_assistant": "Assistente vocale",
     "volume": "Volume",
     "volume_down": "Abbassa volume",
     "volume_up": "Alza volume",
-    "warm_white": "Bianco caldo"
+    "warm_white": "Bianco caldo",
+    "yellow": "Giallo"
   },
   "config": {
     "step": {
@@ -333,24 +342,6 @@
     },
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
-    },
-    "log_level_unknown": {
-      "message": "{level} non è un livello di log accettato da questo dispositivo."
-    },
-    "log_module_unknown": {
-      "message": "{module} non è un nome di modulo noto a questo dispositivo."
-    },
-    "log_level_unreachable": {
-      "message": "Il dispositivo non ha risposto alla modifica del livello: {error}"
-    },
-    "log_level_http": {
-      "message": "Il dispositivo ha rifiutato la modifica del livello (HTTP {status})."
-    },
-    "log_level_refused": {
-      "message": "Il dispositivo ha rifiutato la modifica del livello: {reason}"
-    },
-    "log_reset_no_modules": {
-      "message": "Il dispositivo non ha segnalato moduli da reimpostare."
     },
     "app_not_started": {
       "message": "{entity_id} non ha avviato l'app {app_id}."

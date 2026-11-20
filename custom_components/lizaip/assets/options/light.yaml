@@ -1,0 +1,283 @@
+# Light: everything one lamp can be set to, opened by a button's long touch.
+# The hub fits the lamp: colours or brightness steps, white if it has it, and
+# the room's scenes; `requires:` picks each tile (home-assistant.io/integrations/light).
+
+version: 2
+name: Light
+icon: mdi:lightbulb-on-outline
+description: Brightness, colour, white and scenes for one lamp
+
+target_selector:
+  device:
+    primary_domain: light
+
+placeholders:
+  scene:
+    source: scenes
+    spec:
+      area: "@target"
+
+pages:
+  # ---------------------------------------------------------------------------
+  # The hub: what the button's long touch opens
+  # ---------------------------------------------------------------------------
+  hub:
+    title: "mdi:lightbulb-on-outline ${_device}"
+    buttons:
+      # Eight colours, an eighth of the wheel apart, over the top two rows.
+      # A lamp without colour gets four brightness steps in the top row
+      # instead: a slot listing tiles takes the first the lamp can use.
+
+      button_1:
+        - icon: mdi:circle?fg=ff0000
+          tooltip: {translate: red}
+          requires: &colour_capable
+            capabilities:
+              supported_color_modes: [hs, rgb, rgbw, rgbww, xy]
+          config:
+            - action: light.turn_on
+              data:
+                rgb_color: [255, 0, 0]
+          overrides: &brightness_slider
+            slider_vertical:
+              control: light-brightness
+        - icon: "text:10%?font_size=20"
+          tooltip: "{translate: brightness} 10 %"
+          requires: &dimmable
+            capabilities:
+              supported_color_modes: [brightness, color_temp, white]
+          config:
+            - action: light.turn_on
+              data:
+                brightness_pct: 10
+          overrides: *brightness_slider
+
+      button_2:
+        - icon: mdi:circle?fg=ff7800
+          tooltip: {translate: orange}
+          requires: *colour_capable
+          config:
+            - action: light.turn_on
+              data:
+                rgb_color: [255, 120, 0]
+          overrides: *brightness_slider
+        - icon: "text:25%?font_size=20"
+          tooltip: "{translate: brightness} 25 %"
+          requires: *dimmable
+          config:
+            - action: light.turn_on
+              data:
+                brightness_pct: 25
+          overrides: *brightness_slider
+
+      button_3:
+        - icon: mdi:circle?fg=ffd000
+          tooltip: {translate: yellow}
+          requires: *colour_capable
+          config:
+            - action: light.turn_on
+              data:
+                rgb_color: [255, 208, 0]
+          overrides: *brightness_slider
+        - icon: "text:50%?font_size=20"
+          tooltip: "{translate: brightness} 50 %"
+          requires: *dimmable
+          config:
+            - action: light.turn_on
+              data:
+                brightness_pct: 50
+          overrides: *brightness_slider
+
+      button_4:
+        - icon: mdi:circle?fg=00c832
+          tooltip: {translate: green}
+          requires: *colour_capable
+          config:
+            - action: light.turn_on
+              data:
+                rgb_color: [0, 200, 50]
+          overrides: *brightness_slider
+        - icon: "text:100%?font_size=20"
+          tooltip: "{translate: brightness} 100 %"
+          requires: *dimmable
+          config:
+            - action: light.turn_on
+              data:
+                brightness_pct: 100
+          overrides: *brightness_slider
+
+      button_5:
+        icon: mdi:circle?fg=00c8ff
+        tooltip: {translate: cyan}
+        requires: *colour_capable
+        config:
+          - action: light.turn_on
+            data:
+              rgb_color: [0, 200, 255]
+        overrides: *brightness_slider
+
+      button_6:
+        icon: mdi:circle?fg=0064ff
+        tooltip: {translate: blue}
+        requires: *colour_capable
+        config:
+          - action: light.turn_on
+            data:
+              rgb_color: [0, 100, 255]
+        overrides: *brightness_slider
+
+      button_7:
+        icon: mdi:circle?fg=8c3cff
+        tooltip: {translate: violet}
+        requires: *colour_capable
+        config:
+          - action: light.turn_on
+            data:
+              rgb_color: [140, 60, 255]
+        overrides: *brightness_slider
+
+      button_8:
+        icon: mdi:circle?fg=ff28c8
+        tooltip: {translate: pink}
+        requires: *colour_capable
+        config:
+          - action: light.turn_on
+            data:
+              rgb_color: [255, 40, 200]
+        overrides: *brightness_slider
+
+      # The bottom row. White needs no page of its own: touching this tile
+      # turns the slider to colour temperature; a colour or brightness tile
+      # turns it back to brightness.
+      button_9:
+        icon: mdi:thermometer-lines
+        tooltip: "{translate: colour_temperature} ${_device.color_temp_kelvin} K"
+        requires: &colour_temp_capable
+          capabilities:
+            supported_color_modes: [color_temp]
+        config:
+          - action: light.turn_on
+            data:
+              color_temp_kelvin: 2700
+        overrides:
+          slider_vertical:
+            control: light-color-temp
+
+      # The slider is a blind relative drag, so the kelvin it lands on is
+      # only knowable if the grid says it. No action: a readout, not a key.
+      button_10:
+        icon: "text:${_device.color_temp_kelvin}K?font_size=20"
+        tooltip: "{translate: colour_temperature} ${_device.color_temp_kelvin} K"
+        requires: *colour_temp_capable
+
+      # Hidden when the lamp's room has no scene, and the page with it.
+      button_12:
+        icon: mdi:palette
+        tooltip: "{translate: scenes}…"
+        requires:
+          items: scene
+        goto_page: scenes
+
+      # The hardware keys. Back is left alone on this page: an options page is
+      # given its way out when it is created.
+      button_power:
+        icon: mdi:power
+        tooltip: "${_device} ${_state}"
+        config:
+          - action: light.toggle
+
+      button_volume_up:
+        icon: mdi:brightness-7
+        tooltip: {translate: brighter}
+        key_repeat: true
+        config:
+          - action: light.turn_on
+            data:
+              brightness_step_pct: 10
+
+      button_volume_down:
+        icon: mdi:brightness-5
+        tooltip: {translate: dimmer}
+        key_repeat: true
+        config:
+          - action: light.turn_on
+            data:
+              brightness_step_pct: -10
+
+      slider_vertical:
+        icon: mdi:brightness-6
+        tooltip: {translate: brightness}
+        slider_actions:
+          mode: proportional
+          attribute: brightness
+          service: light.turn_on
+          data_key: brightness
+          factor: 1.0
+          min: 0
+          max: 255
+
+  # ---------------------------------------------------------------------------
+  # Scenes: the room's, not the house's
+  # ---------------------------------------------------------------------------
+  scenes:
+    title: "mdi:palette {translate: scenes}"
+    subpage: true
+    buttons:
+      # `area: "@target"` is what makes this page worth having: without it the
+      # twelve slots would hold whichever twelve scenes of the whole house came
+      # first. A lamp in no area gets an empty page rather than a wrong one.
+      button_1: "@scene[1]"
+      button_2: "@scene[2]"
+      button_3: "@scene[3]"
+      button_4: "@scene[4]"
+      button_5: "@scene[5]"
+      button_6: "@scene[6]"
+      button_7: "@scene[7]"
+      button_8: "@scene[8]"
+      button_9: "@scene[9]"
+      button_10: "@scene[10]"
+      button_11: "@scene[11]"
+      button_12: "@scene[12]"
+
+      button_back:
+        icon: mdi:keyboard-backspace
+        tooltip: {translate: back}
+        goto_page: hub
+
+      button_power:
+        icon: mdi:power
+        tooltip: "${_device} ${_state}"
+        config:
+          - action: light.toggle
+
+      button_volume_up:
+        icon: mdi:brightness-7
+        tooltip: {translate: brighter}
+        key_repeat: true
+        config:
+          - action: light.turn_on
+            data:
+              brightness_step_pct: 10
+
+      button_volume_down:
+        icon: mdi:brightness-5
+        tooltip: {translate: dimmer}
+        key_repeat: true
+        config:
+          - action: light.turn_on
+            data:
+              brightness_step_pct: -10
+
+      # The buttons are scenes, so the slider stays on the lamp the page was
+      # made for.
+      slider_vertical:
+        icon: mdi:brightness-6
+        tooltip: {translate: brightness}
+        slider_actions:
+          mode: proportional
+          attribute: brightness
+          service: light.turn_on
+          data_key: brightness
+          factor: 1.0
+          min: 0
+          max: 255

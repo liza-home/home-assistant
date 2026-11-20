@@ -113,7 +113,7 @@ def suggest_device(hass: HomeAssistant, assignments: dict) -> str:
 @require_device_access
 @websocket_api.async_response
 async def ws_list_all_devices(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Every enabled device with entities, for binding a page that has none.
+    """Every enabled, non-service device with entities, for binding a page.
 
     Given the page, ``suggested`` is the device most of its buttons act on.
     """
@@ -122,7 +122,7 @@ async def ws_list_all_devices(hass: HomeAssistant, connection, msg: dict) -> Non
     if device_id and msg.get("page_id") is not None:
         assignments = await get_store(hass).async_get_assignments(device_id, msg["page_id"]) or {}
         suggested = suggest_device(hass, assignments)
-    devices = eligible_devices(hass, {})
+    devices = eligible_devices(hass, {}, services=False)
     if suggested not in {d["id"] for d in devices}:
         suggested = ""
     connection.send_result(msg["id"], {"devices": devices, "suggested": suggested})

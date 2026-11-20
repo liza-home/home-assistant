@@ -352,9 +352,11 @@ export const PagesMixin = {
     const hub = !!meta.target_selector?.config_entry;
     const confirmLabel = this._t(hub ? "change_hub_confirm" : "change_device_confirm");
     try {
+      const bound = page.template.target || {};
       await this._showTemplateEntityPicker(templateId, meta, {
         confirmLabel,
         busyLabel: this._t("changing"),
+        current: (hub ? bound.config_entry : bound.device) || "",
         onConfirm: async (target, kind) => {
           const result = await this._retargetTemplatePage(page, target, kind);
           return this._t(hub ? "hub_changed" : "device_changed", {
@@ -436,6 +438,7 @@ export const PagesMixin = {
         confirmLabel: this._t(moving ? "change_device_confirm" : "assign_device_confirm"),
         busyLabel: this._t("changing"),
         loadDevices: () => this._loadAllDevices(page.id),
+        current: page.template?.target?.device || "",
         onConfirm: async (target) => {
           const result = await this._bindPageDevice(page, target);
           return this._t(moving ? "device_changed" : "device_assigned", {

@@ -682,7 +682,8 @@ class ListTemplatesTool(llm.Tool):
 
         result = []
         for meta in await hass.async_add_executor_job(list_templates):
-            if not template_has_target(hass, meta):
+            # A routine run in the panel (the Devel tools'), not a page to add.
+            if meta.get("action") or not template_has_target(hass, meta):
                 continue
             template = await hass.async_add_executor_job(load_template, meta["id"]) or {}
             kind, targets = _template_targets(hass, template)

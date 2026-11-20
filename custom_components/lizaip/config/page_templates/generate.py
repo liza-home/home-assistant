@@ -604,6 +604,21 @@ def _stored_overrides(btn_def: dict, btn_entity: str) -> dict:
     return overrides
 
 
+def _runnable_subject(action_str: str, data: Any) -> str:
+    """The scene/script/automation a payload names, for an action of its domain.
+
+    The resolver hands a runnable down as a payload, which leaves the step
+    saying what it runs in ``data`` and nothing in ``target`` -- a shape Home
+    Assistant's own editor flags as targetless. Only an entity of the action's
+    own domain is promoted: a payload naming anything else is an argument.
+    """
+    domain = split_service(action_str)[0]
+    entity = data.get("entity_id") if isinstance(data, dict) else None
+    if not isinstance(entity, str) or not entity.startswith(f"{domain}."):
+        return ""
+    return entity
+
+
 def _action_step_for(btn_def: dict, action_str: str, btn_entity: str, data: dict) -> dict:
     # Copied: the same payload dict is handed to `_register_action`, and the
     # step is about to drop a key from it.
@@ -616,8 +631,11 @@ def _action_step_for(btn_def: dict, action_str: str, btn_entity: str, data: dict
     # script/scene/automation targets name the runnable object, not bound device.
     if split_service(action_str)[0] in _ENTITY_ADDRESSED_DOMAINS:
         declared = (config_step(btn_def) or {}).get("target")
+        runnable = _runnable_subject(action_str, step["data"])
         if isinstance(declared, dict) and declared:
             step["target"] = declared
+        elif runnable:
+            step["target"] = {"entity_id": runnable}
         else:
             step.pop("target")
     # After the target is final: a payload entity that became the target has

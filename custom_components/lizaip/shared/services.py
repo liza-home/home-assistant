@@ -168,6 +168,16 @@ def service_name(service: str) -> str:
     return split_service(service)[1]
 
 
+# (attribute, state) -> glyphs the shipped table used to hold there. A page
+# built before the table was corrected froze the old one, and without this the
+# stale row would stop reading as seeded and shadow the fix.
+_SUPERSEDED_SHIPPED_ICONS: dict[tuple[str | None, str], frozenset[str]] = {
+    ("repeat", "off"): frozenset({"mdi:repeat-once"}),
+    ("repeat", "all"): frozenset({"mdi:repeat-off"}),
+    ("repeat", "one"): frozenset({"mdi:repeat"}),
+}
+
+
 def is_seeded_icon(domain: str, rule: dict) -> bool:
     """Whether *rule* carries the shipped icon rather than a chosen one.
 
@@ -188,7 +198,10 @@ def is_seeded_icon(domain: str, rule: dict) -> bool:
     state = rule.get("state")
     if state is None:
         return False
-    return icon == icon_defaults.for_state(domain, rule.get("attribute"), str(state))
+    attribute = rule.get("attribute")
+    if icon in _SUPERSEDED_SHIPPED_ICONS.get((attribute, str(state)), ()):
+        return True
+    return icon == icon_defaults.for_state(domain, attribute, str(state))
 
 
 def scope_action_states(service: str, states: Any) -> list[dict]:

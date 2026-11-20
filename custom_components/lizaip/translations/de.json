@@ -260,24 +260,6 @@
     "conflicting_page_target": {
       "message": "Der Name \"{page}\" gehört zu Seite {resolved}, nicht zu Seite {page_id}. Gib eines von beiden an, nicht beides."
     },
-    "log_level_unknown": {
-      "message": "{level} ist keine Protokollstufe, die dieses Gerät annimmt."
-    },
-    "log_module_unknown": {
-      "message": "{module} ist kein Modulname, den dieses Gerät kennt."
-    },
-    "log_level_unreachable": {
-      "message": "Das Gerät hat auf die Änderung der Protokollstufe nicht geantwortet: {error}"
-    },
-    "log_level_http": {
-      "message": "Das Gerät hat die Änderung der Protokollstufe abgelehnt (HTTP {status})."
-    },
-    "log_level_refused": {
-      "message": "Das Gerät hat die Änderung der Protokollstufe abgelehnt: {reason}"
-    },
-    "log_reset_no_modules": {
-      "message": "Das Gerät hat keine Module gemeldet, die zurückgesetzt werden könnten."
-    },
     "app_not_started": {
       "message": "{entity_id} hat die App {app_id} nicht gestartet."
     },
@@ -291,18 +273,21 @@
     "audiobooks": "Hörbücher",
     "back": "Zurück",
     "back_menu": "Zurück / Menü",
+    "blue": "Blau",
     "brighter": "Heller",
     "brightness": "Helligkeit",
     "candle": "Kerze",
     "close": "Zu",
     "colour_temperature": "Farbtemperatur",
     "cool_white": "Kaltweiß",
+    "cyan": "Türkis",
     "daylight": "Tageslicht",
     "digits": "Ziffern",
     "dimmer": "Dunkler",
     "down": "Ab",
     "exit": "Beenden",
     "forward": "Vorwärts",
+    "green": "Grün",
     "home": "Startseite",
     "input": "Eingang",
     "inputs": "Eingänge",
@@ -321,9 +306,11 @@
     "on": "Ein",
     "open": "Auf",
     "options": "Optionen",
+    "orange": "Orange",
     "oscillate_off": "Schwenken aus",
     "oscillate_on": "Schwenken ein",
     "pause": "Pause",
+    "pink": "Pink",
     "play": "Wiedergabe",
     "play_pause": "Wiedergabe / Pause",
     "playlists": "Playlists",
@@ -331,12 +318,14 @@
     "power": "Ein/Aus",
     "previous": "Vorheriger",
     "radio": "Radio",
+    "red": "Rot",
     "remote": "Fernbedienung",
     "repeat_all": "Alle wiederholen",
     "repeat_off": "Wiederholen aus",
     "repeat_one": "Eines wiederholen",
     "reverse": "Rückwärts",
     "right": "Rechts",
+    "scenes": "Szenen",
     "search": "Suche",
     "select": "Auswählen",
     "shuffle": "Zufall",
@@ -353,11 +342,13 @@
     "unlock": "Entsperren",
     "unmute": "Ton ein",
     "up": "Auf",
+    "violet": "Violett",
     "voice_assistant": "Sprachassistent",
     "volume": "Lautstärke",
     "volume_down": "Leiser",
     "volume_up": "Lauter",
-    "warm_white": "Warmweiß"
+    "warm_white": "Warmweiß",
+    "yellow": "Gelb"
   },
   "page_titles": {
     "welcome": "willkommen!"

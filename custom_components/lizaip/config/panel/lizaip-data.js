@@ -254,6 +254,13 @@ export const DataMixin = {
   /** Put one `icon_options` reply where the Settings tab reads it. */
   _applyIconOptions(r) {
     this._iconOptions = r;
+    // The remote's Variables switch changes what every preview reads, so the
+    // answers held for the old setting are dropped. On unless it says off,
+    // like `read_variables_enabled`.
+    if (!r) return;
+    const on = r.variables_enabled !== false;
+    if (this._variablesEnabled !== undefined && on !== this._variablesEnabled) this._resetVariables?.();
+    this._variablesEnabled = on;
   },
 
   /**
@@ -921,7 +928,7 @@ export const DataMixin = {
 
       if (reloadActions) await this._loadActions();
       await this._loadAssignments();
-      // Every other page that came with this one -- a batch of debug pages, a
+      // Every other page that came with this one -- a batch of generated pages, a
       // template set -- has nothing cached yet, and an inactive thumbnail draws
       // only from the cache: left alone they showed as empty faces until each
       // was clicked. One bulk read fills them all before the first draw.

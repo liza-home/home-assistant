@@ -30,6 +30,7 @@ from .device import (
     async_register_services,
 )
 from . import action_controller, issues
+from .device.reset_recovery import async_setup_reset_recovery
 from .const import (
     CONF_DEMO_MODE,
     CONF_DEMO_MODE_DWELL_TIME,
@@ -100,6 +101,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # And a renamed remote is called the same thing on both of its pages.
     _async_setup_name_sync(hass)
 
+    # A factory-reset remote that still has an entry is provisioned again.
+    await async_setup_reset_recovery(hass)
+
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
 
@@ -125,7 +129,36 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     except Exception:  # noqa: BLE001 - assistants are optional; the remote is not
         _LOGGER.exception("Could not offer lizaIP's tools to AI assistants")
 
+    _async_load_devel(hass)
+
     return True
+
+
+#: The developer tools, a separate integration that is not part of a release.
+DEVEL_DOMAIN = "lizaip_devel"
+
+
+@callback
+def _async_load_devel(hass: HomeAssistant) -> None:
+    """Set up ``lizaip_devel`` alongside lizaIP when it is installed.
+
+    It has no config entry of its own, so it does not show up as an
+    integration of its own: installing the folder is what turns the Devel tab
+    on, and removing it turns it off. Started, not awaited -- it depends on
+    lizaIP, and waiting for it here would wait for this very setup to finish.
+    """
+    from homeassistant.loader import IntegrationNotFound, async_get_integration
+    from homeassistant.setup import async_setup_component
+
+    async def _load() -> None:
+        try:
+            await async_get_integration(hass, DEVEL_DOMAIN)
+        except IntegrationNotFound:
+            return
+        if not await async_setup_component(hass, DEVEL_DOMAIN, {}):
+            _LOGGER.warning("%s is installed but could not be set up", DEVEL_DOMAIN)
+
+    hass.async_create_task(_load(), f"lizaip load {DEVEL_DOMAIN}")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bool:
@@ -418,6 +451,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> b
     if ok:
         from .config.media_queue import async_sync_sensors
         from .config.media_queue.sensor import async_release
+        from .config.page_resend import cancel_page_resend
+
+        cancel_page_resend(entry.entry_id)
 
         # The queue sensors this entry added went with its platform; another
         # loaded entry adds them back.
