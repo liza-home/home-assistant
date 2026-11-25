@@ -18,14 +18,12 @@ import asyncio
 import logging
 import re
 from copy import deepcopy
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from homeassistant.core import HomeAssistant
 
+from .items import DEFAULT_MAX_ITEMS, DynamicItem, ResolveResult
 from .sources import (
-    DEFAULT_MAX_ITEMS,
-    DynamicItem,
-    ResolveResult,
     async_resolve_source,
     get_source,
     spec_key,
@@ -76,7 +74,7 @@ PLACEHOLDER_META = frozenset({"source", "spec", "overflow"})
 BOUND_FIELDS = ["tooltip", "icon", "data", "action"]
 
 
-def config_step(btn_def: dict) -> dict | None:
+def config_step(btn_def: dict[str, Any]) -> dict[str, Any] | None:
     """The single action step of a page-shaped button, if it has one."""
     config = btn_def.get("config")
     if isinstance(config, list) and config and isinstance(config[0], dict):
@@ -126,7 +124,7 @@ def page_field(btn_def: Any, field: str) -> Any:
     return value
 
 
-def page_target_entity(btn_def: dict) -> Any:
+def page_target_entity(btn_def: dict[str, Any]) -> Any:
     """The entity a button pins itself to, or ``None`` to derive one.
 
     A page names the subject in its step's ``target``; a preset writes
@@ -143,7 +141,7 @@ def page_target_entity(btn_def: dict) -> Any:
     return None
 
 
-def page_slider(btn_def: dict) -> dict:
+def page_slider(btn_def: dict[str, Any]) -> dict[str, Any]:
     """The block a slider's mechanics are declared in.
 
     A page keeps them under ``slider_actions``; nothing else on the button is
@@ -153,7 +151,7 @@ def page_slider(btn_def: dict) -> dict:
     return block if isinstance(block, dict) else {}
 
 
-def expand_placeholders(template: dict) -> dict[str, dict]:
+def expand_placeholders(template: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Rewrite ``@<placeholder>[N]`` buttons into ordinary token entries.
 
     A placeholder names a source and the static fields every button built from
@@ -171,7 +169,7 @@ def expand_placeholders(template: dict) -> dict[str, dict]:
     if not isinstance(buttons, dict) or not isinstance(placeholders, dict):
         return {}
 
-    overflow_defs: dict[str, dict] = {}
+    overflow_defs: dict[str, dict[str, Any]] = {}
     expanded: dict[str, Any] = {}
     used: set[str] = set()
 
@@ -224,7 +222,7 @@ def expand_placeholders(template: dict) -> dict[str, dict]:
     return overflow_defs
 
 
-def _keep_used_placeholders(template: dict, placeholders: dict, used: set[str]) -> None:
+def _keep_used_placeholders(template: dict[str, Any], placeholders: dict[str, Any], used: set[str]) -> None:
     """Drop the placeholders this page does not use that share a source with
     one it does.
 
@@ -246,7 +244,7 @@ def _keep_used_placeholders(template: dict, placeholders: dict, used: set[str]) 
     }
 
 
-def _apply_overflow(buttons: dict, overflow_defs: dict[str, dict]) -> None:
+def _apply_overflow(buttons: dict[str, Any], overflow_defs: dict[str, dict[str, Any]]) -> None:
     """Give past-the-end slots their static fallback, keeping the binding.
 
     Overflow slots are still bound, only currently empty, so later refreshes can
@@ -325,7 +323,7 @@ def _binding_owner(
     ]
 
 
-def scan_requirements(buttons: dict) -> dict[str, int]:
+def scan_requirements(buttons: dict[str, Any]) -> dict[str, int]:
     """Highest 1-based index each source needs across *buttons*.
 
     One entry per source means one fetch per page, not one browse per button on
@@ -372,7 +370,7 @@ def substitute_tokens(value: Any, replacements: dict[str, str]) -> Any:
     return value
 
 
-def _placeholder_spec(template: dict, source_id: str) -> Any:
+def _placeholder_spec(template: dict[str, Any], source_id: str) -> Any:
     """The ``spec:`` declared by the placeholder bound to *source_id*, if any.
 
     A source is fetched once per page, so two placeholders that narrow the same
@@ -399,7 +397,7 @@ def _placeholder_spec(template: dict, source_id: str) -> Any:
 
 
 def spec_for_source(
-    template: dict,
+    template: dict[str, Any],
     source_id: str,
     target_entity: str,
     domain_entities: dict[str, str] | None = None,
@@ -439,7 +437,8 @@ def normalize_spec(
     replacements = {TARGET_TOKEN: target_entity, TARGET_ENTRY_TOKEN: target_config_entry}
     if remote_entry:
         replacements[REMOTE_ENTRY_TOKEN] = remote_entry
-    spec = substitute_tokens(spec, replacements)
+    # The tokens are swapped in place of strings, so a dict comes back a dict.
+    spec = cast(dict[str, Any], substitute_tokens(spec, replacements))
 
     source = get_source(source_id)
     if source is not None and "entity" in (source.param_schema or {}):
@@ -522,7 +521,7 @@ def _inline_names(value: Any, found: dict[str, int]) -> None:
 def _inline_fill(value: Any, items: dict[str, list[DynamicItem]], missing: list[str]) -> Any:
     """*value* with every inline token written out; misses go to *missing*."""
     if isinstance(value, str):
-        def _sub(match: re.Match) -> str:
+        def _sub(match: re.Match[str]) -> str:
             name, idx, field = match.group(1), int(match.group(2)), match.group(3)
             found = items.get(name) or []
             item = found[idx - 1] if 0 < idx <= len(found) else None
@@ -565,12 +564,12 @@ async def _async_resolve_all(
 
 async def resolve_inline_tokens(
     hass: HomeAssistant,
-    template: dict,
+    template: dict[str, Any],
     target_entity: str = "",
     target_config_entry: str = "",
     remote_entry: str = "",
     domain_entities: dict[str, str] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Write ``{@<placeholder>[N].<field>}`` out across a template's buttons.
 
     Lets a tile name something the template cannot know in advance -- "the first
@@ -598,7 +597,7 @@ async def resolve_inline_tokens(
     for name, max_index in wanted.items():
         ph = placeholders.get(name)
         source_id = str((ph or {}).get("source") or "").strip() if isinstance(ph, dict) else ""
-        if not source_id:
+        if not source_id or not isinstance(ph, dict):
             _LOGGER.warning("inline token names %r, which is no placeholder with a source", name)
             items[name] = []
             continue
@@ -629,12 +628,12 @@ async def resolve_inline_tokens(
 
 async def resolve_template_variables(
     hass: HomeAssistant,
-    template: dict,
+    template: dict[str, Any],
     target_entity: str,
     domain_entities: dict[str, str] | None = None,
     target_config_entry: str = "",
     remote_entry: str = "",
-) -> dict:
+) -> dict[str, Any]:
     """Resolve all ``@<source>[N]`` tokens in a template's buttons.
 
     Mutates and returns *template*. Missing items become blank buttons with a
@@ -787,7 +786,7 @@ async def resolve_template_variables(
 
 
 def template_bindings(
-    template: dict,
+    template: dict[str, Any],
     target_entity: str,
     target_config_entry: str = "",
     domain_entities: dict[str, str] | None = None,

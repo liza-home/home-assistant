@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 
-def to_float(value: object, default: float | None = None) -> float | None:
+def to_float(value: Any, default: float | None = None) -> float | None:
     """*value* as a finite float, or *default* when it is empty or not a number.
 
     Form fields arrive as strings, and an emptied one as ``""``, which

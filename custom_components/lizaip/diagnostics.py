@@ -4,8 +4,8 @@ What belongs here is whatever a bug report cannot be answered without, and
 nothing that only repeats what the reporter already told us. Three things
 decide that:
 
-* **The device's own account of itself** — connected or not, from which
-  address, on which firmware and protocol, and what it says it can do. None of
+* **The device's own account of itself** — connected or not, on which
+  firmware and protocol, and what it says it can do. None of
   this is configured anywhere, so none of it can be read off a screenshot.
 * **The settings behind a behaviour complaint** — "the slider lags", "the
   labels are in the wrong language" and "it keeps cycling by itself" are each
@@ -31,6 +31,7 @@ this file is not enough.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -47,7 +48,8 @@ from .const import DOMAIN
 from .device import report as device_report
 from .device.const import MODEL_ID
 from .device.connection import LizaIPConnection
-from .runtime import find_store, resolve_device_id
+from .ir.device import CONF_BRAND_NAME, CONF_KEYS, ir_subentries
+from .runtime import find_store, is_ir_entry, resolve_device_id
 from .shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
@@ -161,7 +163,8 @@ def _traffic_snapshot(connection: LizaIPConnection) -> dict[str, Any] | None:
     if traffic is None:
         return None
     try:
-        return traffic.snapshot(50)
+        snapshot: dict[str, Any] | None = traffic.snapshot(50)
+        return snapshot
     except Exception as err:  # noqa: BLE001 — diagnostics must never raise
         log.debug("Diagnostics could not read the traffic snapshot: %s", err)
         return None
@@ -191,6 +194,112 @@ def _redact(mapping: Mapping[str, Any]) -> dict[str, Any]:
         key: "**redacted**" if _is_secret(str(key)) else value
         for key, value in mapping.items()
     }
+
+
+_REDACTED = "**redacted**"
+_NETWORK_KEYS = frozenset({"ssid", "bssid", "ha_hostname", "hostname"})
+_MAC_RE = re.compile(r"(?<![0-9A-Fa-f:])[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f:])")
+_IPV4_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+_IPV6_RE = re.compile(
+    r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}"
+    r"(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{0,4})(?:%[\w.-]+)?(?![\w:])"
+)
+_MDNS_RE = re.compile(r"(?<![\w.-])[\w-]+(?:\.[\w-]+)*\.local(?![\w-]|\.\w)", re.IGNORECASE)
+_NAMED_RE = re.compile(
+    r"""(?P<key>\b(?:ssid|ha_hostname)["']?\s*[:=]\s*)"""
+    r"""(?:(?P<q>["'])(?P<quoted>(?:\\.|(?!(?P=q))[^\\])*)(?P=q)|(?P<bare>[^\s,;}]+))""",
+    re.IGNORECASE,
+)
+_HOST_KEYS = frozenset({"ha_hostname", "hostname"})
+
+
+def _redact_ip(match: re.Match[str]) -> str:
+    """Hide a LAN address; keep a global one, which here is a version number."""
+    try:
+        is_global = ipaddress.ip_address(match.group()).is_global
+    except ValueError:
+        return match.group()
+    return match.group() if is_global else _REDACTED
+
+
+def _redact_ipv6(match: re.Match[str]) -> str:
+    """Hide any IPv6 address: unlike IPv4, no version number looks like one."""
+    try:
+        ipaddress.ip_address(match.group())
+    except ValueError:
+        return match.group()
+    return _REDACTED
+
+
+def _redact_named(match: re.Match[str]) -> str:
+    quote = match.group("q") or ""
+    return f"{match.group('key')}{quote}{_REDACTED}{quote}"
+
+
+def _known_hosts(value: Any, found: set[str]) -> set[str]:
+    """Every hostname the report names under a hostname key or ``ha_hostname=``."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key).lower() in _HOST_KEYS and isinstance(item, str) and item.strip():
+                found.add(item.strip())
+            else:
+                _known_hosts(item, found)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _known_hosts(item, found)
+    elif isinstance(value, str):
+        for match in _NAMED_RE.finditer(value):
+            if match.group("key").lower().startswith("ha_hostname"):
+                host = match.group("quoted") or match.group("bare") or ""
+                if host.strip():
+                    found.add(host.strip())
+    return found
+
+
+def _redact_network(value: Any, device_id: re.Pattern[str] | None) -> Any:
+    """Hide addresses, MACs, the device id, SSID and hostnames everywhere.
+
+    The remote's own sections and the logs carry them inside free text keys
+    cannot reach, so every hostname named anywhere is hidden everywhere."""
+    hosts = sorted(_known_hosts(value, set()), key=len, reverse=True)
+    host_re = (
+        re.compile(
+            r"(?<![\w.-])(?:" + "|".join(map(re.escape, hosts)) + r")(?![\w-]|\.\w)",
+            re.IGNORECASE,
+        )
+        if hosts else None
+    )
+    return _scrub(value, device_id, host_re)
+
+
+def _scrub(
+    value: Any, device_id: re.Pattern[str] | None, host_re: re.Pattern[str] | None
+) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _REDACTED if str(key).lower() in _NETWORK_KEYS and item
+            else _scrub(item, device_id, host_re)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_scrub(item, device_id, host_re) for item in value]
+    if not isinstance(value, str):
+        return value
+    text = _NAMED_RE.sub(_redact_named, value)
+    if host_re:
+        text = host_re.sub(_REDACTED, text)
+    text = _MDNS_RE.sub(_REDACTED, text)
+    text = _MAC_RE.sub(_REDACTED, text)
+    text = _IPV6_RE.sub(_redact_ipv6, text)
+    text = _IPV4_RE.sub(_redact_ip, text)
+    return device_id.sub(_REDACTED, text) if device_id else text
+
+
+def _device_id_pattern(entry: ConfigEntry) -> re.Pattern[str] | None:
+    """The remote's MAC-based id as it appears in titles and entity ids."""
+    if not entry.unique_id:
+        return None
+    return re.compile(re.escape(entry.unique_id), re.IGNORECASE)
 
 
 def _entity_id_mask(hass: HomeAssistant) -> Callable[[str], str]:
@@ -521,6 +630,21 @@ def _overview(
     }
 
 
+def _ir_entry_report(entry: ConfigEntry) -> dict[str, Any]:
+    """The IR devices entry: which devices it holds, without their codes."""
+    return {
+        "entry": {"entry_id": entry.entry_id, "title": entry.title, "state": str(entry.state)},
+        "ir_devices": [
+            {
+                "title": sub.title,
+                "brand": sub.data.get(CONF_BRAND_NAME),
+                "keys": len(sub.data.get(CONF_KEYS) or ()),
+            }
+            for sub in ir_subentries(entry)
+        ],
+    }
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -533,6 +657,23 @@ async def async_get_config_entry_diagnostics(
     ``probe`` and ``prefetched`` are what the ZIP already read off the remote;
     passing them spares the device a second round of the same requests.
     """
+    if is_ir_entry(entry):
+        return _ir_entry_report(entry)
+    report: dict[str, Any] = _redact_network(
+        await _async_remote_report(hass, entry, probe=probe, prefetched=prefetched),
+        _device_id_pattern(entry),
+    )
+    return report
+
+
+async def _async_remote_report(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    *,
+    probe: dict[str, Any] | None,
+    prefetched: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Everything known about one remote, before network details are hidden."""
     connection: LizaIPConnection = entry.runtime_data.connection
 
     device_report = await _async_device_report(
@@ -581,12 +722,8 @@ async def async_get_config_entry_diagnostics(
             # reporting a bare `null` while the device page shows the shipped
             # default would send someone looking for a fault that is not there.
             "model_id": connection.device_model_id or MODEL_ID,
-            # The remote dials Home Assistant, so its address is not configured
-            # anywhere and appears in no UI — it is read off the socket and kept
-            # only in memory. That makes this the one place a report can say
-            # which box on the LAN it is about. `null` here is ordinary: it means
-            # the device has not connected since the last restart, which is
-            # itself worth knowing when the complaint is that it is offline.
+            # Redacted on the way out; `null` still says the device has not
+            # connected since the last restart.
             "peer_ip": connection.peer_ip,
             "http_port": connection.device_http_port,
         },

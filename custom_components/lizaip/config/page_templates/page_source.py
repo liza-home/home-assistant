@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -31,7 +32,7 @@ def _is_graphic_part(part: str) -> bool:
     if is_address(part) or custom_icon_scheme(part):
         return True
     m = re.match(r"^([a-z][a-z0-9_]*):", part)
-    return bool(m) and m.group(1) in PART_SOURCE_TYPES and m.group(1) not in ("text", "ref")
+    return m is not None and m.group(1) in PART_SOURCE_TYPES and m.group(1) not in ("text", "ref")
 
 
 def _short_text(name: str) -> str:
@@ -54,7 +55,7 @@ def title_parts(title: str) -> tuple[list[str], str]:
     picture = ""
     for part in split_source_parts(_TOKEN_RE.sub("", title or "").strip()):
         part = part.split("?", 1)[0].strip()
-        if not part or part in ("+", "-"):
+        if not part:
             continue
         if part.startswith("text:"):
             words.append(part[len("text:"):].strip())
@@ -62,17 +63,17 @@ def title_parts(title: str) -> tuple[list[str], str]:
             picture = picture or part
         else:
             words.append(part)
-    return [w for w in words if w and w not in ("+", "-")], picture
+    return [w for w in words if w], picture
 
 
 def page_name(title: str, page_id: Any = None) -> str:
     """A page's name, read off its title: its words, else its first picture.
 
     The plumbing of schemes is left out, as :func:`title_parts` leaves out
-    variables and options. ``logo:sonos + ${_device}`` is "Sonos".
+    variables and options. ``logo:sonos ${_device}`` is "Sonos".
     """
     words, picture = title_parts(title)
-    name = " ".join(words).strip(" +-")
+    name = " ".join(words).strip()
     if not name and picture and not picture.startswith(("media:", "/", "http")):
         slug = picture.split(":", 1)[1]
         name = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_]+", slug) if w)
@@ -95,7 +96,7 @@ def page_tile(title: str, name: str) -> str:
     return f"text:{_short_text(name)}" if name else ""
 
 
-def _listed_pages(pages: list, exclude: str, overviews: set | frozenset = frozenset()) -> list[dict]:
+def _listed_pages(pages: list[Any], exclude: str, overviews: set[Any] | frozenset[Any] = frozenset()) -> list[dict[str, Any]]:
     """The main pages an overview lists: no subpages, no overview pages.
 
     An overview is recognised by what it does -- *overviews* are the pages with
@@ -117,7 +118,7 @@ def _listed_pages(pages: list, exclude: str, overviews: set | frozenset = frozen
     return listed
 
 
-async def _remote_pages(hass: HomeAssistant, entry_id: str) -> tuple[list, set]:
+async def _remote_pages(hass: HomeAssistant, entry_id: str) -> tuple[list[Any], set[Any]]:
     """The remote's pages, and the ids of those that are overviews themselves."""
     from ...runtime import resolve_device_id, find_store
     from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
@@ -127,7 +128,7 @@ async def _remote_pages(hass: HomeAssistant, entry_id: str) -> tuple[list, set]:
     if store is None or not device_id:
         raise SourceUnavailable(f"remote {entry_id} is not loaded")
     pages = await store.async_get_pages(device_id)
-    overviews: set = set()
+    overviews: set[Any] = set()
     for page in pages:
         if not isinstance(page, dict) or page.get("id") is None:
             continue
@@ -178,14 +179,13 @@ async def resolve_pages(
 
 
 def pages_fingerprint(
-    pages: list, exclude: str = "toc", overviews: set | frozenset = frozenset(),
-) -> frozenset:
-    """What an overview depends on: which main pages there are, and their titles.
+    pages: list[Any], exclude: str = "toc", overviews: set[Any] | frozenset[Any] = frozenset(),
+) -> tuple[Any, ...]:
+    """What an overview depends on: its main pages, their titles and their order.
 
-    Order is deliberately not part of it -- moving pages around does not call
-    for a refresh, and neither does any edit to a page's buttons.
+    An edit to a page's buttons is deliberately not part of it.
     """
-    return frozenset(
+    return tuple(
         (page["id"], str(page.get("title") or ""))
         for page in _listed_pages(pages, exclude, overviews)
     )
@@ -195,17 +195,19 @@ def pages_fingerprint(
 #: Kept across subscriptions on purpose: deleting a page that has bound buttons
 #: of its own re-subscribes every hook, and a hook that took its starting point
 #: from the list *after* that deletion would see nothing to refresh for.
-_PAGES_SEEN: dict[tuple[str, str], frozenset] = {}
+_PAGES_SEEN: dict[tuple[str, str], tuple[Any, ...]] = {}
 
 
-def subscribe_pages(hass: HomeAssistant, specs, on_change) -> Any | None:
-    """Fire when a listed remote gains or loses a main page, or one is retitled.
+def subscribe_pages(
+    hass: HomeAssistant, specs: Any, on_change: Callable[[], None]
+) -> Any | None:
+    """Fire when a listed remote's main pages are added, removed, retitled or moved.
 
     Every saved change to a remote announces itself with ``CONFIG_CHANGED_EVENT``,
-    but most of them -- a button edited, pages reordered, the overview's own
-    refresh -- leave the page list as it was. Each announcement is compared
-    against a fingerprint of the page list (:func:`pages_fingerprint`) and only
-    a different one schedules a refresh.
+    but most of them -- a button edited, the overview's own refresh -- leave the
+    page list as it was. Each announcement is compared against a fingerprint of
+    the page list (:func:`pages_fingerprint`) and only a different one
+    schedules a refresh.
     """
     from ..const import CONFIG_CHANGED_EVENT
 
@@ -218,7 +220,7 @@ def subscribe_pages(hass: HomeAssistant, specs, on_change) -> Any | None:
     # What the returned unsubscribe stops: a check still reading the store
     # when the page goes away must not schedule a refresh after it.
     closed = False
-    tasks: set[asyncio.Task] = set()
+    tasks: set[asyncio.Task[Any]] = set()
 
     async def _check(entry_id: str, prime: bool = False) -> None:
         key = (entry_id, watched[entry_id])

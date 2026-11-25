@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Final
 
+from aiohttp import ClientTimeout
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -73,7 +74,7 @@ async def _hosted_ok(hass: HomeAssistant, url: str) -> bool | None:
     """Whether *url* serves an image, or ``None`` when it could not be asked."""
     try:
         async with async_get_clientsession(hass).head(
-            url, timeout=_TIMEOUT_S, allow_redirects=True,
+            url, timeout=ClientTimeout(total=_TIMEOUT_S), allow_redirects=True,
         ) as resp:
             # apps.apple.com answers a missing file with a 200 HTML page.
             return resp.status == 200 and resp.content_type.startswith("image/")
@@ -111,7 +112,7 @@ async def _lookup(
         params["country"] = country.lower()
     try:
         async with async_get_clientsession(hass).get(
-            LOOKUP_URL, params=params, timeout=_TIMEOUT_S,
+            LOOKUP_URL, params=params, timeout=ClientTimeout(total=_TIMEOUT_S),
         ) as resp:
             resp.raise_for_status()
             # The service answers `text/javascript`.
@@ -160,7 +161,7 @@ async def app_store_icons(hass: HomeAssistant, bundle_ids: list[str]) -> dict[st
     }
 
 
-async def add_app_icons(hass: HomeAssistant, raw: list[dict]) -> None:
+async def add_app_icons(hass: HomeAssistant, raw: list[dict[str, Any]]) -> None:
     """Give each app of *raw* without a picture its App Store icon, by bundle id."""
     bare = [r["media_content_id"] for r in raw if not r.get("thumbnail") and r.get("media_content_id")]
     if not bare:
@@ -174,5 +175,5 @@ async def add_app_icons(hass: HomeAssistant, raw: list[dict]) -> None:
 class AppleTv(TvPlatform):
     integration = "apple_tv"
 
-    async def decorate(self, hass: HomeAssistant, rows: list[dict]) -> None:
+    async def decorate(self, hass: HomeAssistant, rows: list[dict[str, Any]]) -> None:
         await add_app_icons(hass, rows)

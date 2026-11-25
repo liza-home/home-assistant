@@ -10,10 +10,12 @@ in ``finalize_png``, and not here.
 from __future__ import annotations
 
 import glob
+import importlib
 import json
 import logging
 import os
 import threading
+from typing import Any, cast
 
 from PIL import Image
 
@@ -50,8 +52,11 @@ def _read_mdi_paths() -> dict[str, str]:
 
     # Locate the mdi JSON directory shipped with hass_frontend
     try:
-        import hass_frontend
-        mdi_dir = os.path.join(os.path.dirname(hass_frontend.__file__), "static", "mdi")
+        # Only present inside Home Assistant (and untyped); a regular package has a file.
+        hass_frontend = importlib.import_module("hass_frontend")
+        mdi_dir: str | None = os.path.join(
+            os.path.dirname(cast(str, hass_frontend.__file__)), "static", "mdi",
+        )
     except ImportError:
         dirs = glob.glob(_MDI_FALLBACK_GLOB)
         mdi_dir = dirs[0] if dirs else None
@@ -87,7 +92,7 @@ def render_mdi_icon(
     icon_name: str,
     width: int,
     height: int,
-    fg_color: tuple = DEFAULT_FG_COLOR,
+    fg_color: tuple[Any, ...] = DEFAULT_FG_COLOR,
 ) -> Image.Image:
     """Render an MDI icon and return foreground pixels on a transparent canvas.
 

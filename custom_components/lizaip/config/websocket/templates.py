@@ -12,13 +12,20 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
+from ...ir.page_codes import async_swap_ir_codes
 from ...runtime import get_store
 from ...shared.assignment import ASSIGNMENT_LONGTOUCH_KEY, ASSIGNMENT_DYNAMIC_KEY
 from ...shared.authorship import current_user
@@ -44,12 +51,12 @@ from ..template_targets import (
 )
 from ..listeners import refresh_state_listener, schedule_push_rescan
 from ..template_pages import (
-    TemplatePageError,
     async_create_page_from_template,
     resolve_template_target,
     schedule_page_refresh,
     template_set_page_ids,
 )
+from ..template_writes import TemplatePageError
 from .common import requires_device
 from ..access import require_any_device_access, require_device_access
 
@@ -62,7 +69,7 @@ _LOGGER = logging.getLogger(__name__)
 })
 @require_any_device_access
 @websocket_api.async_response
-async def ws_list_templates(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_list_templates(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Return template metadata: {id, name, icon, description, target_selector}.
 
     Each also says whether Home Assistant has anything it could be bound to
@@ -91,9 +98,9 @@ async def ws_list_templates(hass: HomeAssistant, connection, msg: dict) -> None:
 
 
 async def _with_favorites(
-    hass: HomeAssistant, devices: list[dict], device_sel: dict, kind: str,
+    hass: HomeAssistant, devices: list[dict[str, Any]], device_sel: dict[str, Any], kind: str,
     asked: dict[str, set[str] | None],
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """The *devices* whose player has favourites of *kind*.
 
     A player that cannot be asked -- off, or not loaded -- is left out with
@@ -119,7 +126,7 @@ async def _with_favorites(
 })
 @require_any_device_access
 @websocket_api.async_response
-async def ws_options_fit(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_options_fit(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """``{fits: {entity_id: bool}}``: whether an options template fits each.
 
     The question the button menu asks before it offers **Add options…**,
@@ -132,7 +139,7 @@ async def ws_options_fit(hass: HomeAssistant, connection, msg: dict) -> None:
     fits: dict[str, bool] = {}
     for entity_id in msg["entity_ids"]:
         owners = entity_selector_match(hass, entity_id)
-        fits[entity_id] = bool(owners) and any(template_fits(t, owners) for t in options)
+        fits[entity_id] = owners is not None and any(template_fits(t, owners) for t in options)
     connection.send_result(msg["id"], {"fits": fits})
 
 
@@ -143,7 +150,7 @@ async def ws_options_fit(hass: HomeAssistant, connection, msg: dict) -> None:
 })
 @require_any_device_access
 @websocket_api.async_response
-async def ws_list_template_devices(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_list_template_devices(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """List devices matching a template's integration and primary domain.
 
     Server-side filtering keeps the panel from reimplementing device/entity
@@ -182,7 +189,7 @@ async def ws_list_template_devices(hass: HomeAssistant, connection, msg: dict) -
 })
 @require_any_device_access
 @websocket_api.async_response
-async def ws_list_template_config_entries(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_list_template_config_entries(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """List config entries for templates bound to an integration instance.
 
     The Hue template binds to a bridge/config entry, not one lamp; the page is
@@ -230,7 +237,7 @@ async def ws_list_template_config_entries(hass: HomeAssistant, connection, msg: 
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_add_template_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_add_template_page(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Create a page from a template, bound to a device or config entry target.
 
     Config-entry templates have no primary entity; their grids come from dynamic
@@ -301,7 +308,7 @@ def _referenced_entities(value: Any, out: set[str]) -> set[str]:
     return out
 
 
-def _reference_pattern(mapping: dict[str, str]) -> re.Pattern:
+def _reference_pattern(mapping: dict[str, str]) -> re.Pattern[str]:
     """Every key of *mapping* as a whole token, longest first."""
     return re.compile(
         r"(?<![A-Za-z0-9_])("
@@ -310,7 +317,7 @@ def _reference_pattern(mapping: dict[str, str]) -> re.Pattern:
     )
 
 
-def _rewrite_references(value: Any, pattern: re.Pattern, mapping: dict[str, str]) -> Any:
+def _rewrite_references(value: Any, pattern: re.Pattern[str], mapping: dict[str, str]) -> Any:
     """Return ``value`` with every whole-token reference in ``mapping`` swapped.
 
     Whole tokens, so `media_player.tv` does not rewrite `media_player.tv_2`
@@ -339,8 +346,8 @@ _ENTITY_BEARING_BUTTON_KEYS: Final = frozenset(
 
 
 def _rewrite_assignments(
-    assignments: dict, pattern: re.Pattern, mapping: dict[str, str]
-) -> dict:
+    assignments: dict[str, Any], pattern: re.Pattern[str], mapping: dict[str, str]
+) -> dict[str, Any]:
     """Swap entity references inside stored button assignments.
 
     Walks only the entity-bearing fields of each button (see
@@ -362,8 +369,8 @@ def _rewrite_assignments(
 
 def _retarget_mapping(
     hass: HomeAssistant,
-    old_target: dict,
-    new_target: dict,
+    old_target: dict[str, Any],
+    new_target: dict[str, Any],
     old_domain_entities: dict[str, str],
     new_domain_entities: dict[str, str],
     referenced: set[str],
@@ -419,7 +426,7 @@ def _retarget_mapping(
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_retarget_template_page(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Point a template page at another device (or hub), keeping its buttons.
 
     The page is not regenerated: buttons the user changed stay changed. Only
@@ -440,7 +447,8 @@ async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, 
     if page is None:
         connection.send_error(msg["id"], "page_not_found", f"Page {page_id} not found")
         return
-    page_template = page.get("template") if isinstance(page.get("template"), dict) else {}
+    raw_template = page.get("template")
+    page_template: dict[str, Any] = raw_template if isinstance(raw_template, dict) else {}
     template_id = page_template.get("type") or ""
     if not template_id:
         connection.send_error(msg["id"], "not_a_template_page", f"Page {page_id} was not made from a template")
@@ -466,6 +474,7 @@ async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, 
     }
     integrations = selector_integrations((template.get("target_selector") or {}).get("device") or {})
     old_device = old_target.get("device") or ""
+    integration: str | None
     if len(integrations) == 1:
         integration = integrations[0]
     else:
@@ -492,8 +501,14 @@ async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, 
     assignments_by_page = {
         p["id"]: await store.async_get_assignments(device_id, p["id"]) for p in group
     }
+    # Fetched before anything is written, so a catalogue outage moves nothing.
+    try:
+        swapped_by_page = await async_swap_ir_codes(hass, assignments_by_page, target_device)
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "ir_codes_unavailable", str(err))
+        return
     referenced: set[str] = set()
-    for page_assignments in assignments_by_page.values():
+    for page_assignments in swapped_by_page.values():
         referenced |= _referenced_entities(page_assignments, set())
 
     buttons_changed = 0
@@ -501,14 +516,18 @@ async def ws_retarget_template_page(hass: HomeAssistant, connection, msg: dict, 
         hass, old_target, new_target, old_domain_entities, new_domain_entities,
         referenced,
     )
-    if mapping:
-        pattern = _reference_pattern(mapping)
-        for group_page_id, assignments in assignments_by_page.items():
-            rewritten = _rewrite_assignments(assignments, pattern, mapping)
-            changed = sum(1 for key in rewritten if rewritten[key] != assignments.get(key))
-            if changed:
-                buttons_changed += changed
-                await store.async_set_assignments(device_id, group_page_id, rewritten)
+    pattern = _reference_pattern(mapping) if mapping else None
+    for group_page_id, assignments in assignments_by_page.items():
+        rewritten = swapped_by_page[group_page_id]
+        if pattern is not None:
+            rewritten = _rewrite_assignments(rewritten, pattern, mapping)
+        changed = sum(
+            1 for key in rewritten.keys() | assignments.keys()
+            if rewritten.get(key) != assignments.get(key)
+        )
+        if changed:
+            buttons_changed += changed
+            await store.async_set_assignments(device_id, group_page_id, rewritten)
 
     for group_page in group:
         group_page["template"] = {**group_page["template"], "target": new_target}

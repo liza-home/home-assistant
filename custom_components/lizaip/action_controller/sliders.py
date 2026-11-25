@@ -179,7 +179,7 @@ def controls_for_entity(entity_id: str, state: State | None) -> list[SliderContr
 
 def resolve_control(
     hass: HomeAssistant, entity_id: str, control_id: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Resolve *entity_id* to proportional slider mechanics, or None.
 
     The returned dict is shaped like a stored ``slider_actions`` blob in
@@ -307,7 +307,8 @@ def slider_follows(slider_key: Any, assign: Any) -> bool:
     emptiness test (``Object.keys(...).length === 0`` in JS)."""
     slider_cfg = assign.get("slider_actions") if isinstance(assign, dict) else None
     if not isinstance(slider_cfg, dict) or not slider_cfg:
-        return slider_key == SLIDER_VERTICAL_KEY
+        is_vertical: bool = slider_key == SLIDER_VERTICAL_KEY
+        return is_vertical
     return follows_selection(slider_cfg)
 
 

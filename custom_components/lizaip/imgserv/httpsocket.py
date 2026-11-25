@@ -4,9 +4,10 @@
 
 **Sources** — ``mdi:``, ``logo:``, ``text:``, ``media:``, ``history:``, and any
 icon set the browser registered, ``phu:`` among them (``render_custom.py``).
-A ``media:`` picture shown whole (no ``box``) is cut round (``radius=``, percent,
-0 square, 100 circle, the default); with ``box`` it stays
-square so the tiles meet.
+A picture of tile size (no ``box``) is cut by ``radius=`` (percent, 0 square,
+100 circle): a ``media:`` picture (default 100) and any other picture on a
+``bg`` (default 0), but never words (``text:``); any other size, and any
+``box`` piece, stays square so the tiles meet.
 
 **Options**, all optional, all shared by every source:
 
@@ -21,7 +22,7 @@ square so the tiles meet.
 ``alpha``               keep the alpha channel instead of flattening to black
 ``percent``             0–100 fill level via alpha: bottom stays opaque,
                         upper remainder is dimmed to ``PERCENT_TINT_ALPHA``
-``radius``              0–100 corner radius of a whole ``media:`` picture, 100 = round (default)
+``radius``              0–100 corner radius of a whole picture, 100 = round; see above
 ``font``                font ID, ``text:`` only
 ``font_size``           size in pixels, ``text:`` only (default: the symbolic
                         ``size``'s font size, else the image height)
@@ -29,6 +30,10 @@ square so the tiles meet.
 ``start_time``,         an absolute period for a ``history:`` graph, instead
 ``end_time``            of the moving one ``hours``/``days`` ask for
 ======================  ==================================================
+
+``fg`` and ``bg`` may each be ``linear_gradient(A,B,...)``, running through its
+colours spaced evenly from top to bottom: a ``bg`` over the whole picture, an
+``fg`` over the height of what was drawn in it.
 
 The query is parsed once into :class:`_Options`, each handler answers only
 "what does this subject look like", and :meth:`LizaIPImageView.get` finishes
@@ -40,10 +45,12 @@ import io
 import ipaddress
 import logging
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
 from urllib.parse import parse_qsl, unquote, urlsplit
+from typing import Any, cast
 
 import aiohttp
 from aiohttp import web
@@ -60,6 +67,7 @@ from ..shared.history import is_servable
 from . import media_hosts, media_refs
 from .const import (
     parse_color,
+    gradient_stops,
     COLOR_NAMES,
     DEFAULT_BG_COLOR,
     DEFAULT_FG_COLOR,
@@ -77,7 +85,7 @@ from .source_parse import (
     is_address,
     split_source_parts,
 )
-from .render import finalize_png
+from .render import apply_percent_tint, fade_ink, finalize_png, mount
 from .render_caption import compose_parts
 from .render_history import (
     DEFAULT_HOURS,
@@ -172,7 +180,7 @@ def _parse_box(raw: str | None) -> tuple[int, int, int, int] | None:
     return (x, y, min(w, MAX_SIZE), min(h, MAX_SIZE))
 
 
-def _cut_box(image, box: tuple[int, int, int, int]):
+def _cut_box(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
     """The ``x,y,w,h`` piece of *image*, in exactly the size that was asked for.
 
     Where the box reaches past the edge the piece is transparent there rather
@@ -200,10 +208,10 @@ def _default_font_size(size_str: str | None) -> int | None:
     return named.font_size if named else None
 
 
-def _parse_radius(raw: str | None) -> int:
-    """Parse the optional corner radius (0..100 %); anything else is the default."""
+def _parse_radius(raw: str | None) -> int | None:
+    """Parse the optional corner radius (0..100 %); anything else leaves the picture's default."""
     if raw is None or not raw.strip().isdigit():
-        return _MEDIA_CORNER_PERCENT
+        return None
     return min(int(raw), 100)
 
 
@@ -220,7 +228,7 @@ def _parse_percent(raw: str | None) -> int | None:
     return percent
 
 
-def _parse_span(query) -> timedelta:
+def _parse_span(query: Mapping[str, str]) -> timedelta:
     """How long a ``history:`` graph covers, from ``hours`` or ``days``.
 
     The two spell the same thing, so asking for both is a mistake rather than a
@@ -233,7 +241,7 @@ def _parse_span(query) -> timedelta:
         raise ValueError("use hours or days, not both")
     if has_days:
         try:
-            days = int(days_raw)
+            days = int(cast(str, days_raw))
         except (ValueError, TypeError) as err:
             raise ValueError("days must be an integer") from err
         if not 1 <= days <= MAX_DAYS:
@@ -242,7 +250,7 @@ def _parse_span(query) -> timedelta:
     if not has_hours:
         return timedelta(hours=DEFAULT_HOURS)
     try:
-        hours = int(hours_raw)
+        hours = int(cast(str, hours_raw))
     except (ValueError, TypeError) as err:
         raise ValueError("hours must be an integer") from err
     if not 1 <= hours <= MAX_HOURS:
@@ -264,7 +272,7 @@ def _parse_time(raw: str | None, name: str) -> datetime | None:
     return dt_util.as_utc(parsed)
 
 
-def _parse_period(query) -> tuple[datetime, datetime]:
+def _parse_period(query: Mapping[str, str]) -> tuple[datetime, datetime]:
     """The period a ``history:`` graph covers, as UTC start and end.
 
     ``start_time``/``end_time`` name a period outright; whichever end is
@@ -295,7 +303,7 @@ def _parse_flag(raw: str | None, default: bool) -> bool:
     return raw.strip().lower() not in _FALSE_VALUES
 
 
-def _first_param(query, *names: str) -> str | None:
+def _first_param(query: Mapping[str, str], *names: str) -> str | None:
     """The first non-empty value among ``names``, in query-string order."""
     for key, value in query.items():
         if key in names and value:
@@ -307,8 +315,8 @@ def _resolve_colors(
     mode: str,
     fg_raw: str | None,
     bg_raw: str | None,
-    theme=None,
-) -> tuple[tuple, tuple]:
+    theme: theme_registry.Theme | None = None,
+) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
     """Resolve fg/bg RGBA tuples from mode + explicit params.
 
     ``mode`` provides defaults for *both* fg and bg, but an explicit ``fg``/``color``
@@ -332,6 +340,14 @@ def _resolve_colors(
     return fg, bg
 
 
+def _fade(
+    first: tuple[Any, ...], stops: tuple[str, ...], theme: theme_registry.Theme,
+) -> tuple[tuple[Any, ...], ...] | None:
+    """*stops* as colours, *first* already resolved; ``None`` unless every one reads."""
+    rest = [parse_color(s, theme.colors) for s in stops[1:]]
+    return (first, *cast(list[tuple[Any, ...]], rest)) if rest and all(rest) else None
+
+
 @dataclass(frozen=True)
 class _Options:
     """Everything the query string says, parsed once, before any rendering.
@@ -344,8 +360,8 @@ class _Options:
     width: int
     height: int
     box: tuple[int, int, int, int] | None
-    fg: tuple
-    bg: tuple
+    fg: tuple[Any, ...]
+    bg: tuple[Any, ...]
     crop: bool
     keep_alpha: bool
     percent: int | None
@@ -360,16 +376,24 @@ class _Options:
     fit: str = "contain"
     #: The emoji font: a font id, ``none`` for none, ``None`` to find one.
     emoji: str | None = None
-    #: Corner radius of a whole `media:` picture, percent of its shorter side.
-    radius: int = 100
+    #: Corner radius of a whole picture, percent of its shorter side;
+    #: ``None`` leaves each kind its default (see `_round_unless_boxed`).
+    radius: int | None = None
+    #: The colours ``fg`` and ``bg`` fade through, top to bottom, when given
+    #: as ``linear_gradient(A,B,...)``; the first is ``fg``/``bg`` itself.
+    fg_fade: tuple[tuple[Any, ...], ...] | None = None
+    bg_fade: tuple[tuple[Any, ...], ...] | None = None
 
     @classmethod
-    def from_query(cls, query) -> _Options:
+    def from_query(cls, query: Mapping[str, str]) -> _Options:
         """Parse a query mapping. Raises ``_ImgservError`` (400) on bad input."""
         mode = query.get("mode", "").lower()
         theme = theme_registry.get_theme(query.get("theme"))
-        fg_raw = _first_param(query, "fg", "color")
-        fg, bg = _resolve_colors(mode, fg_raw, _first_param(query, "bg"), theme)
+        fg_stops = gradient_stops(_first_param(query, "fg", "color"))
+        bg_stops = gradient_stops(_first_param(query, "bg"))
+        fg, bg = _resolve_colors(
+            mode, fg_stops[0] if fg_stops else None, bg_stops[0] if bg_stops else None, theme,
+        )
         font_size = _parse_font_size(query.get("font_size"))
 
         try:
@@ -392,12 +416,14 @@ class _Options:
             font_id=query.get("font", "").lower() or None,
             font_size=font_size or _default_font_size(query.get("size")),
             mode=mode,
-            explicit_fg=bool(fg_raw),
+            explicit_fg=bool(fg_stops),
             explicit_font_size=font_size is not None,
             period=period,
             fit=_parse_fit(query.get("fit")),
             emoji=query.get("emoji", "").strip().lower() or None,
             radius=_parse_radius(query.get("radius")),
+            fg_fade=_fade(fg, fg_stops, theme),
+            bg_fade=_fade(bg, bg_stops, theme) if bg[3] else None,
         )
 
     def untinted(self) -> _Options:
@@ -495,7 +521,9 @@ def _png_response(
     return web.Response(body=data, content_type=content_type, headers=headers)
 
 
-def _resolve_reference(source: str, query):
+def _resolve_reference(
+    source: str, query: Mapping[str, str],
+) -> tuple[str, Mapping[str, str]]:
     """Expand ``ref:<djb2>`` back into the request it stands for.
 
     A reference stands for a whole URL -- source *and* options -- so it is
@@ -557,7 +585,7 @@ class LizaIPImageView(HomeAssistantView):
             # Words beside a picture are rendered by the compositor, not by
             # the `text:` handler: only there is there a size to draw them at,
             # because a mark is sized from the words it stands next to.
-            rendered: list = []
+            rendered: list[Any] = []
             for stype, value, source_def in resolved:
                 if len(resolved) > 1:
                     if stype == "text":
@@ -605,6 +633,7 @@ class LizaIPImageView(HomeAssistantView):
         response = _png_response(
             *await hass.async_add_executor_job(
                 _finish, image, options, _crop_mode(options, resolved),
+                not any(stype == "text" for stype, _value, _def in resolved),
             ),
             private=any(stype == "media" for stype, _value, _def in resolved),
         )
@@ -630,7 +659,10 @@ class LizaIPImageView(HomeAssistantView):
 # that shows up as "percent works on icons but not on logos" months later.
 
 
-async def _render_icon(hass, render_fn, value, label, options: _Options, **kwargs):
+async def _render_icon(
+    hass: HomeAssistant, render_fn: Callable[..., Image.Image | None], value: str, label: str,
+    options: _Options, **kwargs: Any,
+) -> Image.Image:
     """Run an icon renderer in the executor and translate its failures.
 
     Shared by ``mdi``, ``logo`` and the browser icon sets: same dispatch, same
@@ -652,11 +684,13 @@ async def _render_icon(hass, render_fn, value, label, options: _Options, **kwarg
     return img
 
 
-async def _handle_mdi(hass, value, options: _Options):
+async def _handle_mdi(hass: HomeAssistant, value: str, options: _Options) -> Image.Image:
     return await _render_icon(hass, render_mdi_icon, value, "MDI icon", options)
 
 
-async def _handle_custom(hass, value, options: _Options, *, source_type: str):
+async def _handle_custom(
+    hass: HomeAssistant, value: str, options: _Options, *, source_type: str,
+) -> Image.Image:
     """An icon set registered in the browser, drawn from its file or an upload.
 
     A name in neither (after a fresh look at the files) is noted, so the panel
@@ -676,7 +710,7 @@ async def _handle_custom(hass, value, options: _Options, *, source_type: str):
     )
 
 
-async def _handle_logo(hass, value, options: _Options):
+async def _handle_logo(hass: HomeAssistant, value: str, options: _Options) -> Image.Image:
     """Native colours unless the caller asked for a colour of their own.
 
     ``mode`` alone is not such an ask — it only supplies a default foreground —
@@ -689,7 +723,7 @@ async def _handle_logo(hass, value, options: _Options):
     )
 
 
-async def _handle_text(hass, value, options: _Options):
+async def _handle_text(hass: HomeAssistant, value: str, options: _Options) -> Image.Image:
     if not value:
         raise _ImgservError(400, "Missing text (e.g. text:Hello)")
     # A font size the caller named is theirs to keep, however wide the words
@@ -702,7 +736,7 @@ async def _handle_text(hass, value, options: _Options):
     ))
 
 
-async def _handle_history(hass, value, options: _Options):
+async def _handle_history(hass: HomeAssistant, value: str, options: _Options) -> Image.Image:
     entity_id = value.strip().lower()
     if not entity_id:
         raise _ImgservError(400, "Missing entity (e.g. history:sensor.temperature)")
@@ -789,7 +823,7 @@ def _check_outside_url(value: str) -> None:
         raise _ImgservError(400, "Ambiguous media URL")
 
 
-def _media_url(hass, value: str) -> tuple[str, bool]:
+def _media_url(hass: HomeAssistant, value: str) -> tuple[str, bool]:
     """The address a ``media:`` *value* is fetched from, and whether it is HA's own."""
     internal = value.startswith("/") and not value.startswith("//")
     if internal:
@@ -809,13 +843,13 @@ def _media_url(hass, value: str) -> tuple[str, bool]:
     return url, internal
 
 
-async def async_fetch_media_bytes(hass, value: str) -> bytes:
+async def async_fetch_media_bytes(hass: HomeAssistant, value: str) -> bytes:
     """The bytes a ``media:`` *value* names, checked as imgserv checks them."""
     url, internal = _media_url(hass, value)
     return await _download(hass, url, value, internal=internal)
 
 
-async def _handle_media(hass, value, options: _Options):
+async def _handle_media(hass: HomeAssistant, value: str, options: _Options) -> Image.Image:
     """Proxy and resize a media thumbnail HA can reach.
 
     Usage:  /api/imgserv/media:<url-or-ha-path>?size=tile
@@ -851,17 +885,23 @@ async def _handle_media(hass, value, options: _Options):
 
 #: Corner radius of a whole `media:` picture unless ``radius=`` says otherwise: 100 = half of its shorter side, a circle.
 _MEDIA_CORNER_PERCENT = 100
+#: Corner radius of a picture on a ``bg`` unless ``radius=`` says otherwise: square.
+_BG_CORNER_PERCENT = 0
 
 
-def _round_unless_boxed(image, options: _Options):
+def _round_unless_boxed(
+    image: Image.Image, options: _Options, default: int = _MEDIA_CORNER_PERCENT,
+) -> Image.Image:
     """*image* with rounded corners, unless a ``box=`` cuts it into pieces.
 
-    A cover shown whole gets a round cut; the tiles of one cut by ``box=`` must
-    meet edge to edge, so those stay square.
+    Only a picture sized for a tile gets ``radius`` (*default* when not
+    given); any other size stays square, and so do the pieces cut by
+    ``box=``, which must meet edge to edge.
     """
-    if options.box:
+    if options.box or (options.width, options.height) != SIZE_IDS["tile"][:2]:
         return image
-    radius = round(min(image.size) * options.radius / 200)
+    percent = default if options.radius is None else options.radius
+    radius = round(min(image.size) * percent / 200)
     if radius < 1:
         return image
     # Drawn at 4x and shrunk, so the curve is smooth rather than stair-stepped.
@@ -870,7 +910,7 @@ def _round_unless_boxed(image, options: _Options):
     ImageDraw.Draw(mask).rounded_rectangle(
         (0, 0, mask.width - 1, mask.height - 1), radius=radius * scale, fill=255,
     )
-    mask = mask.resize(image.size, Image.LANCZOS)
+    mask = mask.resize(image.size, Image.Resampling.LANCZOS)
     image = image.convert("RGBA")
     image.putalpha(ImageChops.multiply(image.getchannel("A"), mask))
     return image
@@ -886,7 +926,7 @@ _MEDIA_CACHE_SIZE = 16
 _media_clock = time.monotonic
 
 
-async def _check_redirect(hass, current: str, target: str) -> None:
+async def _check_redirect(hass: HomeAssistant, current: str, target: str) -> None:
     """Refuse a redirect an outside picture may not follow.
 
     Only to http(s). To the same host it may go; to another only when every
@@ -900,7 +940,7 @@ async def _check_redirect(hass, current: str, target: str) -> None:
         return
     try:
         infos = await hass.loop.getaddrinfo(nxt.hostname, nxt.port or 443)
-        addresses = {ipaddress.ip_address(info[4][0].split("%", 1)[0]) for info in infos}
+        addresses = {ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos}
     except (OSError, ValueError) as err:
         raise _ImgservError(502, "Upstream redirected somewhere else") from err
     if not addresses or not all(addr.is_global for addr in addresses):
@@ -926,7 +966,7 @@ def _tls_check(url: str) -> bool:
     return not (addr.is_private or addr.is_link_local or addr.is_loopback)
 
 
-async def _read_capped(resp) -> bytes:
+async def _read_capped(resp: aiohttp.ClientResponse) -> bytes:
     """The body of *resp*, refused once it outgrows ``_MEDIA_MAX_BYTES``."""
     if (resp.content_length or 0) > _MEDIA_MAX_BYTES:
         raise _ImgservError(502, "Upstream picture is too large")
@@ -957,9 +997,9 @@ def _host_of(url: str) -> str:
 
 
 async def _fetch_and_scale(
-    hass, url: str, value: str, width: int, height: int, fit: str = "contain",
+    hass: HomeAssistant, url: str, value: str, width: int, height: int, fit: str = "contain",
     *, internal: bool = False,
-):
+) -> Image.Image:
     """The picture at *url* at *width*×*height*; always an image, or a 502.
 
     An app's icon is kept once fetched, and answered from what was kept while
@@ -972,9 +1012,10 @@ async def _fetch_and_scale(
     try:
         img_bytes = await _download(hass, url, value, internal=internal)
     except _ImgservError:
-        img_bytes = await app_cache.async_load_icon(hass, value)
-        if img_bytes is None:
+        loaded = await app_cache.async_load_icon(hass, value)
+        if loaded is None:
             raise
+        img_bytes = loaded
         kept = True
     fetched = time.monotonic()
 
@@ -992,7 +1033,7 @@ async def _fetch_and_scale(
     return img
 
 
-async def _check_first_host(hass, url: str) -> None:
+async def _check_first_host(hass: HomeAssistant, url: str) -> None:
     """Refuse an outside picture on a non-public host HA did not hand out.
 
     imgserv answers without authentication, so a request naming a LAN address
@@ -1009,7 +1050,7 @@ async def _check_first_host(hass, url: str) -> None:
     except ValueError:
         try:
             infos = await hass.loop.getaddrinfo(host, parts.port or 443)
-            addresses = {ipaddress.ip_address(i[4][0].split("%", 1)[0]) for i in infos}
+            addresses = {ipaddress.ip_address(str(i[4][0]).split("%", 1)[0]) for i in infos}
         except (OSError, ValueError):
             return
     if not addresses or all(addr.is_global for addr in addresses):
@@ -1019,7 +1060,7 @@ async def _check_first_host(hass, url: str) -> None:
     raise _ImgservError(403, "media: host is not public")
 
 
-async def _download(hass, url: str, value: str, *, internal: bool = False) -> bytes:
+async def _download(hass: HomeAssistant, url: str, value: str, *, internal: bool = False) -> bytes:
     """The bytes at *url*, following only redirects imgserv allows."""
     session = async_get_clientsession(hass)
     current = url
@@ -1062,7 +1103,9 @@ async def _download(hass, url: str, value: str, *, internal: bool = False) -> by
     return img_bytes
 
 
-def _decode_and_scale(img_bytes: bytes, width: int, height: int, fit: str = "contain"):
+def _decode_and_scale(
+    img_bytes: bytes, width: int, height: int, fit: str = "contain",
+) -> Image.Image | None:
     """Decode and resize; ``None`` when Pillow cannot or may not read the bytes.
 
     ``contain`` scales the picture as large as fits *width*×*height* without
@@ -1087,25 +1130,39 @@ def _decode_and_scale(img_bytes: bytes, width: int, height: int, fit: str = "con
         # work; draft never goes below the size asked for, so the resize that
         # follows still has the pixels it needs.
         img.draft("RGB", (width, height))
-        return img.convert("RGBA").resize((width, height), Image.LANCZOS)
+        return img.convert("RGBA").resize((width, height), Image.Resampling.LANCZOS)
     except Exception as exc:  # noqa: BLE001 - answered as a 502
         _LOGGER.warning("media: resize failed: %s", exc)
         return None
 
 
-def _finish(image, options: _Options, crop: bool | str) -> tuple[bytes, str]:
-    """Box, fill and finalize *image* -- every step after the renderer."""
+def _finish(
+    image: Image.Image, options: _Options, crop: bool | str, rounded: bool = True,
+) -> tuple[bytes, str]:
+    """Box, fill and finalize *image* -- every step after the renderer.
+
+    A picture on a painted ``bg`` is cut by ``radius`` as a cover is, unless
+    it is *rounded* ``False`` (words) or a ``box=`` piece.
+    """
     if options.box:
         # The piece asked for is the picture from here on: a `bg=` fills
         # the tile rather than the whole image it was cut from.
         image = _cut_box(image, options.box)
         options = replace(options, width=image.width, height=image.height)
 
-    image = _fill_requested_size(image, options)
-    return finalize_png(image, options.keep_alpha, options.percent, options.bg, crop=crop)
+    image = fade_ink(_fill_requested_size(image, options), options.fg_fade)
+    if rounded and options.bg[3]:
+        image = mount(apply_percent_tint(image, options.percent), options.bg, options.bg_fade)
+        return finalize_png(
+            _round_unless_boxed(image, options, _BG_CORNER_PERCENT), options.keep_alpha,
+        )
+    return finalize_png(
+        image, options.keep_alpha, options.percent, options.bg, crop=crop,
+        bg_fade=options.bg_fade,
+    )
 
 
-def _fill_requested_size(image, options: _Options):
+def _fill_requested_size(image: Image.Image, options: _Options) -> Image.Image:
     """*image* centred on the whole size asked for, when a ``bg=`` paints it.
 
     A background is meant to fill the picture asked for, but some renderers
@@ -1125,7 +1182,7 @@ def _fill_requested_size(image, options: _Options):
     return canvas
 
 
-def _crop_mode(options: _Options, resolved) -> bool | str:
+def _crop_mode(options: _Options, resolved: list[tuple[str, str, _Source]]) -> bool | str:
     """What ``finalize_png`` crops: the most careful mode among the parts.
 
     Nothing when a ``bg=`` paints something: the background is meant to fill
@@ -1141,6 +1198,10 @@ def _crop_mode(options: _Options, resolved) -> bool | str:
     return "vertical" if "vertical" in modes else True
 
 
+#: A source type's renderer: ``(hass, value, options)`` to the subject's image.
+_Handler = Callable[[HomeAssistant, str, _Options], Awaitable[Image.Image]]
+
+
 @dataclass(frozen=True)
 class _Source:
     """One source type: how to render it, and whether ``?crop=`` means anything.
@@ -1153,7 +1214,7 @@ class _Source:
     still come back the same size on the same line across a row of tiles.
     """
 
-    handler: object
+    handler: _Handler
     crop: str = "full"
 
 

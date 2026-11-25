@@ -38,6 +38,7 @@ import sys
 import textwrap
 import time
 import zipfile
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -58,7 +59,7 @@ from ..diagnostics import (
     async_get_config_entry_diagnostics,
     async_settings_snapshot,
 )
-from ..runtime import debug_available, entry_connection, find_store, resolve_device_id
+from ..runtime import entry_connection, find_store, resolve_device_id
 from ..data import lizaip_data
 from ..shared.logs import device_logger
 from ..shared.theme import USER_THEMES_SUBDIR, user_themes_dir
@@ -152,7 +153,7 @@ class _Collector:
     def skip(self, name: str, reason: str) -> None:
         self.skipped.append({"file": name, "reason": reason})
 
-    async def section(self, name: str, factory) -> Any:
+    async def section(self, name: str, factory: Callable[[], Awaitable[Any]]) -> Any:
         """Run one section, and turn its failure into a line in the manifest.
 
         ``BLE001`` is the whole point: a section may fail in any way at all —
@@ -447,7 +448,7 @@ async def _add_reachability(collector: _Collector) -> None:
         }
 
 
-def _add_endpoint(endpoint: str):
+def _add_endpoint(endpoint: str) -> Callable[[_Collector], Awaitable[None]]:
     """One step that fetches one of the remote's endpoints.
 
     One step each rather than one for all eight: this is nearly the whole wait,
@@ -536,7 +537,7 @@ async def _add_traffic(collector: _Collector) -> None:
         if snapshot is None:
             collector.skip(LOG_MESSAGES, "This build ships without the traffic recorder")
             return
-        collector.add(LOG_MESSAGES, _dumps({**snapshot, "connected": bool(conn.connected)}))
+        collector.add(LOG_MESSAGES, _dumps({**snapshot, "connected": conn is not None and bool(conn.connected)}))
 
     await collector.section(LOG_MESSAGES, build)
 
@@ -623,35 +624,6 @@ async def _add_system_log(collector: _Collector) -> None:
     await collector.section(LOG_ERRORS, build)
 
 
-async def _add_debug_dumps(collector: _Collector) -> None:
-    """What the debug tab can reach and a shipped build cannot.
-
-    Only a build carrying the debug tooling has any of it, so the import is
-    local and its absence is a skip rather than a failure to load this module.
-
-    The device's debug port is the whole of it. Everything else the tab shows is
-    already in a standard bundle: the report sections are in `remote/`, the log
-    levels in `remote/logging.json`, the traffic in `log_messages.json`. The
-    port's state is not, and it is the one that explains why a tab that normally
-    answers was silent.
-    """
-    async def build() -> None:
-        try:
-            from ..device import debug as device_debug
-        except ImportError:
-            collector.skip("debug/port.json", "This build ships without the debug tooling")
-            return
-
-        conn = entry_connection(collector.entry)
-        if conn is None:
-            collector.skip("debug/port.json", "The entry has no connection object")
-            return
-
-        collector.add("debug/port.json", _dumps(await device_debug.async_get_debug_port(conn)))
-
-    await collector.section("debug/port.json", build)
-
-
 async def _add_entities(collector: _Collector) -> None:
     """This entry's entities, with the state each is actually in."""
     async def build() -> None:
@@ -665,7 +637,8 @@ def _integration_version() -> str | None:
     path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "manifest.json")
     try:
         with open(path, encoding="utf-8") as handle:
-            return json.load(handle).get("version")
+            version: str | None = json.load(handle).get("version")
+            return version
     except (OSError, ValueError):
         return None
 
@@ -695,13 +668,12 @@ async def _add_environment(collector: _Collector) -> None:
     async def build() -> None:
         hass = collector.hass
         version, platform_name = await hass.async_add_executor_job(_environment_facts)
-        facts = {
+        facts: dict[str, Any] = {
             "integration_version": version,
             "home_assistant_version": HA_VERSION,
             "python_version": sys.version,
             "platform": platform_name,
             "time_zone": str(hass.config.time_zone),
-            "debug_tooling": debug_available(),
         }
         if collector.whole_system:
             facts |= {
@@ -790,7 +762,6 @@ _INVENTORY: tuple[tuple[str, str], ...] = (
                                        "integration, and our setup times."),
     ("homeassistant/device_page.json", "The same report the device page's "
                                        '"Download diagnostics" button produces.'),
-    ("debug/port.json", "Whether the remote's debug port is open."),
 )
 
 #: Where the description column starts. Wide enough for every path above and no
@@ -1100,7 +1071,6 @@ BUNDLE_STEPS = (
     ("ha_log", _add_ha_log, _SUPPORT),
     ("system_log", _add_system_log, _SUPPORT),
     ("traffic", _add_traffic, _SUPPORT),
-    ("debug", _add_debug_dumps, _SUPPORT),
 )
 
 

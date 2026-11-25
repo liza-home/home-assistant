@@ -5,7 +5,14 @@ slider controls and internal commands.
 """
 from __future__ import annotations
 
-import voluptuous as vol
+from typing import TYPE_CHECKING, Any
+
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
@@ -19,6 +26,7 @@ from ...shared.icon_defaults import icon_defaults
 from ...shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ...shared.theme import (
     DEFAULT_THEME,
+    Theme,
     get_theme,
     list_themes,
     load_themes,
@@ -50,15 +58,32 @@ from ...state_color import (
     read_color_enabled,
 )
 from ...shared.variables_calc import (
+    CONF_VARIABLES_ENABLED,
     CONF_VARIABLES_INTERVAL,
+    DEFAULT_VARIABLES_ENABLED,
     DEFAULT_VARIABLES_INTERVAL,
     VARIABLES_INTERVAL_MAX,
     VARIABLES_INTERVAL_MIN,
     VARIABLES_INTERVAL_STEP,
+    read_variables_enabled,
     read_variables_interval,
 )
 from ..events import fire_config_changed
+from ..page_resend import (
+    CONF_RESEND_ON_PAGE_OPEN,
+    DEFAULT_RESEND_ON_PAGE_OPEN,
+    read_resend_on_page_open,
+)
 from ..internal_commands import panel_descriptors
+from ..page_limit import (
+    CONF_MAX_PAGES,
+    CONF_MAX_PAGES_ENABLED,
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_PAGES_ENABLED,
+    MAX_PAGES_MIN,
+    read_max_pages,
+    read_max_pages_enabled,
+)
 from ..text_style import (
     KEY_REPEAT_DELAY_MAX_MS,
     KEY_REPEAT_DELAY_MIN_MS,
@@ -76,7 +101,7 @@ from .common import requires_device, send_failure
 from ..access import require_any_device_access, require_device_access
 
 
-def icon_options_for_entry(hass: HomeAssistant, entry_id: str) -> dict:
+def icon_options_for_entry(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
     """The icon-rendering settings for one entry, as the panel receives them.
 
     Kept out of the handler so it can be exercised without Home Assistant's
@@ -92,20 +117,28 @@ def icon_options_for_entry(hass: HomeAssistant, entry_id: str) -> dict:
     return _icon_options_reply(getattr(entry, "options", None))
 
 
-def _icon_options_reply(options: object) -> dict:
+def _icon_options_reply(options: object) -> dict[str, Any]:
     """The values plus what the gear tab needs to edit them."""
     return {
         "icon_fill_step": read_fill_step(options),
         "icon_fill_enabled": read_fill_enabled(options),
         "icon_color_enabled": read_color_enabled(options),
         "icon_corner_radius": read_corner_radius(options),
+        "variables_enabled": read_variables_enabled(options),
+        "resend_on_page_open": read_resend_on_page_open(options),
         "variables_interval_ms": read_variables_interval(options),
+        "max_pages_enabled": read_max_pages_enabled(options),
+        "max_pages": read_max_pages(options),
         "defaults": {
             "icon_fill_step": DEFAULT_ICON_FILL_STEP,
             "icon_fill_enabled": DEFAULT_ICON_FILL_ENABLED,
             "icon_color_enabled": DEFAULT_ICON_COLOR_ENABLED,
             "icon_corner_radius": DEFAULT_ICON_CORNER_RADIUS,
+            "variables_enabled": DEFAULT_VARIABLES_ENABLED,
+            "resend_on_page_open": DEFAULT_RESEND_ON_PAGE_OPEN,
             "variables_interval_ms": DEFAULT_VARIABLES_INTERVAL,
+            "max_pages_enabled": DEFAULT_MAX_PAGES_ENABLED,
+            "max_pages": DEFAULT_MAX_PAGES,
         },
         "limits": {
             "icon_fill_step": {"min": ICON_FILL_STEP_MIN, "max": ICON_FILL_STEP_MAX},
@@ -117,11 +150,12 @@ def _icon_options_reply(options: object) -> dict:
                 "max": VARIABLES_INTERVAL_MAX,
                 "step": VARIABLES_INTERVAL_STEP,
             },
+            "max_pages": {"min": MAX_PAGES_MIN, "step": 1},
         },
     }
 
 
-def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict) -> dict:
+def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict[str, Any]) -> dict[str, Any]:
     """Save the icon options named in *changes*; returns the new reply.
 
     Stored in ``entry.options`` as before the gear tab took it over, so every
@@ -139,7 +173,7 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
     if entry is None:
         raise KeyError(entry_id)
 
-    updates: dict = {}
+    updates: dict[str, Any] = {}
     if CONF_ICON_FILL_STEP in changes:
         fill_step = changes[CONF_ICON_FILL_STEP]
         # bool is an int subclass; JSON `true` must not pass as 1.
@@ -180,7 +214,22 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
             )
         updates[CONF_VARIABLES_INTERVAL] = interval
 
-    for key in (CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED):
+    if CONF_MAX_PAGES in changes:
+        max_pages = changes[CONF_MAX_PAGES]
+        if (
+            isinstance(max_pages, bool)
+            or not isinstance(max_pages, int)
+            or max_pages < MAX_PAGES_MIN
+        ):
+            raise ValueError(
+                f"{CONF_MAX_PAGES} must be a whole number of at least {MAX_PAGES_MIN}"
+            )
+        updates[CONF_MAX_PAGES] = max_pages
+
+    for key in (
+        CONF_ICON_FILL_ENABLED, CONF_ICON_COLOR_ENABLED, CONF_VARIABLES_ENABLED,
+        CONF_RESEND_ON_PAGE_OPEN, CONF_MAX_PAGES_ENABLED,
+    ):
         if key in changes:
             value = changes[key]
             if not isinstance(value, bool):
@@ -200,7 +249,7 @@ def set_icon_options_for_entry(hass: HomeAssistant, entry_id: str, changes: dict
 })
 @require_device_access
 @websocket_api.async_response
-async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_get_icon_options(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Report the icon-rendering settings the panel has to mirror.
 
     The panel draws its own preview of every button rather than fetching the
@@ -223,16 +272,21 @@ async def ws_get_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
     vol.Optional("icon_fill_enabled"): object,
     vol.Optional("icon_color_enabled"): object,
     vol.Optional("icon_corner_radius"): object,
+    vol.Optional("variables_enabled"): object,
+    vol.Optional("resend_on_page_open"): object,
     vol.Optional("variables_interval_ms"): object,
+    vol.Optional("max_pages_enabled"): object,
+    vol.Optional("max_pages"): object,
 })
 @require_device_access
 @websocket_api.async_response
-async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_set_icon_options(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Save the icon-rendering settings edited in the gear tab."""
-    changes = {
+    changes: dict[str, Any] = {
         key: msg[key]
         for key in ("icon_fill_step", "icon_fill_enabled", "icon_color_enabled",
-                    "icon_corner_radius", "variables_interval_ms")
+                    "icon_corner_radius", "variables_enabled", "resend_on_page_open",
+                    "variables_interval_ms", "max_pages_enabled", "max_pages")
         if key in msg
     }
     try:
@@ -256,7 +310,7 @@ async def ws_set_icon_options(hass: HomeAssistant, connection, msg: dict) -> Non
 async def ws_get_icon_defaults(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """Return icon default mappings loaded from the default theme's icons: block.
 
@@ -287,13 +341,13 @@ async def async_list_fonts(hass: HomeAssistant) -> list[dict[str, str]]:
 async def ws_list_logos(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """List the bundled and user-provided logo names for the picture field."""
     connection.send_result(msg["id"], await hass.async_add_executor_job(list_logos))
 
 
-async def _entry_theme(hass: HomeAssistant, entry_id: str | None):
+async def _entry_theme(hass: HomeAssistant, entry_id: str | None) -> Theme:
     """The theme the remote *entry_id* draws with, or the default one.
 
     A caller that names no remote -- or names one that is gone -- asks a
@@ -305,7 +359,7 @@ async def _entry_theme(hass: HomeAssistant, entry_id: str | None):
     return settings_theme(await get_store(hass).async_get_settings(device_id))
 
 
-def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
+def _settings_reply(settings: dict[str, Any], fonts: list[dict[str, str]]) -> dict[str, Any]:
     # Resolved here rather than in the panel: the editor's preview and the
     # device must read one object, or they drift.
     theme = settings_theme(settings)
@@ -335,7 +389,7 @@ def _settings_reply(settings: dict, fonts: list[dict[str, str]]) -> dict:
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_get_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_get_settings(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """The remote's text settings, with what the editor needs to change them.
 
     ``fonts`` is re-read on every call, so a font dropped into the font folder
@@ -367,7 +421,7 @@ _MAX_IMAGE_URLS = 400
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_image_urls(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """The URL the remote is sent for each picture, built by the code that builds it.
 
     The panel draws its previews from these, so a preview and the remote
@@ -416,7 +470,7 @@ async def ws_image_urls(hass: HomeAssistant, connection, msg: dict, device_id: s
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_set_settings(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_set_settings(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Save the text settings and redraw the remote's pages with them."""
     fonts = await async_list_fonts(hass)
     store = get_store(hass)
@@ -480,7 +534,7 @@ async def _redraw_theme_users(hass: HomeAssistant, theme_id: str) -> None:
 async def ws_save_theme(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """Write one theme and answer with the picker's new contents.
 
@@ -513,7 +567,7 @@ async def ws_save_theme(
 async def ws_delete_theme(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """Delete a theme of the user's own. A shipped theme is refused.
 
@@ -546,7 +600,7 @@ async def ws_delete_theme(
 async def ws_export_theme(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """One theme's own file, for the panel to download."""
     themes_dir = user_themes_dir(hass)
@@ -571,7 +625,7 @@ async def ws_export_theme(
 async def ws_import_theme(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """Add a dropped theme file as a new theme of the user's own.
 
@@ -604,11 +658,11 @@ async def ws_import_theme(
 async def ws_get_button_tooltips(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """Return translated button tooltips for the device language, with English fallback.
 
-    The panel and device share ``translations/<lang>.json`` so tooltips cannot
+    The panel and device share ``i18n/<lang>.json`` so tooltips cannot
     drift; an entry-pinned language outranks the browser language.
 
     Response payload:
@@ -637,7 +691,7 @@ async def ws_get_button_tooltips(
 async def ws_get_slider_controls(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
-    msg: dict,
+    msg: dict[str, Any],
 ) -> None:
     """Return static slider capabilities; authenticated but not admin-gated.
 
@@ -650,7 +704,7 @@ async def ws_get_slider_controls(
 @websocket_api.websocket_command({vol.Required("type"): "lizaip_config/get_internal_commands"})
 @require_any_device_access
 @websocket_api.async_response
-async def ws_get_internal_commands(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_get_internal_commands(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Return device-local command descriptors consumed by the panel.
 
     Serving the registry keeps internal command labels/icons out of JavaScript;

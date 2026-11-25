@@ -65,9 +65,9 @@ button that does not use it.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..shared.icon_defaults import icon_defaults
+from ..shared.icon_defaults import IconDefaults, icon_defaults
 from ..shared.tokens import clean_tooltip_text
 from ..shared.services import (
     ATTR_PREVIOUS_VALUE,
@@ -77,7 +77,12 @@ from ..shared.services import (
     service_fixed_icon,
     service_name,
     service_to_attribute,
+    toggles_attribute,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -124,7 +129,7 @@ def runtime_assign(assign: Any, enabled: bool) -> Any:
     return {k: v for k, v in assign.items() if k != TOGGLE_KEY}
 
 
-def toggle_block(assign: Any) -> dict:
+def toggle_block(assign: Any) -> dict[str, Any]:
     """The ``toggle`` block *assign* declares, as a plain dict.
 
     Absence, a non-dict and an empty table all mean "this is an ordinary
@@ -155,7 +160,25 @@ def toggle_mode(assign: Any) -> str | None:
     return mode if toggle_rules(assign) else None
 
 
-def toggle_rules(assign: Any) -> list[dict]:
+def names_stored_value(assign: Any, svc: str, data: Any) -> bool:
+    """Whether the value *assign* stores is the one it runs, and so names.
+
+    A cycle press and a value setter such as ``repeat_set`` both write what
+    they hold, so the face and the label name that value. A boolean setter
+    such as ``volume_mute`` inverts the live attribute instead and names it.
+
+    One predicate for both halves on purpose: whenever the label names the
+    stored value the face has to name it too, which is the parity the icon
+    ladder and :func:`config.button_rendering._fill_tooltip_tokens` share.
+    """
+    if isinstance(assign, dict) and assign.get("_press"):
+        return True
+    if toggle_mode(assign) == MODE_CYCLE:
+        return True
+    return not toggles_attribute(svc, data)
+
+
+def toggle_rules(assign: Any) -> list[dict[str, Any]]:
     """The runnable rules *assign* declares, in order.
 
     "Runnable" is a non-empty ``config`` list: a rule with no action would take
@@ -174,14 +197,14 @@ def toggle_rules(assign: Any) -> list[dict]:
     ]
 
 
-def representative_steps(assign: Any) -> list[dict]:
+def representative_steps(assign: Any) -> list[dict[str, Any]]:
     """The first step of *assign*, then the first step of each cycle rule.
 
     Each names what one face of the button is about. A rule may point at a
     different entity from the assignment it sits on, and its label reads that
     one, so whatever watches a button's entities has to look at all of them.
     """
-    steps: list[dict] = []
+    steps: list[dict[str, Any]] = []
     config = assign.get("config") if isinstance(assign, dict) else None
     if isinstance(config, list) and config and isinstance(config[0], dict):
         steps.append(config[0])
@@ -189,7 +212,7 @@ def representative_steps(assign: Any) -> list[dict]:
     return steps
 
 
-def rule_steps(rule: Any) -> list[dict]:
+def rule_steps(rule: Any) -> list[dict[str, Any]]:
     """The script steps *rule* runs, or ``[]`` when it has none.
 
     Same shape as a button's own ``config``, because it ends up in the same
@@ -254,8 +277,8 @@ def rule_service(rule: Any) -> str | None:
 def step_icon(
     rule: Any,
     entity_domain: str = "",
-    service_icons: dict | None = None,
-    icons=None,
+    service_icons: dict[str, Any] | None = None,
+    icons: IconDefaults | None = None,
 ) -> str | None:
     """A glyph for *rule* derived from the service it calls.
 
@@ -287,35 +310,46 @@ def step_icon(
     if override:
         return override
 
-    attr_icon = _attribute_step_icon(rule, svc_name, icons)
+    attr_icon = attribute_step_icon(rule, svc_name, icons)
     if attr_icon:
         return attr_icon
 
     if service_icons:
-        svc_icon = service_icons.get(svc_domain, {}).get(svc_name, {}).get("service")
+        svc_icon: str | None = service_icons.get(svc_domain, {}).get(svc_name, {}).get("service")
         if svc_icon:
             return svc_icon
 
     return (icons or icon_defaults).domain_icons.get(svc_domain)
 
 
-def _attribute_step_icon(rule: Any, svc_name: str, icons=None) -> str | None:
+def attribute_step_icon(
+    rule: Any, svc_name: str, icons: IconDefaults | None = None, *, fallback: bool = True,
+) -> str | None:
     """The ``attribute_icons`` glyph for a step that sets an attribute.
 
     No service-icon table names `volume_mute`, so an iconless mute press used
     to fall through to its domain's glyph. The table the button reads has the
     answer, read under the value this press moves on from.
+
+    Shared with the plain-button ladder (``_icon_from_step_value``) so that a
+    stored value draws the same face wherever it was configured. A press with
+    no value of its own still wants a glyph rather than its domain's, which is
+    what ``fallback`` gives it; a plain button passes ``False`` and is left to
+    the live-state rungs instead of wearing an arbitrary one.
     """
     attribute = service_to_attribute(svc_name)
     table = (icons or icon_defaults).attribute_icons.get(attribute, {}) if attribute else {}
-    if not table:
+    # The table is empty whenever there is no attribute.
+    if not table or attribute is None:
         return None
 
     steps = rule_steps(rule)
     data = (steps[0] if steps else {}).get("data") or {}
     value = attr_str(data.get(attribute)) if isinstance(data, dict) else ""
     previous = ATTR_PREVIOUS_VALUE.get(attribute, {}).get(value)
-    return table.get(previous) if previous else next(iter(table.values()), None)
+    if previous:
+        return table.get(previous)
+    return next(iter(table.values()), None) if fallback else None
 
 
 def rule_action_id(rule: Any) -> str | None:
@@ -358,7 +392,7 @@ def rule_tooltip(rule: Any) -> str | None:
     return tooltip or None
 
 
-def _rule_assign(rule: Any) -> dict:
+def _rule_assign(rule: Any) -> dict[str, Any]:
     """*rule* in assignment shape, so a button's own ladders can read it.
 
     A press already carries the keys those ladders ask about, so this is a
@@ -373,7 +407,7 @@ def _rule_assign(rule: Any) -> dict:
     return assign
 
 
-def resolve_rule_tooltip(rule: Any, hass, entry=None) -> str:
+def resolve_rule_tooltip(rule: Any, hass: HomeAssistant, entry: ConfigEntry | None = None) -> str:
     """The words a press prints, with its ``${...}`` placeholders filled in.
 
     Filled by `_fill_tooltip_tokens`, the one every button label goes
@@ -392,7 +426,7 @@ def resolve_rule_tooltip(rule: Any, hass, entry=None) -> str:
     )
 
 
-def step_tooltip(rule: Any, hass, entry=None) -> str:
+def step_tooltip(rule: Any, hass: HomeAssistant | None, entry: ConfigEntry | None = None) -> str:
     """Words for *rule* derived from the step it runs, or "" to fall back.
 
     The twin of :func:`step_icon`: the button's own ladder asked about this
@@ -410,7 +444,7 @@ def step_tooltip(rule: Any, hass, entry=None) -> str:
     return _resolve_button_tooltip(_rule_assign(rule), hass, entry)
 
 
-def sanitize_toggle(value: Any) -> dict:
+def sanitize_toggle(value: Any) -> dict[str, Any]:
     """The storable form of a ``toggle`` block, or ``{}`` for anything unusable.
 
     The one gate every writer passes through — the WebSocket handler, the
@@ -446,7 +480,7 @@ def sanitize_toggle(value: Any) -> dict:
     if mode != MODE_CYCLE:
         return {}
 
-    rules: list[dict] = []
+    rules: list[dict[str, Any]] = []
     for raw in value.get("rules") or []:
         steps = rule_steps(raw)
         if not steps:

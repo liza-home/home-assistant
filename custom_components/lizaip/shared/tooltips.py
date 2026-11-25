@@ -115,7 +115,7 @@ def translate_state(text: str, key: str, lang: str) -> str:
     if "${" not in text:
         return text
 
-    def _word(match: re.Match) -> str:
+    def _word(match: re.Match[str]) -> str:
         if not key:
             # Left for the token pass, which also drops the separator it joined.
             return "${_state}"
@@ -167,13 +167,14 @@ def state_token_key(
     cannot be read, still gets the answer it got before.
 
     *attributes* is the target entity's attribute dict. *data* is the step's
-    service data and is passed **only for a cycle press**, which is the one
-    place a stored direction is the user's choice rather than the value the
-    setter's form demands; a button's own action toggles instead.
+    service data and is passed whenever the stored value is what runs: a cycle
+    press, or a value setter such as ``repeat_set``. A boolean setter inverts
+    the live attribute instead, so its caller passes None.
     """
     attribute = service_to_attribute(svc)
     cycle = attribute_cycle_for(svc)
-    if cycle:
+    # A cycle exists only for a service with an attribute, so the second test holds.
+    if cycle and attribute is not None:
         # The step names a literal value, so this face has one direction
         # whatever the entity is doing: `is_volume_muted: true` is the mute
         # press. `data` is only passed when the stored value is what runs.

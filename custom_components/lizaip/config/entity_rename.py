@@ -17,9 +17,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, Final
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -153,8 +154,8 @@ async def async_follow_entity_rename(hass: HomeAssistant, old: str, new: str) ->
 def async_setup_entity_rename(hass: HomeAssistant) -> None:
     """Listen for entity id renames, once for the integration."""
 
-    async def _renamed(event) -> None:
-        data = event.data
+    async def _renamed(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        data: Mapping[str, Any] = event.data
         if data.get("action") != "update":
             return
         old = (data.get("old_entity_id") or "").strip()

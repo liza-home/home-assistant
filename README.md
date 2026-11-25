@@ -25,8 +25,11 @@ Click the button — it opens the Marketplace with this repository pre-filled:
 
 [![Open your Home Assistant instance and open a repository inside the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=liza-home&repository=home-assistant&category=integration)
 
-No restart is needed to install. Updating a version Home Assistant is already
-running does need one, and Home Assistant asks for it with a repair notice.
+Or install it manually: open the Marketplace in Home Assistant, choose
+**⋮ → Custom repositories**, add `https://github.com/liza-home/home-assistant`
+with the type **Integration**, then search for **lizaIP** and install it.
+
+After installation, restart Home Assistant.
 
 After installation, connected **lizaIP** devices will be discovered automatically —
 confirm the **lizaIP** card under **Settings → Devices & Services**. 
@@ -45,7 +48,21 @@ ones most setups want.
 | **Demo mode** | Off | Puts the device into its showroom loop. |
 | **dwell-time**, **swipe-time** | unset | Timings for that loop. Left empty, the device keeps whatever it already had. |
 
-Renaming the device is a separate step: **⋮ → Rename** on the device page.
+Renaming the remote is a separate step: **⋮ → Reconfigure** on its entry, then
+**Device name**. Left empty, the current name is kept.
+
+### Adding an IR device
+
+A lizaIP remote can also send infrared codes to a television. The first remote
+creates an **IR devices** entry; add a TV with **Settings → Devices & Services →
+lizaIP → IR devices → Add IR device**.
+
+| Field | Required | What it does |
+|---|---|---|
+| **Brand** | Yes | Manufacturer of the TV. Its IR codes come from the catalogue, which needs an internet connection while the device is added. |
+| **Name** | No | Shown as the device name. Left empty, the brand is used. |
+
+**⋮ → Reconfigure** on the IR device lists the keys it can send.
 
 ---
 
@@ -177,10 +194,11 @@ are rounded the way Home Assistant displays them, so a sensor you set to one dec
 shows one decimal here too.
 
 Home Assistant fills the values in and pushes every change to the remote itself, at once
--- no browser has to be open. Each remote can switch this off under
-**Settings** (the gear tab) **→ Variables → Variables and calculations**: off, every `${…}` variable
-and calculation is left out, a picture that uses one shows its normal icon, and the
-editor stops suggesting them.
+-- no browser has to be open. Each remote switches this under
+**Settings** (the gear tab) **→ Behaviour → Variables → Variables and calculations**; a new
+remote starts with it off. Off, no `${…}` variable, calculation or graph is read, including
+what a template fills in: text shows a question-mark box in its place and a picture shows a
+crossed-out circle, on the remote and in the panel.
 
 **Examples**
 
@@ -397,8 +415,8 @@ Some places to use it:
 - **It stays current.** When the entity's state changes, the remote is sent the new graph,
   like a `${…}` value, and at most as often as **Settings → Variables → Update interval**
   allows. A very busy sensor redraws often; raise the interval if that is too much for the
-  remote. With **Variables** switched off the graph is drawn when the page is synced and
-  is not updated in between.
+  remote. With **Variables** switched off the graph is not drawn; a crossed-out circle
+  takes its place.
 - **What it shows.** A sensor with numbers gets a line with a light fill below it. Anything
   else gets a band that is bright while the entity was `on`, `open`, `home` or `playing`.
   Stretches where the entity was `unavailable` or `unknown` stay empty.
@@ -528,6 +546,32 @@ button's configuration onto another button, for which the face menu's **Move** d
 
 If something here does not work with your assistive technology, we would like to know:
 see **Support** below.
+
+---
+
+## Actions
+
+The integration adds these actions, available in automations, scripts and
+**Developer tools → Actions**.
+
+| Action | Fields | What it does |
+|---|---|---|
+| `lizaip.goto_page` | target: a lizaIP device; `page_id` | Shows that page on the remote. The id is listed in the lizaIP panel. On a button it runs on the remote itself, without Home Assistant. |
+| `lizaip.send_ir` | `via`: the remote; `entity_id`: a key of an IR device, **or** `ir_blob`: a base64 IR code | Has the remote transmit the key or code. |
+| `lizaip.launch_app` | `entity_id`: media players; `app_id` | Starts an app on a TV. A Samsung TV is started over its own API; any other player gets `media_player.play_media`. |
+| `lizaip.refresh_dynamic_sources` | `entry_id` (optional) | Re-reads the dynamic template pages (favourites, apps, scenes) and sends the ones that changed. Without `entry_id`, every remote is refreshed. |
+| `lizaip.firmware_update` | `url`; `config_entry_id` (optional) | Installs the firmware at that HTTPS URL. Without `config_entry_id`, every connected remote is updated. The **Firmware** update entity does this for published releases. |
+
+An action fails with a message rather than doing nothing when its remote is not
+connected, the target is not a lizaIP remote, or the device refuses the request.
+
+```yaml
+action: lizaip.goto_page
+target:
+  device_id: 0123456789abcdef0123456789abcdef
+data:
+  page_id: 2
+```
 
 ---
 

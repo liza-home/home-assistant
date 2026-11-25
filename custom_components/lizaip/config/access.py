@@ -23,14 +23,18 @@ from __future__ import annotations
 import logging
 from functools import wraps
 from inspect import iscoroutinefunction
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from ..const import CONF_ASSIGNED_USERS, DOMAIN, PANEL_URL_PATH
+from ..runtime import remote_entries
 from ..shared.authorship import current_user
+
+if TYPE_CHECKING:
+    from homeassistant.components.websocket_api import ActiveConnection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,7 +105,7 @@ def can_access_entry(hass: HomeAssistant, user: Any, entry_id: str | None) -> bo
 
 def accessible_entry_ids(hass: HomeAssistant, user: Any) -> set[str]:
     """Every lizaIP entry this user may configure."""
-    entries = hass.config_entries.async_entries(DOMAIN)
+    entries = remote_entries(hass)
     if is_admin_user(user):
         return {entry.entry_id for entry in entries}
     user_id = getattr(user, "id", None)
@@ -112,13 +116,13 @@ def accessible_entry_ids(hass: HomeAssistant, user: Any) -> set[str]:
     }
 
 
-def _guarded(func: Callable, allowed: Callable) -> Callable:
+def _guarded(func: Callable[..., Any], allowed: Callable[..., Any]) -> Callable[..., Any]:
     """*func*, refused with ``unauthorized`` when *allowed* says no.
 
     Answers rather than raising, so the panel receives the same shaped error it
     does from every other refusal.
     """
-    def refused(hass: HomeAssistant, connection, msg: dict) -> bool:
+    def refused(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> bool:
         if allowed(hass, connection, msg):
             return False
         connection.send_error(msg["id"], "unauthorized", _UNAUTHORIZED)
@@ -129,7 +133,7 @@ def _guarded(func: Callable, allowed: Callable) -> Callable:
     # here, before the handler schedules its task, so the task inherits it.
     if iscoroutinefunction(func):
         @wraps(func)
-        async def async_guard(hass: HomeAssistant, connection, msg: dict) -> None:
+        async def async_guard(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
             if not refused(hass, connection, msg):
                 token = current_user.set(getattr(connection, "user", None))
                 try:
@@ -140,7 +144,7 @@ def _guarded(func: Callable, allowed: Callable) -> Callable:
         return async_guard
 
     @wraps(func)
-    def guard(hass: HomeAssistant, connection, msg: dict) -> None:
+    def guard(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         if not refused(hass, connection, msg):
             token = current_user.set(getattr(connection, "user", None))
             try:
@@ -161,12 +165,12 @@ def holds_any_entry(hass: HomeAssistant, user: Any) -> bool:
     return is_admin_user(user) or bool(accessible_entry_ids(hass, user))
 
 
-def _holds_any(hass: HomeAssistant, connection) -> bool:
+def _holds_any(hass: HomeAssistant, connection: ActiveConnection) -> bool:
     """`holds_any_entry` for a websocket connection."""
     return holds_any_entry(hass, getattr(connection, "user", None))
 
 
-def require_device_access(func: Callable) -> Callable:
+def require_device_access(func: Callable[..., Any]) -> Callable[..., Any]:
     """Refuse a per-remote command from someone that remote is not assigned to.
 
     Takes the place of ``@websocket_api.require_admin`` on everything scoped to
@@ -180,7 +184,7 @@ def require_device_access(func: Callable) -> Callable:
     the answer gives nothing away about one remote, but it is still the
     panel's, and a stranger holding none is refused.
     """
-    def allowed(hass: HomeAssistant, connection, msg: dict) -> bool:
+    def allowed(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> bool:
         entry_id = msg.get("entry_id")
         if not entry_id:
             return _holds_any(hass, connection)
@@ -189,7 +193,7 @@ def require_device_access(func: Callable) -> Callable:
     return _guarded(func, allowed)
 
 
-def require_any_device_access(func: Callable) -> Callable:
+def require_any_device_access(func: Callable[..., Any]) -> Callable[..., Any]:
     """Refuse a command that names no remote from somebody holding none.
 
     For the catalogues -- the template library, the media sources, the list of

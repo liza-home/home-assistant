@@ -1,14 +1,16 @@
 """Switch entities for lizaIP device controls."""
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ..entity import LizaIPEntity
 from .connection import LizaIPConnection
-from .entity import LizaIPEntity
 
 PARALLEL_UPDATES = 1
 
@@ -27,7 +29,6 @@ class LizaIPBrightnessAutomatic(LizaIPEntity, SwitchEntity):
 
     _attr_translation_key = "brightness_automatic"
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_icon = "mdi:brightness-auto"
 
     def __init__(self, connection: LizaIPConnection, entry: ConfigEntry) -> None:
         super().__init__(connection, entry)
@@ -44,9 +45,9 @@ class LizaIPBrightnessAutomatic(LizaIPEntity, SwitchEntity):
         self._attr_extra_state_attributes = {"device_brightness": int(round(value))}
         self.async_write_ha_state()
 
-    async def async_turn_on(self, **kwargs) -> None:
+    async def async_turn_on(self, **kwargs: Any) -> None:
         await self._connection.set_brightness(-1)
 
-    async def async_turn_off(self, **kwargs) -> None:
+    async def async_turn_off(self, **kwargs: Any) -> None:
         await self._connection.set_brightness(self._connection.brightness_value)
 

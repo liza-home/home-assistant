@@ -7,10 +7,14 @@ change could alter what it lists.
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from types import ModuleType
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from .hue_scenes import hue_scene_icon
 from .items import DEFAULT_MAX_ITEMS, DynamicItem
 
 
@@ -31,7 +35,7 @@ _ENTITIES_PARAMS: dict[str, dict[str, Any]] = {
     "area": {
         "type": "string",
         "required": False,
-        "description": "Area id or name to restrict to",
+        "description": "Area id or name to restrict to, or an entity (e.g. @target) for its area",
     },
     "label": {
         "type": "string",
@@ -135,12 +139,14 @@ def _registries(hass: HomeAssistant) -> tuple[Any, Any, Any, Any]:
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
 
+    lr: ModuleType | None
     try:
-        from homeassistant.helpers import label_registry as lr
+        from homeassistant.helpers import label_registry as label_module
+        lr = label_module
     except ImportError:  # pragma: no cover - HA older than labels
         lr = None
 
-    def _get(module):
+    def _get(module: ModuleType | None) -> Any:
         if module is None:
             return None
         try:
@@ -151,9 +157,9 @@ def _registries(hass: HomeAssistant) -> tuple[Any, Any, Any, Any]:
     return _get(er), _get(ar), _get(dr), _get(lr)
 
 
-def _reg_mapping(registry, attr: str) -> dict:
+def _reg_mapping(registry: Any, attr: str) -> dict[str, Any]:
     """A registry's id→entry mapping as a real dict."""
-    raw = getattr(registry, attr, None) if registry is not None else None
+    raw: Any = getattr(registry, attr, None) if registry is not None else None
     if isinstance(raw, dict):
         return raw
     try:
@@ -162,7 +168,7 @@ def _reg_mapping(registry, attr: str) -> dict:
         return {}
 
 
-def _match_area_ids(area_reg, wanted: str) -> set[str]:
+def _match_area_ids(area_reg: Any, wanted: str) -> set[str]:
     """Area ids matching *wanted*, which may be an id or a display name."""
     if not wanted or area_reg is None:
         return set()
@@ -177,7 +183,7 @@ def _match_area_ids(area_reg, wanted: str) -> set[str]:
     return matched or {wanted.strip()}
 
 
-def _match_label_ids(label_reg, wanted: str) -> set[str]:
+def _match_label_ids(label_reg: Any, wanted: str) -> set[str]:
     if not wanted:
         return set()
     needle = wanted.strip().casefold()
@@ -190,7 +196,7 @@ def _match_label_ids(label_reg, wanted: str) -> set[str]:
     return matched or {wanted.strip()}
 
 
-def _entry_area_id(entry, device_reg) -> str:
+def _entry_area_id(entry: Any, device_reg: Any) -> str:
     area_id = getattr(entry, "area_id", None)
     if area_id:
         return str(area_id)
@@ -202,7 +208,20 @@ def _entry_area_id(entry, device_reg) -> str:
     return ""
 
 
-def _entity_item(hass: HomeAssistant, entity_id: str, entry) -> DynamicItem:
+def _spec_area(spec: dict[str, Any], entity_reg: Any, device_reg: Any) -> str:
+    """The area *spec* narrows to; an entity id in ``area`` names the one it sits in.
+
+    An entity in no area gives its own id, which no area matches: the list
+    comes out empty rather than widening to the whole house.
+    """
+    area = str(spec.get("area") or "").strip()
+    if not re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", area):
+        return area
+    entry = entity_reg.async_get(area) if entity_reg is not None else None
+    return (_entry_area_id(entry, device_reg) if entry is not None else "") or area
+
+
+def _entity_item(hass: HomeAssistant, entity_id: str, entry: Any) -> DynamicItem:
     domain = _domain_of(entity_id)
     try:
         state = hass.states.get(entity_id)
@@ -221,6 +240,7 @@ def _entity_item(hass: HomeAssistant, entity_id: str, entry) -> DynamicItem:
         (getattr(entry, "icon", None) if entry is not None else None)
         or (getattr(entry, "original_icon", None) if entry is not None else None)
         or attrs.get("icon")
+        or (hue_scene_icon(hass, entity_id) if domain == "scene" else None)
         or _DOMAIN_ICONS.get(domain, _DEFAULT_ICON)
     )
 
@@ -251,13 +271,13 @@ async def resolve_entities(
     """
     spec = dict(spec or {})
     domains = _wanted_domains(spec)
-    area = str(spec.get("area") or "").strip()
     label = str(spec.get("label") or "").strip()
     config_entry = str(spec.get("config_entry") or "").strip()
 
     device_class = str(spec.get("device_class") or "").strip().lower()
     translation_key = str(spec.get("translation_key") or "").strip()
     entity_reg, area_reg, device_reg, label_reg = _registries(hass)
+    area = _spec_area(spec, entity_reg, device_reg)
 
     area_ids = _match_area_ids(area_reg, area) if area else set()
     label_ids = _match_label_ids(label_reg, label) if label else set()
@@ -301,7 +321,7 @@ async def resolve_entities(
     return items[:max_items]
 
 
-def _device_class(hass: HomeAssistant, entity_id: str, entry) -> str:
+def _device_class(hass: HomeAssistant, entity_id: str, entry: Any) -> str:
     """What kind of value *entity_id* reports: the user's choice, then the
     integration's, then whatever its state says."""
     value = (
@@ -325,7 +345,7 @@ def _all_states(hass: HomeAssistant) -> list[Any]:
         return []
 
 
-def _fixed_domain_resolver(domain: str):
+def _fixed_domain_resolver(domain: str) -> Callable[..., Awaitable[list[DynamicItem]]]:
     async def _resolve(
         hass: HomeAssistant,
         spec: dict[str, Any],
@@ -354,15 +374,15 @@ def _spec_wants_entity(hass: HomeAssistant, spec: dict[str, Any], entity_id: str
     if domains and _domain_of(entity_id) not in domains:
         return False
 
-    area = str(spec.get("area") or "").strip()
     label = str(spec.get("label") or "").strip()
     config_entry = str(spec.get("config_entry") or "").strip()
-    if not area and not label and not config_entry:
+    if not spec.get("area") and not label and not config_entry:
         return True
 
     try:
         entity_reg, area_reg, device_reg, label_reg = _registries(hass)
         entry = entity_reg.async_get(entity_id)
+        area = _spec_area(spec, entity_reg, device_reg)
     except Exception:  # noqa: BLE001 - a filter must never break the event loop
         return True
 
@@ -382,15 +402,17 @@ def _spec_wants_entity(hass: HomeAssistant, spec: dict[str, Any], entity_id: str
     return True
 
 
-def registry_subscriber(pinned_domain: str = ""):
+def registry_subscriber(pinned_domain: str = "") -> Callable[..., Any | None]:
     """A registry hook for a source whose resolver pins the domain.
 
     ``scenes`` and ``scripts`` store no ``domain`` key, so filtering must add
     the same pin the resolver adds or every entity would look relevant.
     """
 
-    def _subscribe(hass: HomeAssistant, specs, on_change) -> Any | None:
-        pinned = []
+    def _subscribe(
+        hass: HomeAssistant, specs: Iterable[Mapping[str, Any]], on_change: Callable[[], None],
+    ) -> Any | None:
+        pinned: list[dict[str, Any]] = []
         for spec in specs:
             spec = dict(spec)
             spec["domain"] = pinned_domain
@@ -401,7 +423,9 @@ def registry_subscriber(pinned_domain: str = ""):
     return _subscribe
 
 
-def subscribe_entity_registry(hass: HomeAssistant, specs, on_change) -> Any | None:
+def subscribe_entity_registry(
+    hass: HomeAssistant, specs: Any, on_change: Callable[[], None],
+) -> Any | None:
     """Fire when a registry change could alter a listed item.
 
     Registry events are filtered before debounce because every integration's

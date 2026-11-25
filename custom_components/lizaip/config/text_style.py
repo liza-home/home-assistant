@@ -168,8 +168,8 @@ def key_repeat_timing(settings: Any) -> tuple[float, float]:
     """``(initial delay, interval)`` in seconds for a held, repeating button."""
     given = settings.get(KEY_REPEAT_SECTION) if isinstance(settings, dict) else None
     given = given if isinstance(given, dict) else {}
-    delay = given.get("delay_ms")
-    rate = given.get("rate")
+    delay: Any = given.get("delay_ms")
+    rate: Any = given.get("rate")
     if not _key_repeat_value("delay_ms", delay):
         delay = DEFAULT_KEY_REPEAT_DELAY_MS
     if not _key_repeat_value("rate", rate):

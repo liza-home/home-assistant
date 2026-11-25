@@ -21,7 +21,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -41,8 +41,8 @@ class LizaIPQueueSensor(SensorEntity):
     """One speaker's queue, reduced to the tracks either side of the current."""
 
     _attr_should_poll = False
-    _attr_icon = "mdi:playlist-music"
-    _attr_has_entity_name = False
+    _attr_translation_key = "queue"
+    _attr_has_entity_name = True
 
     def __init__(self, speaker: str, entry_id: str) -> None:
         self._speaker = speaker
@@ -51,14 +51,16 @@ class LizaIPQueueSensor(SensorEntity):
         # Fixed rather than derived from the name, because `${_queue.x}` is
         # rewritten to exactly this id (see `alias.queue_entity_id`).
         self.entity_id = queue_entity_id(speaker)
-        self._attr_name = f"{speaker.split('.', 1)[-1].replace('_', ' ').title()} queue"
+        self._attr_translation_placeholders = {
+            "speaker": speaker.split(".", 1)[-1].replace("_", " ").title(),
+        }
         self._tracks: list[dict[str, str]] | None = None
         self._held_size: Any = None
         self._values = blank()
         self._fetched_at = float("-inf")
         self._fetching = False
         self._unsubscribe: Any = None
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
         self._removed = False
 
     @property
@@ -100,7 +102,7 @@ class LizaIPQueueSensor(SensorEntity):
         await super().async_will_remove_from_hass()
 
     @callback
-    def _on_speaker_change(self, event: Event) -> None:
+    def _on_speaker_change(self, event: Event[EventStateChangedData]) -> None:
         self._evaluate()
 
     @callback
@@ -114,7 +116,7 @@ class LizaIPQueueSensor(SensorEntity):
             if write:
                 self.async_write_ha_state()
 
-    def _attributes(self) -> dict:
+    def _attributes(self) -> dict[str, Any]:
         state = self.hass.states.get(self._speaker)
         return dict(getattr(state, "attributes", None) or {})
 
@@ -179,7 +181,7 @@ async def async_sync(hass: HomeAssistant, speakers: set[str]) -> None:
     """Make the live queue sensors match the Sonos speakers in *speakers*."""
     data = find_lizaip_data(hass)
     adders = data.queue_adders if data is not None else {}
-    if not adders:
+    if data is None or not adders:
         return
     sensors = data.queue_sensors
     wanted = {s for s in speakers if reads_queue(hass, s)}

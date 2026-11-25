@@ -511,7 +511,7 @@ export const A11yMixin = {
     // list only ever grows, one entry per nested root per repaint, for as
     // long as the panel stays open.
     // A root whose observer goes is forgotten as well, so a node that comes
-    // back (a dialog re-appended after a render) is walked and watched again
+    // back (one detached and appended again) is walked and watched again
     // rather than skipped as already in hand.
     const kept = [];
     for (const entry of this._a11yTabStopObservers || []) {

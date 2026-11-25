@@ -8,6 +8,7 @@ unavailable stretches stay empty in both.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from PIL import Image, ImageDraw
@@ -55,14 +56,14 @@ def _number(state: str) -> float | None:
         return None
 
 
-def _samples(points: list[Point], start: float, end: float, width: int, numeric: bool) -> list:
+def _samples(points: list[Point], start: float, end: float, width: int, numeric: bool) -> list[Any]:
     """One value per pixel column: the state in force at that column's moment.
 
     ``None`` where the entity was unknown or unavailable (or not yet recorded),
     a number for a numeric entity, and active/inactive (bool) for the rest.
     One pass over *points*, which arrive oldest first.
     """
-    out: list = []
+    out: list[Any] = []
     index, current = 0, None
     for x in range(width):
         t = start + (end - start) * (x + 0.5) / width
@@ -78,7 +79,7 @@ def _samples(points: list[Point], start: float, end: float, width: int, numeric:
 
 def render_history(
     points: list[Point], start: float, end: float,
-    width: int, height: int, color: tuple,
+    width: int, height: int, color: tuple[Any, ...],
 ) -> Image.Image:
     """Draw *points* between *start* and *end* on a transparent canvas."""
     w, h = width * _SCALE, height * _SCALE
@@ -99,7 +100,7 @@ def render_history(
                 )
         return img.reduce(_SCALE)
 
-    values = [v for v in samples if v is not None]
+    values: list[float] = [v for v in samples if v is not None]
     if not values:
         return img.reduce(_SCALE)
     low, high = min(values), max(values)

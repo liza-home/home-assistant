@@ -34,7 +34,7 @@ pages:
     paginate: station
     max_parts: 3
     # The page title: the Sonos mark and what the page holds.
-    title: "logo:sonos + radio"
+    title: "logo:sonos radio"
     buttons:
       button_1: "@station[1]"
       button_2: "@station[2]"

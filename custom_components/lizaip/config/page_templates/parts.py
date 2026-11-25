@@ -9,6 +9,7 @@ adding or removing parts on a remote is :mod:`.paginate`'s job.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Any
 
 __all__ = [
@@ -132,10 +133,11 @@ def part_buttons(
             return [shift(v) for v in value]
         return value
 
-    return shift(buttons)
+    shifted: dict[str, Any] = shift(buttons)
+    return shifted
 
 
-def _strings_in(value: Any):
+def _strings_in(value: Any) -> Iterator[str]:
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):

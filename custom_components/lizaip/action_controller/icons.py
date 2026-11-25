@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, State
 
@@ -9,10 +11,9 @@ from ..shared.services import icon_state_key, state_icon_override
 from ..shared.tokens import (
     resolve_image_tokens,
 )
-from ..shared.icon_defaults import icon_defaults
+from ..shared.icon_defaults import IconDefaults, icon_defaults
 from ._state import cycle_index
 from .toggle import (
-    MODE_CYCLE,
     rule_icon,
     rule_service,
     rule_state_icons,
@@ -24,6 +25,9 @@ from .toggle import (
     toggle_rules,
 )
 
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -32,10 +36,10 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _compute_next_state_tooltip(
-    assign: dict,
+    assign: dict[str, Any],
     state: State | None,
     hass: HomeAssistant,
-    entry=None,
+    entry: ConfigEntry | None = None,
     library_name: str | None = None,
 ) -> str:
     """The tooltip a live update sends: the page sync's own ladder.
@@ -55,7 +59,7 @@ def _compute_next_state_tooltip(
 # Icon / state matching
 # ---------------------------------------------------------------------------
 
-def _match_state_icon(service: str, state: State, icons=None) -> str | None:
+def _match_state_icon(service: str, state: State, icons: IconDefaults | None = None) -> str | None:
     """Return the themed icon *service* wears for *state*, or None.
 
     *icons* is the asking remote's table; the shipped one when a caller speaks
@@ -76,15 +80,15 @@ def _match_state_icon(service: str, state: State, icons=None) -> str | None:
 # ---------------------------------------------------------------------------
 
 def toggle_icon(
-    assign: dict,
+    assign: Mapping[str, Any],
     state: State | None,
     entry_id: str | None = None,
     page_id: int | None = None,
     button_key: str | None = None,
     entity_domain: str = "",
-    service_icons: dict | None = None,
+    service_icons: dict[str, Any] | None = None,
     hass: HomeAssistant | None = None,
-    icons=None,
+    icons: IconDefaults | None = None,
 ) -> str | None:
     """The glyph a ``toggle`` block asks this button to wear right now.
 
@@ -105,66 +109,39 @@ def toggle_icon(
       guess at the first step: a caller that cannot identify the button is a
       caller that would paint the wrong one.
     """
-    mode = toggle_mode(assign)
-    if mode is None:
+    if toggle_mode(assign) is None:
         return None
 
     rules = toggle_rules(assign)
-    if not rules:
+    if entry_id is None or page_id is None or button_key is None:
         return None
-
-    if mode == MODE_CYCLE:
-        if entry_id is None or page_id is None or button_key is None:
-            return None
-        # cycle_index reads the position the *next* press will run, which is
-        # exactly what the tile should advertise. Reading never advances, so
-        # repainting an icon cannot skip a step.
-        index = cycle_index(entry_id, page_id, button_key, len(rules))
-        # Position 0 is the button's own declared action -- the editor keeps
-        # `rules[0]` a mirror of `config` -- so at rest the button wears the
-        # face it would wear with no toggle at all. Handing the question back
-        # means the Image field, `state_icons` and the domain defaults answer,
-        # which is what the card's own Image preview already shows. Answering
-        # here instead would let a cycle quietly override a pinned image.
-        if index == 0:
-            return None
-        rule = rules[index]
-        # A press icon takes the same `${sensor.x}` a button's Image does, and
-        # was reaching the device with the braces still in it -- `mdi:battery-
-        # ${sensor.foo}` is not an icon name, so the tile drew nothing. The
-        # assignment's own image has been resolved by `with_resolved_icon`
-        # all along; this is the same rule, applied to the same syntax, from
-        # the one place all three callers of this function pass through.
-        #
-        # A variable that reads nothing drops the whole value, exactly as it
-        # does for a button image -- and here that is not a blank but a fall
-        # through to `step_icon`, which is a better answer than half a name.
-        #
-        # The press's own row for this state first, matched the way a button's
-        # `state_icons` are: the same action, asked the same question.
-        icon = state_icon_override(
-            rule_state_icons(rule), state, rule_service(rule) or "",
-        ) or rule_icon(rule)
-        if icon and hass is not None:
-            icon = resolve_image_tokens(icon, hass)
-        # Derived when the user picked nothing. Falling through to the
-        # ordinary ladder here answers with the *declared* action's face — the
-        # one glyph that is certainly wrong, because the press is about to run
-        # something else and no state will ever correct it. `step_icon` names
-        # the step instead.
-        return icon or step_icon(rule, entity_domain, service_icons, icons)
-
-    return None
+    # The position the *next* press runs; reading never advances the cycle.
+    index = cycle_index(entry_id, page_id, button_key, len(rules))
+    # Position 0 mirrors `config`, so the ordinary ladder answers and a cycle
+    # never overrides a pinned image.
+    if index == 0:
+        return None
+    rule = rules[index]
+    # Resolve `${sensor.x}` like a button Image does; an empty variable drops
+    # the value and falls through to `step_icon`.
+    icon = state_icon_override(
+        rule_state_icons(rule), state, rule_service(rule) or "",
+    ) or rule_icon(rule)
+    if icon and hass is not None:
+        icon = resolve_image_tokens(icon, hass)
+    # Nothing picked: name the step, not the declared action's face, which is
+    # certainly wrong for a press that runs something else.
+    return icon or step_icon(rule, entity_domain, service_icons, icons)
 
 
 def toggle_tooltip(
-    assign: dict,
+    assign: dict[str, Any],
     state: State | None,
     entry_id: str | None = None,
     page_id: int | None = None,
     button_key: str | None = None,
     hass: HomeAssistant | None = None,
-    entry=None,
+    entry: ConfigEntry | None = None,
 ) -> str | None:
     """The words a ``toggle`` block asks this button to print right now.
 
@@ -178,41 +155,25 @@ def toggle_tooltip(
     wrong — which on a cycle step, whose service is often a bare key code, is
     most of the time.
     """
-    mode = toggle_mode(assign)
-    if mode is None:
+    if toggle_mode(assign) is None:
         return None
 
     rules = toggle_rules(assign)
-    if not rules:
+    if entry_id is None or page_id is None or button_key is None:
         return None
-
-    if mode == MODE_CYCLE:
-        if entry_id is None or page_id is None or button_key is None:
-            return None
-        index = cycle_index(entry_id, page_id, button_key, len(rules))
-        # The icon twin's reasoning: position 0 mirrors `config`, so the
-        # ordinary tooltip ladder already phrases it from the declared action
-        # and the subject's state, and a stored label would only shadow the
-        # Tooltip field the user can see on the card.
-        if index == 0:
-            return None
-        # Resolved, not raw. This is the *other* producer of a press tooltip --
-        # the one that answers while the page is being rendered, where
-        # `buttons.py` answers when a press actually runs -- and it handed the
-        # stored text out verbatim, so a `${_state}` press printed its braces
-        # onto the tile until the first press rewrote it. The two must agree;
-        # see `resolve_rule_tooltip`.
-        #
-        # Without `hass` there is nothing to resolve against, and the raw text
-        # is still better than nothing: the callers that can pass it do.
-        if hass is None:
-            return rule_tooltip(rules[index])
-        # The twin of the `icon or step_icon(...)` line above: stored words
-        # first, then the ones this press derives from its own step.
-        return (
-            resolve_rule_tooltip(rules[index], hass, entry)
-            or step_tooltip(rules[index], hass, entry)
-            or None
-        )
-
-    return None
+    index = cycle_index(entry_id, page_id, button_key, len(rules))
+    # As for the icon: position 0 mirrors `config`, so the ordinary tooltip
+    # ladder answers and the card's Tooltip field is not shadowed.
+    if index == 0:
+        return None
+    # Resolved like `buttons.py` does on press, so `${_state}` never shows its
+    # braces; without `hass` the raw text is still better than nothing.
+    if hass is None:
+        return rule_tooltip(rules[index])
+    # The twin of the `icon or step_icon(...)` line above: stored words
+    # first, then the ones this press derives from its own step.
+    return (
+        resolve_rule_tooltip(rules[index], hass, entry)
+        or step_tooltip(rules[index], hass, entry)
+        or None
+    )

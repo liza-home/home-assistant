@@ -18,8 +18,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -35,10 +36,13 @@ from ..runtime import entry_connection, entry_device_id
 from ..data import lizaip_data
 from ..shared.logs import device_logger
 from .const import is_subpage
-from .default_pages import async_effective_pages
+from .welcome_page import async_effective_pages
 from .events import fire_device_synced
 from .page_payload import build_page_payload, build_sync_context, compute_page_hash
 from .panel_entry import get_panel_entry
+
+if TYPE_CHECKING:
+    from ..device.connection import LizaIPConnection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +70,7 @@ PAGE_WRITE_PACING = 0.05
 
 
 async def _send_page_op(
-    factory,
+    factory: Callable[[], Awaitable[Any]],
     op: str,
     page_id: int | None,
     index: int | None = None,
@@ -154,7 +158,7 @@ class _GiveUp:
             )
 
 
-async def _add_page_if_missing(conn, page_id: int) -> None:
+async def _add_page_if_missing(conn: LizaIPConnection, page_id: int) -> None:
     """Create *page_id*, tolerating a page the device already holds.
 
     An interrupted sync can leave a page added but unrecorded, and the device
@@ -182,7 +186,7 @@ async def _add_page_if_missing(conn, page_id: int) -> None:
         )
 
 
-def _page_delta(previous: dict | None, desired: dict) -> dict:
+def _page_delta(previous: dict[str, Any] | None, desired: dict[str, Any]) -> dict[str, Any]:
     """The smallest ``set_page`` payload taking the device from *previous* to *desired*.
 
     ``set_page`` merges rather than replaces: omitted fields keep their current
@@ -211,7 +215,7 @@ def _page_delta(previous: dict | None, desired: dict) -> dict:
     if len(changed) == len(desired.get("buttons", [])):
         return desired
 
-    delta: dict = {"page_id": desired["page_id"], "hash": desired["hash"]}
+    delta: dict[str, Any] = {"page_id": desired["page_id"], "hash": desired["hash"]}
     if previous.get("img_title") != desired.get("img_title"):
         delta["img_title"] = desired["img_title"]
     if changed:
@@ -219,7 +223,7 @@ def _page_delta(previous: dict | None, desired: dict) -> dict:
     return delta
 
 
-def is_ready(conn) -> bool:
+def is_ready(conn: LizaIPConnection | None) -> TypeGuard[LizaIPConnection]:
     """Whether *conn* can take page requests: connected, hello answered.
 
     A remote mid-handshake rejects `set_page` with -4, or -- short on memory --
@@ -232,7 +236,9 @@ def is_ready(conn) -> bool:
     return ready if isinstance(ready, bool) else True
 
 
-async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def sync_config_to_device(
+    hass: HomeAssistant, entry: ConfigEntry, progress: Callable[[int, int], None] | None = None,
+) -> bool:
     """Sync the panel's page configuration to the device, one sync at a time.
 
     Three sources push a sync: a panel save, the device's hello on reconnect,
@@ -249,7 +255,9 @@ async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool
     running the ones in between.
     """
     state = _sync_state(hass, entry)
-    if state["running"]:
+    # A caller counting the pages waits its turn: folded into the running sync
+    # it would be told "done" before anything it is counting was sent.
+    if state["running"] and progress is None:
         state["dirty"] = True
         device_logger(_LOGGER, entry).debug("Sync already running, coalescing")
         return True
@@ -257,19 +265,19 @@ async def sync_config_to_device(hass: HomeAssistant, entry: ConfigEntry) -> bool
     async with state["lock"]:
         state["running"] = True
         try:
-            result = await _sync_locked(hass, entry)
+            result = await _sync_locked(hass, entry, progress)
             # One repeat only. The flag is cleared before the rerun so an edit
             # arriving *during* the rerun sets it again and is picked up by the
             # next caller, rather than spinning here.
             while state["dirty"]:
                 state["dirty"] = False
-                result = await _sync_locked(hass, entry)
+                result = await _sync_locked(hass, entry, progress)
             return result
         finally:
             state["running"] = False
 
 
-def _sync_state(hass: HomeAssistant, entry: ConfigEntry) -> dict:
+def _sync_state(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     """Per-entry sync lock and pending flag, created on first use."""
     return lizaip_data(hass).sync_state.setdefault(
         entry.entry_id, {"lock": asyncio.Lock(), "running": False, "dirty": False}
@@ -301,7 +309,9 @@ def _listing_timeout(page_count: int) -> float:
     )
 
 
-async def _sync_locked(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def _sync_locked(
+    hass: HomeAssistant, entry: ConfigEntry, progress: Callable[[int, int], None] | None = None,
+) -> bool:
     """One pass of the page sync. Call through :func:`sync_config_to_device`.
 
     Two locks, because they exclude different things. The per-entry lock above
@@ -318,11 +328,12 @@ async def _sync_locked(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_logger(_LOGGER, entry).debug("Device not connected, skipping sync")
         return False
     async with conn.page_cache.lock:
-        return await _sync_config_to_device(hass, entry, conn)
+        return await _sync_config_to_device(hass, entry, conn, progress)
 
 
 async def _sync_config_to_device(
     hass: HomeAssistant, entry: ConfigEntry, conn: Any,
+    progress: Callable[[int, int], None] | None = None,
 ) -> bool:
     """Sync pages to *conn*, which `sync_config_to_device` holds the lock for.
 
@@ -562,8 +573,12 @@ async def _sync_config_to_device(
     failed.extend(adds.skipped)
 
     total = len(writes)
+    if progress is not None:
+        progress(0, total)
     sets = _GiveUp(entry, "page writes")
     for n, page_data in enumerate(writes, 1):
+        if progress is not None and n > 1:
+            progress(n - 1, total)
         pid = page_data["page_id"]
         if pid in rejected or pid in add_skipped:
             continue
@@ -612,6 +627,8 @@ async def _sync_config_to_device(
             # out instead of handing the device the whole thing at once.
             await asyncio.sleep(PAGE_WRITE_PACING)
     sets.report()
+    if progress is not None:
+        progress(total, total)
 
     # Listing only the pages that actually made it, and sent whenever that list
     # or the order moved. Previously a single timed-out page raised straight
@@ -737,7 +754,7 @@ def _note_sync_success(hass: HomeAssistant, entry: ConfigEntry, conn: Any) -> No
 _LIVE_BUTTON_FIELDS = ("img_tile", "img_tooltip")
 
 
-def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
+def _live_button_changes(sent: dict[str, Any], built: dict[str, Any]) -> list[dict[str, Any]] | None:
     """The tile and tooltip changes from *sent* to *built*, or None if more moved.
 
     The page title is not compared: a variable can move it, and it is pushed
@@ -760,7 +777,7 @@ def _live_button_changes(sent: dict, built: dict) -> list[dict] | None:
     return changes
 
 
-def _with_outstanding(sent: dict, queue: Any, page_id: int) -> dict:
+def _with_outstanding(sent: dict[str, Any], queue: Any, page_id: int) -> dict[str, Any]:
     """*sent* as it will be once what *queue* holds for *page_id* has landed."""
     buttons, title = queue.outstanding(page_id)
     if not buttons and title is None:
@@ -779,8 +796,8 @@ def _with_outstanding(sent: dict, queue: Any, page_id: int) -> dict:
 
 
 def patched_page(
-    conn, page_id: int, buttons: list[dict], img_title: str | None = None,
-) -> dict | None:
+    conn: LizaIPConnection | None, page_id: int, buttons: list[dict[str, Any]], img_title: str | None = None,
+) -> dict[str, Any] | None:
     """The known copy of *page_id* with a partial ``set_page`` applied, new hash included.
 
     The hash is sent with the partial write, so the device's own copy is
@@ -807,7 +824,7 @@ def patched_page(
 
 
 def note_partial_page(
-    conn, page_id: int, buttons: list[dict], img_title: str | None = None,
+    conn: LizaIPConnection, page_id: int, buttons: list[dict[str, Any]], img_title: str | None = None,
 ) -> None:
     """Record a partial ``set_page`` the device acknowledged in its known copy.
 
@@ -817,12 +834,13 @@ def note_partial_page(
     cache does not hold is left for the full sync to settle.
     """
     patched = patched_page(conn, page_id, buttons, img_title)
-    if patched is not None:
-        conn.page_cache.pages[page_id] = patched
+    pages = conn.page_cache.pages
+    if patched is not None and pages is not None:
+        pages[page_id] = patched
 
 
 async def async_send_partial_page(
-    conn, page_id: int, buttons: list[dict], img_title: str | None = None,
+    conn: LizaIPConnection | None, page_id: int, buttons: list[dict[str, Any]], img_title: str | None = None,
 ) -> None:
     """Send one partial ``set_page`` and record it once the device acknowledged it.
 
@@ -832,7 +850,7 @@ async def async_send_partial_page(
     if not is_ready(conn):
         forget_page(conn, page_id)
         return
-    fields: dict = {"buttons": buttons} if buttons else {}
+    fields: dict[str, Any] = {"buttons": buttons} if buttons else {}
     if img_title is not None:
         fields["img_title"] = img_title
     # The page's new hash goes with the change, so the device's copy says
@@ -848,7 +866,7 @@ async def async_send_partial_page(
     note_partial_page(conn, page_id, buttons, img_title)
 
 
-def forget_page(conn, page_id: int) -> None:
+def forget_page(conn: LizaIPConnection | None, page_id: int) -> None:
     """Drop one page from the device's known copy so the next sync resends it."""
     pages = getattr(getattr(conn, "page_cache", None), "pages", None)
     if pages:

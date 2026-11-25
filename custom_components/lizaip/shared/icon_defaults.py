@@ -6,21 +6,23 @@ The table is the ``icons:`` block of the default theme
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..imgserv.const import load_default_theme_file
 
 
-def _key_variants(key) -> tuple[str, ...]:
+def _key_variants(key: Any) -> tuple[str, ...]:
     """YAML reads on/off/true/false keys as bools; answer to both spellings."""
     if isinstance(key, bool):
         return ("true", "on") if key else ("false", "off")
     return (str(key),)
 
 
-def clean_section(section) -> dict:
+def clean_section(section: Any) -> dict[str, Any]:
     """String keys and string icons, one nesting level deep."""
     if not isinstance(section, dict):
         return {}
-    cleaned: dict = {}
+    cleaned: dict[str, Any] = {}
     for key, value in section.items():
         value = clean_section(value) if isinstance(value, dict) else ("" if value is None else str(value))
         for variant in _key_variants(key):
@@ -39,9 +41,9 @@ class IconDefaults:
         "domain_service_icons",
     )
 
-    def __init__(self, sections: dict) -> None:
+    def __init__(self, sections: dict[str, Any]) -> None:
         #: Every section; also sent to the panel as is.
-        self.all: dict = sections
+        self.all: dict[str, Any] = sections
         self.domain_icons: dict[str, str] = self.all.get("domain_icons", {})
         self.domain_state_icons: dict[str, dict[str, str]] = self.all.get("domain_state_icons", {})
         self.attribute_icons: dict[str, dict[str, str]] = self.all.get("attribute_icons", {})
@@ -49,12 +51,12 @@ class IconDefaults:
         self.domain_service_icons: dict[str, dict[str, str]] = self.all.get("domain_service_icons", {})
 
     @classmethod
-    def from_mapping(cls, data) -> IconDefaults:
+    def from_mapping(cls, data: Any) -> IconDefaults:
         """The tables from a theme's ``icons:`` block, cleaned."""
         data = data if isinstance(data, dict) else {}
         return cls({section: clean_section(data.get(section, {})) for section in cls.SECTIONS})
 
-    def merged(self, overrides: dict | None) -> IconDefaults:
+    def merged(self, overrides: dict[str, Any] | None) -> IconDefaults:
         """A new table with *overrides* laid over this one, section by section.
 
         A copy, never a change in place: two remotes on different themes read
@@ -62,7 +64,7 @@ class IconDefaults:
         """
         if not overrides:
             return self
-        sections: dict = {}
+        sections: dict[str, Any] = {}
         for section in self.SECTIONS:
             base = self.all.get(section, {})
             given = overrides.get(section)

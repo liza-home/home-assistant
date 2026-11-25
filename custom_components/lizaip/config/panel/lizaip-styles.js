@@ -24,7 +24,7 @@ import { STYLES_PAGE_SETTINGS } from "./styles/page-settings.js";
 import { STYLES_TILE_MENU } from "./styles/tile-menu.js";
 import { STYLES_SETTINGS } from "./styles/settings.js";
 import { STYLES_DIAGNOSTICS } from "./styles/diagnostics.js";
-import { STYLES_DEBUG } from "./styles/debug.js";
+import { STYLES_SHARED } from "./styles/shared.js";
 import { STYLES_DIALOGS } from "./styles/dialogs.js";
 import { STYLES_SLIDER } from "./styles/slider.js";
 import { STYLES_A11Y } from "./styles/a11y.js";
@@ -40,7 +40,7 @@ export const STYLES = [
   STYLES_TILE_MENU,
   STYLES_SETTINGS,
   STYLES_DIAGNOSTICS,
-  STYLES_DEBUG,
+  STYLES_SHARED,
   STYLES_DIALOGS,
   STYLES_SLIDER,
   STYLES_A11Y,

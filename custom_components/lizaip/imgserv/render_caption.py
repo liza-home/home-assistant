@@ -6,11 +6,13 @@ after the source renderers and before ``finalize_png``, which finishes it.
 """
 from __future__ import annotations
 
+from typing import Any, cast
+
 from PIL import Image
 
 from .const import MAX_SIZE, TEXT_BAND_INFO, TRANSPARENT
 from .render import autocrop
-from .render_text import render_text, text_baseline
+from .render_text import cap_height, render_text, text_baseline
 
 #: The subject's share of the *height* when a mark and its words are stacked.
 _SUBJECT_HEIGHT_SHARE = 0.62
@@ -32,9 +34,9 @@ _MIN_TITLE_FONT_SIZE = 32
 #: it. Only a smaller size asked for wins. The row overflows and scrolls.
 _BESIDE_A_MARK_FONT_SIZE = 32
 
-#: How far a mark beside words reaches past the tallest letter, in pixels,
-#: above it and below the baseline alike: exactly as tall, a mark's edges
-#: read as smaller than the letters' strokes.
+#: How far a mark beside words reaches past a capital, in pixels, above it
+#: and below the baseline alike: exactly as tall, a mark's edges read as
+#: smaller than the letters' strokes.
 _MARK_OVERSHOOT = 1
 
 #: What marks words that had to be cut short.
@@ -60,21 +62,44 @@ def _fit_subject(
     if scale == 1 or (scale > 1 and not grow):
         return img
     size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
-    return img.resize(size, Image.LANCZOS)
+    return img.resize(size, Image.Resampling.LANCZOS)
+
+
+def _fit_marks(parts: list[Any], budget: int, height: int) -> list[Image.Image]:
+    """Marks trimmed and scaled to one common height.
+
+    The height depends on the box and the number of marks only, never on what
+    the marks look like: a mark is then as big beside a bar as beside a ring.
+    Only if the row still overruns *budget* are all of them shrunk together.
+    """
+    marks = [autocrop(p.convert("RGBA"), TRANSPARENT, symmetric_vertical=False)
+             for p in parts]
+    if any(m.width <= 0 or m.height <= 0 for m in marks):
+        return marks
+    target = max(1, min(height, max(1, budget) // len(marks)))
+    scaled = [(m, target / m.height) for m in marks]
+    total_w = sum(m.width * k for m, k in scaled)
+    if total_w > budget:
+        scaled = [(m, k * budget / total_w) for m, k in scaled]
+    return [
+        m.resize((max(1, round(m.width * k)), max(1, round(m.height * k))), Image.Resampling.LANCZOS)
+        for m, k in scaled
+    ]
 
 
 def _render_fitted_text(
     text: str,
     budget: int,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
     font_size: int,
     font_id: str | None,
     fonts_dir: str | None,
     emoji: str | None = None,
     min_size: int = _MIN_FONT_SIZE,
-) -> Image.Image:
-    """The words, shrunk until they fit *budget* pixels, then cut short.
+) -> tuple[Image.Image, int]:
+    """The words, shrunk until they fit *budget* pixels, then cut short, and
+    the font size they ended up at.
 
     ``render_text`` sizes its canvas to the words, so the fitting is done here.
     """
@@ -91,7 +116,7 @@ def _render_fitted_text(
         img = render_text(
             shortened + _ELLIPSIS, budget, height, fg_color, size, font_id, fonts_dir, emoji,
         )
-    return img
+    return img, size
 
 
 def _place(canvas: Image.Image, img: Image.Image, x: int, y: int) -> None:
@@ -103,19 +128,6 @@ def _place(canvas: Image.Image, img: Image.Image, x: int, y: int) -> None:
     with and a mask would only spend the alpha a second time.
     """
     canvas.paste(img, (x, y))
-
-
-def _text_at(
-    text: str,
-    size: int,
-    height: int,
-    fg_color: tuple,
-    font_id: str | None,
-    fonts_dir: str | None,
-    emoji: str | None = None,
-) -> Image.Image:
-    """*text* drawn at exactly *size*, however wide that turns out to be."""
-    return render_text(text, MAX_SIZE, height, fg_color, size, font_id, fonts_dir, emoji)
 
 
 def _row_width(items: list[Image.Image], gap: int) -> int:
@@ -168,10 +180,10 @@ def _row(
 
 
 def compose_parts(
-    parts: list,
+    parts: list[Any],
     width: int,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
     font_size: int | None = None,
     font_id: str | None = None,
     fonts_dir: str | None = None,
@@ -183,8 +195,9 @@ def compose_parts(
     renders to one, and the plain string for every ``text:`` part, which is
     rendered here because only here is there a size to render it at.
 
-    Words set the scale: a mark is drawn as tall as the tallest letter beside
-    it. Beside a mark the words are drawn at :data:`_BESIDE_A_MARK_FONT_SIZE`
+    The font sets the scale: a mark is drawn as tall as a capital at the
+    words' font size, whatever the words are. Beside a mark the words are
+    drawn at :data:`_BESIDE_A_MARK_FONT_SIZE`
     (or the smaller size asked for), whatever the row's width; words alone
     are shrunk to fit, down to :data:`_MIN_TITLE_FONT_SIZE`. Marks alone share
     the box.
@@ -197,7 +210,7 @@ def compose_parts(
     if not items:
         return Image.new("RGBA", (max(1, width), max(1, height)), TRANSPARENT)
     if len(items) == 1 and not isinstance(items[0], str):
-        return items[0]
+        return cast(Image.Image, items[0])
 
     gap = max(1, round(min(width, height) * _GAP_SHARE))
     texts = [i for i, part in enumerate(items) if isinstance(part, str)]
@@ -209,9 +222,8 @@ def compose_parts(
         )
 
     if not texts:
-        share = max(1, (width - gap * (len(items) - 1)) // len(items))
         # No words to stand on, so the marks stand on the band and centre in it.
-        return _row([_fit_subject(p.convert("RGBA"), share, height) for p in items],
+        return _row(_fit_marks(items, width - gap * (len(items) - 1), height),
                     height, gap, height)
 
     size = min(font_size or height, height)
@@ -242,11 +254,11 @@ def compose_parts(
 
 
 def _render_row(
-    items: list,
+    items: list[Any],
     texts: list[int],
     size: int,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
     font_id: str | None,
     fonts_dir: str | None,
     emoji: str | None = None,
@@ -254,39 +266,36 @@ def _render_row(
 ) -> list[Image.Image]:
     """Every part as an image: the words at *size*, the marks to match.
 
-    A mark is as tall as the tallest letter beside it, plus
-    :data:`_MARK_OVERSHOOT` above and below. With a *budget* the words are fitted to what the marks leave of it.
+    A mark is a capital's height at the words' font size plus
+    :data:`_MARK_OVERSHOOT` each way, whatever the words are. With a *budget*
+    the words are fitted to what the marks leave of it.
     """
-    def letter_height(words: dict) -> int:
-        # How far the tallest letter reaches above the line it stands on.
-        reach = [
-            w.info[TEXT_BAND_INFO][1] - w.getbbox()[1]
-            for w in words.values() if w.getbbox() and TEXT_BAND_INFO in w.info
-        ]
-        tallest = max(1, max(reach)) if reach else max(1, size)
-        return tallest + 2 * _MARK_OVERSHOOT
-
-    def fit_marks(mark_h: int) -> dict:
+    def fit_marks(font_size: int) -> dict[int, Image.Image]:
+        mark_indices = [i for i in range(len(items)) if i not in texts]
+        if not mark_indices:
+            return {}
+        mark_h = cap_height(height, font_size, font_id, fonts_dir) + 2 * _MARK_OVERSHOOT
         return {
-            i: _fit_subject(part.convert("RGBA"), MAX_SIZE, mark_h, grow=True)
-            for i, part in enumerate(items)
-            if i not in texts
+            i: _fit_subject(items[i], MAX_SIZE, mark_h, grow=True)
+            for i in mark_indices
         }
 
-    words = {
-        i: _text_at(items[i], size, height, fg_color, font_id, fonts_dir, emoji)
-        for i in texts
-    }
-    marks = fit_marks(letter_height(words))
+    marks = fit_marks(size)
     if budget is not None:
         share = max(1, (budget - sum(m.width for m in marks.values())) // len(texts))
-        words = {
+        fitted = {
             i: _render_fitted_text(
                 items[i], share, height, fg_color, size, font_id, fonts_dir, emoji,
             )
             for i in texts
         }
-        marks = fit_marks(letter_height(words))
+        words = {i: img for i, (img, _size) in fitted.items()}
+        marks = fit_marks(max(s for _img, s in fitted.values()))
+    else:
+        words = {
+            i: render_text(items[i], MAX_SIZE, height, fg_color, size, font_id, fonts_dir, emoji)
+            for i in texts
+        }
     return [marks.get(i) or words[i] for i in range(len(items))]
 
 
@@ -296,7 +305,7 @@ def _stacked(
     width: int,
     height: int,
     gap: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
     font_size: int | None,
     font_id: str | None,
     fonts_dir: str | None,
@@ -304,9 +313,9 @@ def _stacked(
 ) -> Image.Image:
     """A mark above its words, both fitted -- the arrangement a tile gets."""
     subject_h = max(1, int(height * _SUBJECT_HEIGHT_SHARE))
-    subject = _fit_subject(img.convert("RGBA"), width, subject_h)
+    subject = _fit_subject(img, width, subject_h)
     text_h = max(1, height - subject_h - gap)
-    text = _render_fitted_text(
+    text, _size = _render_fitted_text(
         caption, width, text_h, fg_color,
         min(font_size or text_h, text_h), font_id, fonts_dir, emoji,
     )

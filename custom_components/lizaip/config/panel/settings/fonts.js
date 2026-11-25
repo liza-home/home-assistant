@@ -1,5 +1,5 @@
 /**
- * lizaIP Panel — Settings View: the font pickers, their previews, and the Fontbook group.
+ * lizaIP Panel — Settings View: the font pickers and their previews.
  *
  * One slice of `SettingsViewMixin`, composed in `lizaip-settings-view.js`, so
  * these methods run with `this` bound to the panel element.
@@ -40,12 +40,6 @@ function fontFaceFamily(id) {
     /[^A-Za-z0-9-]/g, (c) => `_${c.codePointAt(0).toString(16)}_`);
   return `liza-font-${safe}`;
 }
-
-// Fontbook (its own integration, a panel of its own) manages the fonts this
-// tab picks from. While it is installed it is a group here, beside Appearance,
-// showing Fontbook's own panel.
-export const FONTBOOK_PANEL = "fontbook";
-export const FONTBOOK_ICON = "mdi:format-font";
 
 export const SettingsFontsMixin = {
   /** The emoji fonts to offer: imgserv's own choice, none, or a font. */
@@ -134,75 +128,5 @@ export const SettingsFontsMixin = {
     Promise.resolve(el.updateComplete).then(apply, apply);
     ["click", "wa-show", "opened", "selected"].forEach((name) =>
       el.addEventListener(name, () => raf(apply)));
-  },
-
-  /** Home Assistant's entry for Fontbook's panel, when it has one to load. */
-  _fontbookPanel() {
-    const panel = this._hass?.panels?.[FONTBOOK_PANEL];
-    return panel?.config?._panel_custom?.name ? panel : null;
-  },
-
-  /**
-   * `{name, url}`: the element Fontbook's panel is and where its module is.
-   * Fontbook says so itself (`fontbook/info`); one from before that command
-   * is read off the panel Home Assistant registered for it.
-   */
-  async _fontbookElementInfo(panel) {
-    if (!this._fontbookInfo) {
-      try {
-        const info = await this._hass.callWS({ type: "fontbook/info" });
-        if (info?.element && info?.module_url) {
-          this._fontbookInfo = { name: info.element, url: info.module_url };
-        }
-      } catch (e) { /* an older Fontbook: its panel's own entry says */ }
-    }
-    if (this._fontbookInfo) return this._fontbookInfo;
-    const custom = panel.config._panel_custom;
-    return { name: custom.name, url: custom.module_url || custom.js_url };
-  },
-
-  /** The Fontbook group: a place for Fontbook's own panel. */
-  _htmlFontbookSection() {
-    const panel = this._fontbookPanel();
-    const title = this._esc(panel?.title || "Fontbook");
-    const failed = this._fontbookError
-      ? `<p class="hint-text">${this._esc(this._t("settings_fontbook_failed"))}
-           <a href="/${this._esc(panel?.url_path || FONTBOOK_PANEL)}">${title}</a></p>`
-      : "";
-    return `
-      <section class="settings-section settings-fontbook" id="liza-settings-panel-${FONTBOOK_PANEL}"
-               role="region" aria-label="${title}" tabindex="-1">
-        ${failed}<div class="fontbook-host"></div>
-      </section>`;
-  },
-
-  /**
-   * Put Fontbook's panel into *host*. One element for the life of the view:
-   * every render rebuilds the markup around it, and a new one each time would
-   * forget what the user was doing in it. Its module is loaded the first time.
-   */
-  async _mountFontbook(host) {
-    const panel = this._fontbookPanel();
-    if (!panel) return;
-    let custom;
-    try {
-      custom = await this._fontbookElementInfo(panel);
-      if (!customElements.get(custom.name)) {
-        await import(custom.url);
-        await customElements.whenDefined(custom.name);
-      }
-    } catch (e) {
-      console.warn("[lizaIP] Fontbook could not be loaded:", e);
-      if (!this._fontbookError) { this._fontbookError = true; this._render(); }
-      return;
-    }
-    if (!host.isConnected) return;
-    if (!this._fontbookEl) this._fontbookEl = document.createElement(custom.name);
-    const el = this._fontbookEl;
-    el.hass = this._hass;
-    el.narrow = !!this.narrow;
-    // The library alone: no toolbar, tabs or menu button of its own.
-    el.embedded = true;
-    if (el.parentNode !== host) host.appendChild(el);
   },
 };

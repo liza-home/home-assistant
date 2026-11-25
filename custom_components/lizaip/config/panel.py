@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
+from typing import Any, cast
 
 from aiohttp import web
 
@@ -185,7 +187,7 @@ class LizaIPGuideImageView(HomeAssistantView):
         )
 
 
-def needs_device_sync(event_data: dict, entry_id: str) -> bool:
+def needs_device_sync(event_data: Mapping[str, Any], entry_id: str) -> bool:
     """Whether a ``config_changed`` event still has work for the device sync.
 
     A reorder whose ``set_main_pages`` push already succeeded is marked
@@ -314,7 +316,7 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             await _device_sync_mod.sync_config_to_device(hass, entry)
 
     async def _send_page(
-        page_id: int, buttons: list[dict], img_title: str | None = None,
+        page_id: int, buttons: list[dict[str, Any]], img_title: str | None = None,
     ) -> None:
         """One `set_page` round-trip, resolving the connection at send time.
 
@@ -346,10 +348,10 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
     # The tooltip style therefore comes from `cached_settings`, warmed during
     # entry setup, rather than an awaited disk read.
     @callback
-    def _on_icon_update(updates: list[dict]) -> None:
+    def _on_icon_update(updates: list[dict[str, Any]]) -> None:
         # Resolve page IDs — they are 32-bit integers matching protocol page IDs
         # Group updates by page for efficiency (one set_page call per page)
-        page_buttons: dict[int, list[dict]] = {}
+        page_buttons: dict[int, list[dict[str, Any]]] = {}
         # The same font and size the page sync drew the tooltip in; without
         # them a live update would redraw it in the defaults.
         tooltip_style = None
@@ -373,7 +375,8 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
             if tooltip is not None:
                 page_color = upd.get("page_color", "")
                 if tooltip_style is None:
-                    cached = store.cached_settings(device_id)
+                    # Connected below only once device_id is known.
+                    cached = store.cached_settings(cast(str, device_id))
                     tooltip_style = cached["tooltip"]
                     tooltip_theme = settings_theme(cached).theme_id
                 btn_data["img_tooltip"] = resolve_tooltip_url(
@@ -404,7 +407,6 @@ async def async_setup_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> N
     # Dynamic-source refresh triggers (goto_page navigation).
     for stop in _template_refresh.async_setup_entry_triggers(hass, entry):
         panel_entry.on_close(stop)
-    _template_refresh.async_register_service(hass)
 
     # Source-side push triggers.
     try:

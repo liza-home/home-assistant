@@ -32,7 +32,7 @@ export const RestoreViewMixin = {
     // restore closed half-way leaves nothing for the next one to inherit.
     const ctx = {
       entry, stage: "pick", file: null, summary: null, error: "",
-      progress: 0, result: null,
+      progress: 0, result: null, steps: [], step: "", written: 0, total: 0,
     };
     // The chooser is the operating system's window, but its Escape reaches the
     // page too, where the dialog took it for its own and closed.
@@ -89,6 +89,7 @@ export const RestoreViewMixin = {
     live.className = "liza-sr-only";
     live.setAttribute("role", "status");
     live.setAttribute("aria-live", "polite");
+    let lastSaid = "";
 
     // WCAG 2.4.3: a repaint replaces every node in the window, so the control
     // the user was on is gone. A change they asked for puts focus on whatever
@@ -103,8 +104,10 @@ export const RestoreViewMixin = {
       dlg.innerHTML = this._htmlRestoreDialog(ctx, device);
       dlg.appendChild?.(live);
       wire();
+      // Said once per change: the pages repaint the window many times a step.
       const said = this._restoreAnnouncement(ctx);
-      if (said) setTimeout(() => { live.textContent = said; }, 50);
+      if (said && said !== lastSaid) setTimeout(() => { live.textContent = said; }, 50);
+      lastSaid = said;
       if (!focus) {
         if (keep) this._focusWhenReady(dlg.querySelector(`.${keep}`));
         return;
@@ -196,19 +199,36 @@ export const RestoreViewMixin = {
     };
 
     /**
-     * Do the restore, and stay to say how it went. The window holds the last
-     * step while the files are written and the panel re-reads them, and then
-     * says so rather than vanishing and leaving a toast to explain itself.
+     * Do the restore, and stay to say how it went. Each step and page the
+     * backend reports is drawn as it lands, and the window then says how it
+     * ended rather than vanishing and leaving a toast to explain itself.
      */
     const run = async () => {
       if (ctx.stage !== "review" || !ctx.summary) return;
-      ctx.stage = "working";
-      ctx.error = "";
+      Object.assign(ctx, { stage: "working", error: "", steps: [], step: "", written: 0, total: 0 });
       repaint();
       let result = null;
       try {
-        result = await this._applyRestore(entry, ctx.summary);
+        result = await this._applyRestore(entry, ctx.summary, (ev) => {
+          this._noteRestoreEvent(ctx, ev);
+          repaint();
+        });
       } catch (e) {
+        if (e?.code === "outcome_unknown") {
+          ctx.stage = "unknown";
+          ctx.result = { outcome_unknown: true };
+          repaint({ focus: true });
+          return;
+        }
+        if (e?.code === "failed") {
+          ctx.stage = "failed";
+          ctx.step = e.step || ctx.step;
+          ctx.result = { success: false, files_restored: e.files_restored === true };
+          ctx.error = this._restoreErrorText(e);
+          if (ctx.result.files_restored) await this._reloadAfterRestore(entry);
+          repaint({ focus: true });
+          return;
+        }
         ctx.error = this._restoreErrorText(e);
       }
       if (!result) {
@@ -229,7 +249,7 @@ export const RestoreViewMixin = {
     wire();
     // The corner button comes first in the window; what the user came to do
     // is pick a file, so that is what is handed the keyboard.
-    dlg.querySelector(".restore-pick-btn")?.focus?.();
+    this._focusWhenReady(dlg.querySelector(".restore-pick-btn"));
   },
 
   /** The restore window, in whichever of its steps it is in. */
@@ -261,7 +281,7 @@ export const RestoreViewMixin = {
    */
   _htmlRestoreActions(ctx) {
     if (ctx.stage === "working") return "";
-    if (ctx.stage === "done") {
+    if (["done", "failed", "unknown"].includes(ctx.stage)) {
       return this._htmlDialogActions({
         commit: { cls: "debug-btn primary restore-close-btn", label: this._t("close") },
       });
@@ -276,14 +296,14 @@ export const RestoreViewMixin = {
   /** Which step the window is on, as the user counts them. */
   _restoreStep(ctx) {
     if (ctx.stage === "review") return 1;
-    if (ctx.stage === "working" || ctx.stage === "done") return 2;
+    if (["working", "done", "failed", "unknown"].includes(ctx.stage)) return 2;
     return 0;
   },
 
   /** The control a repaint the user asked for hands the keyboard to. */
   _restoreFocusClass(ctx) {
     if (ctx.stage === "review") return "restore-confirm-btn";
-    if (ctx.stage === "done") return "restore-close-btn";
+    if (["done", "failed", "unknown"].includes(ctx.stage)) return "restore-close-btn";
     return "restore-pick-btn";
   },
 
@@ -309,6 +329,8 @@ export const RestoreViewMixin = {
   _htmlRestoreBody(ctx) {
     if (ctx.stage === "working") return this._htmlRestoreWorking(ctx);
     if (ctx.stage === "done") return this._htmlRestoreDone(ctx);
+    if (ctx.stage === "failed") return this._htmlRestoreFailed(ctx);
+    if (ctx.stage === "unknown") return this._htmlRestoreUnknown();
     if (ctx.stage === "review" && ctx.summary) return this._htmlRestoreReview(ctx);
     return this._htmlRestorePick(ctx);
   },
@@ -372,29 +394,132 @@ export const RestoreViewMixin = {
       ${rest}${this._htmlRestorePages(ctx.summary)}`;
   },
 
-  /** Step three, while it runs. The write is one call the browser cannot see
-   *  into, so the bar sweeps rather than claiming a number it does not have. */
+  /** Step three, while it runs: the steps the backend reported, a bar, and
+   *  while the pages go out, which one is on its way. */
   _htmlRestoreWorking(ctx) {
+    // Until the step list arrives there is nothing to measure, so it sweeps.
+    const fraction = ctx.steps?.length ? this._restorePercent(ctx) / 100 : null;
+    const pages = this._restorePagesLine(ctx);
     return `<p class="restore-line">${this._esc(this._restoreWorkingLine(ctx))}</p>
-      ${this._htmlRestoreBar(null)}`;
+      ${this._htmlRestoreBar(fraction)}
+      ${pages ? `<p class="restore-status restore-pages-progress">${this._esc(pages)}</p>` : ""}
+      ${this._htmlRestoreChecklist(ctx)}`;
   },
 
   /** Step three, once it is over. It waits to be dismissed: a window that
    *  closes itself is a window the user is left wondering about. */
   _htmlRestoreDone(ctx) {
     const pages = ctx.result?.pages ?? ctx.summary?.pages ?? 0;
+    const note = this._restoreRemoteNote(ctx);
+    const remote = ctx.result?.remote;
+    const notice = note ? `
+      <p class="restore-line ${remote === "failed" ? "warn" : "note"}"><ha-icon
+        icon="${remote === "failed" ? "mdi:alert-outline" : "mdi:information-outline"}"
+        aria-hidden="true"></ha-icon><span>${this._esc(note)}</span></p>` : "";
     return `
       <p class="restore-done">
         <ha-icon class="restore-done-icon" icon="mdi:check-circle" aria-hidden="true"></ha-icon>
         <span>${this._esc(this._restoreCount("restore_done", pages, "pages"))}</span>
-      </p>`;
+      </p>${notice}
+      ${this._htmlRestoreChecklist(ctx)}`;
   },
 
-  /**
-   * The bar. A real fraction while the file goes up, a sweep while the server
-   * writes -- that half is one call the browser cannot see into, and a bar
-   * pretending to measure it would be making the number up.
-   */
+  /** A backend failure is terminal, but may have happened after the files
+   *  were replaced. Make that boundary explicit instead of offering a retry. */
+  _htmlRestoreFailed(ctx) {
+    const message = ctx.result?.files_restored
+      ? this._t("restore_failed_after_files")
+      : this._t("restore_failed_before_files");
+    return `<p class="restore-line warn"><ha-icon icon="mdi:alert-outline"
+        aria-hidden="true"></ha-icon><span>${this._esc(message)}</span></p>
+      <p class="restore-status error">${this._esc(
+        this._t("restore_failed", { error: ctx.error }))}</p>
+      ${this._htmlRestoreChecklist(ctx)}`;
+  },
+
+  /** The backend may continue after the panel loses its socket, so this is
+   *  neither success nor failure and the user must check before retrying. */
+  _htmlRestoreUnknown() {
+    return `<p class="restore-line warn"><ha-icon icon="mdi:alert-outline"
+        aria-hidden="true"></ha-icon><span>${this._esc(
+          this._t("restore_connection_lost"))}</span></p>`;
+  },
+
+  /** The backend's steps, ticked off as they land. A remote that was away or
+   *  refused is marked as such once it is over, not as done. */
+  _htmlRestoreChecklist(ctx) {
+    const steps = ctx.steps || [];
+    if (!steps.length) return "";
+    const at = steps.indexOf(ctx.step);
+    const remote = ctx.result?.remote;
+    const marks = { done: "✓", running: "●", waiting: "○", later: "○", failed: "✕" };
+    const rows = steps.map((key, i) => {
+      let state = i < at ? "done" : i === at ? "running" : "waiting";
+      if (ctx.stage === "done") {
+        state = !key.startsWith("remote_") || remote === "synced" ? "done"
+          : remote === "failed" ? "failed" : "later";
+      } else if (ctx.stage === "failed") {
+        const failedAt = steps.indexOf(ctx.step);
+        state = failedAt < 0 ? "waiting"
+          : i < failedAt ? "done" : i === failedAt ? "failed" : "waiting";
+      }
+      const said = state === "later" || state === "failed"
+        ? this._t(`restore_step_${state}`) : this._t(`diagnostics_step_${state}`);
+      return `<li class="diag-step ${state}">
+          <span class="diag-step-mark" aria-hidden="true">${marks[state]}</span>
+          <span class="diag-step-label">${this._esc(this._t(`restore_step_${key}`))}</span>
+          <span class="diag-step-state">${this._esc(said)}</span>
+        </li>`;
+    }).join("");
+    return `<ol class="diag-steps restore-checklist">${rows}</ol>`;
+  },
+
+  /** Fold one event of the restore subscription into the window's state. */
+  _noteRestoreEvent(ctx, ev) {
+    if (ev?.event === "steps") ctx.steps = ev.steps || [];
+    else if (ev?.event === "progress") ctx.step = ev.step;
+    else if (ev?.event === "pages") {
+      ctx.written = ev.written || 0;
+      ctx.total = ev.total || 0;
+    }
+  },
+
+  /** How far the restore has come, as a whole percent. The pages are most
+   *  of the wait, so they get most of the bar. */
+  _restorePercent(ctx) {
+    if (ctx.stage === "done") return 100;
+    if (ctx.step === "remote_pages" && ctx.total) {
+      return 20 + Math.round((80 * Math.min(ctx.written, ctx.total)) / ctx.total);
+    }
+    return { reload: 5, remote_clear: 10, remote_pages: 20 }[ctx.step] || 0;
+  },
+
+  /** "Page 4 of 12", while the pages go out. */
+  _restorePagesLine(ctx) {
+    if (ctx.step !== "remote_pages" || !ctx.total) return "";
+    return this._t("restore_pages_progress", {
+      written: Math.min(ctx.written + 1, ctx.total), total: ctx.total,
+    });
+  },
+
+  /** What became of the remote, when it is anything but synced. */
+  _restoreRemoteNote(ctx) {
+    const remote = ctx.result?.remote;
+    if (remote === "offline") return this._t("restore_remote_offline");
+    if (remote === "failed") return this._t("restore_remote_failed");
+    return "";
+  },
+
+  /** How a restore ended, in one sentence and its note. */
+  _restoreOutcomeText(ctx) {
+    if (ctx.result?.outcome_unknown) return this._t("restore_connection_lost");
+    const pages = ctx.result?.pages ?? 0;
+    return [this._restoreCount("restore_done", pages, "pages"), this._restoreRemoteNote(ctx)]
+      .filter(Boolean).join(" ");
+  },
+
+  /** The bar: a real fraction whenever there is one, a sweep until then --
+   *  a bar pretending to measure what it cannot would be making it up. */
   _htmlRestoreBar(fraction) {
     if (fraction == null) {
       return `<div class="restore-bar sweeping" role="progressbar" aria-busy="true">
@@ -538,12 +663,20 @@ export const RestoreViewMixin = {
 
   /** What a reader is told when the window changes state on its own. */
   _restoreAnnouncement(ctx) {
-    if (ctx.stage === "working") return this._restoreWorkingLine(ctx);
+    if (ctx.stage === "working") {
+      const step = ctx.step ? this._t(`restore_step_${ctx.step}`) : "";
+      return [this._restoreWorkingLine(ctx), step].filter(Boolean).join(" ");
+    }
     if (ctx.stage === "reading") {
       return this._t("restore_checking", { filename: ctx.file?.name || "" });
     }
-    if (ctx.stage === "done") {
-      return this._restoreCount("restore_done", ctx.result?.pages ?? 0, "pages");
+    if (ctx.stage === "done") return this._restoreOutcomeText(ctx);
+    if (ctx.stage === "unknown") return this._t("restore_connection_lost");
+    if (ctx.stage === "failed") {
+      const message = ctx.result?.files_restored
+        ? this._t("restore_failed_after_files")
+        : this._t("restore_failed_before_files");
+      return [message, this._t("restore_failed", { error: ctx.error })].join(" ");
     }
     if (ctx.stage === "review" && ctx.summary) {
       return this._restoreSummaryLines(ctx.file, ctx.summary, ctx.entry)
@@ -593,27 +726,70 @@ export const RestoreViewMixin = {
 
   /**
    * Spend the token the upload handed back: the upload parked a checked
-   * archive, and this is the half that writes. Split from the reading so that
-   * cancelling the window is simply never calling it -- an unspent token
-   * expires on its own.
+   * archive, and this is the half that writes. A subscription, so each step
+   * and page reaches `onEvent`; it resolves with the final `done` event.
    */
-  async _applyRestore(entryId, summary) {
+  async _applyRestore(entryId, summary, onEvent = null) {
     const entry = entryId || this._currentEntry;
     if (!entry || !summary?.token || this._restoreBusy) return null;
     this._restoreBusy = "applying";
-    this._render();
+    let unsub = null;
+    const connection = this._hass.connection;
+    let settled = false;
+    let rejectPromise;
+    const unsubscribe = () => {
+      try {
+        const result = unsub?.();
+        result?.catch?.(() => {});
+      } catch (_) { /* the socket may already be gone */ }
+    };
+    const onDisconnected = () => {
+      if (settled) return;
+      settled = true;
+      rejectPromise(Object.assign(
+        new Error("The connection was lost while the restore was running"),
+        { code: "outcome_unknown" },
+      ));
+    };
     try {
-      // The result carries the page count and whether the remote could be
-      // reached -- the difference between "it worked" and "why is my remote
-      // still showing the old pages" -- and the window says which.
-      return await this._hass.callWS({
-        type: "lizaip_config/restore_config",
-        entry_id: entry,
-        token: summary.token,
+      return await new Promise((resolve, reject) => {
+        rejectPromise = reject;
+        connection.addEventListener?.("disconnected", onDisconnected);
+        connection.subscribeMessage(
+          (ev) => {
+            if (settled) return;
+            if (ev?.event === "done") {
+              settled = true;
+              resolve(ev);
+            }
+            else if (ev?.event === "error") {
+              settled = true;
+              reject(Object.assign(new Error(ev.message || ""), {
+                code: ev.code,
+                step: ev.step,
+                files_restored: ev.files_restored,
+              }));
+            } else onEvent?.(ev);
+          },
+          { type: "lizaip_config/restore_config", entry_id: entry, token: summary.token },
+          { resubscribe: false },
+        ).then((fn) => {
+          unsub = fn;
+          if (settled) {
+            unsubscribe();
+          }
+        }, (err) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
       });
     } finally {
+      settled = true;
+      connection.removeEventListener?.("disconnected", onDisconnected);
+      unsubscribe();
       this._restoreBusy = null;
-      this._render();
     }
   },
 
@@ -680,9 +856,6 @@ export const RestoreViewMixin = {
     const entry = entryId || this._currentEntry;
     try {
       if (entry && entry === this._currentEntry && this._selectDevice) {
-        // Awaited: `_selectDevice` clears the caches straight away but only
-        // renders once `_loadAll` answers, and a window that says "done"
-        // before that is a window that says it over the old pages.
         await this._selectDevice(entry);
         return;
       }

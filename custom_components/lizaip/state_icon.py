@@ -16,7 +16,7 @@ what the panel has always done via ``_getTargetEntityFromConfig``.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Final
+from typing import Any, Final
 
 from homeassistant.core import HomeAssistant, State
 
@@ -209,7 +209,7 @@ def icon_style_for_entities(
 
 def icon_style_for(
     hass: HomeAssistant | None,
-    step: dict | None,
+    step: dict[str, Any] | None,
     page_color: str = "",
     *,
     fill_step: int | None = None,

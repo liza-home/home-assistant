@@ -17,13 +17,14 @@ once, in ``finalize_png``, and not here.
 """
 from __future__ import annotations
 
+import importlib
 import io
 import logging
 import math
 import re
 import xml.etree.ElementTree as ET
-from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -84,8 +85,8 @@ def list_logos() -> list[str]:
     return sorted(
         name for name in names
         if any(
-            (path := _resolve_under(logo_directory(name), f"{name}{suffix}")) is not None
-            and path.is_file()
+            (found := _resolve_under(logo_directory(name), f"{name}{suffix}")) is not None
+            and found.is_file()
             for suffix in (".svg", ".png")
         )
     )
@@ -95,7 +96,7 @@ def render_logo(
     logo_name: str,
     width: int,
     height: int,
-    fg_color: tuple = DEFAULT_FG_COLOR,
+    fg_color: tuple[Any, ...] = DEFAULT_FG_COLOR,
     native_color: bool = False,
     prefer_native_png: bool = False,
 ) -> Image.Image | None:
@@ -157,13 +158,8 @@ def render_logo(
 
 # -- Internal helpers -------------------------------------------------------
 
-@lru_cache(maxsize=64)
-def _natural_aspect(path_str: str, _mtime_ns: int) -> float | None:
-    """Width over height of a logo file, from its viewBox or its pixels.
-
-    Cached per file version so replacing a user logo updates its shape too.
-    """
-    path = Path(path_str)
+def _natural_aspect(path: Path) -> float | None:
+    """Width over height of a logo file, from its viewBox or its pixels."""
     try:
         if path.suffix == ".svg":
             _, _, width, height = parse_svg_viewbox(ET.parse(path).getroot())
@@ -181,7 +177,7 @@ def _shape_of(logos_dir: Path, name: str) -> float | None:
     for suffix in (".svg", ".png"):
         candidate = _resolve_under(logos_dir, f"{name}{suffix}")
         if candidate is not None and candidate.is_file():
-            aspect = _natural_aspect(str(candidate), candidate.stat().st_mtime_ns)
+            aspect = _natural_aspect(candidate)
             if aspect:
                 return aspect
     return None
@@ -239,7 +235,7 @@ def _resolve_under(base_dir: Path, name: str) -> Path | None:
 def _load_png(png_path: Path, width: int, height: int) -> Image.Image | None:
     try:
         img = Image.open(png_path).convert("RGBA")
-        img.thumbnail((width, height), Image.LANCZOS)
+        img.thumbnail((width, height), Image.Resampling.LANCZOS)
         return img
     except Exception as err:
         _LOGGER.error("Logo PNG error %s: %s", png_path, err, exc_info=True)
@@ -248,7 +244,7 @@ def _load_png(png_path: Path, width: int, height: int) -> Image.Image | None:
 
 def _try_cairosvg(svg_path: Path, width: int, height: int) -> Image.Image | None:
     try:
-        import cairosvg
+        cairosvg = importlib.import_module("cairosvg")  # optional and untyped
         png_data = cairosvg.svg2png(url=str(svg_path), output_width=width, output_height=height)
         return Image.open(io.BytesIO(png_data)).convert("RGBA")
     except ImportError:

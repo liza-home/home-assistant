@@ -120,7 +120,7 @@ _OLD_BINDING_FIELDS: Final[dict[str, str]] = {
 }
 
 
-def _rename_key(holder: dict, old: str, new: str) -> None:
+def _rename_key(holder: dict[str, Any], old: str, new: str) -> None:
     """Move *old* to *new* on *holder*, unless *new* is already there."""
     if old in holder:
         value = holder.pop(old)
@@ -165,7 +165,7 @@ def _explicit_wording(text: Any) -> Any:
     return translate_ref(key) if key else text
 
 
-def _migrate_tooltip(holder: dict, *, explicit_state: bool) -> None:
+def _migrate_tooltip(holder: dict[str, Any], *, explicit_state: bool) -> None:
     """A stored tooltip, translated the way it was before format 2."""
     tooltip = holder.get("tooltip")
     if explicit_state:
@@ -176,7 +176,7 @@ def _migrate_tooltip(holder: dict, *, explicit_state: bool) -> None:
         holder["tooltip"] = tooltip
 
 
-def _migrate_action_library(actions: list) -> None:
+def _migrate_action_library(actions: list[Any]) -> None:
     """Bring a library written by an earlier release up to date, in memory.
 
     - An icon the panel seeded from a command's old default is shed: a stored
@@ -195,11 +195,11 @@ def _migrate_action_library(actions: list) -> None:
             action.pop("icon")
 
 
-def _migrate_binding(binding: dict) -> None:
+def _migrate_binding(binding: dict[str, Any]) -> None:
     """A dynamic binding's field names, as they are spelt now."""
     fields = binding.get("fields")
     if isinstance(fields, list):
-        renamed: list = []
+        renamed: list[Any] = []
         for field in fields:
             field = _OLD_BINDING_FIELDS.get(field, field) if isinstance(field, str) else field
             if field not in renamed:
@@ -207,7 +207,7 @@ def _migrate_binding(binding: dict) -> None:
         binding["fields"] = sorted(renamed, key=str)
     field_map = binding.get("field_map")
     if isinstance(field_map, dict):
-        renamed_map = {}
+        renamed_map: dict[Any, Any] = {}
         for key, value in field_map.items():
             key = _OLD_BINDING_FIELDS.get(key, key)
             value = _OLD_BINDING_FIELDS.get(value, value) if isinstance(value, str) else value
@@ -220,7 +220,7 @@ def _migrate_binding(binding: dict) -> None:
             binding.pop("field_map")
 
 
-def _migrate_button(button: dict, *, explicit_state: bool = False) -> None:
+def _migrate_button(button: dict[str, Any], *, explicit_state: bool = False) -> None:
     """A stored button's keys, as this release spells them."""
     if _OLD_REPEAT_KEY in button:
         if button.pop(_OLD_REPEAT_KEY) is True:
@@ -251,7 +251,7 @@ def _migrate_button(button: dict, *, explicit_state: bool = False) -> None:
                 _migrate_tooltip(override, explicit_state=explicit_state)
 
 
-def _migrate_page_file(raw: dict) -> None:
+def _migrate_page_file(raw: dict[str, Any]) -> None:
     """Bring a page file written by an earlier release up to date, in memory.
 
     Nothing is written here; the next save of the page stores the new form.
@@ -350,7 +350,7 @@ class LizaRemoteStore:
     def _page_order_path(self, device_id: str) -> str:
         return os.path.join(self._device_dir(device_id), "page_order.yaml")
 
-    async def _async_write_page_order(self, device_id: str, pages: list) -> None:
+    async def _async_write_page_order(self, device_id: str, pages: list[Any]) -> None:
         """Write ``page_order.yaml``: every page, subpages included.
 
         It keeps where a subpage sits among the others in the editor, and is
@@ -443,7 +443,7 @@ class LizaRemoteStore:
             raise StoreWriteError(path)
 
     @staticmethod
-    def _runnable_overrides(table: Any) -> dict:
+    def _runnable_overrides(table: Any) -> dict[str, Any]:
         """Runnable override entries: known fixed key plus an action to run.
 
         Absence means inherit. Empty or actionless overrides are not stored,
@@ -458,7 +458,7 @@ class LizaRemoteStore:
         """
         if not isinstance(table, dict):
             return {}
-        out = {}
+        out: dict[str, Any] = {}
         for k, v in table.items():
             if k == SLIDER_VERTICAL_KEY:
                 # The slider block is runnable when it names a subject —
@@ -480,7 +480,7 @@ class LizaRemoteStore:
         return out
 
     @staticmethod
-    def _is_empty_button(btn_data: dict) -> bool:
+    def _is_empty_button(btn_data: Any) -> bool:
         """Whether a button assignment should be omitted from page YAML.
 
         "Empty" is stricter than "has no action": sliders, dynamic placeholders,
@@ -520,7 +520,7 @@ class LizaRemoteStore:
         return True
 
     @staticmethod
-    def _strip_empty_fields(btn_data: dict) -> dict:
+    def _strip_empty_fields(btn_data: dict[str, Any]) -> dict[str, Any]:
         """Remove unset fields before writing user-editable YAML.
 
         Presence is meaningful for several booleans/containers: ``tooltip_edited``
@@ -528,7 +528,7 @@ class LizaRemoteStore:
         dicts/lists should not become visible YAML noise unless another reader
         treats their presence as a distinct state.
         """
-        result = {}
+        result: dict[str, Any] = {}
         for key, val in btn_data.items():
             if val is None:
                 continue
@@ -600,7 +600,7 @@ class LizaRemoteStore:
     #               mirrors rule 1 and is the fallback if the block is inert.
 
     @classmethod
-    def _template_bindings(cls, page_meta: dict) -> dict[str, dict]:
+    def _template_bindings(cls, page_meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """What the page's template says each of its bound buttons is bound to.
 
         Empty for a page with no template provenance, and for one whose template has
@@ -625,7 +625,7 @@ class LizaRemoteStore:
         )
 
     @staticmethod
-    def _template_page_def(template: dict, template_meta: dict) -> dict:
+    def _template_page_def(template: dict[str, Any], template_meta: dict[str, Any]) -> dict[str, Any]:
         """The part of a template that describes *this* page.
 
         A template names its pages, and the page says which of them it is.
@@ -650,7 +650,7 @@ class LizaRemoteStore:
         return {**shared, "buttons": buttons}
 
     @classmethod
-    def _strip_template_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
+    def _strip_template_stated_keys(cls, page_meta: dict[str, Any], buttons: dict[str, Any]) -> None:
         """Drop the binding keys the page's template can state itself.
 
         Twelve Hue lamps each stored the source they came from, the spec that
@@ -684,7 +684,7 @@ class LizaRemoteStore:
             }
 
     @classmethod
-    def _restore_template_stated_keys(cls, page_meta: dict, buttons: dict) -> None:
+    def _restore_template_stated_keys(cls, page_meta: dict[str, Any], buttons: dict[str, Any]) -> None:
         """Put the template-stated keys back, before anything reads a binding.
 
         Only buttons that already carry a binding get one: a hand-made button
@@ -704,7 +704,7 @@ class LizaRemoteStore:
                 binding.setdefault(key, deepcopy(value))
 
     @staticmethod
-    def _warn_if_unrefreshable(page_meta: dict, buttons: dict) -> None:
+    def _warn_if_unrefreshable(page_meta: dict[str, Any], buttons: dict[str, Any]) -> None:
         """Say so when a page's template is the only thing that knew what it holds.
 
         A page that was written against a template stores only what the template
@@ -733,7 +733,7 @@ class LizaRemoteStore:
             ", ".join(sorted(orphaned)),
         )
 
-    def _build_page_file_data(self, page_meta: dict, assignments: dict) -> dict:
+    def _build_page_file_data(self, page_meta: dict[str, Any], assignments: dict[str, Any]) -> dict[str, Any]:
         clean_buttons = {k: self._strip_empty_fields(v)
                          for k, v in assignments.items()
                          if not self._is_empty_button(v)}
@@ -754,7 +754,7 @@ class LizaRemoteStore:
             data["buttons"] = clean_buttons
         return data
 
-    def _parse_page_file_data(self, raw: dict) -> tuple[dict, dict]:
+    def _parse_page_file_data(self, raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         """Parse one page YAML payload into metadata and button assignments.
 
         Blocking: consults the page's template. Call via ``async_add_executor_job``.
@@ -796,8 +796,8 @@ class LizaRemoteStore:
             self._page_order_path(device_id)
         ) or []
 
-        pages: list[dict] = []
-        assignments: dict[int, dict] = {}
+        pages: list[dict[str, Any]] = []
+        assignments: dict[int, dict[str, Any]] = {}
         pages_dir = self._pages_dir(device_id)
 
         if await self._hass.async_add_executor_job(os.path.isdir, pages_dir):
@@ -841,7 +841,7 @@ class LizaRemoteStore:
 
         return data if (pages or data.get("action_library") or assignments) else None
 
-    async def _write_page_files(self, device_id: str, pages: list, assignments: dict) -> None:
+    async def _write_page_files(self, device_id: str, pages: list[Any], assignments: dict[str, Any]) -> None:
         """Write page YAML files; skip malformed page entries.
 
         Callers hand over the whole page list because page files carry metadata
@@ -869,7 +869,7 @@ class LizaRemoteStore:
         if unwritten:
             raise StoreWriteError(", ".join(unwritten))
 
-    async def _async_template_ready(self, source: dict) -> None:
+    async def _async_template_ready(self, source: dict[str, Any]) -> None:
         """Parse the page's template now, so building and parsing can stay on the loop.
 
         Both consult the template, and both walk the live in-memory assignments —
@@ -889,7 +889,7 @@ class LizaRemoteStore:
             await async_load_template(self._hass, template_id)
 
     @staticmethod
-    def _page_file_digest(file_data: dict) -> str:
+    def _page_file_digest(file_data: dict[str, Any]) -> str:
         """Fingerprint of a page's file payload.
 
         Deliberately not ``yaml.dump``: serialising is the expensive half of a
@@ -921,7 +921,7 @@ class LizaRemoteStore:
                 except ValueError:
                     pass
             self._written_page_digests.pop(path, None)
-    async def _async_write_page(self, path: str, page_meta: dict, assignments: dict) -> bool:
+    async def _async_write_page(self, path: str, page_meta: dict[str, Any], assignments: dict[str, Any]) -> bool:
         """Build one page's file payload on the loop and write it off it.
 
         Skipped when the payload matches what we last wrote to *path*. Callers
@@ -947,12 +947,12 @@ class LizaRemoteStore:
             self._written_page_digests[path] = digest
         return written
 
-    async def _async_read_page(self, path: str) -> tuple[dict, dict] | None:
+    async def _async_read_page(self, path: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
         """Read one page file off the loop and parse it on it."""
         parsed = await self._async_read_page_as_stored(path)
         return parsed[:2] if parsed is not None else None
 
-    async def _async_read_page_as_stored(self, path: str) -> tuple[dict, dict, dict] | None:
+    async def _async_read_page_as_stored(self, path: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
         """:meth:`_async_read_page`, plus the file as read before any migration.
 
         The third element is for :meth:`_prime_page_digest`.
@@ -965,7 +965,7 @@ class LizaRemoteStore:
         await self._async_template_ready(raw)
         return (*self._parse_page_file_data(raw), on_disk)
 
-    def _prime_page_digest(self, path: str, page_meta: dict, buttons: dict, on_disk: dict) -> None:
+    def _prime_page_digest(self, path: str, page_meta: dict[str, Any], buttons: dict[str, Any], on_disk: dict[str, Any]) -> None:
         """Remember a loaded page file as written, when it is what a save would write.
 
         Without this the digest cache starts empty at every start, so the first
@@ -978,14 +978,14 @@ class LizaRemoteStore:
             self._written_page_digests[path] = self._page_file_digest(built)
 
     @staticmethod
-    def _clean_action_library(actions: Any) -> list[dict]:
+    def _clean_action_library(actions: Any) -> list[dict[str, Any]]:
         """Drop empty fields from each action before it is persisted.
 
         Shared by the full-device save and the action-library-only save: they
         each had their own copy of this, so a change to the persisted action
         shape could be made in one and missed in the other.
         """
-        clean: list[dict] = []
+        clean: list[dict[str, Any]] = []
         for action in actions or []:
             if not isinstance(action, dict):
                 continue
@@ -1108,7 +1108,7 @@ class LizaRemoteStore:
             }
         return self._data[device_id]
 
-    async def async_get_pages(self, device_id: str) -> list[dict]:
+    async def async_get_pages(self, device_id: str) -> list[dict[str, Any]]:
         """The remote's pages, in order.
 
         A new list of shallow page copies: a caller editing a page or the list
@@ -1118,7 +1118,7 @@ class LizaRemoteStore:
         data = self._data.get(device_id, {})
         return [dict(p) if isinstance(p, dict) else p for p in data.get("pages", [])]
 
-    async def async_set_page_order(self, device_id: str, pages: list[dict]) -> None:
+    async def async_set_page_order(self, device_id: str, pages: list[dict[str, Any]]) -> None:
         """Persist a new page order without rewriting the page files.
 
         Order lives entirely in ``page_order.yaml``, a flat list of page ids. A
@@ -1136,11 +1136,11 @@ class LizaRemoteStore:
             await self._async_write_page_order(device_id, pages)
             entry["pages"] = pages
 
-    async def async_set_pages(self, device_id: str, pages: list[dict]) -> None:
+    async def async_set_pages(self, device_id: str, pages: list[dict[str, Any]]) -> None:
         async with self.device_lock(device_id):
             await self.async_set_pages_locked(device_id, pages)
 
-    async def async_set_pages_locked(self, device_id: str, pages: list[dict]) -> None:
+    async def async_set_pages_locked(self, device_id: str, pages: list[dict[str, Any]]) -> None:
         """`async_set_pages` for a caller already holding `device_lock`."""
         await self._ensure_loaded(device_id)
         entry = self._ensure_device(device_id)
@@ -1168,18 +1168,18 @@ class LizaRemoteStore:
         )
         self._forget_page_digests(self._pages_dir(device_id), keep=set(page_ids))
 
-    async def async_get_action_library(self, device_id: str) -> list[dict]:
+    async def async_get_action_library(self, device_id: str) -> list[dict[str, Any]]:
         """The remote's action library, as a new list a caller may change."""
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
         lib = data.get("action_library")
         return list(lib) if isinstance(lib, list) else []
 
-    async def async_set_action_library(self, device_id: str, actions: list[dict]) -> None:
+    async def async_set_action_library(self, device_id: str, actions: list[dict[str, Any]]) -> None:
         async with self.device_lock(device_id):
             await self.async_set_action_library_locked(device_id, actions)
 
-    async def async_set_action_library_locked(self, device_id: str, actions: list[dict]) -> None:
+    async def async_set_action_library_locked(self, device_id: str, actions: list[dict[str, Any]]) -> None:
         """`async_set_action_library` for a caller already holding `device_lock`."""
         await self._ensure_loaded(device_id)
         entry = self._ensure_device(device_id)
@@ -1190,7 +1190,7 @@ class LizaRemoteStore:
         await self._async_write_yaml(path, self._clean_action_library(actions))
         entry["action_library"] = actions
 
-    async def async_merge_actions(self, device_id: str, actions: list[dict]) -> None:
+    async def async_merge_actions(self, device_id: str, actions: list[dict[str, Any]]) -> None:
         """Add *actions* to the library, replacing any with the same id."""
         async with self.device_lock(device_id):
             library = await self.async_get_action_library(device_id)
@@ -1203,18 +1203,18 @@ class LizaRemoteStore:
                     library.append(action)
             await self.async_set_action_library_locked(device_id, library)
 
-    async def async_get_assignments(self, device_id: str, page_id: int) -> dict[str, dict]:
+    async def async_get_assignments(self, device_id: str, page_id: int) -> dict[str, dict[str, Any]]:
         """*page_id*'s buttons, as a new dict a caller may change."""
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
         return dict(data.get("assignments", {}).get(page_id, {}))
 
-    async def async_set_assignments(self, device_id: str, page_id: int, assignments: dict[str, dict]) -> None:
+    async def async_set_assignments(self, device_id: str, page_id: int, assignments: dict[str, dict[str, Any]]) -> None:
         async with self.device_lock(device_id):
             await self.async_set_assignments_locked(device_id, page_id, assignments)
 
     async def async_set_assignments_locked(
-        self, device_id: str, page_id: int, assignments: dict[str, dict]
+        self, device_id: str, page_id: int, assignments: dict[str, dict[str, Any]]
     ) -> None:
         """`async_set_assignments` for a caller already holding `device_lock`.
 
@@ -1235,7 +1235,7 @@ class LizaRemoteStore:
 
     async def async_update_page(
         self, device_id: str, page_id: int, fields: dict[str, Any],
-    ) -> list[dict] | None:
+    ) -> list[dict[str, Any]] | None:
         """Set *fields* on one page; the pages as stored, or None if it is gone.
 
         Read and written under the device lock, so an edit made meanwhile is
@@ -1251,14 +1251,18 @@ class LizaRemoteStore:
             return await self.async_get_pages(device_id)
 
     async def async_insert_page(
-        self, device_id: str, page: dict, assignments: dict[str, dict], *, after: int,
-    ) -> None:
+        self, device_id: str, page: dict[str, Any], assignments: dict[str, dict[str, Any]], *, after: int,
+        max_pages: int | None = None,
+    ) -> bool:
         """Add *page* with its *assignments* directly after the page *after*.
 
-        At the end when *after* is no longer there.
+        At the end when *after* is no longer there. False, adding nothing, when
+        the remote already holds *max_pages*.
         """
         async with self.device_lock(device_id):
             pages = await self.async_get_pages(device_id)
+            if max_pages is not None and len(pages) >= max_pages:
+                return False
             at = next(
                 (i + 1 for i, p in enumerate(pages) if isinstance(p, dict) and p.get("id") == after),
                 len(pages),
@@ -1266,6 +1270,7 @@ class LizaRemoteStore:
             pages.insert(at, page)
             await self.async_set_assignments_locked(device_id, page["id"], assignments)
             await self.async_set_pages_locked(device_id, pages)
+            return True
 
     async def async_stamp_restored(
         self, device_id: str, user: Any, page_ids: set[int] | None = None,
@@ -1299,7 +1304,7 @@ class LizaRemoteStore:
                 raise StoreWriteError(path)
             entry["assignments"][page_id] = stamped
 
-    async def async_get_all_assignments(self, device_id: str) -> dict[int, dict[str, dict]]:
+    async def async_get_all_assignments(self, device_id: str) -> dict[int, dict[str, dict[str, Any]]]:
         """Every page's buttons by page id, as a new dict a caller may change."""
         await self._ensure_loaded(device_id)
         data = self._data.get(device_id, {})
@@ -1329,7 +1334,7 @@ class LizaRemoteStore:
         kept = self._settings.get(device_id)
         return deepcopy(kept) if kept is not None else normalize_settings(None)
 
-    async def async_set_settings(self, device_id: str, settings: dict) -> dict[str, dict[str, Any]]:
+    async def async_set_settings(self, device_id: str, settings: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """Save the text settings; returns them as stored.
 
         The text block is left out of the file: it is the theme's, and a copy

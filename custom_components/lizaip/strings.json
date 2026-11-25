@@ -9,6 +9,9 @@
         "title": "Reconfigure lizaIP",
         "data": {
           "name": "Device name"
+        },
+        "data_description": {
+          "name": "The name of this remote in Home Assistant. Leave it empty to keep the current name."
         }
       }
     },
@@ -30,18 +33,6 @@
         "data_description": {
           "optimistic_updates": "Update button icons immediately on press, before confirming the actual state. If the action fails, the icon reverts to the real state shortly after.",
           "language": "Language for the button labels this remote displays. \"Automatic\" follows Home Assistant's language."
-        },
-        "selector": {
-          "language": {
-            "options": {
-              "auto": "Automatic",
-              "en": "English",
-              "de": "Deutsch",
-              "fr": "Français",
-              "it": "Italiano",
-              "es": "Español"
-            }
-          }
         },
         "sections": {
           "demo": {
@@ -76,6 +67,11 @@
     }
   },
   "entity": {
+    "button": {
+      "ir_key": {
+        "name": "IR key"
+      }
+    },
     "event": {
       "button": {
         "name": "Button {button_id}"
@@ -118,6 +114,9 @@
       },
       "ip_address": {
         "name": "IP address"
+      },
+      "queue": {
+        "name": "{speaker} queue"
       }
     },
     "update": {
@@ -187,20 +186,18 @@
         }
       }
     },
-    "clear_device_pages": {
-      "name": "Clear device pages",
-      "description": "Remove every page from the remote and rebuild it from the stored configuration. Use this when the device's pages no longer match what Home Assistant has. No configuration is lost.",
-      "fields": {
-        "config_entry_id": {
-          "name": "Device",
-          "description": "Device to rebuild. If omitted, all lizaIP devices are rebuilt."
-        }
-      }
-    },
     "send_ir": {
-      "name": "Send IR",
-      "description": "Have a remote transmit an infrared code. Without a target, every lizaIP remote sends it.",
+      "name": "Send IR code",
+      "description": "Have a lizaIP remote transmit an infrared code, given either as an IR code or as a key of an IR device.",
       "fields": {
+        "via": {
+          "name": "Via lizaIP",
+          "description": "The remote that transmits the key."
+        },
+        "entity_id": {
+          "name": "IR key",
+          "description": "The key of an IR device to send."
+        },
         "ir_blob": {
           "name": "IR code",
           "description": "The infrared code to transmit, base64 encoded."
@@ -260,131 +257,36 @@
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
     },
-    "log_level_unknown": {
-      "message": "{level} is not a log level this device accepts."
-    },
-    "log_module_unknown": {
-      "message": "{module} is not a module name this device accepts."
-    },
-    "log_level_unreachable": {
-      "message": "The device did not answer the log level change: {error}"
-    },
-    "log_level_http": {
-      "message": "The device refused the log level change (HTTP {status})."
-    },
-    "log_level_refused": {
-      "message": "The device refused the log level change: {reason}"
-    },
-    "log_reset_no_modules": {
-      "message": "The device did not report any modules to reset."
-    },
     "app_not_started": {
       "message": "{entity_id} did not start the app {app_id}."
     },
     "invalid_ir_blob": {
       "message": "The IR code is not valid base64."
+    },
+    "ir_send_refused": {
+      "message": "The remote refused the infrared code: {error}"
+    },
+    "ir_not_an_ir_device": {
+      "message": "{device} is not an IR device."
+    },
+    "ir_remote_ambiguous": {
+      "message": "More than one lizaIP is connected, so it is unclear which one sends the key. Press the key from a lizaIP button, or use the Send IR device key action and choose the lizaIP."
+    },
+    "ir_unknown_key": {
+      "message": "{device} has no key \"{key}\"."
+    },
+    "ir_catalog_unavailable": {
+      "message": "The IR code could not be loaded: {error}"
+    },
+    "not_a_remote": {
+      "message": "The chosen device is not a lizaIP remote."
+    },
+    "ir_entry_missing": {
+      "message": "The IR devices entry does not exist yet."
+    },
+    "refresh_failed": {
+      "message": "Refreshing the dynamic sources failed for: {devices}"
     }
-  },
-  "page_titles": {
-    "welcome": "welcome!"
-  },
-  "button_tooltips": {
-    "albums": "Albums",
-    "apps": "Apps",
-    "audiobooks": "Audiobooks",
-    "back": "Back",
-    "back_menu": "Back / Menu",
-    "brighter": "Brighter",
-    "brightness": "Brightness",
-    "candle": "Candle",
-    "close": "Close",
-    "colour_temperature": "Colour temperature",
-    "cool_white": "Cool white",
-    "daylight": "Daylight",
-    "digits": "Digits",
-    "dimmer": "Dimmer",
-    "down": "Down",
-    "exit": "Exit",
-    "forward": "Forward",
-    "home": "Home",
-    "input": "Input",
-    "inputs": "Inputs",
-    "instant_replay": "Instant Replay",
-    "left": "Left",
-    "lock": "Lock",
-    "menu": "Menu",
-    "more": "More",
-    "mute": "Mute",
-    "neutral_white": "Neutral white",
-    "next": "Next",
-    "night_light": "Night light",
-    "now_playing": "Now Playing",
-    "off": "Off",
-    "ok": "OK",
-    "on": "On",
-    "open": "Open",
-    "options": "Options",
-    "oscillate_off": "Oscillate off",
-    "oscillate_on": "Oscillate on",
-    "pause": "Pause",
-    "play": "Play",
-    "play_pause": "Play / Pause",
-    "playlists": "Playlists",
-    "podcasts": "Podcasts",
-    "power": "Power",
-    "previous": "Previous",
-    "radio": "Radio",
-    "remote": "Remote",
-    "repeat_all": "Repeat all",
-    "repeat_off": "Repeat off",
-    "repeat_one": "Repeat one",
-    "reverse": "Reverse",
-    "right": "Right",
-    "search": "Search",
-    "select": "Select",
-    "shuffle": "Shuffle",
-    "shuffle_off": "Shuffle off",
-    "shuffle_on": "Shuffle on",
-    "sleep_in": "Sleep in",
-    "sleep_timer_off": "Sleep timer off",
-    "source": "Source",
-    "stop": "Stop",
-    "toggle": "Toggle",
-    "tools_more": "Tools / More",
-    "top_menu": "Top Menu",
-    "tracks": "Tracks",
-    "unlock": "Unlock",
-    "unmute": "Unmute",
-    "up": "Up",
-    "voice_assistant": "Voice Assistant",
-    "volume": "Volume",
-    "volume_down": "Volume Down",
-    "volume_up": "Volume Up",
-    "warm_white": "Warm white"
-  },
-  "state_words": {
-    "on": "on",
-    "off": "off",
-    "play": "play",
-    "pause": "pause",
-    "open": "open",
-    "close": "close",
-    "stop": "stop",
-    "lock": "lock",
-    "unlock": "unlock",
-    "next": "next",
-    "previous": "previous",
-    "mute": "mute",
-    "unmute": "unmute",
-    "shuffle_on": "shuffle on",
-    "shuffle_off": "shuffle off",
-    "oscillate_on": "oscillate on",
-    "oscillate_off": "oscillate off",
-    "forward": "forward",
-    "reverse": "reverse",
-    "repeat_off": "repeat off",
-    "repeat_all": "repeat all",
-    "repeat_one": "repeat one"
   },
   "issues": {
     "address_locked": {
@@ -398,6 +300,101 @@
     "protocol_mismatch": {
       "title": "{name} speaks a different protocol version",
       "description": "The remote speaks lizaIP protocol version {device}, Home Assistant speaks version {ha}. Some features may not work. Update the remote's firmware or the lizaIP integration so both match."
+    }
+  },
+  "config_subentries": {
+    "ir_device": {
+      "initiate_flow": {
+        "user": "Add IR device"
+      },
+      "entry_type": "IR device",
+      "step": {
+        "user": {
+          "title": "Add an IR device",
+          "description": "Pick the brand of a television and name the device, or leave the name to take the brand.",
+          "data": {
+            "brand_id": "Brand",
+            "name": "Name"
+          },
+          "data_description": {
+            "brand_id": "Manufacturer of the TV. Its IR codes come from the catalogue.",
+            "name": "Shown as the device name. Leave it empty to use the brand."
+          }
+        },
+        "reconfigure": {
+          "title": "IR device",
+          "description": "**{name}**\n\nIts {keys} keys:\n\n{table}"
+        }
+      },
+      "error": {
+        "ir_no_brand": "Pick a brand.",
+        "ir_unknown_brand": "There is no brand of that name. Pick one from the list."
+      },
+      "abort": {
+        "reconfigure_successful": "Device updated.",
+        "ir_catalog_unavailable": "The IR code catalogue cannot be reached. Try again later.",
+        "ir_no_keys": "The catalogue has no code set for this brand with a key the remote can send."
+      }
+    }
+  },
+  "device_automation": {
+    "action_type": {
+      "power": "Send Power",
+      "number_1": "Send Number 1",
+      "number_2": "Send Number 2",
+      "number_3": "Send Number 3",
+      "number_4": "Send Number 4",
+      "number_5": "Send Number 5",
+      "number_6": "Send Number 6",
+      "number_7": "Send Number 7",
+      "number_8": "Send Number 8",
+      "number_9": "Send Number 9",
+      "number_0": "Send Number 0",
+      "input": "Send Input",
+      "epg": "Send TV Guide",
+      "info": "Send Info",
+      "subtitle": "Send Subtitles",
+      "cursor_up": "Send Up",
+      "cursor_down": "Send Down",
+      "cursor_left": "Send Left",
+      "cursor_right": "Send Right",
+      "ok": "Send OK",
+      "menu": "Send Menu",
+      "exit": "Send Exit",
+      "volume_up": "Send Volume Up",
+      "volume_down": "Send Volume Down",
+      "channel_up": "Send Channel Up",
+      "channel_down": "Send Channel Down",
+      "mute": "Send Mute",
+      "red": "Send Red",
+      "green": "Send Green",
+      "yellow": "Send Yellow",
+      "blue": "Send Blue",
+      "play": "Send Play",
+      "pause": "Send Pause",
+      "stop": "Send Stop",
+      "fast_rewind": "Send Reverse",
+      "fast_forward": "Send Forward",
+      "skip_back": "Send Previous",
+      "skip_forward": "Send Next",
+      "home": "Send Home",
+      "back": "Send Back",
+      "play_pause": "Send Play / Pause"
+    },
+    "extra_fields": {
+      "via": "Via lizaIP"
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "auto": "Automatic",
+        "en": "English",
+        "de": "Deutsch",
+        "fr": "Français",
+        "it": "Italiano",
+        "es": "Español"
+      }
     }
   }
 }

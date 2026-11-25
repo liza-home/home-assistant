@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .icon_defaults import icon_defaults
+from .icon_defaults import IconDefaults, icon_defaults
 
 # ---------------------------------------------------------------------------
 # Shared translation data for dynamic tooltips / labels
@@ -88,7 +88,7 @@ def service_state_scope(svc: str) -> tuple[str, ...] | None:
     return _TWO_WAY_STATE_SCOPE.get(svc)
 
 
-def service_fixed_icon(domain: str, svc: str, icons=None) -> str | None:
+def service_fixed_icon(domain: str, svc: str, icons: IconDefaults | None = None) -> str | None:
     """Our override for a fixed-icon service, or None to defer to HA.
 
     *icons* is the asking remote's table -- the shipped one with its theme laid
@@ -136,7 +136,7 @@ def state_catchall(domain: str, live_state: str) -> str | None:
 _PAYLOAD_NON_CONTAINER_KEYS = frozenset({"metadata", "target", "extra"})
 
 
-def normalise_payload(data) -> dict:
+def normalise_payload(data: Any) -> dict[str, Any]:
     """Flatten a step's ``data`` into the flat view identity lookups expect.
 
     ``media_player.play_media`` nests the identifying keys under ``media`` while
@@ -168,7 +168,17 @@ def service_name(service: str) -> str:
     return split_service(service)[1]
 
 
-def is_seeded_icon(domain: str, rule: dict) -> bool:
+# (attribute, state) -> glyphs the shipped table used to hold there. A page
+# built before the table was corrected froze the old one, and without this the
+# stale row would stop reading as seeded and shadow the fix.
+_SUPERSEDED_SHIPPED_ICONS: dict[tuple[str | None, str], frozenset[str]] = {
+    ("repeat", "off"): frozenset({"mdi:repeat-once"}),
+    ("repeat", "all"): frozenset({"mdi:repeat-off"}),
+    ("repeat", "one"): frozenset({"mdi:repeat"}),
+}
+
+
+def is_seeded_icon(domain: str, rule: dict[str, Any]) -> bool:
     """Whether *rule* carries the shipped icon rather than a chosen one.
 
     The panel used to write the shipped table into a new action's ``states``,
@@ -188,10 +198,14 @@ def is_seeded_icon(domain: str, rule: dict) -> bool:
     state = rule.get("state")
     if state is None:
         return False
-    return icon == icon_defaults.for_state(domain, rule.get("attribute"), str(state))
+    attribute = rule.get("attribute")
+    if icon in _SUPERSEDED_SHIPPED_ICONS.get((attribute, str(state)), ()):
+        return True
+    matches: bool = icon == icon_defaults.for_state(domain, attribute, str(state))
+    return matches
 
 
-def scope_action_states(service: str, states: Any) -> list[dict]:
+def scope_action_states(service: str, states: Any) -> list[dict[str, Any]]:
     """Drop stored state rules a narrowed service can never reach.
 
     `states` is persisted on the action-library entry, so entries written before
@@ -382,7 +396,7 @@ def icon_state_key(service: str, state: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
-def state_icon_override(state_icons: dict, state: Any, service: str) -> str | None:
+def state_icon_override(state_icons: dict[str, Any], state: Any, service: str) -> str | None:
     """The button's own ``state_icons`` row for *state*, or None.
 
     Keyed as the theme table is (``icon_state_key``); then the entity's own
@@ -392,12 +406,14 @@ def state_icon_override(state_icons: dict, state: Any, service: str) -> str | No
         return None
     for key in (icon_state_key(service, state)[1], state.state):
         if key and state_icons.get(key):
-            return state_icons[key]
+            own: str = state_icons[key]
+            return own
     for key, icon in state_icons.items():
         if icon and ":" in key:
             attr_name, attr_val = key.split(":", 1)
             if attr_str(state.attributes.get(attr_name, "")) == attr_val:
-                return icon
+                matched: str = icon
+                return matched
     return None
 
 

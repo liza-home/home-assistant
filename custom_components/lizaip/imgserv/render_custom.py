@@ -24,12 +24,19 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Final
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, Final
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from PIL import Image
 
 from ..const import DOMAIN
 from ..data import find_lizaip_data, lizaip_data
@@ -74,11 +81,11 @@ class CustomIcons:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self.files = IconSetFiles(hass.config.path("www"))
         self._scanned_at: float | None = None
-        self._scan_task: asyncio.Task | None = None
-        self.icons: dict[str, dict] = {}
+        self._scan_task: asyncio.Task[Any] | None = None
+        self.icons: dict[str, dict[str, Any]] = {}
         self._reported: set[str] = set()
         #: Insertion-ordered, oldest first, so the cap drops the stalest.
         self.missing: dict[str, None] = {}
@@ -121,13 +128,13 @@ class CustomIcons:
             self._reported | {k.partition(":")[0] for k in self.icons} | set(self.files.sets)
         )
 
-    def _data(self) -> dict:
+    def _data(self) -> dict[str, Any]:
         return {"prefixes": sorted(self._reported), "icons": self.icons}
 
     def _save(self) -> None:
         self._store.async_delay_save(self._data, 1)
 
-    def set_prefixes(self, prefixes) -> None:
+    def set_prefixes(self, prefixes: Iterable[str] | None) -> None:
         """Adopt the panel's view of which sets are registered."""
         before = custom_icon_prefixes()
         self._reported = set(prefixes or ())
@@ -172,7 +179,7 @@ class CustomIcons:
         while len(self.missing) > MAX_MISSING:
             self.missing.pop(next(iter(self.missing)))
 
-    def missing_for(self, prefixes) -> list[dict[str, str]]:
+    def missing_for(self, prefixes: Iterable[str]) -> list[dict[str, str]]:
         wanted = set(prefixes)
         return [
             {"prefix": p, "name": n}
@@ -180,19 +187,21 @@ class CustomIcons:
             if p in wanted
         ]
 
-    def sync(self, prefixes) -> dict:
+    def sync(self, prefixes: Iterable[str] | None) -> dict[str, Any]:
         """``lizaip_config/sync_custom_icons``: take the sets, answer what is missing."""
         self.set_prefixes(prefixes)
         return {"missing": self.missing_for(custom_icon_prefixes())}
 
-    def store(self, items) -> dict:
+    def store(self, items: Iterable[dict[str, Any]]) -> dict[str, Any]:
         """``lizaip_config/store_custom_icons``: keep the shapes, answer how many."""
         return {"stored": sum(
             self.put(i["prefix"], i["name"], i["path"], i.get("secondary_path", ""), i.get("view_box"))
             for i in items
         )}
 
-    def render(self, prefix: str, name: str, width: int, height: int, fg_color: tuple):
+    def render(
+        self, prefix: str, name: str, width: int, height: int, fg_color: tuple[Any, ...],
+    ) -> Image.Image:
         """Draw a stored shape; ``ValueError`` when there is none."""
         entry = self.icons.get(f"{prefix}:{name}") or self.files.get(prefix, name)
         if not entry:
@@ -221,7 +230,9 @@ async def async_setup_custom_icons(hass: HomeAssistant) -> CustomIcons:
 })
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_sync_custom_icons(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_sync_custom_icons(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any],
+) -> None:
     """Take the browser's registered icon sets; answer the names still missing."""
     icons = get_custom_icons(hass)
     if icons is None:
@@ -242,7 +253,9 @@ async def ws_sync_custom_icons(hass: HomeAssistant, connection, msg: dict) -> No
 })
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_store_custom_icons(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_store_custom_icons(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any],
+) -> None:
     """Keep the shapes the panel looked up; answer how many were taken."""
     icons = get_custom_icons(hass)
     if icons is None:

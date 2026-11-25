@@ -13,6 +13,7 @@ without Pillow.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from typing import Final
 
 # ── Source types ──────────────────────────────────────────────────────────
@@ -46,11 +47,6 @@ def is_address(word: str) -> bool:
     """Whether *word* is a picture written as a bare address."""
     return bool(_ADDRESS.match(word))
 
-# What may stand between two parts once a space has already divided them. A
-# bare hyphen cannot be a separator on its own -- `mdi:play-circle` holds one
-# -- but a spaced hyphen can, as can the plus that used to be the spelling.
-_PART_LEAD_INS: Final = ("-", "+")
-
 # What a part looks like from the outside: a scheme, then a colon. A word not
 # shaped like that belongs to the part it follows, so `text:Hello world` is
 # one phrase.
@@ -81,7 +77,7 @@ def has_source_type(word: str) -> bool:
 def names_a_source(word: str) -> bool:
     """Whether *word* starts with a source type imgserv draws (``mdi:``, ``hue:``…)."""
     m = _PART_START.match(word)
-    return bool(m) and (m.group(1) in PART_SOURCE_TYPES or m.group(1) in _custom_icon_prefixes)
+    return m is not None and (m.group(1) in PART_SOURCE_TYPES or m.group(1) in _custom_icon_prefixes)
 
 
 def _is_part_start(word: str) -> bool:
@@ -100,14 +96,9 @@ def split_source_parts(source: str) -> tuple[str, ...]:
     mark beside the word "Wohnzimmer"::
 
         logo:hue Wohnzimmer
-        logo:hue - Wohnzimmer
-        logo:hue + Wohnzimmer
-        logo:hue + text:Wohnzimmer
         logo:hue text:Wohnzimmer
 
-    A lone ``-`` or ``+`` between two parts is punctuation and is dropped,
-    except where dropping it would change what a part means: a ``text:1 +
-    1`` whose next word is not a part of its own is one phrase.
+    ``-`` and ``+`` are ordinary text, not separators.
 
     One part is the common case and comes back as a tuple of one. The rule is
     the whole rule: `_draws_words` and the panel's `_splitSourceParts` read a
@@ -119,24 +110,13 @@ def split_source_parts(source: str) -> tuple[str, ...]:
 
     words = text.split(" ")
     parts: list[str] = [words[0]]
-    i = 1
-    while i < len(words):
-        word = words[i]
+    for word in words[1:]:
         if not word:
-            i += 1
-            continue
-        nxt = next((w for w in words[i + 1:] if w), "")
-        if word in _PART_LEAD_INS and (
-            _is_part_start(nxt) or _is_slug_part(parts[-1])
-        ):
-            # Punctuation between two parts, not a part and not a value.
-            i += 1
             continue
         if _is_part_start(word) or _is_slug_part(parts[-1]):
             parts.append(word if _is_part_start(word) else f"text:{word}")
         else:
             parts[-1] = f"{parts[-1]} {word}"
-        i += 1
     return tuple(p for p in (p.strip() for p in parts) if p)
 
 
@@ -165,7 +145,7 @@ _custom_icon_prefixes: set[str] = set()
 _ICON_PREFIX_RE: Final = re.compile(r"^[a-z0-9_-]+$")
 
 
-def set_custom_icon_prefixes(prefixes) -> None:
+def set_custom_icon_prefixes(prefixes: Iterable[object] | None) -> None:
     """Replace the registered extra icon sets; native and malformed names are dropped."""
     _custom_icon_prefixes.clear()
     _custom_icon_prefixes.update(

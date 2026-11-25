@@ -29,7 +29,7 @@ last one sent.
 from __future__ import annotations
 
 import math
-from typing import Final
+from typing import Any, Final
 
 #: Option key on the config entry. Kept here beside the logic it configures
 #: rather than in ``const.py`` — nothing else in the integration reads it.
@@ -45,7 +45,7 @@ DEFAULT_SLIDER_MIN_INTERVAL_MS: Final = 250.0
 SLIDER_MIN_INTERVAL_MS_MAX: Final = 2000.0
 
 
-def _clamped_float(raw: object, default: float, hi: float) -> float:
+def _clamped_float(raw: Any, default: float, hi: float) -> float:
     """Read an option as a float in ``0..hi``, falling back to `default`.
 
     Options come from a config entry, which survives restarts and downgrades

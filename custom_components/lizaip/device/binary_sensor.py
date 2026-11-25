@@ -11,8 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
+from ..entity import LizaIPEntity
 from .connection import LizaIPConnection
-from .entity import LizaIPEntity
 
 PARALLEL_UPDATES = 0  # Push-only — the device sends events, we never poll.
 
@@ -39,13 +39,6 @@ class LizaIPInHandSensor(LizaIPEntity, BinarySensorEntity):
     _attr_translation_key = "in_hand"
     # Keep this sensor generic so HA does not map its state to home/away.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    @property
-    def icon(self) -> str:
-        """Return hand icon based on state."""
-        if self._attr_is_on:
-            return "mdi:hand-back-left"
-        return "mdi:hand-back-left-off"
 
     def __init__(
         self,

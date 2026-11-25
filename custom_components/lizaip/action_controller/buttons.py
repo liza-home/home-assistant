@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant.core import Context, HomeAssistant, State
@@ -37,7 +37,8 @@ from ..shared.tokens import (
     page_scope,
 )
 from ..shared.i18n import get_ui_language, language_scope
-from ..shared.logs import device_id_logger, device_logger
+from ..shared.variables_calc import variables_scope
+from ..shared.logs import DeviceLogger, device_id_logger, device_logger
 from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url
 from ..state_icon import entity_icon_style, read_icon_style_options
@@ -47,6 +48,7 @@ from ._state import (
     cycle_index,
     get_selected_button,
 )
+from ..ir.sender import pressing_entry_id
 from ..runtime import entry_connection, get_store, resolve_device_id
 from .helpers import first_step, resolve_step_entity
 from .icons import _compute_next_state_tooltip, _match_state_icon, toggle_icon
@@ -61,6 +63,9 @@ from .toggle import (
     toggle_mode,
     toggle_rules,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,7 +90,7 @@ def _script_cache(
     return getattr(entry_connection(entry), "script_cache", None)
 
 
-def _actions_fingerprint(actions: list) -> str:
+def _actions_fingerprint(actions: list[Any]) -> str:
     """A stable digest of an action list, for spotting edits.
 
     The cache used to keep a `deepcopy` of the actions beside the compiled
@@ -107,7 +112,7 @@ async def _get_script(
     entry_id: str,
     page_id: int,
     button_key: str,
-    actions: list,
+    actions: list[Any],
     gesture: str = "click",
     step: int | None = None,
 ) -> Script | None:
@@ -232,7 +237,7 @@ _TV_DEVICE_CLASS = "tv"
 _TURN_ON_FEATURE = 128
 
 
-def _inferred_prelude(hass: HomeAssistant, step: dict) -> list[dict]:
+def _inferred_prelude(hass: HomeAssistant, step: Any) -> list[dict[str, Any]]:
     """Infer a wake prelude for *step*, or return ``[]`` if it needs none.
 
     Decided at press time, not page-creation time, so the wake also reaches
@@ -300,8 +305,8 @@ _APP_LAUNCH_CONTENT_TYPE = "app"
 
 
 def _inferred_verification(
-    hass: HomeAssistant, step: dict, retry_steps: list[dict],
-) -> tuple[list[dict], list[dict]]:
+    hass: HomeAssistant, step: Any, retry_steps: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Infer a launch verification for *step*, or ``([], [])`` if it has none.
 
     The halves are returned separately because they are spliced into different
@@ -360,7 +365,7 @@ def _inferred_verification(
     )
 
 
-def _launch_step(hass: HomeAssistant, step: Any) -> dict | None:
+def _launch_step(hass: HomeAssistant, step: Any) -> dict[str, Any] | None:
     """``lizaip.launch_app`` for an app launch on a Samsung TV, else ``None``.
 
     Such a TV drops the launch ``media_player.play_media`` sends, so the step
@@ -382,11 +387,11 @@ def _launch_step(hass: HomeAssistant, step: Any) -> dict | None:
     return {"action": f"{DOMAIN}.launch_app", "data": {"entity_id": entity_id, "app_id": app_id}}
 
 
-def _reroute_launches(hass: HomeAssistant, actions: list) -> list:
+def _reroute_launches(hass: HomeAssistant, actions: list[Any]) -> list[Any]:
     return [_launch_step(hass, step) or step for step in actions]
 
 
-def _toggle_attribute_step(hass: HomeAssistant, step: Any) -> dict | None:
+def _toggle_attribute_step(hass: HomeAssistant, step: Any) -> dict[str, Any] | None:
     """The step rewritten to flip its boolean attribute, else ``None``.
 
     `volume_mute` writes the value it is handed, so a stored direction would
@@ -415,8 +420,8 @@ def _toggle_attribute_step(hass: HomeAssistant, step: Any) -> dict | None:
 
 
 def _runnable_steps(
-    hass: HomeAssistant, actions: list, entry_id: str, toggle: bool = True,
-) -> list:
+    hass: HomeAssistant, actions: list[Any], entry_id: str, toggle: bool = True,
+) -> list[Any]:
     """Rewrite stored steps into the form the Script runs.
 
     *toggle* is false for a cycle press, whose direction the user spelled out
@@ -432,7 +437,7 @@ def _is_optimistic(hass: HomeAssistant, entry_id: str) -> bool:
     if entry is None:
         _LOGGER.debug("Optimistic: entry %s not found", entry_id)
         return False
-    enabled = entry.options.get(CONF_OPTIMISTIC_UPDATES, True)
+    enabled: bool = entry.options.get(CONF_OPTIMISTIC_UPDATES, True)
     device_logger(_LOGGER, entry).debug(
         "Optimistic: options=%s → enabled=%s", dict(entry.options), enabled,
     )
@@ -444,7 +449,7 @@ async def _fire_cycle_update(
     device_id: str,
     page_id: int,
     button_key: str,
-    assign: Mapping,
+    assign: Mapping[str, Any],
     entry_id: str,
 ) -> None:
     """:func:`_fire_cycle_update_in_scope`, reading ``${_device}`` as the page has it."""
@@ -453,6 +458,8 @@ async def _fire_cycle_update(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
     ), language_scope(get_ui_language(
         hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
+    )), variables_scope(getattr(
+        hass.config_entries.async_get_entry(entry_id) if entry_id else None, "options", None,
     )):
         await _fire_cycle_update_in_scope(
             hass, device_id, page_id, button_key, assign, entry_id,
@@ -468,15 +475,44 @@ async def _page_meta(store: Any, device_id: str, page_id: int) -> tuple[Any, str
     return None, ""
 
 
+def _cycle_tooltip(
+    rules: list[dict[str, Any]], index: int, assign: Mapping[str, Any],
+    hass: HomeAssistant, entry: ConfigEntry | None,
+) -> str:
+    """The words a cycle button shows for the press at *index*.
+
+    Same order as ``icons.toggle_tooltip``: the press's own words, the ones it
+    derives from its step, then the button's label. Resolved, not just cleaned,
+    so a ``${sensor.x}`` is filled in rather than stripped.
+
+    Position 0 is the exception, for the reason the icon has one: press 1
+    mirrors ``config`` and wears the assignment's label, so words derived from
+    its step would shout over a name the user typed. The button's own ladder
+    answers it, without a ``button_ref`` -- that would re-enter the cycle.
+    """
+    if index == 0:
+        from ..config.button_rendering import _resolve_button_tooltip
+
+        return (
+            resolve_rule_tooltip(rules[0], hass, entry)
+            or _resolve_button_tooltip(dict(assign), hass, entry)
+        )
+    return (
+        resolve_rule_tooltip(rules[index], hass, entry)
+        or step_tooltip(rules[index], hass, entry)
+        or resolve_rule_tooltip(assign, hass, entry)
+    )
+
+
 async def _fire_cycle_update_in_scope(
     hass: HomeAssistant,
     device_id: str,
     page_id: int,
     button_key: str,
-    assign: Mapping,
+    assign: Mapping[str, Any],
     entry_id: str,
     *,
-    page_color: str | None = None,
+    page_color: str,
 ) -> None:
     """Repaint a cycle button with the step its *next* press will run.
 
@@ -504,28 +540,25 @@ async def _fire_cycle_update_in_scope(
         hass=hass, icons=theme.icons,
     )
     if not icon:
+        # Position 0, where `toggle_icon` answers `None` by contract because
+        # step 1 mirrors `config`. Returning here left the tile wearing the
+        # final step's glyph for good, so the cycle had no visible loop.
+        from ..config.button_rendering import _get_service_icons, _resolve_button_icon
+
+        icon = _resolve_button_icon(
+            dict(assign), hass, await _get_service_icons(hass), icons=theme.icons,
+        )
+    if not icon:
         # Rule icons are optional, and a cycle with none is a button the user
         # chose to leave looking constant. Firing a blank would erase the glyph
         # device_sync painted rather than leave it alone.
         return
 
     rules = toggle_rules(assign)
-    if not rules:
-        return
     index = cycle_index(entry_id, page_id, button_key, len(rules))
 
-    if page_color is None:
-        page_color = (await _page_meta(store, device_id, page_id))[1]
-
-    # Same order as `icons.toggle_tooltip`: the press's own words, the ones it
-    # derives from its step, then the button's label. Resolved, not just
-    # cleaned, so a `${sensor.x}` is filled in rather than stripped.
     entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
-    tooltip = clean_tooltip_text(
-        resolve_rule_tooltip(rules[index], hass, entry)
-        or step_tooltip(rules[index], hass, entry)
-        or resolve_rule_tooltip(assign, hass, entry)
-    )
+    tooltip = clean_tooltip_text(_cycle_tooltip(rules, index, assign, hass, entry))
 
     device_id_logger(_LOGGER, hass, device_id).debug(
         "Cycle update: %s/%s → next step %d/%d icon=%s",
@@ -549,8 +582,8 @@ async def _fire_optimistic_update(
     device_id: str,
     page_id: int,
     button_key: str,
-    assign: dict,
-    own_actions: list,
+    assign: dict[str, Any],
+    own_actions: list[Any],
     entry_id: str | None = None,
 ) -> None:
     """Predict the next state and fire an immediate icon update.
@@ -623,12 +656,14 @@ async def _fire_optimistic_update(
         resolve_step_entity(first_step(dict(assign)), hass), hass,
     ), language_scope(get_ui_language(
         hass, hass.config_entries.async_get_entry(entry_id) if entry_id else None,
+    )), variables_scope(getattr(
+        hass.config_entries.async_get_entry(entry_id) if entry_id else None, "options", None,
     )):
         # The sync's order, so a picture the user gave the button survives the
         # press instead of giving way to the predicted state's glyph.
         from ..config.button_rendering import library_names, live_button_icon
 
-        icon = live_button_icon(assign, predicted, service, action_icon, hass)
+        icon = live_button_icon(assign, predicted, service, action_icon, hass, theme.icons)
     if not icon:
         log.debug("Optimistic: predicted icon has no value — skipping")
         return
@@ -658,8 +693,9 @@ async def _fire_optimistic_update(
     # predicted state: a label the user wrote, and its variables, survive the
     # press instead of being swapped for a generic "<name> <action>".
     names = library_names(await store.async_get_action_library(device_id))
+    action_id: Any = assign.get("action_id")
     tooltip = _compute_next_state_tooltip(
-        assign, predicted, hass, entry, names.get(assign.get("action_id")),
+        assign, predicted, hass, entry, names.get(action_id),
     )
 
     log.debug(
@@ -681,7 +717,7 @@ async def resolve_button_assignment(
     entry_id: str,
     button_key: str,
     page_id: int = _DEFAULT_PAGE_ID,
-) -> tuple[str | None, dict | None]:
+) -> tuple[str | None, dict[str, Any] | None]:
     """``(device_id, assignment)`` a press of *button_key* runs right now.
 
     The fixed-button context applies, so this is the override when the selected
@@ -709,7 +745,7 @@ async def longtouch_assignment(
     entry_id: str,
     button_key: str,
     page_id: int = _DEFAULT_PAGE_ID,
-) -> list:
+) -> list[Any]:
     """The long-touch steps *button_key* runs now; ``[]`` when it has none.
 
     Also ``[]`` while the remote's settings have long touch off: the steps stay
@@ -717,24 +753,41 @@ async def longtouch_assignment(
     """
     device_id, assign = await resolve_button_assignment(hass, entry_id, button_key, page_id)
     steps = longtouch_steps(assign)
-    if not steps:
+    # No device means no assignment, so no steps: the second test already holds.
+    if not steps or device_id is None:
         return []
     settings = await get_store(hass).async_get_settings(device_id)
     return steps if longtouch_enabled(settings) else []
 
 
-def _bind_internal_steps(actions: list, entry_id: str) -> list:
-    """Point device-local steps that name no remote at this one.
+_SEND_IR = f"{DOMAIN}.send_ir"
 
-    A button's ``lizaip.*`` step stores no target, meaning "the remote this
-    button is on". Run by Home Assistant instead of the remote, the same call
-    without a target addresses every remote, so the entry is filled in.
+
+async def _run_pressed(script: Script, context: Context, entry_id: str) -> None:
+    """Run a button's script, naming its remote to steps that cannot (``remote.send_command``)."""
+    token = pressing_entry_id.set(entry_id)
+    try:
+        await script.async_run(context=context)
+    finally:
+        pressing_entry_id.reset(token)
+
+
+def _bind_internal_steps(actions: list[Any], entry_id: str) -> list[Any]:
+    """Point device-local steps that name no remote, and every ``send_ir``, at this one.
+
+    Run by Home Assistant, a step without a target would address every remote.
     """
     bound = []
     for step in actions:
-        if (
-            isinstance(step, dict)
-            and get_internal_command(step.get("action") or step.get("service")) is not None
+        service = isinstance(step, dict) and (step.get("action") or step.get("service"))
+        if service == _SEND_IR and "ir_blob" in (step.get("data") or {}):
+            step = {k: v for k, v in step.items() if k != "target"}
+            step["data"] = {**(step.get("data") or {}), "config_entry_id": entry_id}
+        elif service == _SEND_IR and not (step.get("data") or {}).get("via"):
+            step = {**step, "data": {**(step.get("data") or {}), "config_entry_id": entry_id}}
+        elif (
+            service
+            and get_internal_command(service) is not None
             and not step.get("target")
             and not (step.get("data") or {}).get("config_entry_id")
         ):
@@ -744,7 +797,8 @@ def _bind_internal_steps(actions: list, entry_id: str) -> list:
 
 
 async def _press_context(
-    hass: HomeAssistant, log, assign: Mapping | None, page_id: int, button_key: str,
+    hass: HomeAssistant, log: DeviceLogger, assign: Mapping[str, Any] | None, page_id: int,
+    button_key: str,
 ) -> Context | None:
     """The context a press runs with, or ``None`` when it must not run."""
     author = author_of(assign)
@@ -793,7 +847,7 @@ async def execute_longtouch(
         script.name, len(script.sequence), page_id, button_key,
     )
     try:
-        await script.async_run(context=context)
+        await _run_pressed(script, context, entry_id)
     except Exception:
         log.exception("Long touch failed for %s/%s", page_id, button_key)
 
@@ -803,9 +857,9 @@ def resolve_toggle_steps(
     entry_id: str,
     page_id: int,
     button_key: str,
-    assign: Mapping,
-    actions: list[dict],
-) -> list[dict]:
+    assign: Mapping[str, Any],
+    actions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Pick the steps this press should run, honouring an optional ``toggle``.
 
     ``toggle`` is a sibling of ``config``, never a replacement for it: six other
@@ -818,27 +872,20 @@ def resolve_toggle_steps(
     prelude and launch verification are derived from the step actually about to
     run rather than from the declared default.
     """
-    mode = toggle_mode(assign)
-    if mode is None:
+    if toggle_mode(assign) is None:
         return actions
 
     rules = toggle_rules(assign)
-    if not rules:
-        return actions
-
-    if mode == MODE_CYCLE:
-        index = cycle_index(entry_id, page_id, button_key, len(rules))
-        # Advance before running, not after: a step that fails on an IR blaster
-        # gives no feedback either way, and leaving the position parked would
-        # trap the user on the broken entry with no way to step past it.
-        advance_cycle(entry_id, page_id, button_key, len(rules))
-        device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id)).debug(
-            "toggle(cycle): step %d/%d for %s/%s",
-            index + 1, len(rules), page_id, button_key,
-        )
-        return rule_steps(rules[index])
-
-    return actions
+    index = cycle_index(entry_id, page_id, button_key, len(rules))
+    # Advance before running, not after: a step that fails on an IR blaster
+    # gives no feedback either way, and leaving the position parked would
+    # trap the user on the broken entry with no way to step past it.
+    advance_cycle(entry_id, page_id, button_key, len(rules))
+    device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id)).debug(
+        "toggle(cycle): step %d/%d for %s/%s",
+        index + 1, len(rules), page_id, button_key,
+    )
+    return rule_steps(rules[index])
 
 
 async def execute_action(
@@ -847,7 +894,7 @@ async def execute_action(
     button_key: str,
     page_id: int = _DEFAULT_PAGE_ID,
     *,
-    resolved: tuple[str | None, dict | None] | None = None,
+    resolved: tuple[str | None, dict[str, Any] | None] | None = None,
 ) -> None:
     """Run the HA script action assigned to a clicked button.
 
@@ -916,7 +963,7 @@ async def execute_action(
     # would churn the Script cache on every state flip. ``after`` follows the
     # same sibling-key rule as ``before``; absence infers, ``[]`` suppresses.
     # Inferred verification captures after wake and before the action.
-    capture: list[dict] = []
+    capture: list[dict[str, Any]] = []
     after = assign.get("after")
     if after is None:
         capture, after = _inferred_verification(hass, own_actions[0], own_actions)
@@ -964,7 +1011,7 @@ async def execute_action(
     try:
         # The author's context, so HA applies that person's permissions and
         # traces the resulting calls back to them.
-        await script.async_run(context=context)
+        await _run_pressed(script, context, entry_id)
     except Exception:
         # User-authored action failures must not tear down device event dispatch.
         log.exception("Action failed for %s/%s", page_id, button_key)

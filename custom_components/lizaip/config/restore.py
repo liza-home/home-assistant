@@ -401,13 +401,13 @@ def _in_page_order(
     """
     if not order:
         return sorted(pages, key=lambda p: p["id"])
-    rank = {}
+    rank: dict[int, int] = {}
     for i, raw in enumerate(order):
         try:
             rank.setdefault(int(raw), i)
         except (TypeError, ValueError):
             continue
-    end = len(rank)
+    end = len(order)
     return sorted(pages, key=lambda p: (rank.get(p["id"], end), p["id"]))
 
 

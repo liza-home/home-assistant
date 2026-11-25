@@ -29,7 +29,7 @@ pages:
     paginate: audiobook
     max_parts: 3
     # The page title: the Sonos mark and what the page holds.
-    title: "logo:sonos + audiobooks"
+    title: "logo:sonos audiobooks"
     buttons:
       button_1: "@audiobook[1]"
       button_2: "@audiobook[2]"

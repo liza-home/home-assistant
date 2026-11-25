@@ -17,13 +17,14 @@ from homeassistant.helpers.target import (
 )
 
 from ..const import DOMAIN
+from ..runtime import remote_entries
 from ..state_color import ABSENT_STATES, INACTIVE_STATES
 from ._state import _DEFAULT_PAGE_ID, get_current_page
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _resolve_entry_id(hass: HomeAssistant, data: dict) -> str | None:
+def _resolve_entry_id(hass: HomeAssistant, data: dict[str, Any]) -> str | None:
     """Resolve the config entry_id an event belongs to.
 
     Prefers the device registry, falls back to an explicit ``entry_id`` in the
@@ -44,13 +45,13 @@ def _resolve_entry_id(hass: HomeAssistant, data: dict) -> str | None:
     if not entry_id:
         entry_id = data.get("entry_id")
     if not entry_id:
-        entries = hass.config_entries.async_entries(DOMAIN)
+        entries = remote_entries(hass)
         if len(entries) == 1:
             entry_id = entries[0].entry_id
     return entry_id
 
 
-def _raw_page_id(data: dict) -> int | None:
+def _raw_page_id(data: dict[str, Any]) -> int | None:
     """The event's ``page_id`` as an int, or None when it names no page.
 
     Split out of :func:`_coerce_page_id` because the page-change check needs the
@@ -69,7 +70,7 @@ def _raw_page_id(data: dict) -> int | None:
     return page_id or None
 
 
-def _coerce_page_id(data: dict, entry_id: str | None = None) -> int:
+def _coerce_page_id(data: dict[str, Any], entry_id: str | None = None) -> int:
     """Return a usable int page_id.
 
     The device sends 0 (or a string) before its page state is initialised, and
@@ -90,7 +91,7 @@ def _coerce_page_id(data: dict, entry_id: str | None = None) -> int:
     return _DEFAULT_PAGE_ID
 
 
-def _normalize_position(raw_position) -> float | None:
+def _normalize_position(raw_position: Any) -> float | None:
     """Convert a protocol slider position (0-100 percent) to a 0.0-1.0 ratio.
 
     PROTOCOL.md fixes ``position`` at 0-100, so convert unconditionally.
@@ -123,7 +124,7 @@ def first_id(value: Any) -> str | None:
     return value or None
 
 
-def get_entity_from_step(step: dict) -> str | None:
+def get_entity_from_step(step: dict[str, Any]) -> str | None:
     """Extract the target entity_id from a single action step dict.
 
     ``target`` / ``data`` may be present but explicitly null (placeholder
@@ -139,7 +140,7 @@ def get_entity_from_step(step: dict) -> str | None:
 
 
 def resolve_target_entities(
-    step: dict, hass: HomeAssistant, service_domain: str | None = None,
+    step: dict[str, Any], hass: HomeAssistant, service_domain: str | None = None,
 ) -> list[str]:
     """Resolve a step's target to the entity_ids it acts on.
 
@@ -175,7 +176,7 @@ def resolve_target_entities(
 
 
 def _subject_name(
-    registry: object, lookup: str, hass: HomeAssistant, item_id: str,
+    registry: Any, lookup: str, hass: HomeAssistant, item_id: str,
 ) -> str:
     """The name a registry entry shows in the UI, a rename winning where there
     is one. Only devices carry ``name_by_user``; the rest answer with ``name``.
@@ -183,7 +184,8 @@ def _subject_name(
     item = getattr(registry.async_get(hass), lookup)(item_id)
     if not item:
         return ""
-    return getattr(item, "name_by_user", None) or item.name or ""
+    name: str = getattr(item, "name_by_user", None) or item.name or ""
+    return name
 
 
 #: Target kinds that name something other than an entity, narrowest first, each
@@ -197,7 +199,7 @@ _SUBJECT_REGISTRIES = (
 )
 
 
-def target_subject_name(step: dict, hass: HomeAssistant) -> str:
+def target_subject_name(step: dict[str, Any], hass: HomeAssistant) -> str:
     """The name of the thing a step points at, when that is not an entity.
 
     A button aimed at an area is about the area, so it reads "Office" rather
@@ -235,12 +237,12 @@ def resolve_group_state(
     return states[0] if states else None
 
 
-def resolve_step_state(step: dict, hass: HomeAssistant) -> State | None:
+def resolve_step_state(step: dict[str, Any], hass: HomeAssistant) -> State | None:
     """The state a step's target presents, across every entity behind it."""
     return resolve_group_state(resolve_target_entities(step, hass), hass)
 
 
-def resolve_step_entity(step: dict, hass: HomeAssistant) -> str | None:
+def resolve_step_entity(step: dict[str, Any], hass: HomeAssistant) -> str | None:
     """The one entity a step acts on, whichever target kind names it.
 
     For callers with a single subject; the rest call ``resolve_target_entities``
@@ -250,7 +252,7 @@ def resolve_step_entity(step: dict, hass: HomeAssistant) -> str | None:
     return entities[0] if entities else None
 
 
-def first_step(assign: dict) -> dict:
+def first_step(assign: dict[str, Any]) -> dict[str, Any]:
     """A button's first config step, which is the one its label describes."""
     config = assign.get("config", []) if isinstance(assign, dict) else []
     if not (isinstance(config, list) and config):
@@ -259,7 +261,7 @@ def first_step(assign: dict) -> dict:
 
 
 def subject_for_assign(
-    assign: dict, hass: HomeAssistant, fallback_state: State | None = None,
+    assign: dict[str, Any], hass: HomeAssistant, fallback_state: State | None = None,
 ) -> tuple[str, State | None]:
     """The name and state a button's label should speak about.
 
@@ -288,7 +290,7 @@ def _attrs(state: State | None) -> Mapping[str, Any]:
     return attributes if isinstance(attributes, Mapping) else {}
 
 
-def _color_modes(state: State | None) -> list:
+def _color_modes(state: State | None) -> list[Any]:
     modes = _attrs(state).get("supported_color_modes")
     return list(modes) if isinstance(modes, (list, tuple, set)) else []
 
@@ -296,7 +298,8 @@ def _color_modes(state: State | None) -> list:
 def _attr_num(state: State | None, key: str) -> float | None:
     """A numeric attribute that is present and finite, else None."""
     try:
-        value = float(_attrs(state).get(key))
+        raw: Any = _attrs(state).get(key)
+        value = float(raw)
     except (TypeError, ValueError):
         return None
     # NaN and ±inf reach here from hand-edited YAML and from integrations that

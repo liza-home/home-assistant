@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final
@@ -11,9 +11,13 @@ from typing import TYPE_CHECKING, Any, Final
 from .variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
+    VARIABLE_OFF_ICON,
+    VARIABLE_OFF_MARK,
     function_token_value,
+    variables_enabled,
 )
-from .history import versioned_history_image
+from .history import history_entities, versioned_history_image
+from ..imgserv.source_parse import split_source_parts
 from .icon_urls import is_media_source
 from .i18n import get_ui_language, translate_inline
 from ..config.media_queue.alias import device_attribute, expand_queue_alias
@@ -108,12 +112,14 @@ def _weather_condition_label(hass: HomeAssistant, condition: str) -> str:
     return label if isinstance(label, str) and label else WEATHER_CONDITION_LABELS[condition]
 
 
-def weather_condition_icon(hass: HomeAssistant, entity_id: str) -> str | None:
+def weather_condition_icon(hass: HomeAssistant | None, entity_id: str) -> str | None:
     """The icon slug (``weather-sunny``) for a weather entity's condition."""
     if not entity_id.startswith("weather.") or hass is None:
         return None
     state = hass.states.get(entity_id)
-    return WEATHER_CONDITION_ICONS.get(getattr(state, "state", None))
+    if state is None:
+        return None
+    return WEATHER_CONDITION_ICONS.get(state.state)
 
 
 def entity_token_entities(text: Any) -> set[str]:
@@ -135,7 +141,8 @@ def _display_precision(hass: HomeAssistant, entity_id: str) -> int | None:
         return None
     if entry is None:
         return None
-    options = (entry.options or {}).get("sensor") or {}
+    entry_options: Mapping[str, Mapping[str, Any]] = entry.options or {}
+    options = entry_options.get("sensor") or {}
     for key in ("display_precision", "suggested_display_precision"):
         value = options.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
@@ -156,7 +163,7 @@ def _format_value(value: Any) -> str:
 
 
 def entity_token_value(
-    hass: HomeAssistant,
+    hass: HomeAssistant | None,
     entity_id: str,
     attribute: str | None = None,
     with_unit: bool = True,
@@ -170,10 +177,11 @@ def entity_token_value(
     unknown or unavailable reads as nothing, so the token collapses away.
     """
     state = hass.states.get(entity_id) if hass is not None else None
-    if state is None:
+    if hass is None or state is None:
         return ""
+    attributes: Mapping[str, Any] = state.attributes or {}
     if attribute:
-        return _format_value((state.attributes or {}).get(attribute))
+        return _format_value(attributes.get(attribute))
     value = state.state
     if not isinstance(value, str) or value in _NO_VALUE_STATES:
         return ""
@@ -185,11 +193,25 @@ def entity_token_value(
             value = f"{float(value):.{precision}f}"
         except ValueError:
             pass
-    unit = (state.attributes or {}).get("unit_of_measurement")
+    unit = attributes.get("unit_of_measurement")
     return f"{value} {unit}" if with_unit and isinstance(unit, str) and unit else value
 
 
-def _function_value(hass: HomeAssistant | None, match) -> str:
+def silence_variables(text: Any) -> Any:
+    """*text* with every ``${…}`` marked as switched off, unread."""
+    if not isinstance(text, str) or "${" not in text:
+        return text
+    return _VARIABLE_BODY_RE.sub(VARIABLE_OFF_MARK, text)
+
+
+def empty_variables(text: Any) -> Any:
+    """Replace variable expressions with empty strings without changing their surroundings."""
+    if not isinstance(text, str) or "${" not in text:
+        return text
+    return _VARIABLE_BODY_RE.sub("", text)
+
+
+def _function_value(hass: HomeAssistant | None, match: re.Match[str]) -> str:
     return function_token_value(hass.states.get if hass is not None else None, match.group(1))
 
 
@@ -200,6 +222,8 @@ def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
     """
     if not isinstance(text, str) or "${" not in text:
         return text
+    if not variables_enabled():
+        text = silence_variables(text)
     text = _with_page_device(text, hass)
     text = FUNCTION_TOKEN_RE.sub(lambda m: _function_value(hass, m), text)
     return translate_inline(ENTITY_TOKEN_RE.sub(
@@ -207,7 +231,7 @@ def substitute_entity_tokens(text: Any, hass: HomeAssistant | None) -> Any:
     ))
 
 
-def _template_target(template: Any) -> dict:
+def _template_target(template: Any) -> dict[str, Any]:
     """What a template page is bound to, {} for anything that is not a page."""
     target = template.get("target") if isinstance(template, dict) else None
     return target if isinstance(target, dict) else {}
@@ -231,7 +255,10 @@ def _entity_name(hass: HomeAssistant | None, template: Any) -> str:
     """The friendly name of the entity a page is bound to, "" if none."""
     entity_id = template_target_entity(template)
     state = hass.states.get(entity_id) if hass is not None and entity_id else None
-    return _format_value((state.attributes or {}).get("friendly_name")) if state else ""
+    if not state:
+        return ""
+    attributes: Mapping[str, Any] = state.attributes or {}
+    return _format_value(attributes.get("friendly_name"))
 
 
 def template_target_name(hass: HomeAssistant | None, template: Any) -> str:
@@ -274,7 +301,7 @@ def expand_device_alias(text: Any, template: Any) -> Any:
         return text
     entity_id = _template_target(template).get("entity_id")
 
-    def _expand(match: re.Match) -> str:
+    def _expand(match: re.Match[str]) -> str:
         body = match.group(1)
         if not DEVICE_ATTRIBUTE_RE.search(body):
             return match.group(0)
@@ -534,7 +561,7 @@ def _label_names(ctx: _FactContext) -> str:
 #: device registry for, and it derives that from this mapping rather than
 #: keeping a list of its own -- a second list is a second place to forget,
 #: and forgetting it is silent: the page simply stops repainting.
-COMPUTED_FACTS: Final = {
+COMPUTED_FACTS: Final[dict[str, Callable[[_FactContext], str]]] = {
     "friendly_name": lambda ctx: ctx.name,
     "area_name": lambda ctx: (ctx.area and (ctx.area.name or "")) or "",
     "label_names": _label_names,
@@ -602,6 +629,45 @@ def substitute_device_token(text: Any, hass: HomeAssistant | None, template: Any
     return DEVICE_TOKEN_RE.sub(lambda _m: name, text).strip()
 
 
+def _silenced_image(image: str) -> str:
+    """*image* with variables off: a picture reading one is `VARIABLE_OFF_ICON`.
+
+    Words keep the dash; in a composite only its picture parts give way."""
+    silenced: str = silence_variables(image)
+    # What is left of `${…}` may hold spaces; masked, it cannot split a part.
+    kept: list[str] = []
+
+    def _keep(m: re.Match[str]) -> str:
+        kept.append(m.group(0))
+        return f"{_MASK}{len(kept) - 1}{_MASK}"
+
+    masked = _VARIABLE_BODY_RE.sub(_keep, silenced)
+    parts = split_source_parts(masked)
+    if len(parts) > 1:
+        drawn = [p if p.startswith("text:") else _silenced_part(p, p) for p in parts]
+        if drawn == list(parts):
+            return silenced
+        return _MASKED_RE.sub(lambda m: kept[int(m.group(1))], " ".join(drawn))
+    return _silenced_part(image, silenced)
+
+
+_MASK: Final = "\ue002"
+_MASKED_RE: Final = re.compile(f"{_MASK}(\\d+){_MASK}")
+
+
+#: A picture's imgserv options (`?size=…&box=…`), which alone do not make it a word.
+_IMAGE_QUERY_RE: Final = re.compile(r"\?\w+=\S*$")
+
+
+def _silenced_part(image: str, silenced: str) -> str:
+    bare = _IMAGE_QUERY_RE.sub("", silenced).replace(VARIABLE_OFF_MARK, "").strip()
+    if history_entities(image) or (VARIABLE_OFF_MARK in silenced and (
+        is_media_source(silenced) or not bare
+    )):
+        return VARIABLE_OFF_ICON
+    return silenced
+
+
 def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
     """*image* with its entity variables filled in, or None if one has no value.
 
@@ -618,13 +684,18 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
     device unresolved. ``config.button_rendering`` imports *from* that module,
     so the shared piece cannot live in either.
     """
-    image = versioned_history_image(_with_page_device(translate_inline(image), hass), hass)
+    image = translate_inline(image)
+    if not variables_enabled() and isinstance(image, str):
+        image = _silenced_image(image)
+        if image == VARIABLE_OFF_ICON:
+            return image
+    image = versioned_history_image(_with_page_device(image, hass), hass)
     if not entity_token_entities(image):
         return image
     # All or nothing: half an icon name ("mdi:weather-") draws a broken glyph.
     missing = False
 
-    def _function(match) -> str:
+    def _function(match: re.Match[str]) -> str:
         nonlocal missing
         value = _function_value(hass, match)
         missing = missing or not value
@@ -640,7 +711,7 @@ def resolve_image_tokens(image: Any, hass: HomeAssistant | None) -> Any:
         word = text[:index].split()[-1] if text[:index][-1:].strip() else ""
         return ":" not in word or word.lower().startswith("text:")
 
-    def _value(match) -> str:
+    def _value(match: re.Match[str]) -> str:
         nonlocal missing
         eid = match.group(1).lower()
         icon = None if match.group(2) else weather_condition_icon(hass, eid)
@@ -685,14 +756,17 @@ def substitute_tooltip_tokens(
     text = translate_inline(text)
     if not text or "${" not in text:
         return text
+    if not variables_enabled():
+        text = silence_variables(text)
     text = expand_queue_alias(text, subject)
     lookup = {k.lower(): v for k, v in values.items()}
     if is_media_source(text):
         # A picture keeps its entity variables for `finish_tooltip`, which
         # reads them by the picture rules (no unit inside an icon name).
-        return translate_inline(
+        picture: str = translate_inline(
             TOOLTIP_TOKEN_RE.sub(lambda m: lookup.get(m.group(1).lower(), ""), text),
         )
+        return picture
     if hass is not None:
         text = substitute_entity_tokens(text, hass)
     # `{translate: ${_state}}` waited for its value; it is looked up now.
@@ -756,4 +830,12 @@ def finish_tooltip(text: str, hass: HomeAssistant | None) -> str:
         return resolve_image_tokens(text.strip(), hass) or ""
     # Words followed by a graph ("Battery 85 % + history:sensor.x"): the graph
     # gets its version all the same, or the remote keeps the picture it cached.
-    return versioned_history_image(clean_tooltip_text(text), hass)
+    text = clean_tooltip_text(text)
+    if not variables_enabled() and history_entities(text):
+        # A graph reads its entity like a variable: the words stay, the graph gives way.
+        for part in split_source_parts(text):
+            if history_entities(part):
+                text = text.replace(part, VARIABLE_OFF_ICON)
+        return text
+    versioned: str = versioned_history_image(text, hass)
+    return versioned

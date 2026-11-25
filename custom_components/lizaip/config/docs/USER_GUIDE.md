@@ -33,6 +33,14 @@ support), see [`README.md`](https://github.com/liza-home/home-assistant/blob/mai
   - [Track names: current, previous, next](#track-names-current-previous-next)
   - [Calculating with variables](#calculating-with-variables)
   - [Using a variable to generate an icon](#using-a-variable-to-generate-an-icon)
+- [Reference](#reference)
+  - [Supported devices](#supported-devices)
+  - [Entities](#entities)
+  - [Actions](#actions)
+  - [How data is updated](#how-data-is-updated)
+  - [Use cases](#use-cases)
+  - [Known limitations](#known-limitations)
+  - [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -42,9 +50,10 @@ support), see [`README.md`](https://github.com/liza-home/home-assistant/blob/mai
 
 Requires Home Assistant 2026.11.0+. The
 [Installation section of `README.md`](https://github.com/liza-home/home-assistant/blob/main/README.md#installation)
-has a button that opens the Marketplace with this repository filled in. Installing
-needs no restart; updating a version Home Assistant already runs does, and it asks
-for one with a repair notice.
+has a button that opens the Marketplace with this repository filled in. Or open
+the Marketplace in Home Assistant, choose **⋮ → Custom repositories**, add
+`https://github.com/liza-home/home-assistant` with type **Integration**, then
+search for **lizaIP** and install it. After installation, restart Home Assistant.
 
 ### Provisioning a new device
 
@@ -105,10 +114,13 @@ version, IP address, and recent activity.
 
 It lists:
 
-- **Controls / Sensors** — one entity per button (for state-based automations), battery
-  level, Wi-Fi strength, and similar diagnostics.
-- **Configuration** — brightness and automatic-brightness entities, firmware version.
-- **Diagnostic** — the device's IP address and connection state.
+- **Controls / Sensors** — one event entity per button, the sliders, battery level
+  and charging state.
+- **Configuration** — brightness, automatic brightness and the firmware update.
+- **Diagnostic** — the remote's IP address, the Home Assistant address it uses, and
+  whether it is in your hand.
+
+[Entities](#entities) describes each of them.
 
 ### Config
 
@@ -178,9 +190,11 @@ takes you to its pages, cleared of whatever you had selected.
 ### Define pages
 
 A remote with no pages configured does not sit blank. It shows a stand-in page
-instead, headed by the Home Assistant logo and **welcome!** in your language, with
-the remote's own IP address, its firmware version, the address of your Home Assistant
-and its battery on its buttons. It is a placeholder, not a page — the panel still
+instead, headed by the Home Assistant logo and **welcome!** in your language. With
+[variables](#how-to-use-variables-with-examples) switched on in the remote's settings,
+its buttons show the remote's own IP address, its firmware version, the address of
+your Home Assistant and its battery; with them off, the greeting is all it shows.
+It is a placeholder, not a page — the panel still
 shows an empty page strip with nothing but the **+** tile, and there is nothing there
 to edit or delete. Add your first page and it is gone; delete your last one and it
 comes back. Its buttons do nothing, as they only show values.
@@ -219,7 +233,7 @@ deeply as the folders do.
 | **Hue Lamp Options** | Hue | Brightness and colour-temperature presets for one lamp (**Add options…** only) |
 | **Android TV** | Android TV Remote | Laid out as the LG webOS TV template: remote keys and volume, with an **Apps** subpage (the apps configured in the integration's options) on button 4 and a **Digits** keypad with Channel up and down on button 8. The integration lists no inputs, so button 12 opens the TV's own input menu. Back returns to the remote keys |
 | **Apple TV** | Apple TV | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (its apps, with their App Store icons — App Store and Arcade show their own logos; Computers, Settings and Search, which the store does not list, get a lookalike in their home-screen colours) on button 4. An Apple TV has no digit keys and no inputs. Back returns to the remote keys |
-| **Amazon Fire TV** | Android Debug Bridge | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (the apps it lists as sources) on button 4 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
+| **Amazon Fire TV** | fireTV (firetv_dial) | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (the apps it lists as sources) on button 4. Back returns to the remote keys |
 | **Roku** | Roku | Laid out as the LG webOS TV template: remote keys, volume and play/pause, with an **Apps** subpage (its apps and channels) on button 4 and, for a Roku TV, an **Inputs** subpage (Antenna TV, HDMI 1–4, AV) on button 12. A Roku has no digit keys. Back returns to the remote keys |
 | **Samsung TV** | Samsung Smart TV | Laid out as the LG webOS TV template: remote keys and volume, with an **Apps** subpage on button 4 (its apps, with the icons from Samsung's TV app store — a newer Samsung TV does not list its apps, so it is asked about every app of the store; the first look takes about half a minute, and an app built into the TV, such as Samsung TV Plus, does not show), an **Inputs** subpage (TV and HDMI) on button 12 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
 | **Sony Bravia TV** | Sony Bravia TV | Laid out as the LG webOS TV template: the TV's remote keys and volume, with an **Apps** subpage (its apps) on button 4, an **Inputs** subpage (its inputs, as named on the TV) on button 12 and a **Digits** keypad with Channel up and down on button 8. Back returns to the remote keys |
@@ -778,19 +792,23 @@ Nothing is half-written on the way there. The new configuration is written into 
 folder beside the live one and only then moved into place, so a restore that cannot
 finish leaves the old configuration where it was rather than a mixture of the two.
 
-The last step holds the window while the files are written and the panel re-reads
-them, ticking off each of those two as it passes them, and then says how many pages
-came back and waits for you to close it. Closing it puts the keyboard back on the
-panel rather than on the ⋮ the window was opened from. The remote is rebuilt in the
-background rather than being waited for: pushing a whole configuration back takes a
-device round trip per page, and none of it is anything the panel reads, so the
-restore is finished on screen while the remote is still catching up on its own.
+The last step shows the restore as it happens, as a checklist of what Home Assistant
+does in turn: write the configuration files, load them, clear the remote's pages and
+send the pages back to it. A bar fills as the steps pass, and while the pages go out —
+one device round trip each, so most of the wait — the window counts them ("Page 4 of
+12").
+
+The window cannot be closed while the restore runs. Once it is over it says how many
+pages came back and waits for you to close it; closing it puts the keyboard back on
+the panel rather than on the ⋮ the window was opened from.
 
 Afterwards the panel reads the remote from scratch — pages, buttons, thumbnails and
 the open editor all come from the restored configuration rather than from what was on
-screen a moment ago — and the remote is sent the whole thing anew, so its screen
-matches without a restart. If the remote is offline the restore still happens — Home
-Assistant holds the configuration either way — and it catches up when it is back.
+screen a moment ago — and the remote has been sent the whole thing anew, so its screen
+matches without a restart. If the remote is offline the restore still succeeds — Home
+Assistant holds the configuration either way — and the window says the remote gets the
+pages as soon as it reconnects. If some pages did not reach it, the window says so too;
+they are sent again at the next change or reconnect.
 
 What a configuration download does **not** carry: the remote's connection settings,
 the icon rendering options, the fonts you uploaded and who the remote is assigned to.
@@ -968,8 +986,8 @@ media:${_device.entity_picture}?size=200x200&bg=black
 | `fit` | `contain` keeps the picture's proportions inside the size, `fill` stretches it to the size. Without a `size` it is `contain`, with one `fill` | `fit=contain` |
 | `box` | Answers with one piece of it: `x,y,w,h` of the sized picture | `box=60,62,60,62` |
 | `mode` | `dark` (the default) or `light` background rendering | `mode=light` |
-| `fg` | Tint colour, for a monochrome picture | `fg=white`, `fg=FF8800` |
-| `bg` | Background colour behind the picture | `bg=black` |
+| `fg` | Tint colour, for a monochrome picture; a gradient runs through its colours, evenly spaced, top to bottom | `fg=white`, `fg=FF8800`, `fg=linear_gradient(FFD700,FF4500)` |
+| `bg` | Background colour behind the picture; a gradient runs through its colours, evenly spaced, top to bottom and rounds the corners | `bg=black`, `bg=linear_gradient(FBE3A0,F2B14C)` |
 | `crop` | `0` keeps the padding around the picture | `crop=0` |
 | `alpha` | `1` keeps the picture's transparency | `alpha=1` |
 | `percent` | Fill level `0`–`100`: the lower part stays solid, the part above is dimmed | `percent=40` |
@@ -1084,16 +1102,17 @@ buttons 1–3, 5–7 and 9–11, each tile `${_device.entity_picture}?size=180x1
 
 An Image, a tooltip or a page title may name several things separated by spaces; they
 are drawn side by side in one picture, in the order written.
+Existing titles that use `+` or `-` as a separator need it removed; it is
+now displayed as text.
 
 | You write | The remote shows |
 |---|---|
 | `logo:sonos Küche` | the Sonos mark, then the word "Küche" |
-| `logo:sonos - Küche`, `logo:sonos + Küche` | the same — a lone `-` or `+` between parts is only for looks and is dropped |
 | `mdi:lightbulb Wohnzimmer` | a bulb, then "Wohnzimmer" |
 | `logo:hue text:Hue mdi:lightbulb` | the Hue mark, the word "Hue" and a bulb |
 | `phu:ceiling-fan text:Fan` | the fan icon, then "Fan" |
 | `logo:sonos ${_device}` | the Sonos mark, then the name of the page's device |
-| `${_device.entity_picture} + logo:sonos + ${_device.friendly_name}` | the cover now playing, the Sonos mark and the player's name |
+| `${_device.entity_picture} logo:sonos ${_device.friendly_name}` | the cover now playing, the Sonos mark and the player's name |
 | `mdi:thermometer ${sensor.outdoor_temperature}` | a thermometer, then "21.5 °C" |
 | `mdi:play mdi:pause` | two icons sharing the space |
 
@@ -1112,10 +1131,10 @@ split, so a device name with spaces stays one name.
 - **The words always keep room for accents and tails.** A picture with words is as tall
   as the font can reach above and below the line the letters sit on, whether or not
   the name has an `Ä` or a `g`, so titles and buttons line up.
-- **Icons and logos stand on that baseline and are as tall as the tallest letter**
-  beside them, plus one pixel above and one below so they do not look smaller than the
-  letters: next to `Wohnzimmer` a bulb is as tall as the `W`, next to `wasser` only as
-  tall as the lower-case letters.
+- **Icons and logos stand on that baseline and are as tall as a capital letter**
+  in the font size the words are drawn at, plus one pixel above and one below so
+  they do not look smaller than the letters. The words themselves do not matter:
+  next to `.` or `--` a bulb is as big as next to `Wohnzimmer`.
 - **Beside a logo or icon the words have a fixed size** (32 px in a page title, or the
   title font size if that is smaller), so a name looks the same next to any mark. A row
   wider than the title bar is simply wider, and the remote scrolls it; only a very long
@@ -1564,3 +1583,125 @@ name — works for anything with stepped icons:
 This same technique — more detail, plus the full battery walkthrough — is also in
 [*An icon that follows a value — the battery level*](https://github.com/liza-home/home-assistant/blob/main/README.md#an-icon-that-follows-a-value--the-battery-level)
 in the README.
+
+---
+
+## Reference
+
+### Supported devices
+
+- **lizaIP remote** by ruwido austria GmbH (model `3029-000`), with Wi-Fi.
+  Each remote is a device of its own.
+- **IR devices**, such as a TV, that you add yourself: in **Settings → Devices & services → lizaIP**,
+  choose **Add IR device** on the **IR devices** entry. The remote sends their codes through its infrared LED.
+
+Other ruwido remotes and other IR blasters are not supported.
+
+### Entities
+
+Each remote has these entities:
+
+| Entity | Type | What it is |
+|---|---|---|
+| Button 1–12, Button Power, Button Back, Button Voice Assistant, Button Volume Up, Button Volume Down | Event | Fires `touch`, `click`, `release` and `repeat` when the button is used. Use it as an automation trigger. |
+| Slider | Number | One per slider of the remote: its position, 0–100 %. |
+| Battery | Sensor | Battery level in %. |
+| Charging | Binary sensor | Whether the remote is charging. |
+| Brightness | Number (configuration) | Display brightness. |
+| Brightness automatic | Switch (configuration) | Lets the remote set its brightness itself. |
+| Firmware | Update (configuration) | Installs published firmware releases. |
+| IP address | Sensor (diagnostic) | The address the remote connects from. |
+| Home Assistant address | Sensor (diagnostic) | The address of Home Assistant the remote uses. |
+| In hand | Binary sensor (diagnostic) | Whether somebody is holding the remote. |
+
+Each IR device has a **remote** entity, which `remote.send_command` uses, and one
+button per key.
+
+A button that shows what plays next on a Sonos speaker adds a
+**`<speaker> queue`** sensor. Its state is the next track's title.
+
+### Actions
+
+The actions the integration adds (`lizaip.goto_page`, `lizaip.send_ir`,
+`lizaip.launch_app`, `lizaip.refresh_dynamic_sources`, `lizaip.firmware_update`) are
+listed with their fields in the
+[Actions section of `README.md`](https://github.com/liza-home/home-assistant/blob/main/README.md#actions).
+Automations can also use the device actions on a remote's device page.
+
+### How data is updated
+
+The remote connects to Home Assistant over a WebSocket and keeps the connection
+open, so there is no polling. Button presses, the slider, the battery and the
+charging state reach Home Assistant at the moment they change. Changes you make in
+the panel, and live values on buttons, are sent to the remote the same way.
+
+If the connection drops, the remote's entities become unavailable until it
+reconnects. The **Home Assistant address** sensor is read once when the integration
+starts. A Sonos queue sensor is read again when its speaker changes, at most every
+30 seconds.
+
+### Use cases
+
+- **One remote for the living room.** Put lights, scenes, the TV and music on pages
+  of their own, each with a picture on the button.
+- **Show what matters.** A button can show a live value, such as the temperature,
+  a battery level or the track that plays next.
+- **Control a TV without its own remote.** Add it as an IR device and put its keys
+  on a page.
+- **Trigger automations.** Every button is an event entity, so a press, a long
+  press or a release can start any automation:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.lizaip_living_room_button_1
+    attribute: event_type
+    to: click
+actions:
+  - action: light.toggle
+    target:
+      entity_id: light.living_room
+```
+
+### Known limitations
+
+- A remote belongs to **one Home Assistant**. Another Home Assistant cannot take it
+  over until the remote is factory reset.
+- The remote and Home Assistant must be on the **same local network**; the remote
+  does not use Home Assistant Cloud or an external URL.
+- Discovery needs **mDNS (zeroconf)**. Networks that block multicast between Wi-Fi
+  and wired devices, or separate them into VLANs, hide the remote.
+- The remote only **sends** infrared. It cannot learn codes from another remote;
+  they come from the catalogue or from a code you enter.
+- The queue sensor works with **Sonos** speakers only.
+- The lizaIP panel is for **administrators**. Other users can be allowed to
+  configure a remote; see
+  [Letting somebody else configure a remote](#letting-somebody-else-configure-a-remote).
+
+### Troubleshooting
+
+**The remote is not discovered.**
+- Check that the remote is on the same network as Home Assistant and that mDNS is
+  not blocked (see [Known limitations](#known-limitations)).
+- If you ignored it earlier, show the ignored integrations in
+  **Settings → Devices & services** and choose **Stop ignoring**.
+
+**The remote is offline, its entities are unavailable.**
+- Wake it by picking it up, and check that it is charged.
+- Look under **Settings → Repairs**. If Home Assistant changed its address, a repair
+  tells you what to do.
+- To restart the remote, hold **POWER + BACK** for more than 3 seconds.
+
+**The remote belongs to another Home Assistant.**
+- Factory reset it by holding **POWER + button 9** for more than 3 seconds, then set
+  it up again as in [Provisioning a new device](#provisioning-a-new-device).
+
+**The lizaIP panel is not in the sidebar.**
+- The panel is admin-only. Sign in as an administrator.
+
+**An action fails with "not connected".**
+- The remote was offline when the action ran. Check that it is connected, then try
+  again.
+
+If none of this helps, download diagnostics as described in
+[Reporting a problem](#reporting-a-problem) and attach the file to your report.

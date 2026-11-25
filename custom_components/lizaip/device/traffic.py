@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from typing import Any
+from typing import Any, cast
 
 from ..shared.logs import device_logger
 
@@ -246,8 +246,9 @@ class TrafficLog:
                 "n": len(rtts),
                 "min": round(min(rtts)) if rtts else None,
                 "avg": round(sum(rtts) / len(rtts)) if rtts else None,
-                "p50": None if not rtts else round(_percentile(rtts, 50)),
-                "p95": None if not rtts else round(_percentile(rtts, 95)),
+                # _percentile answers None only for an empty list, ruled out here.
+                "p50": None if not rtts else round(cast(float, _percentile(rtts, 50))),
+                "p95": None if not rtts else round(cast(float, _percentile(rtts, 95))),
                 "max": round(max(rtts)) if rtts else None,
             },
         }

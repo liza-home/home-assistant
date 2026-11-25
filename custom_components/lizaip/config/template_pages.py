@@ -9,12 +9,17 @@ remote, the state listener and the push triggers.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
+from homeassistant.config_entries import ConfigEntries, ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
+from ..ir.page_codes import async_fill_ir_codes
 from ..runtime import get_store
 from ..shared.logs import entry_id_logger
+from ..shared.variables_calc import read_variables_enabled
 from .const import generate_page_id
 from .device_entities import _resolve_device_domain_entities
 from .page_list import reserved_page_ids
@@ -23,18 +28,25 @@ from .page_templates import (
     async_compose_pages,
     generate_assignments as template_generate_assignments,
     is_unbound,
+    list_templates,
     load_template,
     refresh as template_refresh,
     template_pages,
 )
 from .page_templates.parts import paginated_placeholder
-from .template_writes import async_store_template_pages
-from .template_targets import device_integration, selector_integrations
+from .template_writes import TemplatePageError, async_store_template_pages, ensure_room
+from .template_targets import (
+    async_empty_placeholders,
+    device_integration,
+    prune_unusable_buttons,
+    selector_integrations,
+    subentry_types,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def template_set_page_ids(pages: list, page_id: int) -> list[int]:
+def template_set_page_ids(pages: list[Any], page_id: int) -> list[int]:
     """*page_id* and the pages its template brought with it, that page first.
 
     A page that belongs to no set is a set of one.
@@ -77,7 +89,7 @@ def schedule_page_refresh(hass: HomeAssistant, entry_id: str, *page_ids: int) ->
 def resolve_template_target(
     hass: HomeAssistant,
     template_id: str,
-    template: dict,
+    template: dict[str, Any],
     target_device: str,
     target_config_entry: str,
 ) -> tuple[tuple[str, str] | None, str, dict[str, str]]:
@@ -130,6 +142,14 @@ def resolve_template_target(
             if integration is None:
                 return ("not_found", f"Device '{target_device}' does not belong to integration "
                     f"'{' / '.join(integrations)}' required by template '{template_id}'"), "", {}
+        subentry_type = device_sel.get("subentry_type")
+        if subentry_type:
+            device = dr.async_get(hass).async_get(target_device)
+            subentry_id: Any = getattr(device, "config_subentry_id", None)
+            if subentry_types(hass).get(subentry_id) != subentry_type:
+                return ("not_found", f"Device '{target_device}' is no '{subentry_type}' "
+                    f"required by template '{template_id}'"), "", {}
+            return None, "", {}
 
         domain_entities = _resolve_device_domain_entities(
             hass, target_device, integration
@@ -137,7 +157,7 @@ def resolve_template_target(
         if not domain_entities:
             return ("not_found", f"Device '{target_device}' has no usable entities"), "", {}
         primary_domain = device_sel.get("primary_domain")
-        target_entity = domain_entities.get(primary_domain) if primary_domain else ""
+        target_entity = (domain_entities.get(primary_domain) or "") if primary_domain else ""
         if not target_entity:
             return ("not_found", f"Device '{target_device}' has no '{primary_domain}' entity required by template '{template_id}'"), "", {}
     else:
@@ -146,18 +166,16 @@ def resolve_template_target(
     return None, target_entity, domain_entities
 
 
-def _config_entry(hass: HomeAssistant, entry_id: str):
+def _config_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
     """The remote's config entry, or None where there is no registry to ask."""
-    entries = getattr(hass, "config_entries", None)
+    entries: ConfigEntries | None = getattr(hass, "config_entries", None)
     return entries.async_get_entry(entry_id) if entries is not None else None
 
 
-class TemplatePageError(Exception):
-    """A template that cannot become a page; ``code`` is the websocket error code."""
-
-    def __init__(self, message: str, code: str = "template_error") -> None:
-        super().__init__(message)
-        self.code = code
+async def _needs_variables(hass: HomeAssistant, template_id: str) -> bool:
+    """Whether the catalog marks *template_id*, or a folder it sits in, as made of variables."""
+    templates = await hass.async_add_executor_job(list_templates)
+    return any(t["id"] == template_id and t.get("needs_variables") for t in templates)
 
 
 async def async_create_page_from_template(
@@ -187,6 +205,28 @@ async def async_create_page_from_template(
     template = await hass.async_add_executor_job(load_template, template_id)
     if not template:
         raise TemplatePageError(f"Template '{template_id}' not found")
+    entry = _config_entry(hass, entry_id)
+    variables = read_variables_enabled(getattr(entry, "options", None))
+    if not variables and await _needs_variables(hass, template_id):
+        raise TemplatePageError(
+            f"Template '{template_id}' needs variables, which are off on this remote",
+            "variables_off",
+        )
+    error, target_entity, domain_entities = resolve_template_target(
+        hass, template_id, template, target_device, target_config_entry,
+    )
+    if error:
+        code, message = error
+        raise TemplatePageError(message, code)
+    try:
+        template = await async_fill_ir_codes(hass, template, target_device, entry_id)
+    except HomeAssistantError as err:
+        raise TemplatePageError(str(err), "ir_codes_unavailable") from err
+
+    empty = await async_empty_placeholders(
+        hass, template, target_entity, domain_entities, target_config_entry,
+    )
+    template = prune_unusable_buttons(hass, template, target_entity, empty)
     pages_def = template_pages(template_id, template)
     if not pages_def:
         raise TemplatePageError(f"Template '{template_id}' names no pages under 'pages:'")
@@ -200,19 +240,13 @@ async def async_create_page_from_template(
             "template_paginated",
         )
 
-    error, target_entity, domain_entities = resolve_template_target(
-        hass, template_id, template, target_device, target_config_entry,
-    )
-    if error:
-        code, message = error
-        raise TemplatePageError(message, code)
-
     # The title of a first page that states none: what the caller asked for,
     # else the icon the picker showed.
     fallback_title = title or template.get("icon", "mdi:remote")
 
     store = get_store(hass)
     stored = await store.async_get_pages(device_id)
+    ensure_room(hass, entry_id, stored, len(pages_def))
     reserved = await reserved_page_ids(
         store, device_id, {p["id"] for p in stored if isinstance(p, dict)},
     )
@@ -230,8 +264,9 @@ async def async_create_page_from_template(
         domain_entities=domain_entities or None,
         target_config_entry=target_config_entry,
         remote_entry=entry_id,
-        entry=_config_entry(hass, entry_id),
+        entry=entry,
         fallback_title=fallback_title,
+        variables=variables,
     )
     if pages_def[0][1].get("buttons") and not composed[0].assignments:
         raise TemplatePageError(f"Template '{template_id}' produced no assignments")
@@ -245,6 +280,7 @@ async def async_create_page_from_template(
         subpage=subpage,
         back_to_page=back_to_page,
         insert_after=insert_after,
+        variables=variables,
     )
     # A page that repeats over its items is made as its first part; the
     # refresh counts the items and adds the parts they need.
@@ -260,7 +296,7 @@ async def async_add_template_page(
     entry_id: str,
     device_id: str,
     template_id: str,
-    template: dict,
+    template: dict[str, Any],
     *,
     title: str,
     target_entity: str = "",
@@ -268,7 +304,7 @@ async def async_add_template_page(
     target_config_entry: str = "",
     domain_entities: dict[str, str] | None = None,
     subpage: bool = False,
-    generated: tuple[list[dict], dict[str, dict]] | None = None,
+    generated: tuple[list[dict[str, Any]], dict[str, dict[str, Any]]] | None = None,
 ) -> int:
     """Turn a *resolved* template into a new page on a remote; return its id.
 
@@ -292,6 +328,7 @@ async def async_add_template_page(
 
     store = get_store(hass)
     pages = await store.async_get_pages(device_id)
+    ensure_room(hass, entry_id, pages, 1)
     new_page_id = generate_page_id(
         await reserved_page_ids(
             store, device_id, {p["id"] for p in pages if isinstance(p, dict)},

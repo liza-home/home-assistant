@@ -5,6 +5,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 
@@ -70,7 +71,7 @@ def _min_interval_for(hass: HomeAssistant, entry_id: str) -> float:
 
 
 def _slider_num(
-    slider_cfg: dict,
+    slider_cfg: dict[str, Any],
     key: str,
     default: float,
     lo: float | None = None,
@@ -136,7 +137,7 @@ class _Mechanics:
     author: str | None = None
 
     @classmethod
-    def from_config(cls, slider_cfg: dict) -> "_Mechanics":
+    def from_config(cls, slider_cfg: dict[str, Any]) -> "_Mechanics":
         attribute = slider_cfg.get("attribute", "volume_level")
         service = slider_cfg.get("service", "media_player.volume_set")
         data_key = slider_cfg.get("data_key", attribute)
@@ -227,7 +228,7 @@ class _Mechanics:
 
 def _resolve_selected_control(
     hass: HomeAssistant, entry_id: str, slider_key: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """The mechanics of the currently selected device, or None.
 
     The auto-derive step, and where a button's own declared control is honoured
@@ -249,8 +250,8 @@ def _resolve_selected_control(
 
 
 def _resolve_selection_config(
-    hass: HomeAssistant, entry_id: str, slider_cfg: dict, slider_key: str,
-) -> dict | None:
+    hass: HomeAssistant, entry_id: str, slider_cfg: dict[str, Any], slider_key: str,
+) -> dict[str, Any] | None:
     """Turn a selection-following target into concrete mechanics, or None.
 
     Resolved at gesture time, not at config time: the target does not exist
@@ -356,7 +357,7 @@ def _gesture_for(interaction: str, state_key: tuple[str, str]) -> str:
 
 async def _load_slider_cfg(
     hass: HomeAssistant, device_id: str, slider_key: str, page_id: int,
-) -> tuple[dict | None, bool]:
+) -> tuple[dict[str, Any] | None, bool]:
     """This slider's stored config and whether it follows the selection.
 
     `follows` is asked once, from the key and the raw assignment, and reused for
@@ -384,10 +385,10 @@ def _pinned_config(
     hass: HomeAssistant,
     entry_id: str,
     state_key: tuple[str, str],
-    slider_cfg: dict,
+    slider_cfg: dict[str, Any],
     slider_key: str,
     gesture: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """The mechanics a selection-following gesture is pinned to, or None to bail.
 
     Resolved once, at `touch_start`, and read back from the gesture afterwards.
@@ -423,7 +424,7 @@ def _shape_changed_mid_gesture(state_key: tuple[str, str], follows: bool) -> boo
 
 
 def _begin_gesture(
-    state_key: tuple[str, str], base_value: float, position: float, pinned_cfg: dict | None,
+    state_key: tuple[str, str], base_value: float, position: float, pinned_cfg: dict[str, Any] | None,
 ) -> None:
     """Store the origin a drag is measured from."""
     entry_id, slider_key = state_key
@@ -448,7 +449,7 @@ def _begin_gesture(
 
 
 def _throttled(
-    hass: HomeAssistant, entry_id: str, touch: dict, position: float, now: float,
+    hass: HomeAssistant, entry_id: str, touch: dict[str, Any], position: float, now: float,
 ) -> bool:
     """Whether this movement should be held back rather than written.
 
@@ -474,7 +475,7 @@ async def _do_start(
     mech: _Mechanics,
     slider_key: str,
     position: float | None,
-    pinned_cfg: dict | None,
+    pinned_cfg: dict[str, Any] | None,
 ) -> None:
     """Pin the zero-point and base value a drag is measured from."""
     log = _log_for(hass, state_key[0])
@@ -572,7 +573,7 @@ async def _do_end(
     log.debug("Slider touch_end: %s (from '%s')", slider_key, interaction)
 
 
-def _value_at(mech: _Mechanics, touch: dict, pos: float) -> float:
+def _value_at(mech: _Mechanics, touch: dict[str, Any], pos: float) -> float:
     """The value `pos` implies, relative to the gesture's origin."""
     return mech.value_at(touch["base_value"], pos - touch["zero_pos"])
 
@@ -580,7 +581,7 @@ def _value_at(mech: _Mechanics, touch: dict, pos: float) -> float:
 async def _write(
     hass: HomeAssistant,
     mech: _Mechanics,
-    touch: dict,
+    touch: dict[str, Any],
     phase: str,
     slider_key: str,
     pos: float,
@@ -717,7 +718,7 @@ async def _execute_slider_action(
         return
 
     mode = slider_cfg.get("mode", "proportional")
-    pinned_cfg: dict | None = None
+    pinned_cfg: dict[str, Any] | None = None
     if follows:
         # Resolved before any of the maths reads the config, so there is exactly
         # one implementation of the drag: from here down there is only a target

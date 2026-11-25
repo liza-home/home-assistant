@@ -8,14 +8,14 @@ The state itself is typed in ``data``: these are its readers.
 """
 from __future__ import annotations
 
-import importlib.util
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .data import LIZAIP_DATA, LizaIPRuntimeData, find_lizaip_data, lizaip_data
+from .const import DOMAIN, IR_ENTRY_ID
+from .data import LIZAIP_DATA, LizaIPIrData, LizaIPRuntimeData, find_lizaip_data, lizaip_data
 
 if TYPE_CHECKING:
     from .config.panel_entry import PanelEntry
@@ -23,19 +23,9 @@ if TYPE_CHECKING:
     from .device.connection import LizaIPConnection
 
 
-def debug_available() -> bool:
-    """Whether this build has the pre-release debug tools.
-
-    They are stripped from a stable release by `scripts/public_repo.sh`, so a
-    missing module is the expected state there rather than a broken install.
-    Checked by import rather than by version so that a build we deploy
-    ourselves -- which rsyncs the working tree, suffix or not -- always has the
-    tools it shipped.
-    """
-    return importlib.util.find_spec(f"{__package__}.config.debug_websocket") is not None
-
-
-def renamed_device(hass: HomeAssistant, event: Event) -> dr.DeviceEntry | None:
+def renamed_device(
+    hass: HomeAssistant, event: Event[Any],
+) -> dr.DeviceEntry | dr.ChildDeviceEntry | None:
     """The device a device-registry event renamed, or ``None``.
 
     The registry fires on every device touch -- a new connection, a via
@@ -79,9 +69,20 @@ def remember_panel_language(hass: HomeAssistant, language: str) -> None:
     lizaip_data(hass).ui_language = language
 
 
+def is_ir_entry(entry: ConfigEntry) -> bool:
+    """Whether *entry* is the one holding the IR devices rather than a remote."""
+    return entry.unique_id == IR_ENTRY_ID
+
+
+def remote_entries(hass: HomeAssistant) -> list[ConfigEntry]:
+    """Every lizaIP remote's entry, loaded or not."""
+    return [e for e in hass.config_entries.async_entries(DOMAIN) if not is_ir_entry(e)]
+
+
 def entry_runtime(entry: ConfigEntry | None) -> LizaIPRuntimeData | None:
     """The loaded remote's runtime data, or ``None`` before setup made it."""
-    return getattr(entry, "runtime_data", None) or None
+    data = getattr(entry, "runtime_data", None) or None
+    return None if isinstance(data, LizaIPIrData) else data
 
 
 def entry_connection(entry: ConfigEntry | None) -> LizaIPConnection | None:
@@ -113,7 +114,7 @@ def resolve_device_id(hass: HomeAssistant, entry_id: str) -> str | None:
 
 async def get_assignments(
     hass: HomeAssistant, device_id: str, page_id: int,
-) -> list[tuple[str, dict]]:
+) -> list[tuple[str, dict[str, Any]]]:
     """Return (button_key, assignment_dict) pairs for every button on *page_id*."""
     assignments = await get_store(hass).async_get_assignments(device_id, page_id)
     return [

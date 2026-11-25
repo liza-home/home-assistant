@@ -60,9 +60,8 @@ from .compose import (
     async_compose_pages,
 )
 from .resolver import template_bindings, resolve_template_variables
+from .items import DEFAULT_MAX_ITEMS, DEFAULT_TRACKED_FIELDS
 from .sources import (
-    DEFAULT_MAX_ITEMS,
-    DEFAULT_TRACKED_FIELDS,
     SOURCES,
     async_resolve_source,
     get_source,

@@ -29,7 +29,7 @@ target_selector:
 
 pages:
   options:
-    title: "logo:sonos + options"
+    title: "logo:sonos options"
     buttons:
       button_1:
         icon: mdi:volume-mute

@@ -189,6 +189,14 @@ export const STYLES_DIALOGS = `
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
   }
+  .template-row-badge {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(3,169,244,.15);
+    color: var(--primary-text-color, #fff);
+    font-size: var(--liza-font-11);
+    white-space: nowrap;
+  }
   /* Drawn rather than a glyph, so it needs no icon round-trip to say "this
      one opens". */
   .template-row-chevron {
@@ -434,6 +442,21 @@ export const STYLES_DIALOGS = `
     color: var(--liza-muted-text);
   }
   .template-target-list { padding-bottom: 0; }
+  /* Sticky so it stays in reach while a long device list scrolls. */
+  .template-target-search {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    padding: 4px 0 6px;
+    background: var(--card-background-color, #1e1e1e);
+  }
+  .template-target-search[hidden] { display: none; }
+  .template-target-search > ha-input-search { flex: 1 1 auto; min-width: 0; }
+  .template-new-device { margin-top: 4px; }
+  .template-new-device[hidden] { display: none; }
+  .subentry-flow-input { display: block; margin-top: 12px; }
+  ha-select.subentry-flow-select { width: 100%; }
   .template-entity-hint {
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
@@ -683,6 +706,12 @@ export const STYLES_DIALOGS = `
     margin: 0 0 14px;
   }
   .restore-status.error { color: var(--error-color, #db4437); }
+  .restore-pages-progress { margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+  .restore-checklist { margin-top: 14px; }
+  /* The note under the result: an icon beside the sentence, never below it. */
+  .restore-line.note { display: flex; align-items: flex-start; gap: 8px; }
+  .restore-line.note ha-icon { flex: none; --mdc-icon-size: 18px; }
+  .diag-step.failed .diag-step-mark { color: var(--error-color, #db4437); }
   /* Cancel sits in a flex row beside the commit, so it must not carry the
      auto margin that would centre it and strand its partner at the edge. */
   .confirm-cancel-btn { flex: 0 0 auto; }

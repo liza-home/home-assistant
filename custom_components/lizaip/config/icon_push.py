@@ -28,18 +28,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from typing import Any, Protocol
 
 from ..shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
 
 #: One page's worth of buttons: button name -> the fields to send for it.
-_PageButtons = dict[str, dict]
+_PageButtons = dict[str, dict[str, Any]]
 
 #: How long a drain waits before its first send, so updates that one state
 #: change produces a few milliseconds apart go out as one `set_page`.
 GATHER_WINDOW = 0.05
+
+
+class SendPage(Protocol):
+    """Sends one page's buttons, and its title when one is waiting."""
+
+    def __call__(
+        self, page_id: int, buttons: list[dict[str, Any]], *, img_title: str | None = ...,
+    ) -> Awaitable[object]: ...
 
 
 class IconPushQueue:
@@ -55,7 +64,7 @@ class IconPushQueue:
 
     def __init__(
         self,
-        send: Callable[[int, list[dict]], Awaitable[object]],
+        send: SendPage,
         current_page: Callable[[], int | None] | None = None,
         device: object | None = None,
         gather: float = 0.0,
@@ -68,7 +77,7 @@ class IconPushQueue:
         self._titles: dict[int, str] = {}
         # What is on its way and not yet answered, per page: see `outstanding`.
         self._inflight: dict[int, tuple[_PageButtons, str | None]] = {}
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
         # Whether a drain is running, tracked separately from the task handle.
         # Home Assistant starts background tasks eagerly, so `create_task` runs
         # the drain synchronously up to its first suspension -- a drain with
@@ -80,7 +89,7 @@ class IconPushQueue:
         self._gather = gather
 
     def submit(
-        self, page_id: int, buttons: Iterable[dict], *, img_title: str | None = None,
+        self, page_id: int, buttons: Iterable[dict[str, Any]], *, img_title: str | None = None,
     ) -> None:
         """Merge *buttons* into the pending set for *page_id*.
 
@@ -119,7 +128,9 @@ class IconPushQueue:
             merged[name] = {**merged.get(name, {}), **fields}
         return merged, self._titles.get(page_id, title)
 
-    def schedule(self, create_task: Callable[[Awaitable], asyncio.Task]) -> None:
+    def schedule(
+        self, create_task: Callable[[Coroutine[Any, Any, None]], asyncio.Task[Any]],
+    ) -> None:
         """Start draining if nothing is draining already.
 
         Separate from `submit` so a batch is merged completely before any of it

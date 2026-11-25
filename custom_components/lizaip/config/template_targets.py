@@ -6,16 +6,18 @@ disagree.
 """
 from __future__ import annotations
 
+import html
+from collections.abc import Iterator
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 
-from .page_templates.catalog import is_unbound
+from .page_templates.catalog import TEMPLATE_PAGES_KEY, is_unbound
 
 
-def selector_integrations(selector: dict) -> tuple[str, ...]:
+def selector_integrations(selector: dict[str, Any]) -> tuple[str, ...]:
     """The integrations a target selector accepts: one name, or a list of them."""
     value = (selector or {}).get("integration")
     if isinstance(value, str):
@@ -49,6 +51,45 @@ def device_domains(hass: HomeAssistant) -> dict[str, set[str]]:
     return domains
 
 
+def subentry_types(hass: HomeAssistant) -> dict[str, str]:
+    """``{subentry id: subentry type}`` over every config entry, read once."""
+    return {
+        subentry_id: subentry.subentry_type
+        for entry in hass.config_entries.async_entries()
+        for subentry_id, subentry in (getattr(entry, "subentries", None) or {}).items()
+    }
+
+
+def _device_subentry_types(device: Any, types: dict[str, str]) -> frozenset[str]:
+    subentry_id = getattr(device, "config_subentry_id", None)
+    return frozenset({types[subentry_id]} if subentry_id in types else ())
+
+
+def entity_capabilities(hass: HomeAssistant, entity_id: str) -> set[str]:
+    """``key:value`` for every capability *entity_id* declares.
+
+    A lamp says it can do colour through ``supported_color_modes``, which the
+    entity registry holds; an entity registered without any is asked of its
+    live state instead.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    entry = er.async_get(hass).async_get(entity_id)
+    caps = getattr(entry, "capabilities", None)
+    if not isinstance(caps, dict):
+        caps = getattr(hass.states.get(entity_id), "attributes", None)
+    return _capability_values(caps) if isinstance(caps, dict) else set()
+
+
+def _capability_values(caps: dict[str, Any]) -> set[str]:
+    """``key:value`` for each capability, one entry per value of a list."""
+    flat: set[str] = set()
+    for key, value in caps.items():
+        values = value if isinstance(value, (list, tuple, set, frozenset)) else (value,)
+        flat.update(f"{key}:{v}" for v in values if isinstance(v, (str, int)))
+    return flat
+
+
 def device_entry_ids(device: Any) -> set[str]:
     """The config entries *device* belongs to.
 
@@ -74,23 +115,36 @@ def device_integration(
     return next((i for i in integrations if i in owners), None)
 
 
-def eligible_devices(hass: HomeAssistant, device_sel: dict) -> list[dict]:
-    """Devices a device-mode template can bind to, named and sorted for a picker."""
+def eligible_devices(
+    hass: HomeAssistant, device_sel: dict[str, Any], *, services: bool = True,
+) -> list[dict[str, Any]]:
+    """Devices a device-mode template can bind to, named and sorted for a picker.
+
+    ``services=False`` leaves out service devices (add-ons, integrations);
+    ``subentry_type`` asks for a kind of subentry device, e.g. an IR device.
+    """
     integrations = selector_integrations(device_sel)
     primary_domain = device_sel.get("primary_domain")
+    subentry_type = device_sel.get("subentry_type")
     domain_of_entry = entry_domains(hass) if integrations else {}
     domains_by_device = device_domains(hass)
+    types = subentry_types(hass) if subentry_type else {}
     # Read only if something actually has an area: most templates resolve
     # without one, and the registry is a real lookup.
     areas = None
-    devices = []
+    devices: list[dict[str, Any]] = []
     for device in dr.async_get(hass).devices:
         if device.disabled_by is not None:
+            continue
+        if not services and getattr(device, "entry_type", None) == dr.DeviceEntryType.SERVICE:
             continue
         if integrations and device_integration(hass, device, integrations, domain_of_entry) is None:
             continue
         domains = domains_by_device.get(device.id, set())
-        if not domains or (primary_domain and primary_domain not in domains):
+        if subentry_type:
+            if subentry_type not in _device_subentry_types(device, types):
+                continue
+        elif not domains or (primary_domain and primary_domain not in domains):
             continue
         area_name = ""
         if device.area_id:
@@ -100,8 +154,12 @@ def eligible_devices(hass: HomeAssistant, device_sel: dict) -> list[dict]:
             area_name = area.name if area else ""
         devices.append({
             "id": device.id,
-            "name": device.name_by_user or device.name or device.id,
+            # UPnP-discovered names may carry HTML entities ("43&quot; QLED");
+            # a name the user typed is kept as written.
+            "name": device.name_by_user or html.unescape(device.name or "") or device.id,
             "area": area_name,
+            "manufacturer": getattr(device, "manufacturer", None) or "",
+            "model": getattr(device, "model", None) or "",
             "domains": sorted(domains),
         })
     devices.sort(key=lambda d: d["name"].lower())
@@ -142,7 +200,7 @@ def entity_selector_match(
 
 
 def template_fits(
-    template: dict, owners: tuple[frozenset[str], frozenset[str], str],
+    template: dict[str, Any], owners: tuple[frozenset[str], frozenset[str], str],
 ) -> bool:
     """Whether the entity behind *owners* answers *template*'s target selector.
 
@@ -157,21 +215,27 @@ def template_fits(
     if entry_sel:
         return entry_integration in selector_integrations(entry_sel)
     device_sel = selector.get("device") or {}
-    return bool(device_sel) and device_selector_accepts(device_sel, [(integrations, domains)])
+    return bool(device_sel) and device_selector_accepts(
+        device_sel, [(integrations, domains, frozenset())],
+    )
 
 
-def target_index(hass: HomeAssistant) -> list[tuple[frozenset[str], frozenset[str]]]:
-    """``(owning integrations, entity domains)`` for every enabled device.
+def target_index(
+    hass: HomeAssistant,
+) -> list[tuple[frozenset[str], frozenset[str], frozenset[str]]]:
+    """``(owning integrations, entity domains, subentry types)`` per enabled device.
 
     Read once per request, so every template listed is answered from one pass
     over the registries rather than walking them again for each.
     """
     domain_of_entry = entry_domains(hass)
     domains_by_device = device_domains(hass)
+    types = subentry_types(hass)
     return [
         (
             frozenset(domain_of_entry[e] for e in device_entry_ids(device) if e in domain_of_entry),
             frozenset(domains_by_device.get(device.id, ())),
+            _device_subentry_types(device, types),
         )
         for device in dr.async_get(hass).devices
         if device.disabled_by is None
@@ -179,8 +243,8 @@ def target_index(hass: HomeAssistant) -> list[tuple[frozenset[str], frozenset[st
 
 
 def template_has_target(
-    hass: HomeAssistant, template: dict,
-    index: list[tuple[frozenset[str], frozenset[str]]] | None = None,
+    hass: HomeAssistant, template: dict[str, Any],
+    index: list[tuple[frozenset[str], frozenset[str], frozenset[str]]] | None = None,
 ) -> bool:
     """Whether Home Assistant has anything *template* could be bound to right now.
 
@@ -202,19 +266,139 @@ def template_has_target(
     device_sel = selector.get("device") or {}
     if not device_sel:
         return False
+    # The picker can add such a device itself, so having none yet is no bar.
+    sub_type = device_sel.get("subentry_type")
+    if sub_type and any(
+        not entry.disabled_by and sub_type in entry.supported_subentry_types
+        for integration in selector_integrations(device_sel)
+        for entry in hass.config_entries.async_entries(integration)
+    ):
+        return True
     if index is None:
         return bool(eligible_devices(hass, device_sel))
     return device_selector_accepts(device_sel, index)
 
 
 def device_selector_accepts(
-    device_sel: dict, index: list[tuple[frozenset[str], frozenset[str]]],
+    device_sel: dict[str, Any], index: list[tuple[frozenset[str], frozenset[str], frozenset[str]]],
 ) -> bool:
-    """Whether a device of *index* -- ``(integrations, domains)`` each -- fits *device_sel*."""
+    """Whether a device of *index* fits *device_sel*, as :func:`eligible_devices` asks."""
     integrations = set(selector_integrations(device_sel))
     primary_domain = device_sel.get("primary_domain")
+    subentry_type = device_sel.get("subentry_type")
     return any(
         (not integrations or owners & integrations)
-        and (not primary_domain or primary_domain in domains)
-        for owners, domains in index
+        and (
+            subentry_type in types if subentry_type
+            else not primary_domain or primary_domain in domains
+        )
+        for owners, domains, types in index
     )
+
+
+def _requires(button: Any) -> dict[str, Any]:
+    asked = button.get("requires") if isinstance(button, dict) else None
+    return asked if isinstance(asked, dict) else {}
+
+
+def _usable(button: Any, caps: set[str] | None, empty: set[str]) -> bool:
+    """Whether *button* asks for nothing *caps* (``None``: unknown) and *empty* deny."""
+    asked = _requires(button)
+    wanted = asked.get("capabilities")
+    if caps is not None and isinstance(wanted, dict):
+        values = _capability_values(wanted)
+        if values and not values & caps:
+            return False
+    return asked.get("items") not in empty
+
+
+def _choices(slot: Any) -> list[Any]:
+    """A slot's alternatives, best first; a single tile is a list of one."""
+    return slot if isinstance(slot, list) else [slot]
+
+
+def _tiles(pages: dict[str, Any]) -> Iterator[Any]:
+    """Every tile on *pages*, alternatives included."""
+    for page in pages.values():
+        for slot in ((page or {}).get("buttons") or {}).values():
+            yield from _choices(slot)
+
+
+def _links(pages: dict[str, Any]) -> set[str]:
+    found: set[str] = set()
+    for btn in _tiles(pages):
+        goto = btn.get("goto_page") if isinstance(btn, dict) else None
+        found.update(goto if isinstance(goto, list) else [goto] if goto else [])
+    return found
+
+
+async def async_empty_placeholders(
+    hass: HomeAssistant, template: dict[str, Any], target_entity: str,
+    domain_entities: dict[str, str] | None = None, target_config_entry: str = "",
+) -> set[str]:
+    """The placeholders a ``requires: {items: ...}`` names that list nothing.
+
+    A source that cannot be read counts as not empty: a tile hidden for good
+    because a speaker was asleep once would be worse than one leading nowhere.
+    """
+    from .page_templates.resolver import PLACEHOLDERS_KEY, normalize_spec
+    from .page_templates.sources import async_resolve_source
+
+    declared = template.get(PLACEHOLDERS_KEY) or {}
+    asked: set[Any] = {_requires(btn).get("items") for btn in _tiles(template.get(TEMPLATE_PAGES_KEY) or {})}
+    empty: set[str] = set()
+    for name in asked:
+        placeholder = declared.get(name) if isinstance(name, str) else None
+        if not isinstance(placeholder, dict):
+            continue
+        source = str(placeholder.get("source") or "")
+        spec = normalize_spec(
+            placeholder.get("spec"), source, target_entity, domain_entities, target_config_entry,
+        )
+        result = await async_resolve_source(hass, source, spec, max_items=1)
+        if not result.items and not result.error:
+            empty.add(name)
+    return empty
+
+
+def prune_unusable_buttons(
+    hass: HomeAssistant, template: dict[str, Any], target_entity: str, empty: set[str] | None = None,
+) -> dict[str, Any]:
+    """*template* with each slot set to the first tile *target_entity* can use.
+
+    The entity the tiles act on, not its device: a ceiling lamp's white main
+    light gets no colour tiles because its ambient light has colour.
+
+    A slot may list alternatives; a tile's ``requires:`` asks for *any* of the
+    capabilities it lists, and ``items: <placeholder>`` for one that lists
+    something. A slot nothing fits stays empty, and a page whose last link went
+    with it is dropped.
+    """
+    pages = template.get(TEMPLATE_PAGES_KEY)
+    if not isinstance(pages, dict):
+        return template
+    pending = {
+        name: page["buttons"] for name, page in pages.items()
+        if isinstance(page, dict) and isinstance(page.get("buttons"), dict)
+        and any(isinstance(s, list) or _requires(s) for s in page["buttons"].values())
+    }
+    if not pending:
+        return template
+    caps = entity_capabilities(hass, target_entity) if target_entity else None
+    empty = empty or set()
+    kept = {}
+    for name, buttons in pending.items():
+        usable = {}
+        for key, slot in buttons.items():
+            tile = next((b for b in _choices(slot) if _usable(b, caps, empty)), None)
+            if tile is not None:
+                usable[key] = tile
+        if usable.keys() != buttons.keys() or any(usable[k] is not buttons[k] for k in usable):
+            kept[name] = {**pages[name], "buttons": usable}
+    if not kept:
+        return template
+    pruned = {**pages, **kept}
+    first = next(iter(pages))
+    for name in _links(pages) - _links(pruned) - {first}:
+        pruned.pop(name, None)
+    return {**template, TEMPLATE_PAGES_KEY: pruned}

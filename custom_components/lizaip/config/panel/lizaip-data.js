@@ -126,7 +126,7 @@ export const DataMixin = {
    *
    * Loaded rather than hardcoded so the panel and the device cannot disagree:
    * `get_button_tooltip` in `const.py` reads the same `button_tooltips` section of
-   * the same `translations/<lang>.json`. On failure `_buttonTooltips` stays empty
+   * the same `i18n/<lang>.json`. On failure `_buttonTooltips` stays empty
    * and `_getButtonTooltip` title-cases the key, which is readable English rather
    * than a blank button.
    *
@@ -254,6 +254,8 @@ export const DataMixin = {
   /** Put one `icon_options` reply where the Settings tab reads it. */
   _applyIconOptions(r) {
     this._iconOptions = r;
+    // Off unless it says on, like `read_variables_enabled`.
+    if (r) this._variablesEnabled = r.variables_enabled === true;
   },
 
   /**
@@ -921,7 +923,7 @@ export const DataMixin = {
 
       if (reloadActions) await this._loadActions();
       await this._loadAssignments();
-      // Every other page that came with this one -- a batch of debug pages, a
+      // Every other page that came with this one -- a batch of generated pages, a
       // template set -- has nothing cached yet, and an inactive thumbnail draws
       // only from the cache: left alone they showed as empty faces until each
       // was clicked. One bulk read fills them all before the first draw.
@@ -1042,6 +1044,22 @@ export const DataMixin = {
       const moved = Array.isArray(result?.page_ids) ? result.page_ids : [page.id];
       for (const id of moved) delete this._pageCache[id];
       if (moved.includes(this._currentPageId)) await this._loadAssignments();
+      return result;
+    });
+  },
+
+  /** Take the device off a page no template made. */
+  async _unbindPageDevice(page) {
+    return this._runPageOp(async () => {
+      await this._flushAutoSave();
+      const result = await this._hass.callWS({
+        type: "lizaip_config/remove_page_device",
+        entry_id: this._currentEntry,
+        page_id: page.id,
+      });
+      if (result?.pages) this._pages = result.pages;
+      delete this._pageCache[page.id];
+      if (page.id === this._currentPageId) await this._loadAssignments();
       return result;
     });
   },

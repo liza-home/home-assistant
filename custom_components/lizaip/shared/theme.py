@@ -41,7 +41,7 @@ import re
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import yaml
 
@@ -55,6 +55,9 @@ from ..imgserv.const import (
 )
 from ..imgserv.fonts import DEFAULT_FONT_ID
 from .icon_defaults import IconDefaults, clean_section, icon_defaults
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,13 +100,13 @@ STATE_COLOR_NAMES: Final = ("on", "off", "unavailable", "default")
 LEGACY_STATE_KEYS: Final = LEGACY_COLOR_ALIASES
 
 
-def state_colors_given(raw: dict) -> dict:
+def state_colors_given(raw: dict[str, Any]) -> dict[str, Any]:
     """A ``colors:`` block's state colours under today's names.
 
     Older files say ``enabled``/``disabled`` and keep the default colour in a
     ``default_fg`` beside ``states:``; a new name wins over its old spelling.
     """
-    given = raw.get("states") if isinstance(raw.get("states"), dict) else {}
+    given: Any = raw.get("states") if isinstance(raw.get("states"), dict) else {}
     # YAML 1.1 reads an unquoted `on:`/`off:` key as a boolean.
     given = {({True: "on", False: "off"}.get(k, k) if isinstance(k, bool) else k): v
              for k, v in given.items()}
@@ -186,7 +189,7 @@ class Theme:
     preset: bool = True
     #: The theme's own icon overrides, as read from the file. Kept so the panel
     #: can be told what a theme changes; :attr:`icons` is what a renderer reads.
-    icon_overrides: dict[str, dict] = field(default_factory=dict)
+    icon_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @cached_property
     def icons(self) -> IconDefaults:
@@ -356,7 +359,7 @@ TINT_SHADES: Final = {
 
 
 def _apply_tint(
-    value: Any, colors: dict, palette: dict, theme_id: str,
+    value: Any, colors: dict[str, Any], palette: dict[str, Any], theme_id: str,
 ) -> tuple[int, int, int, int] | None:
     """Re-point every colour name at a shade of one colour.
 
@@ -378,14 +381,14 @@ def _apply_tint(
 
 
 def _parse_colors(
-    raw: Any, colors: dict, palette: dict, theme_id: str = "?",
-) -> tuple | None:
+    raw: Any, colors: dict[str, Any], palette: dict[str, Any], theme_id: str = "?",
+) -> None:
     """Apply a theme's ``colors:`` block to *colors* and *palette*."""
     if not isinstance(raw, dict):
         return
     given = raw.get("palette")
     if isinstance(given, list):
-        ordered: dict[str, tuple] = {}
+        ordered: dict[str, tuple[Any, ...]] = {}
         for entry in given:
             if not isinstance(entry, dict):
                 continue
@@ -437,7 +440,7 @@ def _parse_emoji(raw: Any) -> str:
     return font.strip().lower() if isinstance(font, str) else ""
 
 
-def _parse_text(raw: Any, text: dict) -> None:
+def _parse_text(raw: Any, text: dict[str, Any]) -> None:
     if not isinstance(raw, dict):
         return
     for kind in TEXT_KINDS:
@@ -452,7 +455,7 @@ def _parse_text(raw: Any, text: dict) -> None:
             text[kind]["font_size"] = size
 
 
-def _icon_overrides(icons: Any) -> dict[str, dict]:
+def _icon_overrides(icons: Any) -> dict[str, dict[str, Any]]:
     """The entries of an ``icons:`` block that differ from the shipped table.
 
     A row equal to the shipped one changes nothing, so it is dropped: the
@@ -462,13 +465,13 @@ def _icon_overrides(icons: Any) -> dict[str, dict]:
     """
     if not isinstance(icons, dict):
         return {}
-    overrides: dict[str, dict] = {}
+    overrides: dict[str, dict[str, Any]] = {}
     for section in IconDefaults.SECTIONS:
         given = icons.get(section)
         if not isinstance(given, dict):
             continue
         shipped = getattr(icon_defaults, section, {})
-        changed: dict = {}
+        changed: dict[str, Any] = {}
         for key, value in clean_section(given).items():
             base = shipped.get(key)
             if isinstance(value, dict):
@@ -501,7 +504,7 @@ def parse_theme(
     }
     name = theme_id
     preset = True
-    icon_overrides: dict[str, dict] = {}
+    icon_overrides: dict[str, dict[str, Any]] = {}
     emoji_font = ""
 
     if isinstance(raw, dict):
@@ -538,7 +541,7 @@ DEFAULT_THEME: Final = parse_theme(
     DEFAULT_THEME_ID, load_default_theme_file(), "bundled")
 
 
-def user_themes_dir(hass) -> str:
+def user_themes_dir(hass: HomeAssistant) -> str:
     """Where the user's own themes go: ``<ha_config>/lizaip/themes``."""
     return hass.config.path(*USER_THEMES_SUBDIR)
 

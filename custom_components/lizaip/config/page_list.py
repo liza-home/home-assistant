@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
@@ -21,10 +21,14 @@ from .events import fire_config_changed
 from .internal_commands import pinned_page_ids
 from .listeners import schedule_push_rescan
 
+if TYPE_CHECKING:
+    from ..device.connection import LizaIPConnection
+    from .store import LizaRemoteStore
+
 _LOGGER = logging.getLogger(__name__)
 
 
-def deliverable_main_pages(conn, pages: list) -> list[int] | None:
+def deliverable_main_pages(conn: LizaIPConnection, pages: list[Any]) -> list[int] | None:
     """The main-page order to push straight from the panel, or ``None``.
 
     `set_main_pages` is all-or-nothing -- naming one page the device does not
@@ -47,7 +51,7 @@ def deliverable_main_pages(conn, pages: list) -> list[int] | None:
     return [p["id"] for p in pages if not is_subpage(p)]
 
 
-def device_holds_every_page(conn, pages: list) -> bool:
+def device_holds_every_page(conn: LizaIPConnection, pages: list[Any]) -> bool:
     """Whether the device holds every main page, so a sync has nothing to add.
 
     Narrowing a `config_changed` event to "order only" lets the sync skip
@@ -60,7 +64,12 @@ def device_holds_every_page(conn, pages: list) -> bool:
     )
 
 
-async def send_main_pages(conn, page_ids: list, log, failure: str) -> bool:
+async def send_main_pages(
+    conn: LizaIPConnection,
+    page_ids: list[Any],
+    log: logging.Logger | logging.LoggerAdapter[Any],
+    failure: str,
+) -> bool:
     """Push a page order under the page-sync lock; True once the device took it.
 
     Every order push goes through here so none can interleave with a full sync.
@@ -93,28 +102,34 @@ def _opens_removed(steps: Any, removed: set[int]) -> bool:
     step = steps[0]
     if (step.get("action") or step.get("service")) != _GOTO_PAGE:
         return False
-    raw = (step.get("data") or {}).get("page_id")
+    raw: Any = (step.get("data") or {}).get("page_id")
     try:
         return int(raw) in removed
     except (TypeError, ValueError):
         return False
 
 
-def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
+def drop_links_to(assign: Any, removed: set[int]) -> dict[str, Any] | None:
     """*assign* without its links to *removed* pages, or None if it had none.
 
     A long touch, a fixed control's override or a toggle step that opens a
     removed page goes; a click that opens one empties the button, keeping a
-    long touch that still leads somewhere. A button filled by a dynamic source
-    (a Table of contents tile) is left to that source's own refresh.
+    long touch that still leads somewhere.
+
+    What a dynamic source wrote is left to that source's own refresh, so a
+    Table of contents tile keeps its click. Its long touch is not the source's
+    to rewrite -- the user hung it there with **Add options…** -- so deleting
+    the options page takes it off a bound tile as off any other button.
     """
-    if not isinstance(assign, dict) or isinstance(assign.get(ASSIGNMENT_DYNAMIC_KEY), dict):
+    if not isinstance(assign, dict):
         return None
     result = deepcopy(assign)
     changed = False
     if _opens_removed(result.get(ASSIGNMENT_LONGTOUCH_KEY), removed):
         result.pop(ASSIGNMENT_LONGTOUCH_KEY)
         changed = True
+    if isinstance(result.get(ASSIGNMENT_DYNAMIC_KEY), dict):
+        return result if changed else None
     overrides = result.get("overrides")
     if isinstance(overrides, dict):
         for key in [k for k, o in overrides.items()
@@ -123,7 +138,7 @@ def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
             changed = True
         if not overrides:
             result.pop("overrides")
-    toggle = result.get(TOGGLE_KEY)
+    toggle: Any = result.get(TOGGLE_KEY)
     rules = toggle.get("rules") if isinstance(toggle, dict) else None
     if isinstance(rules, list):
         kept = [r for r in rules if not (isinstance(r, dict) and _opens_removed(r.get("config"), removed))]
@@ -143,7 +158,7 @@ def drop_links_to(assign: dict, removed: set[int]) -> dict | None:
 
 
 async def async_drop_links_to(
-    hass: HomeAssistant, entry_id: str, store, device_id: str, removed: set[int],
+    hass: HomeAssistant, entry_id: str, store: LizaRemoteStore, device_id: str, removed: set[int],
 ) -> list[int]:
     """Remove every link to the *removed* pages from the pages left; return those changed.
 
@@ -176,7 +191,7 @@ async def async_drop_links_to(
 
 
 async def push_page_list(
-    hass: HomeAssistant, entry_id: str, pages: list, order_only: bool
+    hass: HomeAssistant, entry_id: str, pages: list[Any], order_only: bool
 ) -> None:
     """Tell the device and the other panels about a page list already stored."""
     log = entry_id_logger(_LOGGER, hass, entry_id)
@@ -202,18 +217,17 @@ async def push_page_list(
             "Leaving the page order to the full sync: the device does not "
             "hold every page yet",
         )
-    else:
-        if await send_main_pages(
-            conn, page_ids, log, "set_main_pages after set_pages failed: %s",
-        ):
-            order_pushed = device_holds_every_page(conn, pages)
+    elif conn is not None and await send_main_pages(
+        conn, page_ids, log, "set_main_pages after set_pages failed: %s",
+    ):
+        order_pushed = device_holds_every_page(conn, pages)
 
     fire_config_changed(
         hass, entry_id, order_only=order_only and order_pushed
     )
 
 
-async def reserved_page_ids(store, device_id: str, in_use: set[int]) -> set[int]:
+async def reserved_page_ids(store: LizaRemoteStore, device_id: str, in_use: set[int]) -> set[int]:
     """Page ids unavailable to newly created pages.
 
     Ids are reserved while any stored goto button still points at them; otherwise
@@ -225,7 +239,8 @@ async def reserved_page_ids(store, device_id: str, in_use: set[int]) -> set[int]
     harmless until the user repoints or deletes them.
     """
     reserved = set(in_use)
-    for page_assigns in (await store.async_get_all_assignments(device_id)).values():
+    stored: dict[int, Any] = await store.async_get_all_assignments(device_id)
+    for page_assigns in stored.values():
         for assign in (page_assigns or {}).values():
             if not isinstance(assign, dict):
                 continue

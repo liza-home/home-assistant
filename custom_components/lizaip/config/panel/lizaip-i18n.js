@@ -329,14 +329,17 @@ export const STRINGS = {
     it: "Per usare un carattere tuo, metti il file .ttf, .otf, .woff o .woff2 in {path} e riapri questa scheda.",
     es: "Para usar una fuente propia, coloca su archivo .ttf, .otf, .woff u .woff2 en {path} y vuelve a abrir esta pestaña.",
   },
-  // NotoColorEmoji.ttf is too large to ship, so colour emoji are opt-in.
-  settings_fontbook_failed: {
-    en: "Fontbook could not be shown here. Open it on its own:",
-    de: "Fontbook konnte hier nicht angezeigt werden. Eigenständig öffnen:",
-    fr: "Fontbook n'a pas pu être affiché ici. L'ouvrir à part :",
-    it: "Impossibile mostrare Fontbook qui. Aprilo a parte:",
-    es: "No se pudo mostrar Fontbook aquí. Ábrelo por separado:",
+  embedded_panel_failed: {
+    en: "{name} could not be shown here. Open it on its own:",
+    de: "{name} konnte hier nicht angezeigt werden. Eigenständig öffnen:",
+    fr: "{name} n'a pas pu être affiché ici. L'ouvrir à part :",
+    it: "Impossibile mostrare {name} qui. Aprilo a parte:",
+    es: "No se pudo mostrar {name} aquí. Ábrelo por separado:",
   },
+  tab_devel: {
+    en: "Devel", de: "Devel", fr: "Devel", it: "Devel", es: "Devel",
+  },
+  // NotoColorEmoji.ttf is too large to ship, so colour emoji are opt-in.
   settings_emoji_font: {
     en: "Emoji", de: "Emoji", fr: "Emoji", it: "Emoji", es: "Emoji",
   },
@@ -414,6 +417,94 @@ export const STRINGS = {
   },
   settings_device: {
     en: "Device", de: "Gerät", fr: "Appareil", it: "Dispositivo", es: "Dispositivo",
+  },
+  settings_variables_enabled: {
+    en: "Variables and calculations (${…})",
+    de: "Variablen und Berechnungen (${…})",
+    fr: "Variables et calculs (${…})",
+    it: "Variabili e calcoli (${…})",
+    es: "Variables y cálculos (${…})",
+  },
+  settings_variables_enabled_hint: {
+    en: "Keeps ${sensor.x}, ${_device…}, calculations and graphs in tooltips, pictures and titles up to date.",
+    de: "Hält ${sensor.x}, ${_device…}, Berechnungen und Verläufe in Tooltips, Bildern und Titeln aktuell.",
+    fr: "Tient à jour ${sensor.x}, ${_device…}, les calculs et les graphiques des info-bulles, images et titres.",
+    it: "Mantiene aggiornati ${sensor.x}, ${_device…}, i calcoli e i grafici in tooltip, immagini e titoli.",
+    es: "Mantiene al día ${sensor.x}, ${_device…}, los cálculos y los gráficos de descripciones, imágenes y títulos.",
+  },
+  settings_variables_off_warning: {
+    en: "Variables are off: title variables display as empty. In other text they show {text_mark}, and pictures show {picture_mark}.",
+    de: "Variablen sind aus: In Titeln werden sie leer angezeigt. In anderem Text steht {text_mark}, Bilder zeigen {picture_mark}.",
+    fr: "Les variables sont désactivées : elles sont vides dans les titres. Dans les autres textes apparaît {text_mark}, les images affichent {picture_mark}.",
+    it: "Le variabili sono disattivate: nei titoli sono vuote. Negli altri testi compare {text_mark}, le immagini mostrano {picture_mark}.",
+    es: "Las variables están desactivadas: en los títulos se muestran vacías. En otros textos aparece {text_mark} y las imágenes muestran {picture_mark}.",
+  },
+
+  settings_max_pages: {
+    en: "Max pages", de: "Maximale Seitenanzahl", fr: "Nombre maximal de pages",
+    it: "Numero massimo di pagine", es: "Máximo de páginas",
+  },
+  settings_max_pages_enabled: {
+    en: "Limit the number of pages",
+    de: "Seitenanzahl begrenzen",
+    fr: "Limiter le nombre de pages",
+    it: "Limita il numero di pagine",
+    es: "Limitar el número de páginas",
+  },
+  settings_max_pages_enabled_hint: {
+    en: "Counts every page, subpages included. Pages already over the limit stay; only adding more is refused.",
+    de: "Zählt jede Seite, auch Unterseiten. Seiten über dem Limit bleiben erhalten; nur weitere hinzuzufügen wird verhindert.",
+    fr: "Compte chaque page, sous-pages comprises. Les pages déjà au-delà de la limite restent ; seul l'ajout de nouvelles est refusé.",
+    it: "Conta ogni pagina, sottopagine comprese. Le pagine già oltre il limite restano; viene solo impedito di aggiungerne altre.",
+    es: "Cuenta todas las páginas, incluidas las subpáginas. Las páginas que ya superan el límite se quedan; solo se impide añadir más.",
+  },
+  settings_max_pages_field: {
+    en: "Pages", de: "Seiten", fr: "Pages", it: "Pagine", es: "Páginas",
+  },
+  settings_max_pages_invalid: {
+    en: "Enter a whole number of at least {min}.", de: "Gib eine ganze Zahl ab {min} ein.",
+    fr: "Saisissez un nombre entier d'au moins {min}.", it: "Inserisci un numero intero di almeno {min}.",
+    es: "Introduce un número entero de al menos {min}.",
+  },
+  settings_max_pages_over: {
+    en: "This remote already has {count} pages — no new ones until it has fewer than {limit}.",
+    de: "Diese Fernbedienung hat schon {count} Seiten – neue erst, wenn sie weniger als {limit} hat.",
+    fr: "Cette télécommande a déjà {count} pages — pas de nouvelle tant qu'elle en a {limit} ou plus.",
+    it: "Questo telecomando ha già {count} pagine — nessuna nuova finché ne ha meno di {limit}.",
+    es: "Este mando ya tiene {count} páginas — ninguna nueva hasta que tenga menos de {limit}.",
+  },
+  settings_resend_pages: {
+    en: "Reload on page change",
+    de: "Beim Seitenwechsel neu laden",
+    fr: "Recharger au changement de page",
+    it: "Ricarica al cambio pagina",
+    es: "Recargar al cambiar de página",
+  },
+  settings_resend_on_page_open: {
+    en: "Send a page again when it is opened", de: "Seite beim Öffnen erneut senden",
+    fr: "Renvoyer une page à son ouverture", it: "Invia di nuovo una pagina quando viene aperta",
+    es: "Volver a enviar una página al abrirla",
+  },
+  settings_resend_on_page_open_hint: {
+    en: "The remote keeps about 400 images and drops the oldest when it needs room. Sending the page it opens again makes it fetch the images it dropped, so no tile stays blank. The same happens when the remote is picked up.",
+    de: "Die Fernbedienung speichert etwa 400 Bilder und verwirft die ältesten, wenn sie Platz braucht. Wird die geöffnete Seite erneut gesendet, lädt sie die verworfenen Bilder neu, sodass keine Kachel leer bleibt. Dasselbe passiert, wenn die Fernbedienung in die Hand genommen wird.",
+    fr: "La télécommande conserve environ 400 images et supprime les plus anciennes quand elle manque de place. Renvoyer la page qu'elle ouvre lui fait recharger les images supprimées, ainsi aucune tuile ne reste vide. Il en va de même quand la télécommande est prise en main.",
+    it: "Il telecomando conserva circa 400 immagini e scarta le più vecchie quando gli serve spazio. Inviare di nuovo la pagina che apre gli fa scaricare le immagini scartate, così nessun riquadro resta vuoto. Lo stesso avviene quando il telecomando viene preso in mano.",
+    es: "El mando guarda unas 400 imágenes y descarta las más antiguas cuando necesita espacio. Volver a enviar la página que abre hace que descargue las imágenes descartadas, así ningún mosaico queda vacío. Lo mismo ocurre cuando se coge el mando.",
+  },
+  settings_resend_keep_on: {
+    en: "Keep this on: without it, lizaIP might not behave as expected.",
+    de: "Lass das eingeschaltet: Ohne diese Funktion verhält sich lizaIP möglicherweise nicht wie erwartet.",
+    fr: "Laissez cette option activée : sans elle, lizaIP risque de ne pas se comporter comme prévu.",
+    it: "Lascia questa opzione attiva: senza, lizaIP potrebbe non comportarsi come previsto.",
+    es: "Déjalo activado: sin esto, lizaIP podría no comportarse como se espera.",
+  },
+  settings_resend_off_warning: {
+    en: "Without this, lizaIP might not work as expected: once the remote holds more than about 400 images, tiles can stay blank.",
+    de: "Ohne diese Funktion funktioniert lizaIP möglicherweise nicht wie erwartet: Sobald die Fernbedienung mehr als etwa 400 Bilder hat, können Kacheln leer bleiben.",
+    fr: "Sans cette fonction, lizaIP risque de ne pas fonctionner comme prévu : dès que la télécommande contient plus d'environ 400 images, des tuiles peuvent rester vides.",
+    it: "Senza questa funzione lizaIP potrebbe non funzionare come previsto: quando il telecomando ha più di circa 400 immagini, alcuni riquadri possono restare vuoti.",
+    es: "Sin esta función, lizaIP podría no funcionar como se espera: cuando el mando tiene más de unas 400 imágenes, algunos mosaicos pueden quedar vacíos.",
   },
   settings_clear_pages: {
     en: "Clear and rebuild pages", de: "Seiten löschen und neu aufbauen",
@@ -819,6 +910,52 @@ export const STRINGS = {
     en: "Restore", de: "Wiederherstellen", fr: "Restaurer",
     it: "Ripristina", es: "Restaurar",
   },
+  restore_step_files: {
+    en: "Save the configuration", de: "Konfiguration speichern",
+    fr: "Enregistrer la configuration", it: "Salva la configurazione",
+    es: "Guardar la configuración",
+  },
+  restore_step_reload: {
+    en: "Load the configuration", de: "Konfiguration laden",
+    fr: "Charger la configuration", it: "Carica la configurazione",
+    es: "Cargar la configuración",
+  },
+  restore_step_remote_clear: {
+    en: "Clear the pages on the remote", de: "Seiten auf der Fernbedienung löschen",
+    fr: "Effacer les pages de la télécommande", it: "Cancella le pagine dal telecomando",
+    es: "Borrar las páginas del mando",
+  },
+  restore_step_remote_pages: {
+    en: "Send the pages to the remote", de: "Seiten an die Fernbedienung senden",
+    fr: "Envoyer les pages à la télécommande", it: "Invia le pagine al telecomando",
+    es: "Enviar las páginas al mando",
+  },
+  restore_step_later: {
+    en: "On reconnect", de: "Beim Verbinden", fr: "À la reconnexion",
+    it: "Alla riconnessione", es: "Al reconectar",
+  },
+  restore_step_failed: {
+    en: "Failed", de: "Fehlgeschlagen", fr: "Échec", it: "Non riuscito", es: "Error",
+  },
+  restore_pages_progress: {
+    en: "Page {written} of {total}", de: "Seite {written} von {total}",
+    fr: "Page {written} sur {total}", it: "Pagina {written} di {total}",
+    es: "Página {written} de {total}",
+  },
+  restore_remote_offline: {
+    en: "The remote is not connected. It gets the pages as soon as it reconnects.",
+    de: "Die Fernbedienung ist nicht verbunden. Sie bekommt die Seiten, sobald sie sich wieder verbindet.",
+    fr: "La télécommande n'est pas connectée. Elle recevra les pages dès sa reconnexion.",
+    it: "Il telecomando non è connesso. Riceverà le pagine appena si riconnette.",
+    es: "El mando no está conectado. Recibirá las páginas en cuanto se vuelva a conectar.",
+  },
+  restore_remote_failed: {
+    en: "Not every page reached the remote. It is tried again at the next change or reconnect.",
+    de: "Nicht alle Seiten haben die Fernbedienung erreicht. Beim nächsten Ändern oder Verbinden wird es erneut versucht.",
+    fr: "Toutes les pages n'ont pas atteint la télécommande. Nouvel essai à la prochaine modification ou reconnexion.",
+    it: "Non tutte le pagine hanno raggiunto il telecomando. Si riprova alla prossima modifica o riconnessione.",
+    es: "No todas las páginas llegaron al mando. Se vuelve a intentar con el próximo cambio o reconexión.",
+  },
   restore_saved_on: {
     en: "Saved {when}", de: "Gespeichert {when}", fr: "Enregistré {when}",
     it: "Salvato {when}", es: "Guardado {when}",
@@ -849,6 +986,27 @@ export const STRINGS = {
     en: "Restore failed: {error}", de: "Wiederherstellen fehlgeschlagen: {error}",
     fr: "Échec de la restauration : {error}", it: "Ripristino non riuscito: {error}",
     es: "Error al restaurar: {error}",
+  },
+  restore_failed_before_files: {
+    en: "The configuration files were not replaced.",
+    de: "Die Konfigurationsdateien wurden nicht ersetzt.",
+    fr: "Les fichiers de configuration n’ont pas été remplacés.",
+    it: "I file di configurazione non sono stati sostituiti.",
+    es: "No se reemplazaron los archivos de configuración.",
+  },
+  restore_failed_after_files: {
+    en: "The configuration files were restored, but a follow-up step failed. Check the remote before trying again.",
+    de: "Die Konfigurationsdateien wurden wiederhergestellt, aber ein Folgeschritt ist fehlgeschlagen. Prüfe die Fernbedienung, bevor du es erneut versuchst.",
+    fr: "Les fichiers de configuration ont été restaurés, mais une étape suivante a échoué. Vérifiez la télécommande avant de réessayer.",
+    it: "I file di configurazione sono stati ripristinati, ma un passaggio successivo non è riuscito. Controlla il telecomando prima di riprovare.",
+    es: "Se restauraron los archivos de configuración, pero falló un paso posterior. Comprueba el mando antes de intentarlo de nuevo.",
+  },
+  restore_connection_lost: {
+    en: "The connection was lost during the restore. It may still be running or may have finished. Check the remote before trying again.",
+    de: "Während der Wiederherstellung wurde die Verbindung getrennt. Sie läuft möglicherweise noch oder ist bereits fertig. Prüfe die Fernbedienung, bevor du es erneut versuchst.",
+    fr: "La connexion a été perdue pendant la restauration. Elle est peut-être toujours en cours ou déjà terminée. Vérifiez la télécommande avant de réessayer.",
+    it: "La connessione è stata persa durante il ripristino. Potrebbe essere ancora in corso o essere già terminato. Controlla il telecomando prima di riprovare.",
+    es: "Se perdió la conexión durante la restauración. Puede que siga en curso o que haya terminado. Comprueba el mando antes de intentarlo de nuevo.",
   },
   restore_error_not_a_zip: {
     en: "That file is not a ZIP archive.", de: "Diese Datei ist kein ZIP-Archiv.",
@@ -941,61 +1099,6 @@ export const STRINGS = {
     it: "Aggiunge Aggiungi opzioni… al menu di un pulsante quando un modello di opzioni è adatto al suo dispositivo: una pagina di impostazioni per quel dispositivo, aperta dal tocco lungo del pulsante. Richiede Tocco lungo. Disattivandola, le pagine di opzioni già create restano.",
     es: "Añade Añadir opciones… al menú de un botón cuando una plantilla de opciones encaja con su dispositivo: una página de ajustes para ese dispositivo, que abre el toque largo del botón. Requiere Toque largo. Al desactivarlo se conservan las páginas de opciones ya creadas.",
   },
-  settings_memory_card: {
-    en: "Device memory", de: "Gerätespeicher",
-    fr: "Mémoire de l’appareil", it: "Memoria del dispositivo",
-    es: "Memoria del dispositivo",
-  },
-  settings_memory: {
-    en: "Show memory use", de: "Speicherauslastung anzeigen",
-    fr: "Afficher l’utilisation de la mémoire", it: "Mostra l’uso della memoria",
-    es: "Mostrar el uso de memoria",
-  },
-  settings_memory_hint: {
-    en: "Shows bars next to the device name for RAM, heap fragmentation and flash. Read from the device after every transfer and at least every 5 minutes.", de: "Zeigt neben dem Gerätenamen Balken für RAM, Heap-Fragmentierung und Flash. Wird nach jeder Übertragung zum Gerät und mindestens alle 5 Minuten aktualisiert.",
-    fr: "Affiche à côté du nom de l’appareil des barres pour la RAM, la fragmentation du tas et la flash. Mis à jour après chaque transfert vers l’appareil et au moins toutes les 5 minutes.", it: "Mostra accanto al nome del dispositivo barre per RAM, frammentazione dell’heap e flash. Aggiornato dopo ogni trasferimento al dispositivo e almeno ogni 5 minuti.",
-    es: "Muestra junto al nombre del dispositivo barras de RAM, fragmentación del heap y flash. Se actualiza tras cada transferencia al dispositivo y al menos cada 5 minutos.",
-  },
-  memory_group: {
-    en: "Device memory", de: "Gerätespeicher",
-    fr: "Mémoire de l’appareil", it: "Memoria del dispositivo",
-    es: "Memoria del dispositivo",
-  },
-  memory_ram: {
-    en: "RAM", de: "RAM",
-    fr: "RAM", it: "RAM",
-    es: "RAM",
-  },
-  memory_frag: {
-    en: "Frag.", de: "Frag.",
-    fr: "Frag.", it: "Framm.",
-    es: "Frag.",
-  },
-  memory_flash_images: {
-    en: "Flash images", de: "Flash Bilder",
-    fr: "Flash images", it: "Flash immagini",
-    es: "Flash imágenes",
-  },
-  memory_flash_files: {
-    en: "Flash files", de: "Flash Dateien",
-    fr: "Flash fichiers", it: "Flash file",
-    es: "Flash archivos",
-  },
-  memory_used_of: {
-    en: "{used} of {total} used", de: "{used} von {total} belegt",
-    fr: "{used} sur {total} utilisés", it: "{used} di {total} usati",
-    es: "{used} de {total} usados",
-  },
-  memory_unknown: {
-    en: "not read yet — the device did not report it", de: "noch nicht gelesen — das Gerät hat es nicht gemeldet",
-    fr: "pas encore lu — l’appareil ne l’a pas signalé", it: "non ancora letto — il dispositivo non l’ha segnalato",
-    es: "aún no leído — el dispositivo no lo ha informado",
-  },
-  memory_frag_tip: {
-    en: "Heap fragmentation: largest free block {largest} of {free} free", de: "Heap-Fragmentierung: größter freier Block {largest} von {free} frei",
-    fr: "Fragmentation du tas : plus grand bloc libre {largest} sur {free} libres", it: "Frammentazione heap: blocco libero più grande {largest} su {free} liberi",
-    es: "Fragmentación del heap: bloque libre mayor {largest} de {free} libres",
-  },
   settings_page_links: {
     en: "Show page links",
     de: "Seitenverbindungen anzeigen",
@@ -1009,6 +1112,42 @@ export const STRINGS = {
     fr: "Tant que le pointeur repose sur un bouton, trace une ligne vers la page qu'il ouvre. S'il repose sur une page, trace tous les liens qui mènent à cette page.",
     it: "Finché il puntatore resta su un pulsante, traccia una linea verso la pagina che apre. Se resta su una pagina, traccia tutti i collegamenti che la raggiungono.",
     es: "Mientras el puntero descansa sobre un botón, dibuja una línea hasta la página que abre. Si descansa sobre una página, dibuja todos los enlaces que llegan a ella.",
+  },
+  settings_visible_faces: {
+    en: "Update only visible pages",
+    de: "Nur sichtbare Seiten aktualisieren",
+    fr: "Mettre à jour uniquement les pages visibles",
+    it: "Aggiorna solo le pagine visibili",
+    es: "Actualizar solo las páginas visibles",
+  },
+  settings_visible_faces_hint: {
+    en: "Variables on pages scrolled out of view are updated when you scroll back to them. Saves work on phones and on remotes with many pages.",
+    de: "Variablen auf Seiten außerhalb des sichtbaren Bereichs werden aktualisiert, sobald du zu ihnen zurückscrollst. Spart Arbeit auf Smartphones und bei Fernbedienungen mit vielen Seiten.",
+    fr: "Les variables des pages hors de vue sont mises à jour lorsque vous y revenez. Allège le travail sur les téléphones et les télécommandes à nombreuses pages.",
+    it: "Le variabili delle pagine fuori vista vengono aggiornate quando torni a scorrerle. Riduce il lavoro sugli smartphone e sui telecomandi con molte pagine.",
+    es: "Las variables de las páginas fuera de la vista se actualizan cuando vuelves a ellas. Ahorra trabajo en móviles y en mandos con muchas páginas.",
+  },
+  settings_live_values: {
+    en: "Live values in the editor",
+    de: "Live-Werte im Editor",
+    fr: "Valeurs en direct dans l’éditeur",
+    it: "Valori in tempo reale nell’editor",
+    es: "Valores en directo en el editor",
+  },
+  settings_live_values_hint: {
+    en: "Keeps the variable values in the editor's previews and hints up to date while they change. When off, they are filled in each time the editor is drawn.",
+    de: "Hält die Variablenwerte in den Vorschauen und Hinweisen des Editors aktuell, während sie sich ändern. Ausgeschaltet werden sie bei jedem Neuzeichnen des Editors eingesetzt.",
+    fr: "Tient à jour les valeurs des variables dans les aperçus et les indications de l’éditeur pendant qu’elles changent. Désactivé, elles sont renseignées à chaque affichage de l’éditeur.",
+    it: "Mantiene aggiornati i valori delle variabili nelle anteprime e nei suggerimenti dell’editor mentre cambiano. Se disattivato, vengono inseriti ogni volta che l’editor viene ridisegnato.",
+    es: "Mantiene al día los valores de las variables en las vistas previas y las indicaciones del editor mientras cambian. Desactivado, se rellenan cada vez que se dibuja el editor.",
+  },
+
+  settings_needs_variables: {
+    en: "Variables are off: these settings only work while variables are switched on.",
+    de: "Variablen sind aus: Diese Einstellungen funktionieren nur, solange Variablen eingeschaltet sind.",
+    fr: "Les variables sont désactivées : ces réglages ne fonctionnent que lorsque les variables sont activées.",
+    it: "Le variabili sono disattivate: queste impostazioni funzionano solo quando le variabili sono attivate.",
+    es: "Las variables están desactivadas: estos ajustes solo funcionan mientras las variables están activadas.",
   },
 
   settings_icons: {
@@ -1141,13 +1280,6 @@ export const STRINGS = {
     it: "Salvataggio non riuscito: {error}", es: "Error al guardar: {error}",
   },
 
-  // ── debug tab ──────────────────────────────────────────────────────
-  // Only reachable on a build that carries the debug tooling; the strings
-  // stay here regardless, because the i18n table is shipped whole and one
-  // missing key would render as its own name.
-  tab_debug: {
-    en: "Debug", de: "Diagnose", fr: "Diagnostic", it: "Diagnostica", es: "Diagnóstico",
-  },
   // Rejections from `hass.callWS` that arrive as a bare numeric code rather
   // than an error object -- see `_wsErrorText`. Worded as what the user can do
   // about it, because the code itself tells them nothing.
@@ -1193,321 +1325,7 @@ export const STRINGS = {
     it: "L'accesso a Home Assistant non è stato completato.",
     es: "El inicio de sesión en Home Assistant no se completó.",
   },
-  debug_reachability: {
-    en: "Reachability", de: "Erreichbarkeit", fr: "Accessibilité",
-    it: "Raggiungibilità", es: "Accesibilidad",
-  },
-  debug_not_tested: {
-    en: "Not tested yet.", de: "Noch nicht getestet.", fr: "Pas encore testé.",
-    it: "Non ancora testato.", es: "Aún sin probar.",
-  },
-  debug_ping: {
-    en: "Ping", de: "Anpingen", fr: "Envoyer un ping",
-    it: "Esegui ping", es: "Hacer ping",
-  },
-  debug_pinging: {
-    en: "Pinging…", de: "Wird angepingt…", fr: "Ping en cours…",
-    it: "Ping in corso…", es: "Haciendo ping…",
-  },
-  debug_never_connected: {
-    en: "The remote has never connected, so there is no address to test.",
-    de: "Die Fernbedienung hat sich noch nie verbunden, daher gibt es keine Adresse zum Testen.",
-    fr: "La télécommande ne s'est jamais connectée, il n'y a donc aucune adresse à tester.",
-    it: "Il telecomando non si è mai connesso, quindi non c'è alcun indirizzo da testare.",
-    es: "El mando nunca se ha conectado, por lo que no hay dirección que probar.",
-  },
-  debug_reachable: {
-    en: "Reachable", de: "Erreichbar", fr: "Accessible",
-    it: "Raggiungibile", es: "Accesible",
-  },
-  debug_unreachable: {
-    en: "Not reachable", de: "Nicht erreichbar", fr: "Inaccessible",
-    it: "Non raggiungibile", es: "No accesible",
-  },
-  debug_address: {
-    en: "Address", de: "Adresse", fr: "Adresse", it: "Indirizzo", es: "Dirección",
-  },
-  debug_latency: {
-    en: "Response time", de: "Antwortzeit", fr: "Temps de réponse",
-    it: "Tempo di risposta", es: "Tiempo de respuesta",
-  },
-  debug_error: {
-    en: "Error", de: "Fehler", fr: "Erreur", it: "Errore", es: "Error",
-  },
-  debug_websocket: {
-    en: "WebSocket", de: "WebSocket", fr: "WebSocket", it: "WebSocket", es: "WebSocket",
-  },
-  debug_connected: {
-    en: "Connected", de: "Verbunden", fr: "Connecté", it: "Connesso", es: "Conectado",
-  },
-  debug_disconnected: {
-    en: "Disconnected", de: "Getrennt", fr: "Déconnecté",
-    it: "Disconnesso", es: "Desconectado",
-  },
-  debug_log_port: {
-    en: "Device log stream", de: "Geräteprotokoll-Stream", fr: "Flux de journal de l'appareil",
-    it: "Flusso di log del dispositivo", es: "Flujo de registro del dispositivo",
-  },
-  debug_log_port_hint: {
-    en: "Opens the remote's debug port and writes its output to the Home Assistant log at debug level. Turn it off again when you are done — it is not kept across restarts.",
-    de: "Öffnet den Debug-Port der Fernbedienung und schreibt deren Ausgabe auf Debug-Ebene ins Home-Assistant-Protokoll. Danach wieder ausschalten — die Einstellung übersteht keinen Neustart.",
-    fr: "Ouvre le port de débogage de la télécommande et écrit sa sortie dans le journal Home Assistant au niveau debug. Désactivez-le ensuite : il n'est pas conservé après un redémarrage.",
-    it: "Apre la porta di debug del telecomando e scrive il suo output nel log di Home Assistant a livello debug. Disattivalo quando hai finito: non viene mantenuto dopo un riavvio.",
-    es: "Abre el puerto de depuración del mando y escribe su salida en el registro de Home Assistant en nivel debug. Desactívalo al terminar: no se conserva tras un reinicio.",
-  },
-  // A switch reports a state, where a button named an action. "Disable" on a
-  // control that is already off read as the thing it would do, which is the
-  // opposite of what a switch means.
-  debug_stream_on: {
-    en: "On", de: "Ein", fr: "Activé", it: "Attivo", es: "Activado",
-  },
-  debug_stream_off: {
-    en: "Off", de: "Aus", fr: "Désactivé", it: "Disattivo", es: "Desactivado",
-  },
-  // Shown only while the stream is running. The lines do not appear in the
-  // panel -- they go into Home Assistant's own log -- so without this the
-  // switch would look like it had done nothing.
-  //
-  // The second sentence is not padding. That page opens on the grouped list fed
-  // by the system_log integration, whose handler sits at WARNING, so these
-  // DEBUG lines can never appear there. Only the raw view renders them, and it
-  // is reached by a button: ha-config-logs keeps that choice in internal state,
-  // never in the URL, so the link cannot land on it and the reader has to be
-  // told. The button is named through Home Assistant's own string, so it reads
-  // exactly as this instance labels it rather than as a guess of ours.
-  debug_stream_live: {
-    en: "The device's lines are being written to {link}. That page opens on the "
-      + "grouped warnings and errors, where these lines never appear — use "
-      + "\u201c{button}\u201d to see them.",
-    de: "Die Zeilen des Geräts werden nach {link} geschrieben. Diese Seite "
-      + "öffnet zuerst die gruppierten Warnungen und Fehler, in denen diese "
-      + "Zeilen nie auftauchen — mit \u201e{button}\u201c werden sie sichtbar.",
-    fr: "Les lignes de l'appareil sont écrites dans {link}. Cette page s'ouvre "
-      + "sur les avertissements et erreurs groupés, où ces lignes n'apparaissent "
-      + "jamais — utilisez «\u202f{button}\u202f» pour les voir.",
-    it: "Le righe del dispositivo vengono scritte in {link}. Quella pagina si "
-      + "apre sugli avvisi e sugli errori raggruppati, dove queste righe non "
-      + "compaiono mai: usa \u201c{button}\u201d per vederle.",
-    es: "Las líneas del dispositivo se escriben en {link}. Esa página se abre "
-      + "en las advertencias y los errores agrupados, donde estas líneas nunca "
-      + "aparecen: usa \u201c{button}\u201d para verlas.",
-  },
-  // Home Assistant's own label for the button that switches the log page to the
-  // raw view. Taking it from its string means the hint names what the reader
-  // actually sees, in whatever language the instance runs -- which is also why
-  // only English is carried here: the instance supplies the rest, and a second
-  // set of our own could only contradict it.
-  debug_stream_raw_button: {
-    ha: "ui.panel.config.logs.show_full_logs", en: "Show raw logs",
-  },
-  // Shown when the device's port is open but nothing is reading it -- the
-  // state a restart of Home Assistant leaves behind, since the port survives
-  // it and the task reading the port does not.
-  debug_stream_detached: {
-    en: "The port is open on the device, but these lines are not being "
-      + "collected. Switch it off and on again to start reading it.",
-    de: "Der Port am Gerät ist offen, aber die Zeilen werden nicht "
-      + "eingesammelt. Zum Mitlesen den Schalter aus- und wieder einschalten.",
-    fr: "Le port est ouvert sur l'appareil, mais ces lignes ne sont pas "
-      + "collectées. Éteignez puis rallumez l'interrupteur pour les lire.",
-    it: "La porta è aperta sul dispositivo, ma queste righe non vengono "
-      + "raccolte. Spegni e riaccendi l'interruttore per leggerle.",
-    es: "El puerto está abierto en el dispositivo, pero estas líneas no se "
-      + "recogen. Apaga y vuelve a encender el interruptor para leerlas.",
-  },
-  // The read failed without saying why. The switch keeps showing what it last
-  // knew rather than claiming the port is closed.
-  debug_port_unknown: {
-    en: "Could not read the port's state from the device.",
-    de: "Der Zustand des Ports konnte nicht vom Gerät gelesen werden.",
-    fr: "Impossible de lire l'état du port depuis l'appareil.",
-    it: "Impossibile leggere lo stato della porta dal dispositivo.",
-    es: "No se pudo leer el estado del puerto desde el dispositivo.",
-  },
-  debug_stream_live_link: {
-    en: "the Home Assistant log", de: "das Home-Assistant-Protokoll",
-    fr: "le journal Home Assistant", it: "il registro di Home Assistant",
-    es: "el registro de Home Assistant",
-  },
-  // The per-module log levels. The level names themselves are not translated:
-  // they are the values the device takes, and a translated "off" sent back
-  // would be refused. They are shown as the device spells them.
-  debug_logging: {
-    en: "Log levels", de: "Protokollstufen", fr: "Niveaux de journalisation",
-    it: "Livelli di log", es: "Niveles de registro",
-  },
-  debug_logging_hint: {
-    en: "Which parts of the remote's firmware write to its log, and how much.",
-    de: "Welche Teile der Firmware der Fernbedienung protokollieren und wie ausführlich.",
-    fr: "Quelles parties du micrologiciel de la télécommande écrivent dans son journal, et à quel point.",
-    it: "Quali parti del firmware del telecomando scrivono nel suo log e con quanto dettaglio.",
-    es: "Qué partes del firmware del mando escriben en su registro y con cuánto detalle.",
-  },
-  debug_logging_loading: {
-    en: "Reading…", de: "Wird gelesen…", fr: "Lecture…",
-    it: "Lettura…", es: "Leyendo…",
-  },
-  // The two states of the per-section button: the label says what a click
-  // will do, not what is currently shown.
-  debug_pretty: {
-    en: "Pretty", de: "Formatiert", fr: "Format\u00e9", it: "Formattato",
-    es: "Formateado",
-  },
-  debug_raw: {
-    en: "Raw", de: "Roh", fr: "Brut", it: "Grezzo", es: "Sin formato",
-  },
-  debug_logging_reset: {
-    en: "Reset all to important", de: "Alle auf \u201eimportant\u201c zur\u00fccksetzen",
-    fr: "Tout remettre sur \u00ab\u202fimportant\u202f\u00bb",
-    it: "Reimposta tutto su \u201cimportant\u201d",
-    es: "Restablecer todo a \u201cimportant\u201d",
-  },
-  debug_logging_empty: {
-    en: "The remote did not report any log modules.",
-    de: "Die Fernbedienung hat keine Protokollmodule gemeldet.",
-    fr: "La télécommande n'a signalé aucun module de journalisation.",
-    it: "Il telecomando non ha segnalato alcun modulo di log.",
-    es: "El mando no ha informado de ningún módulo de registro.",
-  },
-  debug_logging_version: {
-    en: "Schema version {version}", de: "Schemaversion {version}",
-    fr: "Version du schéma {version}", it: "Versione dello schema {version}",
-    es: "Versión del esquema {version}",
-  },
 
-  debug_report: {
-    en: "Device report", de: "Gerätebericht", fr: "Rapport de l'appareil",
-    it: "Rapporto del dispositivo", es: "Informe del dispositivo",
-  },
-  debug_report_hint: {
-    en: "Reads the remote's status, metrics and stored logs. Each section is read from the remote when you expand it. Useful to attach to a bug report.",
-    de: "Liest Status, Messwerte und gespeicherte Protokolle der Fernbedienung. Jeder Abschnitt wird beim Aufklappen von der Fernbedienung gelesen. Nützlich als Anhang zu einer Fehlermeldung.",
-    fr: "Lit l'état, les mesures et les journaux enregistrés de la télécommande. Chaque section est lue sur la télécommande au moment où vous la dépliez. Utile à joindre à un rapport de bogue.",
-    it: "Legge stato, metriche e log memorizzati del telecomando. Ogni sezione viene letta dal telecomando quando la espandi. Utile da allegare a una segnalazione di bug.",
-    es: "Lee el estado, las métricas y los registros almacenados del mando. Cada sección se lee del mando al desplegarla. Útil para adjuntar a un informe de error.",
-  },
-  // Shown while the list of readable endpoints is being fetched. The card is
-  // empty until it arrives, and an empty card says nothing about whether
-  // anything is happening. ("Ping" stays hard-coded in the view: the word is
-  // identical in all five languages.)
-  debug_report_fetching: {
-    en: "Collecting report…", de: "Bericht wird abgerufen…",
-    fr: "Collecte du rapport…", it: "Raccolta del rapporto…",
-    es: "Recopilando informe…",
-  },
-  // Shown on a row that is on the list but has not been fetched yet. The rows
-  // appear before any of them is collected, so each needs to say which it is.
-  debug_section_pending: {
-    en: "collecting…", de: "wird abgerufen…", fr: "collecte…",
-    it: "raccolta…", es: "recopilando…",
-  },
-  debug_section_truncated: {
-    en: "Cut off — the device sent {length} characters.",
-    de: "Abgeschnitten — das Gerät sendete {length} Zeichen.",
-    fr: "Tronqué — l'appareil a envoyé {length} caractères.",
-    it: "Troncato — il dispositivo ha inviato {length} caratteri.",
-    es: "Truncado — el dispositivo envió {length} caracteres.",
-  },
-  debug_report_copy: {
-    en: "Copy", de: "Kopieren", fr: "Copier", it: "Copia", es: "Copiar",
-  },
-  debug_traffic: {
-    en: "Traffic", de: "Datenverkehr", fr: "Trafic", it: "Traffico", es: "Tráfico",
-  },
-  debug_traffic_hint: {
-    en: "Every message between Home Assistant and the remote since {since}. The round trip runs from sending a request to its answer; a late answer arrived after Home Assistant had given up; a lost request never got one.",
-    de: "Alle Nachrichten zwischen Home Assistant und der Fernbedienung seit {since}. Die Antwortzeit läuft vom Senden einer Anfrage bis zu ihrer Antwort; eine verspätete Antwort kam, nachdem Home Assistant aufgegeben hatte; eine verlorene Anfrage bekam nie eine.",
-    fr: "Tous les messages entre Home Assistant et la télécommande depuis {since}. L'aller-retour va de l'envoi d'une requête à sa réponse ; une réponse tardive est arrivée après l'abandon de Home Assistant ; une requête perdue n'en a jamais reçu.",
-    it: "Tutti i messaggi tra Home Assistant e il telecomando da {since}. Il tempo di andata e ritorno va dall'invio di una richiesta alla sua risposta; una risposta tardiva è arrivata dopo che Home Assistant aveva rinunciato; una richiesta persa non ne ha mai ricevuta una.",
-    es: "Todos los mensajes entre Home Assistant y el mando desde {since}. El tiempo de ida y vuelta va del envío de una solicitud a su respuesta; una respuesta tardía llegó después de que Home Assistant se rindiera; una solicitud perdida nunca la recibió.",
-  },
-  debug_traffic_requests: {
-    en: "Requests", de: "Anfragen", fr: "Requêtes", it: "Richieste", es: "Solicitudes",
-  },
-  debug_traffic_answered: {
-    en: "Answered", de: "Beantwortet", fr: "Répondues", it: "Con risposta", es: "Respondidas",
-  },
-  debug_traffic_timeouts: {
-    en: "Timed out", de: "Zeitüberschreitung", fr: "Expirées", it: "Scadute", es: "Agotadas",
-  },
-  debug_traffic_late: {
-    en: "Answered late", de: "Verspätet beantwortet", fr: "Réponse tardive",
-    it: "Risposta tardiva", es: "Respuesta tardía",
-  },
-  debug_traffic_lost: {
-    en: "Lost", de: "Verloren", fr: "Perdues", it: "Perse", es: "Perdidas",
-  },
-  debug_traffic_errors: {
-    en: "Error answers", de: "Fehlerantworten", fr: "Réponses d'erreur",
-    it: "Risposte di errore", es: "Respuestas de error",
-  },
-  debug_traffic_unmatched: {
-    en: "Unmatched answers", de: "Nicht zuordenbare Antworten", fr: "Réponses sans requête",
-    it: "Risposte senza richiesta", es: "Respuestas sin solicitud",
-  },
-  debug_traffic_rtt: {
-    en: "Round trip", de: "Antwortzeit", fr: "Aller-retour", it: "Andata e ritorno", es: "Ida y vuelta",
-  },
-  debug_traffic_gap: {
-    en: "Longest silence", de: "Längste Funkstille", fr: "Plus long silence",
-    it: "Silenzio più lungo", es: "Silencio más largo",
-  },
-  debug_traffic_gaps: {
-    en: "Silences of 15 s or more", de: "Funkstillen ab 15 s", fr: "Silences de 15 s ou plus",
-    it: "Silenzi di 15 s o più", es: "Silencios de 15 s o más",
-  },
-  debug_traffic_connections: {
-    en: "Connects / disconnects", de: "Verbindungen / Abbrüche", fr: "Connexions / déconnexions",
-    it: "Connessioni / disconnessioni", es: "Conexiones / desconexiones",
-  },
-  debug_traffic_volume: {
-    en: "Sent / received", de: "Gesendet / empfangen", fr: "Envoyé / reçu",
-    it: "Inviato / ricevuto", es: "Enviado / recibido",
-  },
-  debug_traffic_frames: {
-    en: "Recent messages, newest first", de: "Letzte Nachrichten, neueste zuerst",
-    fr: "Derniers messages, les plus récents d'abord", it: "Ultimi messaggi, i più recenti prima",
-    es: "Últimos mensajes, los más recientes primero",
-  },
-  debug_traffic_empty: {
-    en: "No messages recorded yet.", de: "Noch keine Nachrichten aufgezeichnet.",
-    fr: "Aucun message enregistré pour l'instant.", it: "Nessun messaggio registrato finora.",
-    es: "Aún no se ha registrado ningún mensaje.",
-  },
-  debug_traffic_refresh: {
-    en: "Refresh", de: "Aktualisieren", fr: "Actualiser", it: "Aggiorna", es: "Actualizar",
-  },
-  debug_traffic_reset: {
-    en: "Reset", de: "Zurücksetzen", fr: "Réinitialiser", it: "Azzera", es: "Restablecer",
-  },
-  debug_traffic_log: {
-    en: "Write to the log", de: "Ins Protokoll schreiben", fr: "Écrire dans le journal",
-    it: "Scrivi nel registro", es: "Escribir en el registro",
-  },
-  debug_traffic_log_live: {
-    en: "Each message is written to {link}.", de: "Jede Nachricht wird nach {link} geschrieben.",
-    fr: "Chaque message est écrit dans {link}.", it: "Ogni messaggio viene scritto in {link}.",
-    es: "Cada mensaje se escribe en {link}.",
-  },
-  debug_traffic_copied: {
-    en: "Traffic copied to the clipboard ✓", de: "Datenverkehr in die Zwischenablage kopiert ✓",
-    fr: "Trafic copié dans le presse-papiers ✓", it: "Traffico copiato negli appunti ✓",
-    es: "Tráfico copiado al portapapeles ✓",
-  },
-  debug_report_copied: {
-    en: "Report copied to the clipboard ✓",
-    de: "Bericht in die Zwischenablage kopiert ✓",
-    fr: "Rapport copié dans le presse-papiers ✓",
-    it: "Rapporto copiato negli appunti ✓",
-    es: "Informe copiado al portapapeles ✓",
-  },
-  debug_report_copy_failed: {
-    en: "Could not copy: {error}",
-    de: "Kopieren fehlgeschlagen: {error}",
-    fr: "Copie impossible : {error}",
-    it: "Copia non riuscita: {error}",
-    es: "No se pudo copiar: {error}",
-  },
   action_library: {
     en: "Action Library", de: "Aktionsbibliothek", fr: "Bibliothèque d'actions",
     it: "Libreria azioni", es: "Biblioteca de acciones",
@@ -1688,11 +1506,25 @@ export const STRINGS = {
     it: "Assegna dispositivo…", es: "Asignar dispositivo…",
   },
   assign_device_desc: {
-    en: "The page's device: ${_device} in its title and buttons reads it, and the page can later be moved to another device.",
-    de: "Das Gerät der Seite: ${_device} in Titel und Tasten liest es, und die Seite lässt sich später auf ein anderes Gerät umstellen.",
-    fr: "L'appareil de la page : ${_device} dans son titre et ses boutons le lit, et la page peut ensuite passer à un autre appareil.",
-    it: "Il dispositivo della pagina: ${_device} nel titolo e nei pulsanti lo legge, e la pagina può poi passare a un altro dispositivo.",
-    es: "El dispositivo de la página: ${_device} en su título y botones lo lee, y la página puede pasar después a otro dispositivo.",
+    en: "Pick the device this page controls. Its buttons follow along when you change it later.",
+    de: "Wähle das Gerät, das diese Seite steuert. Ihre Tasten ziehen mit, wenn du es später änderst.",
+    fr: "Choisissez l'appareil que cette page commande. Ses boutons suivent si vous le changez plus tard.",
+    it: "Scegli il dispositivo che questa pagina controlla. I suoi pulsanti lo seguono se lo cambi in seguito.",
+    es: "Elige el dispositivo que controla esta página. Sus botones lo siguen si lo cambias más tarde.",
+  },
+  remove_device: {
+    en: "Remove device", de: "Gerät entfernen", fr: "Retirer l'appareil",
+    it: "Rimuovi dispositivo", es: "Quitar dispositivo",
+  },
+  device_removed: {
+    en: "{name} no longer has a device", de: "{name} hat kein Gerät mehr",
+    fr: "{name} n'a plus d'appareil", it: "{name} non ha più un dispositivo",
+    es: "{name} ya no tiene dispositivo",
+  },
+  remove_device_failed: {
+    en: "Could not remove the device: {error}", de: "Gerät konnte nicht entfernt werden: {error}",
+    fr: "Impossible de retirer l'appareil : {error}", it: "Impossibile rimuovere il dispositivo: {error}",
+    es: "No se pudo quitar el dispositivo: {error}",
   },
   assign_device_confirm: {
     en: "Assign", de: "Zuweisen", fr: "Attribuer", it: "Assegna", es: "Asignar",
@@ -1721,6 +1553,13 @@ export const STRINGS = {
     fr: "La mise en page « {name} » d'origine de cette page n'est plus disponible",
     it: "Il modello \"{name}\" da cui è stata creata questa pagina non è più disponibile",
     es: "La plantilla \"{name}\" de la que se creó esta página ya no está disponible",
+  },
+  page_limit_reached: {
+    en: "This remote is limited to {count} pages",
+    de: "Diese Fernbedienung ist auf {count} Seiten begrenzt",
+    fr: "Cette télécommande est limitée à {count} pages",
+    it: "Questo telecomando è limitato a {count} pagine",
+    es: "Este mando está limitado a {count} páginas",
   },
   page_duplicated: {
     en: "{name} duplicated", de: "{name} dupliziert",
@@ -1905,6 +1744,12 @@ export const STRINGS = {
   },
   back: {
     en: "Back", de: "Zurück", fr: "Retour", it: "Indietro", es: "Atrás",
+  },
+  next: {
+    en: "Next", de: "Weiter", fr: "Suivant", it: "Avanti", es: "Siguiente",
+  },
+  new_device: {
+    en: "New device", de: "Neues Gerät", fr: "Nouvel appareil", it: "Nuovo dispositivo", es: "Nuevo dispositivo",
   },
   badge_unused: {
     en: "unused", de: "nicht verwendet", fr: "non utilisé",
@@ -2100,6 +1945,18 @@ export const STRINGS = {
   target_device: {
     en: "Target device", de: "Zielgerät", fr: "Appareil cible",
     it: "Dispositivo di destinazione", es: "Dispositivo de destino",
+  },
+  search_devices: {
+    en: "Search devices…", de: "Geräte suchen…", fr: "Rechercher un appareil…",
+    it: "Cerca dispositivi…", es: "Buscar dispositivos…",
+  },
+  search_hubs: {
+    en: "Search hubs…", de: "Hubs suchen…", fr: "Rechercher un hub…",
+    it: "Cerca hub…", es: "Buscar hubs…",
+  },
+  // A badge on the picker row a page is on now.
+  target_current: {
+    en: "Current", de: "Aktuell", fr: "Actuel", it: "Attuale", es: "Actual",
   },
   loading_hubs: {
     en: "Loading…", de: "Wird geladen…", fr: "Chargement…",
@@ -2811,49 +2668,26 @@ export const STRINGS = {
     it: "Una pagina per tipo di preferito: radio, playlist, album, audiolibri e altro",
     es: "Una página por tipo de favorito: radio, listas, álbumes, audiolibros y más",
   },
-  random_pages: {
-    en: "Random pages", de: "Zufallsseiten", fr: "Pages aléatoires",
-    it: "Pagine casuali", es: "Páginas aleatorias",
-  },
-  random_pages_desc: {
-    en: "Test pages titled \"page <id>\", with random icons on every button.",
-    de: "Testseiten mit dem Titel „page <id>“ und zufälligen Icons auf allen Tasten.",
-    fr: "Pages de test intitulées « page <id> », avec des icônes aléatoires sur chaque touche.",
-    it: "Pagine di prova intitolate \"page <id>\", con icone casuali su ogni tasto.",
-    es: "Páginas de prueba tituladas \"page <id>\", con iconos aleatorios en cada botón.",
-  },
-  random_pages_count: {
-    en: "Number of pages", de: "Anzahl der Seiten", fr: "Nombre de pages",
-    it: "Numero di pagine", es: "Número de páginas",
-  },
-  random_pages_images: {
-    en: "Number of different images", de: "Anzahl verschiedener Bilder",
-    fr: "Nombre d'images différentes", it: "Numero di immagini diverse",
-    es: "Número de imágenes distintas",
-  },
-  random_pages_tooltip: {
-    en: "Tooltip (same on every button)", de: "Tooltip (auf allen Tasten gleich)",
-    fr: "Infobulle (identique sur chaque touche)", it: "Tooltip (uguale su ogni tasto)",
-    es: "Tooltip (igual en cada botón)",
-  },
-  random_pages_create: {
-    en: "Create", de: "Erstellen", fr: "Créer", it: "Crea", es: "Crear",
-  },
-  random_pages_added: {
-    en: "{count} pages added", de: "{count} Seiten hinzugefügt", fr: "{count} pages ajoutées",
-    it: "{count} pagine aggiunte", es: "{count} páginas añadidas",
-  },
-  random_pages_failed: {
-    en: "Could not add the pages: {error}", de: "Seiten konnten nicht hinzugefügt werden: {error}",
-    fr: "Impossible d'ajouter les pages : {error}", it: "Impossibile aggiungere le pagine: {error}",
-    es: "No se pudieron añadir las páginas: {error}",
-  },
   title_device_hint: {
     en: "<code>${_device}</code> shows the name of this page's device, <code>${_device.…}</code> one of its attributes (e.g. <code>${_device.volume_level}</code>).",
     de: "<code>${_device}</code> zeigt den Namen des Geräts dieser Seite, <code>${_device.…}</code> eines seiner Attribute (z. B. <code>${_device.volume_level}</code>).",
     fr: "<code>${_device}</code> affiche le nom de l'appareil de cette page, <code>${_device.…}</code> l'un de ses attributs (p. ex. <code>${_device.volume_level}</code>).",
     it: "<code>${_device}</code> mostra il nome del dispositivo di questa pagina, <code>${_device.…}</code> uno dei suoi attributi (ad es. <code>${_device.volume_level}</code>).",
     es: "<code>${_device}</code> muestra el nombre del dispositivo de esta página, <code>${_device.…}</code> uno de sus atributos (p. ej. <code>${_device.volume_level}</code>).",
+  },
+  variables_off_field_hint: {
+    en: "Variables are off: the remote shows {mark} here instead.",
+    de: "Variablen sind aus: Die Fernbedienung zeigt hier stattdessen {mark}.",
+    fr: "Les variables sont désactivées : la télécommande affiche {mark} à la place.",
+    it: "Le variabili sono disattivate: il telecomando mostra invece {mark}.",
+    es: "Las variables están desactivadas: el mando muestra {mark} en su lugar.",
+  },
+  variables_off_title_hint: {
+    en: "Variables are off: the remote leaves them empty in the title.",
+    de: "Variablen sind aus: Im Titel lässt die Fernbedienung sie leer.",
+    fr: "Les variables sont désactivées : la télécommande les laisse vides dans le titre.",
+    it: "Le variabili sono disattivate: il telecomando le lascia vuote nel titolo.",
+    es: "Las variables están desactivadas: el mando las deja vacías en el título.",
   },
   variable_hint: {
     en: "<code>${sensor.…}</code> shows that entity's current value, <code>${sensor.….attribute}</code> one of its attributes.",

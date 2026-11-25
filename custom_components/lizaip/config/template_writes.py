@@ -17,6 +17,7 @@ from .blueprint import async_get_blueprint
 from .const import EMPTY_BUTTON, PAGE_SUBPAGE_KEY
 from .events import fire_config_changed
 from .listeners import refresh_state_listener, schedule_push_rescan
+from .page_limit import PAGE_LIMIT_CODE, page_room_error
 from .page_templates import (
     ComposedPage,
     TEMPLATE_VERSION,
@@ -24,7 +25,22 @@ from .page_templates import (
     is_unbound,
     template_pages,
 )
+from .page_templates.compose import TEMPLATE_VARIABLES_KEY
 from .page_templates.parts import paginated_placeholder
+
+
+class TemplatePageError(Exception):
+    """A template that cannot become a page; ``code`` is the websocket error code."""
+
+    def __init__(self, message: str, code: str = "template_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def ensure_room(hass: HomeAssistant, entry_id: str, stored: list[Any], adding: int) -> None:
+    """Refuse *adding* pages the remote's page limit has no room for."""
+    if error := page_room_error(hass, entry_id, len(stored), len(stored) + adding):
+        raise TemplatePageError(error, PAGE_LIMIT_CODE)
 
 
 async def async_store_template_pages(
@@ -32,7 +48,7 @@ async def async_store_template_pages(
     entry_id: str,
     device_id: str,
     template_id: str,
-    template: dict,
+    template: dict[str, Any],
     composed: list[ComposedPage],
     *,
     target_entity: str = "",
@@ -42,6 +58,7 @@ async def async_store_template_pages(
     instance: int | None = None,
     insert_after: int | None = None,
     back_to_page: int | None = None,
+    variables: bool = True,
 ) -> int:
     """Write a template's composed pages to a remote; return the first page's id.
 
@@ -49,19 +66,17 @@ async def async_store_template_pages(
     the parts a paginated page grows -- after the page *insert_after*, which
     also seats a page made beside the one that asked for it.
     *back_to_page* gives the first page a hardware Back that leads there --
-    what **Add options…** makes for a button.
+    what **Add options…** makes for a button. A set made without *variables*
+    says so, and the parts it grows later are made without them too.
 
     All of them land in one pass: the action library, the pages themselves,
     and every button the template leaves alone written empty. Then the remote,
     the state listener and the push triggers are told, once.
     """
     store = get_store(hass)
-
-    await store.async_merge_actions(
-        device_id, [action for page in composed for action in page.actions],
-    )
-
     pages = await store.async_get_pages(device_id)
+    # Checked again on the pages it adds to: others may have come while it was composed.
+    ensure_room(hass, entry_id, pages, len(composed))
     existing_ids = {p["id"] for p in pages if isinstance(p, dict) and "id" in p}
     main_page_id = composed[0].page_id
     bound = not is_unbound(template)
@@ -90,6 +105,7 @@ async def async_store_template_pages(
                 **({"page": page.name} if page.name else {}),
                 **({"part": page.part} if page.part > 1 else {}),
                 **({"instance": instance or main_page_id} if set_of_pages else {}),
+                **({TEMPLATE_VARIABLES_KEY: False} if not variables else {}),
                 **({"target": {
                     "entity_id": target_entity,
                     **({"device": target_device} if target_device else {}),
@@ -108,6 +124,9 @@ async def async_store_template_pages(
         if insert_after is not None:
             insert_after = page.page_id
     await store.async_set_pages(device_id, pages)
+    await store.async_merge_actions(
+        device_id, [action for page in composed for action in page.actions],
+    )
 
     bp = await async_get_blueprint(hass, entry_id)
     all_keys = [btn["key"] for btn in bp.get("buttons", [])]

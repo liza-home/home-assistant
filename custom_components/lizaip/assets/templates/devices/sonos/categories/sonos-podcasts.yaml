@@ -29,7 +29,7 @@ pages:
     paginate: podcast
     max_parts: 3
     # The page title: the Sonos mark and what the page holds.
-    title: "logo:sonos + podcasts"
+    title: "logo:sonos podcasts"
     buttons:
       button_1: "@podcast[1]"
       button_2: "@podcast[2]"

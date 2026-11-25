@@ -24,7 +24,6 @@ export const STYLES_BASE = `
        HA themes -- the required luminance ranges do not overlap -- so each is
        blended toward --primary-text-color. Text only; fills stay unblended. */
     --liza-accent-text: color-mix(in srgb, var(--primary-color, #03a9f4) 50%, var(--primary-text-color, #212121));
-    --liza-success-text: color-mix(in srgb, #4caf50 60%, var(--primary-text-color, #212121));
     --liza-danger-text: color-mix(in srgb, #f44336 78%, var(--primary-text-color, #212121));
     --liza-error-text: color-mix(in srgb, var(--error-color, #db4437) 70%, var(--primary-text-color, #212121));
     /* HA's amber is the weakest semantic colour (#ffa600 is 1.96:1 on white),
@@ -138,28 +137,14 @@ export const STYLES_BASE = `
   .title-text {
     overflow-wrap: anywhere;
   }
-  /* Empty (and so invisible) unless the memory switch is on. */
-  .toolbar-memory {
-    display: flex;
-    flex-wrap: wrap;
+  /* Another integration's readout beside the name (the Devel memory meters).
+     It draws itself in the toolbar's text colour. */
+  .toolbar-devel {
+    display: inline-flex;
     align-items: center;
-    gap: 4px 12px;
-    margin-left: 16px;
-    font-size: var(--liza-font-13);
+    margin-left: 12px;
+    min-width: 0;
   }
-  .mem-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-  .mem-bar {
-    display: inline-block;
-    width: 56px; height: 8px;
-    border-radius: 4px;
-    overflow: hidden;
-    background: color-mix(in srgb, var(--app-header-text-color, #fff) 25%, transparent);
-  }
-  .mem-fill { display: block; height: 100%; background: var(--app-header-text-color, #fff); }
-  /* The percentage beside each bar carries the value; colour only adds to it. */
-  .mem-bar.warn .mem-fill { background: #ffb300; }
-  .mem-bar.crit .mem-fill { background: #ff5252; }
-  .mem-item:has(.mem-bar.unknown) { opacity: 0.6; }
   /* ha-tab-group draws the tabs and the active marker. Its track is the
      toolbar's own bottom edge, so it draws none of its own. */
   .toolbar-tabs {
@@ -318,12 +303,8 @@ export const STYLES_BASE = `
     font-size: 9px; font-weight: 500;
   }
 
-  .status-badge { display: flex; align-items: center; gap: 6px; font-size: var(--liza-font-s); font-weight: 500; flex-shrink: 0; margin-left: 12px; }
-  .status-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .status-badge.online .dot { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
-  .status-badge.online { color: var(--liza-success-text); }
-  .status-badge.offline .dot { background: #f44336; box-shadow: 0 0 4px #f44336; }
-  .status-badge.offline { color: var(--liza-danger-text); }
+  /* The toolbar pill, reused: there it sits before the title, here after it. */
+  .device-item .toolbar-status { margin: 0 0 0 12px; }
 
   /* Every picture the remote is sent, wherever the panel shows one. The panel
      asks imgserv to keep the alpha, so the backdrop is the panel's to supply:

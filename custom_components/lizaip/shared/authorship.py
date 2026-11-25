@@ -60,7 +60,7 @@ def as_system() -> Iterator[None]:
         current_user.reset(token)
 
 
-def _runnable(assign: Mapping) -> str:
+def _runnable(assign: Mapping[str, Any]) -> str:
     """A comparable digest of what *assign* runs."""
     picked = {k: assign[k] for k in _RUNNABLE_KEYS if k in assign}
     return json.dumps(_without_stamps(picked), sort_keys=True, default=str)
@@ -74,28 +74,29 @@ def _without_stamps(value: Any) -> Any:
     return value
 
 
-def _stamped(assign: Mapping, author: str | None) -> dict:
+def _stamped(assign: Mapping[str, Any], author: str | None) -> dict[str, Any]:
     """*assign* with *author* as its only stamp, nested overrides included."""
-    clean = _without_stamps(assign)
+    clean: dict[str, Any] = _without_stamps(assign)
     if author:
         clean[AUTHOR_KEY] = author
     return clean
 
 
-def stamp_page(old: Mapping | None, new: Mapping) -> dict:
+def stamp_page(old: Mapping[str, Any] | None, new: Mapping[str, Any]) -> dict[str, Any]:
     """*new*'s buttons, stamped against *old* by ``current_user``."""
     old = old if isinstance(old, Mapping) else {}
     user = current_user.get()
     # Steps moved or copied from another button keep that button's standing;
     # when the same steps exist with and without a stamp, the stamp wins.
     by_content: dict[str, str | None] = {}
+    prev: Any
     for prev in old.values():
         if isinstance(prev, Mapping):
             digest = _runnable(prev)
             if prev.get(AUTHOR_KEY) or digest not in by_content:
                 by_content[digest] = prev.get(AUTHOR_KEY) or by_content.get(digest)
 
-    stamped: dict = {}
+    stamped: dict[str, Any] = {}
     for key, assign in new.items():
         if not isinstance(assign, Mapping):
             stamped[key] = assign
@@ -119,7 +120,7 @@ def stamp_page(old: Mapping | None, new: Mapping) -> dict:
     return stamped
 
 
-def stamp_all(page: Mapping, user: Any, *, bound_only: bool = False) -> dict:
+def stamp_all(page: Mapping[str, Any], user: Any, *, bound_only: bool = False) -> dict[str, Any]:
     """Every button on *page* as written by *user* (a restore, a retarget).
 
     *bound_only* limits it to buttons with a ``dynamic`` binding: retargeting a

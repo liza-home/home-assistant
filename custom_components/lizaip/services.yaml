@@ -20,14 +20,6 @@ firmware_update:
         config_entry:
           integration: lizaip
 
-clear_device_pages:
-  fields:
-    config_entry_id:
-      required: false
-      selector:
-        config_entry:
-          integration: lizaip
-
 launch_app:
   fields:
     entity_id:
@@ -51,14 +43,11 @@ refresh_dynamic_sources:
           integration: lizaip
 
 goto_page:
-  # All three keys are needed, and dropping any one fails silently: without
-  # `device` the action is not offered on the lizaIP device, without `entity`
-  # core's matcher accepts every entity, and without `primary_entities_only`
-  # it skips the remote's entities (all of them have an entity category).
+  # The picker offers a device when one of its entities matches `entity`, so
+  # the remote is offered without a `device` filter (hassfest forbids one). Keep
+  # `primary_entities_only: false`: every lizaIP entity has an entity category.
   target:
     entity:
-      integration: lizaip
-    device:
       integration: lizaip
     primary_entities_only: false
   # The page is named by its id, not its title: titles are duplicable and get
@@ -75,16 +64,21 @@ goto_page:
           mode: box
 
 send_ir:
-  # Same three target keys as goto_page, for the same reasons.
-  target:
-    entity:
-      integration: lizaip
-    device:
-      integration: lizaip
-    primary_entities_only: false
+  # Send through one lizaIP (via), either a key of an IR device or an IR code.
   fields:
-    ir_blob:
+    via:
       required: true
+      selector:
+        device:
+          integration: lizaip
+          model: lizaIP
+    entity_id:
+      selector:
+        entity:
+          filter:
+            integration: lizaip
+            domain: button
+    ir_blob:
       example: "aGFsbG93ZWx0"
       selector:
         text:

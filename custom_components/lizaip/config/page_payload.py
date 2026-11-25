@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -23,7 +23,8 @@ from ..shared.assignment import longtouch_steps
 from ..shared.icon_urls import resolve_icon_url, resolve_title_url, resolve_tooltip_url
 from ..shared.logs import device_logger
 from ..shared.i18n import get_ui_language, language_scope
-from ..shared.tokens import page_scope, substitute_device_token
+from ..shared.variables_calc import variables_enabled, variables_scope
+from ..shared.tokens import empty_variables, page_scope, resolve_image_tokens
 from ..state_icon import (
     IconStyle,
     IconStyleOptions,
@@ -41,13 +42,15 @@ from .const import step_service
 from .internal_commands import build_page_context
 from .internal_commands import resolve_action as resolve_internal_action
 from .text_style import longtouch_enabled, settings_theme, toggle_enabled
+from ..shared.icon_defaults import IconDefaults
+from ..shared.theme import Theme
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def _button_icon_style(
     hass: HomeAssistant | None,
-    assign: dict,
+    assign: dict[str, Any],
     page_color: str,
     style_options: IconStyleOptions | None = None,
 ) -> IconStyle:
@@ -68,14 +71,14 @@ def _button_icon_style(
     )
 
 
-def compute_page_hash(page_data: dict) -> int:
+def compute_page_hash(page_data: dict[str, Any]) -> int:
     """Compute a 32-bit hash for a page's content."""
     raw = json.dumps(page_data, sort_keys=True, separators=(",", ":"))
     digest = hashlib.md5(raw.encode()).hexdigest()
     return int(digest[:8], 16)  # 32-bit integer
 
 
-def step_targets_entry(hass: HomeAssistant, entry: ConfigEntry, config) -> bool:
+def step_targets_entry(hass: HomeAssistant, entry: ConfigEntry, config: Any) -> bool:
     """Whether a stored step's target names the remote whose page this is.
 
     A button lives on one remote, and a device-local action is executed by that
@@ -89,7 +92,7 @@ def step_targets_entry(hass: HomeAssistant, entry: ConfigEntry, config) -> bool:
     """
     step = config[0] if isinstance(config, list) and config and isinstance(config[0], dict) else {}
 
-    payload: dict = {}
+    payload: dict[str, Any] = {}
     target = step.get("target")
     if isinstance(target, dict):
         payload.update(target)
@@ -112,19 +115,19 @@ class SyncContext:
     :func:`build_page_payload` call.
     """
 
-    text_settings: dict
+    text_settings: dict[str, dict[str, Any]]
     internal_context: Any
     style_options: IconStyleOptions
-    service_icons: dict
+    service_icons: dict[str, Any]
     #: The action library's names by id, so a label that is only its button's
     #: library name can still be told from one somebody chose.
-    library_names: dict = field(default_factory=dict)
+    library_names: dict[str, Any] = field(default_factory=dict)
     #: Button assignments by page id, for pages that are not in the store.
     #: Left None, every page's buttons are read from the store as usual.
-    assignments: dict[int, dict] | None = None
+    assignments: dict[int, dict[str, Any]] | None = None
 
     @property
-    def theme(self):
+    def theme(self) -> Theme:
         """The remote's theme, the default one when it has picked none."""
         return settings_theme(self.text_settings)
 
@@ -133,12 +136,12 @@ class SyncContext:
         return self.theme.theme_id
 
     @property
-    def icons(self):
+    def icons(self) -> IconDefaults:
         """The icon table this remote reads: the shipped one under its theme."""
         return self.theme.icons
 
     @property
-    def tooltip_style(self) -> dict:
+    def tooltip_style(self) -> dict[str, Any]:
         return self.text_settings["tooltip"]
 
     @property
@@ -153,9 +156,9 @@ class SyncContext:
 async def build_sync_context(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    all_pages: list[dict] | None = None,
+    all_pages: list[dict[str, Any]] | None = None,
     *,
-    assignments: dict[int, dict] | None = None,
+    assignments: dict[int, dict[str, Any]] | None = None,
 ) -> SyncContext:
     """Everything a page payload needs that is the same for every page.
 
@@ -174,10 +177,11 @@ async def build_sync_context(
     that property: the next sync reads the registry again.
 
     *assignments* carries the buttons of pages the store does not hold -- the
-    placeholders of :mod:`default_pages`.
+    placeholders of :mod:`welcome_page`.
     """
     store = get_store(hass)
-    device_id = entry_device_id(entry)
+    # Only a connected remote is synced or answered; its id is known by then.
+    device_id = cast(str, entry_device_id(entry))
 
     return SyncContext(
         text_settings=await store.async_get_settings(device_id),
@@ -193,15 +197,17 @@ async def build_page_payload(
     hass: HomeAssistant,
     entry: ConfigEntry,
     page_id: int,
-    page_config: dict,
-    all_pages: list[dict] | None = None,
+    page_config: dict[str, Any],
+    all_pages: list[dict[str, Any]] | None = None,
     *,
     ctx: SyncContext | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build a set_page data payload, its tiles reading ``${_device}`` as the page has it."""
     template = page_config.get("template") if isinstance(page_config, dict) else None
     # `{translate: …}` is drawn in this remote's language.
-    with page_scope(template), language_scope(get_ui_language(hass, entry)):
+    with page_scope(template), language_scope(get_ui_language(hass, entry)), variables_scope(
+        getattr(entry, "options", None),
+    ):
         return await _build_page_payload_in_scope(
             hass, entry, page_id, page_config, all_pages, ctx=ctx,
         )
@@ -211,11 +217,11 @@ async def _build_page_payload_in_scope(
     hass: HomeAssistant,
     entry: ConfigEntry,
     page_id: int,
-    page_config: dict,
-    all_pages: list[dict] | None = None,
+    page_config: dict[str, Any],
+    all_pages: list[dict[str, Any]] | None = None,
     *,
     ctx: SyncContext | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build a set_page data payload from the store.
 
     Returns a dict matching the protocol's set_page.data shape:
@@ -366,7 +372,7 @@ async def _build_page_payload_in_scope(
         # Determine action type. A device-local ("internal") command is executed
         # by the remote itself; everything else travels to HA as a button event.
         action_type = "ha_event"  # Default — HA handles via automations
-        action_params = {}
+        action_params: dict[str, Any] = {}
 
         internal = resolve_internal_action(
             internal_service, step_data, internal_context
@@ -412,14 +418,11 @@ async def _build_page_payload_in_scope(
             })
 
     # Page-level properties — img_title is always a URL to a PNG image
-    # Entity variables resolve as they do on a button; one with no value leaves
-    # the title strip blank rather than drawing half a name.
-    # `${_device}` first: what it names can itself hold no variable.
-    title = with_resolved_icon(
-        {"icon": substitute_device_token(
-            page_config.get("title", ""), hass, page_config.get("template"),
-        )}, hass,
-    ).get("icon") or ""
+    # A switched-off variable contributes no text to the title, but remains stored.
+    title = page_config.get("title", "")
+    if not variables_enabled():
+        title = empty_variables(title)
+    title = resolve_image_tokens(title, hass) or ""
     img_title = resolve_title_url(
         title, page_color, text_settings["title"], theme_id,
     )

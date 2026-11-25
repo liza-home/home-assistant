@@ -21,7 +21,7 @@ from .connection import LizaIPConnection
 from ..const import DOMAIN
 from ..shared.logs import device_logger
 from .const import LIZAIP_HELLO_EVENT, MODEL_ID
-from .entity import LizaIPEntity
+from ..entity import LizaIPEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,12 +102,12 @@ def _trusted_asset(url: Any) -> bool:
     return asset.scheme in ("http", "https") and bool(asset.host) and asset.host == api.host
 
 
-def _firmware_asset_url(release: dict) -> str | None:
+def _firmware_asset_url(release: dict[str, Any]) -> str | None:
     """The OTA image of a release: its .bin asset, or else its .tar one."""
     fallback: str | None = None
     for asset in release.get("assets", []):
         name = asset.get("name", "")
-        url = asset.get("browser_download_url") or asset.get("url")
+        url: str | None = asset.get("browser_download_url") or asset.get("url")
         if not _trusted_asset(url):
             if url:
                 _LOGGER.warning(
@@ -173,7 +173,7 @@ class LizaIPFirmwareUpdate(LizaIPEntity, UpdateEntity):
         self._ota_status: str | None = None
         self._firmware_url: str | None = None
         self._attr_in_progress: bool = False
-        self._first_check_task: asyncio.Task | None = None
+        self._first_check_task: asyncio.Task[Any] | None = None
 
     async def async_added_to_hass(self) -> None:
         """Register availability + trigger first firmware check."""

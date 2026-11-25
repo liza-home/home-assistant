@@ -12,7 +12,7 @@
  *
  *     /lizaip                     the device list
  *     /lizaip/<entry_id>          a remote, default tab
- *     /lizaip/<entry_id>/<tab>    pages|settings|debug
+ *     /lizaip/<entry_id>/<tab>    pages|settings|devel
  *
  * The remote is named by id rather than by name, so that a rename does not
  * break a link someone saved. The walk stops at the tab: a page and a control
@@ -35,7 +35,7 @@ export const ROUTE_MEMORY_KEY = "lizaip:last-route";
  * tab, and `/lizaip/<entry>/buttons` parses through the same default that an
  * absent tab does.
  */
-const TABS = new Set(["buttons", "settings", "debug"]);
+const TABS = new Set(["buttons", "settings", "devel"]);
 
 // Module scope on purpose: a navigation entry belongs to the document, and so
 // does one evaluation of this module.
@@ -401,11 +401,10 @@ export const RouteMixin = {
       }
     }
 
-    // "debug" is not merely hidden on a stable build, it is stripped, so a
-    // link to it pasted into a bug report and opened on a release would
-    // otherwise render a panel with no tab highlighted at all.
+    // "devel" exists only where lizaip_devel is installed, so a link to it
+    // opened elsewhere would otherwise render a panel with no tab highlighted.
     const tab = route.tab;
-    if (tab && (tab !== "debug" || this._debugTools)) this._activeTab = tab;
+    if (tab && (tab !== "devel" || this._develPanel())) this._activeTab = tab;
     else this._activeTab = "buttons";
     // The settings view decides whether the name is one of its own; an
     // unknown one leaves the remembered section standing.
@@ -418,10 +417,9 @@ export const RouteMixin = {
    * Run the entry work the tab a route landed on would have had from a click.
    *
    * `_switchTab` is where a tab's data is fetched -- the settings' fonts and
-   * icon options, the actions tab's usage counts, the debug tab's log-port
-   * state. A route sets `_activeTab` directly, so without this a deep link
-   * renders the right tab over no data, and the debug tab shows what it read
-   * for the previous remote.
+   * icon options, the actions tab's usage counts, the Devel tab's
+   * element. A route sets `_activeTab` directly, so without this a deep link
+   * renders the right tab over no data.
    *
    * Separate from `_routeApply` because `_init` has to call it after
    * `_loadAll`. Not `_switchTab` itself: that flushes an auto-save and
@@ -433,11 +431,8 @@ export const RouteMixin = {
       case "settings":
         this._enterSettingsTab?.();
         break;
-      case "debug":
-        // The guard in `_routeApply` has already ruled out a build without the
-        // tab, so reaching here with no `_enterDebugTab` would be a bug rather
-        // than a stripped release.
-        this._enterDebugTab?.();
+      case "devel":
+        this._develError = false;
         break;
       default:
         this._editingActionIdx = -1;

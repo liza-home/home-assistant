@@ -1,13 +1,21 @@
 """Shared entity base for lizaIP platforms."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .connection import LizaIPConnection
+from .device.connection import LizaIPConnection
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.entity import Entity as _MixinBase
+else:
+    # A plain mixin at runtime; the concrete platform class supplies Entity.
+    _MixinBase = object
 
 
-class LizaIPEntity:
+class LizaIPEntity(_MixinBase):
     """Mixin providing device info and connection-availability tracking."""
 
     _attr_has_entity_name = True

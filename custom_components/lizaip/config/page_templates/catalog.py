@@ -99,10 +99,18 @@ def _text_entry(entry: dict[str, Any], data: dict[str, Any], field: str, default
 
     A translated one travels as ``<field>_key``, which the panel looks up; the
     plain field then holds *default*, what a reader without the table sees.
+    One spelt out per language travels as ``<field>_i18n``.
     """
     value = data.get(field)
     key = translate_key(value)
-    if key:
+    if isinstance(value, dict) and not key and value and all(
+        isinstance(k, str) and len(k) == 2 for k in value
+    ):
+        # `{en: …, de: …}`: words a template brings for itself, from outside
+        # the panel's table. English is what a reader without the language sees.
+        entry[field] = str(value.get("en") or default)
+        entry[f"{field}_i18n"] = {k: str(v) for k, v in value.items()}
+    elif key:
         entry[field] = translate_fallback(value, default)
         entry[f"{field}_key"] = key
     else:
@@ -239,7 +247,7 @@ _GROUP_FILE = "_group.yaml"
 #: Everything ``_group.yaml`` may say. Anything else is a typo worth a warning:
 #: a misspelt ``name`` is silently the folder name otherwise, which reads as
 #: "the file was ignored" and is tedious to chase down.
-_GROUP_KEYS = frozenset({"name", "icon", "description", "primary"})
+_GROUP_KEYS = frozenset({"name", "icon", "description", "primary", "needs_variables"})
 #: The user's own templates: ``<config>/lizaip/templates``, set at setup.
 #: Outside the integration, so an update does not wipe them. Read after
 #: ``assets/templates/`` as one more folder, :data:`USER_TEMPLATES_GROUP`, with
@@ -254,6 +262,28 @@ def _user_options_dir() -> str | None:
     if not _USER_TEMPLATES_DIR:
         return None
     return os.path.join(os.path.dirname(_USER_TEMPLATES_DIR), "options")
+
+
+#: Template folders other integrations bring while they are loaded, by owner.
+#: Read like ``assets/templates/``: a folder at their top is a button on the
+#: add-page dialog's first screen. ``lizaip_devel`` offers its tools this way.
+_EXTRA_TEMPLATE_DIRS: dict[str, str] = {}
+
+
+def register_template_dir(owner: str, path: str) -> None:
+    """Offer the templates under *path* while *owner* is loaded."""
+    global _LISTED
+    _EXTRA_TEMPLATE_DIRS[owner] = path
+    _LISTED = None
+    _TEMPLATE_CACHE.clear()
+
+
+def unregister_template_dir(owner: str) -> None:
+    """Stop offering *owner*'s templates."""
+    global _LISTED
+    if _EXTRA_TEMPLATE_DIRS.pop(owner, None) is not None:
+        _LISTED = None
+        _TEMPLATE_CACHE.clear()
 
 
 def set_user_templates_dir(path: str | None) -> None:
@@ -308,9 +338,13 @@ def _template_dirs() -> list[tuple[str, tuple[str, ...]]]:
     # Loose at the top level like the templates; a folder of its own is
     # `options/<name>`, so it never merges with a template folder of that name.
     walk(OPTIONS_DIR, (), OPTION_FOLDER_PREFIX)
+    for owner in sorted(_EXTRA_TEMPLATE_DIRS):
+        walk(_EXTRA_TEMPLATE_DIRS[owner], ())
     if _USER_TEMPLATES_DIR:
         walk(_USER_TEMPLATES_DIR, USER_TEMPLATES_GROUP)
-        walk(_user_options_dir(), USER_TEMPLATES_GROUP, OPTION_FOLDER_PREFIX)
+        options_dir = _user_options_dir()
+        if options_dir:
+            walk(options_dir, USER_TEMPLATES_GROUP, OPTION_FOLDER_PREFIX)
     return dirs
 
 
@@ -345,7 +379,7 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     # option can be drawn; everything nested is an ordinary card.
     scope = "option" if len(path) == 1 else "grid"
 
-    group: dict[str, str] = {"id": "/".join(path)}
+    group: dict[str, Any] = {"id": "/".join(path)}
     leaf = path[-1].removeprefix(OPTION_FOLDER_PREFIX)
     _text_entry(group, meta, "name", leaf.replace("-", " ").title())
     group["icon"] = str(meta.get("icon") or "mdi:folder-outline")
@@ -356,14 +390,16 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     # option can ask to lead it.
     if scope == "option" and meta.get("primary") is True:
         group["primary"] = True
+    if meta.get("needs_variables") is True:
+        group["needs_variables"] = True
     return group
 
 
 #: The last :func:`list_templates` answer and the files it was read from.
-_LISTED: tuple[tuple, list[dict[str, Any]]] | None = None
+_LISTED: tuple[tuple[Any, ...], list[dict[str, Any]]] | None = None
 
 
-def _files_signature(dirs: list[tuple[str, tuple[str, ...]]]) -> tuple:
+def _files_signature(dirs: list[tuple[str, tuple[str, ...]]]) -> tuple[Any, ...]:
     """Every file in *dirs* with its size and change time: what a listing depends on."""
     return tuple(
         (directory, tuple(sorted(
@@ -435,9 +471,9 @@ def _read_template_list(
             if not fname.endswith(".yaml") or fname.startswith("_"):
                 continue
             template_id = template_id_of(fname, directory)
-            path = os.path.join(directory, fname)
-            if parsed is not None and template_id not in first and os.path.isfile(path):
-                first[template_id] = path
+            file_path = os.path.join(directory, fname)
+            if parsed is not None and template_id not in first and os.path.isfile(file_path):
+                first[template_id] = file_path
             # A stored page keeps the bare id it was created from, so one stem
             # can only ever mean one file however deep the tree goes.
             if template_id in seen:
@@ -445,20 +481,20 @@ def _read_template_list(
                     "Template id %r is used by both %s and %s; ignoring the second",
                     template_id,
                     seen[template_id],
-                    path,
+                    file_path,
                 )
                 continue
             try:
-                with open(path, "r", encoding="utf-8") as fh:
+                with open(file_path, "r", encoding="utf-8") as fh:
                     data = yaml.safe_load(fh) or {}
             except (OSError, yaml.YAMLError) as exc:
                 _LOGGER.warning("Failed to read template %s: %s", fname, exc)
                 continue
-            if not _readable(template_id, data, path):
+            if not _readable(template_id, data, file_path):
                 continue
-            seen[template_id] = path
+            seen[template_id] = file_path
             if (
-                parsed is not None and first.get(template_id) == path
+                parsed is not None and first.get(template_id) == file_path
                 and _valid_template_id(template_id)
             ):
                 parsed[template_id] = deepcopy(data)
@@ -498,6 +534,11 @@ def _read_template_list(
                 entry["groups"] = [
                     meta_by_path[group_path[:n]] for n in range(1, len(group_path) + 1)
                 ]
+            # Nothing without its variables: not offered while they are off.
+            if data.get("needs_variables") is True or any(
+                g.get("needs_variables") for g in entry.get("groups", ())
+            ):
+                entry["needs_variables"] = True
             templates.append(entry)
 
     return templates

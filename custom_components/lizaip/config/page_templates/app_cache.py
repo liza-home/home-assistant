@@ -17,6 +17,8 @@ import os
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
+from homeassistant.core import HomeAssistant
+
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY = "lizaip.app_cache"
@@ -27,13 +29,15 @@ _DATA_KEY = "lizaip_app_cache"
 
 
 class _Cache:
-    def __init__(self, hass) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         from homeassistant.helpers.storage import Store
 
         self.hass = hass
-        self.store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self.lists: dict[str, list[dict]] = {}
+        self.store: Store[Any] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self.lists: dict[str, list[dict[str, Any]]] = {}
         self.icons: set[str] = set()
+        #: The lists whose icons were prefetched since Home Assistant started.
+        self.prefetched: set[str] = set()
         self.loaded = False
         self.lock = asyncio.Lock()
 
@@ -45,10 +49,11 @@ class _Cache:
             lists = data.get("lists") if isinstance(data, dict) else None
             self.lists = lists if isinstance(lists, dict) else {}
             self.icons = {_icon_key(i.get("thumbnail")) for v in self.lists.values() for i in v} - {""}
+            _remember_hosts(self.icons)
             self.loaded = True
 
 
-def _get(hass) -> _Cache | None:
+def _get(hass: HomeAssistant) -> _Cache | None:
     """The cache, or ``None`` where HA's storage is not there (a test's hass)."""
     data = getattr(hass, "data", None)
     if not isinstance(data, dict) or getattr(hass, "config", None) is None:
@@ -59,7 +64,8 @@ def _get(hass) -> _Cache | None:
         except Exception as exc:  # noqa: BLE001 - no cache is no reason to fail
             _LOGGER.debug("App cache unavailable: %s", exc)
             return None
-    return data[_DATA_KEY]
+    cache: _Cache = data[_DATA_KEY]
+    return cache
 
 
 def cache_key(entity_id: str, exclude: list[str]) -> str:
@@ -77,6 +83,22 @@ def _norm(value: str) -> str:
     return urlunsplit(parts._replace(query=query))
 
 
+def _remember_hosts(icons: set[str]) -> None:
+    """Let imgserv fetch from the hosts these icons are on.
+
+    imgserv fetches from a LAN host only once Home Assistant has handed out a
+    picture there (``imgserv/media_hosts.py``). An app list is exactly that --
+    the TV integration's own answer -- but its icons were not registered until
+    a page spelled them, so the prefetch that keeps them was refused, and a TV
+    that was then switched off had no icon to fall back on. Also run on load,
+    since the record does not survive a restart.
+    """
+    from ...imgserv import media_hosts
+
+    for icon in icons:
+        media_hosts.remember(icon)
+
+
 def _icon_key(thumbnail: Any) -> str:
     thumb = str(thumbnail or "")
     if thumb.startswith("media:"):
@@ -84,7 +106,7 @@ def _icon_key(thumbnail: Any) -> str:
     return _norm(thumb) if thumb.startswith(("http", "/")) else ""
 
 
-async def async_get(hass, key: str) -> list[dict]:
+async def async_get(hass: HomeAssistant, key: str) -> list[dict[str, Any]]:
     """The apps last kept under *key*, as item fields; ``[]`` when there are none."""
     cache = _get(hass)
     if cache is None:
@@ -93,7 +115,7 @@ async def async_get(hass, key: str) -> list[dict]:
     return [dict(d) for d in cache.lists.get(key) or [] if isinstance(d, dict)]
 
 
-async def async_put(hass, key: str, items: list[dict]) -> None:
+async def async_put(hass: HomeAssistant, key: str, items: list[dict[str, Any]]) -> None:
     """Keep *items* (item fields) as what the TV lists, and fetch their icons.
 
     An app the TV now lists without its picture -- a TV whose icons live on the
@@ -112,10 +134,16 @@ async def async_put(hass, key: str, items: list[dict]) -> None:
             row["thumbnail"] = old["thumbnail"]
         rows.append(row)
     if cache.lists.get(key) == rows:
-        return
-    cache.lists[key] = rows
-    cache.icons = {_icon_key(i.get("thumbnail")) for v in cache.lists.values() for i in v} - {""}
-    cache.store.async_delay_save(lambda: {"lists": cache.lists}, 5)
+        # Unchanged, but once a session its icons are fetched all the same: one
+        # refused or missed before is otherwise never asked for again.
+        if key in cache.prefetched:
+            return
+    else:
+        cache.lists[key] = rows
+        cache.icons = {_icon_key(i.get("thumbnail")) for v in cache.lists.values() for i in v} - {""}
+        _remember_hosts(cache.icons)
+        cache.store.async_delay_save(lambda: {"lists": cache.lists}, 5)
+    cache.prefetched.add(key)
     # Fetched as listed: the proxy's token is what lets imgserv in.
     new = [unquote(str(r.get("thumbnail") or "")).removeprefix("media:") for r in rows]
     hass.async_create_background_task(
@@ -123,7 +151,7 @@ async def async_put(hass, key: str, items: list[dict]) -> None:
     )
 
 
-async def async_is_app_icon(hass, value: str) -> bool:
+async def async_is_app_icon(hass: HomeAssistant, value: str) -> bool:
     """Whether imgserv should keep and fall back to the picture at *value*."""
     cache = _get(hass)
     if cache is None:
@@ -132,9 +160,10 @@ async def async_is_app_icon(hass, value: str) -> bool:
     return _norm(value) in cache.icons
 
 
-def _icon_path(hass, value: str) -> str:
+def _icon_path(hass: HomeAssistant, value: str) -> str:
     name = hashlib.sha256(_norm(value).encode()).hexdigest()[:32]
-    return hass.config.path(*ICON_DIR, name)
+    path: str = hass.config.path(*ICON_DIR, name)
+    return path
 
 
 def _write(path: str, data: bytes) -> None:
@@ -153,7 +182,7 @@ def _read(path: str) -> bytes | None:
         return None
 
 
-async def async_save_icon(hass, value: str, data: bytes) -> None:
+async def async_save_icon(hass: HomeAssistant, value: str, data: bytes) -> None:
     """Keep the bytes of an app's icon that was just fetched."""
     if not await async_is_app_icon(hass, value):
         return
@@ -165,14 +194,15 @@ async def async_save_icon(hass, value: str, data: bytes) -> None:
         _LOGGER.debug("App icon could not be kept: %s", exc)
 
 
-async def async_load_icon(hass, value: str) -> bytes | None:
+async def async_load_icon(hass: HomeAssistant, value: str) -> bytes | None:
     """The kept bytes of an app's icon, for when it cannot be fetched."""
     if not await async_is_app_icon(hass, value):
         return None
-    return await hass.async_add_executor_job(_read, _icon_path(hass, value))
+    data: bytes | None = await hass.async_add_executor_job(_read, _icon_path(hass, value))
+    return data
 
 
-async def _async_prefetch(hass, values: list[str]) -> None:
+async def _async_prefetch(hass: HomeAssistant, values: list[str]) -> None:
     """Fetch, one at a time, the icons that are not on disk yet."""
     from ...imgserv.httpsocket import async_fetch_media_bytes
 

@@ -9,6 +9,9 @@
         "title": "Reconfigurar lizaIP",
         "data": {
           "name": "Nombre del dispositivo"
+        },
+        "data_description": {
+          "name": "El nombre de este mando en Home Assistant. Déjalo vacío para mantener el nombre actual."
         }
       }
     },
@@ -30,18 +33,6 @@
         "data_description": {
           "optimistic_updates": "Actualiza los iconos de los botones inmediatamente al pulsar, antes de confirmar el estado real. Si la acción falla, el icono vuelve poco después al estado real.",
           "language": "Idioma de las etiquetas de botones que muestra este mando. «Automático» sigue el idioma de Home Assistant."
-        },
-        "selector": {
-          "language": {
-            "options": {
-              "auto": "Automático",
-              "en": "English",
-              "de": "Deutsch",
-              "fr": "Français",
-              "it": "Italiano",
-              "es": "Español"
-            }
-          }
         },
         "sections": {
           "demo": {
@@ -76,6 +67,11 @@
     }
   },
   "entity": {
+    "button": {
+      "ir_key": {
+        "name": "Tecla IR"
+      }
+    },
     "event": {
       "button": {
         "name": "Botón {button_id}"
@@ -113,6 +109,9 @@
       },
       "ip_address": {
         "name": "Dirección IP"
+      },
+      "queue": {
+        "name": "Cola de {speaker}"
       }
     },
     "update": {
@@ -187,20 +186,18 @@
         }
       }
     },
-    "clear_device_pages": {
-      "name": "Borrar las páginas del dispositivo",
-      "description": "Elimina todas las páginas del mando y las reconstruye a partir de la configuración guardada. Úsalo cuando las páginas del dispositivo ya no coincidan con las de Home Assistant. No se pierde ninguna configuración.",
-      "fields": {
-        "config_entry_id": {
-          "name": "Dispositivo",
-          "description": "Dispositivo que se va a reconstruir. Si se omite, se reconstruyen todos los dispositivos lizaIP."
-        }
-      }
-    },
     "send_ir": {
-      "name": "Enviar IR",
+      "name": "Enviar código IR sin procesar",
       "description": "Hace que un mando transmita un código infrarrojo. Sin destino, lo envían todos los mandos lizaIP.",
       "fields": {
+        "via": {
+          "name": "A través de lizaIP",
+          "description": "El mando que transmite la tecla."
+        },
+        "entity_id": {
+          "name": "Tecla IR",
+          "description": "La tecla de un dispositivo IR que se envía."
+        },
         "ir_blob": {
           "name": "Código IR",
           "description": "El código infrarrojo que se transmite, codificado en base64."
@@ -260,131 +257,36 @@
     "conflicting_page_target": {
       "message": "The name \"{page}\" belongs to page {resolved}, not page {page_id}. Give one or the other, not both."
     },
-    "log_level_unknown": {
-      "message": "{level} no es un nivel de registro que acepte este dispositivo."
-    },
-    "log_module_unknown": {
-      "message": "{module} no es un nombre de módulo que conozca este dispositivo."
-    },
-    "log_level_unreachable": {
-      "message": "El dispositivo no respondió al cambio de nivel: {error}"
-    },
-    "log_level_http": {
-      "message": "El dispositivo rechazó el cambio de nivel (HTTP {status})."
-    },
-    "log_level_refused": {
-      "message": "El dispositivo rechazó el cambio de nivel: {reason}"
-    },
-    "log_reset_no_modules": {
-      "message": "El dispositivo no informó de ningún módulo que restablecer."
-    },
     "app_not_started": {
       "message": "{entity_id} no ha abierto la app {app_id}."
     },
     "invalid_ir_blob": {
       "message": "El código IR no es base64 válido."
+    },
+    "ir_send_refused": {
+      "message": "El mando rechazó el código infrarrojo: {error}"
+    },
+    "ir_not_an_ir_device": {
+      "message": "{device} no es un dispositivo IR."
+    },
+    "ir_remote_ambiguous": {
+      "message": "Hay varios lizaIP conectados y no está claro cuál envía la tecla. Pulsa la tecla desde un botón de lizaIP o usa la acción «Enviar tecla de dispositivo IR» y elige el lizaIP."
+    },
+    "ir_unknown_key": {
+      "message": "{device} no tiene la tecla «{key}»."
+    },
+    "ir_catalog_unavailable": {
+      "message": "No se pudo cargar el código IR: {error}"
+    },
+    "not_a_remote": {
+      "message": "El dispositivo elegido no es un mando lizaIP."
+    },
+    "ir_entry_missing": {
+      "message": "La entrada de dispositivos IR todavía no existe."
+    },
+    "refresh_failed": {
+      "message": "Error al actualizar las fuentes dinámicas de: {devices}"
     }
-  },
-  "button_tooltips": {
-    "albums": "Álbumes",
-    "apps": "Aplicaciones",
-    "audiobooks": "Audiolibros",
-    "back": "Atrás",
-    "back_menu": "Atrás / Menú",
-    "brighter": "Más brillo",
-    "brightness": "Brillo",
-    "candle": "Vela",
-    "close": "Cerrar",
-    "colour_temperature": "Temperatura de color",
-    "cool_white": "Blanco frío",
-    "daylight": "Luz diurna",
-    "digits": "Dígitos",
-    "dimmer": "Menos brillo",
-    "down": "Abajo",
-    "exit": "Salir",
-    "forward": "Adelante",
-    "home": "Inicio",
-    "input": "Entrada",
-    "inputs": "Entradas",
-    "instant_replay": "Repetición",
-    "left": "Izquierda",
-    "lock": "Bloquear",
-    "menu": "Menú",
-    "more": "Más",
-    "mute": "Silenciar",
-    "neutral_white": "Blanco neutro",
-    "next": "Siguiente",
-    "night_light": "Luz nocturna",
-    "now_playing": "Reproduciendo",
-    "off": "Apagado",
-    "ok": "OK",
-    "on": "Encendido",
-    "open": "Abrir",
-    "options": "Opciones",
-    "oscillate_off": "Oscilación desactivada",
-    "oscillate_on": "Oscilación activada",
-    "pause": "Pausa",
-    "play": "Reproducir",
-    "play_pause": "Reproducir / Pausa",
-    "playlists": "Listas de reproducción",
-    "podcasts": "Pódcasts",
-    "power": "Encendido",
-    "previous": "Anterior",
-    "radio": "Radio",
-    "remote": "Mando",
-    "repeat_all": "Repetir todo",
-    "repeat_off": "Repetir desactivado",
-    "repeat_one": "Repetir una",
-    "reverse": "Atrás",
-    "right": "Derecha",
-    "search": "Buscar",
-    "select": "Seleccionar",
-    "shuffle": "Aleatorio",
-    "shuffle_off": "Aleatorio desactivado",
-    "shuffle_on": "Aleatorio activado",
-    "sleep_in": "Apagar en",
-    "sleep_timer_off": "Temporizador apagado",
-    "source": "Fuente",
-    "stop": "Stop",
-    "toggle": "Alternar",
-    "tools_more": "Herramientas / Más",
-    "top_menu": "Menú principal",
-    "tracks": "Canciones",
-    "unlock": "Desbloquear",
-    "unmute": "Activar sonido",
-    "up": "Arriba",
-    "voice_assistant": "Asistente de voz",
-    "volume": "Volumen",
-    "volume_down": "Bajar volumen",
-    "volume_up": "Subir volumen",
-    "warm_white": "Blanco cálido"
-  },
-  "page_titles": {
-    "welcome": "¡bienvenido!"
-  },
-  "state_words": {
-    "on": "encendido",
-    "off": "apagado",
-    "play": "reproducir",
-    "pause": "pausa",
-    "open": "abrir",
-    "close": "cerrar",
-    "stop": "stop",
-    "lock": "bloquear",
-    "unlock": "desbloquear",
-    "next": "siguiente",
-    "previous": "anterior",
-    "mute": "silenciar",
-    "unmute": "activar sonido",
-    "shuffle_on": "aleatorio activado",
-    "shuffle_off": "aleatorio desactivado",
-    "oscillate_on": "oscilación activada",
-    "oscillate_off": "oscilación desactivada",
-    "forward": "adelante",
-    "reverse": "atrás",
-    "repeat_off": "repetir desactivado",
-    "repeat_all": "repetir todo",
-    "repeat_one": "repetir una"
   },
   "issues": {
     "address_locked": {
@@ -398,6 +300,101 @@
     "protocol_mismatch": {
       "title": "{name} usa otra versión del protocolo",
       "description": "El mando usa la versión {device} del protocolo lizaIP y Home Assistant la versión {ha}. Algunas funciones pueden no funcionar. Actualiza el firmware del mando o la integración lizaIP para que coincidan."
+    }
+  },
+  "config_subentries": {
+    "ir_device": {
+      "initiate_flow": {
+        "user": "Añadir dispositivo IR"
+      },
+      "entry_type": "Dispositivo IR",
+      "step": {
+        "user": {
+          "title": "Añadir un dispositivo IR",
+          "description": "Elige la marca de un televisor y ponle nombre al dispositivo, o deja el nombre vacío para usar la marca.",
+          "data": {
+            "brand_id": "Marca",
+            "name": "Nombre"
+          },
+          "data_description": {
+            "brand_id": "Fabricante del televisor. Sus códigos IR se obtienen del catálogo.",
+            "name": "Se muestra como nombre del dispositivo. Déjalo vacío para usar la marca."
+          }
+        },
+        "reconfigure": {
+          "title": "Dispositivo IR",
+          "description": "**{name}**\n\nSus {keys} teclas:\n\n{table}"
+        }
+      },
+      "error": {
+        "ir_no_brand": "Elige una marca.",
+        "ir_unknown_brand": "No hay ninguna marca con ese nombre. Elige una de la lista."
+      },
+      "abort": {
+        "reconfigure_successful": "Dispositivo actualizado.",
+        "ir_catalog_unavailable": "No se puede acceder al catálogo de códigos IR. Inténtalo más tarde.",
+        "ir_no_keys": "El catálogo no tiene para esta marca ningún juego de códigos con una tecla que el mando pueda enviar."
+      }
+    }
+  },
+  "device_automation": {
+    "action_type": {
+      "power": "Enviar Encendido",
+      "number_1": "Enviar Número 1",
+      "number_2": "Enviar Número 2",
+      "number_3": "Enviar Número 3",
+      "number_4": "Enviar Número 4",
+      "number_5": "Enviar Número 5",
+      "number_6": "Enviar Número 6",
+      "number_7": "Enviar Número 7",
+      "number_8": "Enviar Número 8",
+      "number_9": "Enviar Número 9",
+      "number_0": "Enviar Número 0",
+      "input": "Enviar Entrada",
+      "epg": "Enviar Guía de programación",
+      "info": "Enviar Info",
+      "subtitle": "Enviar Subtítulos",
+      "cursor_up": "Enviar Arriba",
+      "cursor_down": "Enviar Abajo",
+      "cursor_left": "Enviar Izquierda",
+      "cursor_right": "Enviar Derecha",
+      "ok": "Enviar OK",
+      "menu": "Enviar Menú",
+      "exit": "Enviar Salir",
+      "volume_up": "Enviar Subir volumen",
+      "volume_down": "Enviar Bajar volumen",
+      "channel_up": "Enviar Canal siguiente",
+      "channel_down": "Enviar Canal anterior",
+      "mute": "Enviar Silenciar",
+      "red": "Enviar Rojo",
+      "green": "Enviar Verde",
+      "yellow": "Enviar Amarillo",
+      "blue": "Enviar Azul",
+      "play": "Enviar Reproducir",
+      "pause": "Enviar Pausa",
+      "stop": "Enviar Stop",
+      "fast_rewind": "Enviar Atrás",
+      "fast_forward": "Enviar Adelante",
+      "skip_back": "Enviar Anterior",
+      "skip_forward": "Enviar Siguiente",
+      "home": "Enviar Inicio",
+      "back": "Enviar Atrás",
+      "play_pause": "Enviar Reproducir / Pausa"
+    },
+    "extra_fields": {
+      "via": "A través de lizaIP"
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "auto": "Automático",
+        "en": "English",
+        "de": "Deutsch",
+        "fr": "Français",
+        "it": "Italiano",
+        "es": "Español"
+      }
     }
   }
 }

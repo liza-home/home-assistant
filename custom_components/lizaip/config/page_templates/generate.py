@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.core import HomeAssistant
 
@@ -44,7 +44,11 @@ from ...shared.services import (
 from ...const import DOMAIN
 from ...shared.icon_defaults import icon_defaults
 from ...config.const import ASSIGNMENT_BLANKED_KEY, drop_redundant_subject, payload_identity
-from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY, ASSIGNMENT_REPEAT_KEY
+from ...shared.assignment import (
+    ASSIGNMENT_DYNAMIC_KEY,
+    ASSIGNMENT_IR_KEY,
+    ASSIGNMENT_REPEAT_KEY,
+)
 from ...shared.i18n import (
     FALLBACK_LANGUAGE,
     button_tooltips,
@@ -78,7 +82,7 @@ PAGE_LINK_KEY = "goto_page"
 
 
 def page_buttons(
-    buttons: dict[str, Any], page_ids: dict[str, int],
+    buttons: Any, page_ids: dict[str, int],
     *, template_id: str = "", page_name: str = "",
 ) -> dict[str, Any]:
     """One page's buttons, links made commands and translated words written out.
@@ -164,7 +168,7 @@ def _translated_wordings(
     return out
 
 
-def _template_num(raw, default: float, button_key: str, field: str) -> float:
+def _template_num(raw: Any, default: float, button_key: str, field: str) -> float:
     """Coerce user-editable template YAML numbers before they reach storage.
 
     ``.inf``/``.nan`` parse as floats but the executor rejects them, so template
@@ -191,7 +195,7 @@ def _template_num(raw, default: float, button_key: str, field: str) -> float:
 _SLIDER_MECHANIC_KEYS = ("attribute", "service", "data_key")
 
 
-def _slider_entity(btn_def: dict) -> Any:
+def _slider_entity(btn_def: dict[str, Any]) -> Any:
     """The entity a slider declares as its own, in either spelling."""
     declared = page_slider(btn_def).get("target_entity")
     if isinstance(declared, str) and declared.strip():
@@ -199,7 +203,7 @@ def _slider_entity(btn_def: dict) -> Any:
     return page_target_entity(btn_def)
 
 
-def _declares_slider_mechanics(btn_def: dict) -> bool:
+def _declares_slider_mechanics(btn_def: dict[str, Any]) -> bool:
     """Whether this template spells out slider mechanics.
 
     Empty YAML scalars such as ``service:`` do not count. Without that guard, a
@@ -210,7 +214,7 @@ def _declares_slider_mechanics(btn_def: dict) -> bool:
     return any(str(cfg.get(key) or "").strip() for key in _SLIDER_MECHANIC_KEYS)
 
 
-def _wants_derived_default(btn_def: dict) -> bool:
+def _wants_derived_default(btn_def: dict[str, Any]) -> bool:
     """Whether a following slider names an entity to derive defaults from.
 
     This mirrors the stored-shape test in ``_effective_target``: proportional,
@@ -225,7 +229,7 @@ def _wants_derived_default(btn_def: dict) -> bool:
     )
 
 
-def _slider_assignment(btn_def: dict, slider_actions: dict) -> dict:
+def _slider_assignment(btn_def: dict[str, Any], slider_actions: dict[str, Any]) -> dict[str, Any]:
     """Stored slider assignment; empty ``config`` routes events to slider handling.
 
     Both slider modes share this assignment shape. They differ only in the
@@ -267,7 +271,7 @@ GENERIC_SERVICE_DOMAINS = _DATA_ADDRESSED_DOMAINS | _ENTITY_ADDRESSED_DOMAINS
 _INTEGRATION_SERVICE_DOMAINS = {"webostv": "media_player", "sonos": "media_player"}
 
 
-def _payload_entity(btn_def: dict) -> str:
+def _payload_entity(btn_def: dict[str, Any]) -> str:
     """Single entity named by ``data``; multi-entity payloads cannot drive sliders.
 
     The action target and selected slider target need one answer. A payload
@@ -282,7 +286,7 @@ def _payload_entity(btn_def: dict) -> str:
     return ""
 
 
-def _declared_entity(btn_def: dict, action: Any) -> Any:
+def _declared_entity(btn_def: dict[str, Any], action: Any) -> Any:
     """The entity a button pins itself to, if its target names one.
 
     A script/scene/automation step's ``target`` names the object to run, not
@@ -298,7 +302,7 @@ def _declared_entity(btn_def: dict, action: Any) -> Any:
 
 
 def _slider_target(
-    btn_def: dict, target_entity: str, domain_entities: dict[str, str] | None,
+    btn_def: dict[str, Any], target_entity: str, domain_entities: dict[str, str] | None,
 ) -> str:
     """The entity a slider moves unless it names one: the bound entity, or the
     device's entity of the domain its ``service`` acts on -- as a button binds
@@ -313,7 +317,7 @@ def _slider_target(
 
 
 def _button_entity(
-    btn_def: dict, target_entity: str, domain_entities: dict[str, str] | None,
+    btn_def: dict[str, Any], target_entity: str, domain_entities: dict[str, str] | None,
 ) -> tuple[str, str | None]:
     """Return ``(entity_id, unresolved_domain)`` for a template button.
 
@@ -382,7 +386,7 @@ def _button_entity(
 # live in sibling ``before``/``after`` keys so panel edits preserve them.
 
 
-def _button_prelude(btn_def: dict, button_key: str) -> list[dict] | None:
+def _button_prelude(btn_def: dict[str, Any], button_key: str) -> list[dict[str, Any]] | None:
     """Return ``before`` steps, preserving ``None`` vs ``[]``.
 
     Absence lets the executor infer wake steps; ``before: []`` explicitly
@@ -408,7 +412,7 @@ def _button_prelude(btn_def: dict, button_key: str) -> list[dict] | None:
     return list(custom)
 
 
-def _unassigned(btn_def: dict, binding: dict | None = None) -> dict:
+def _unassigned(btn_def: dict[str, Any], binding: dict[str, Any] | None = None) -> dict[str, Any]:
     """Empty slot assignment; dynamic bindings stay so later refresh can fill it.
 
     The tooltip/artwork still render, and the shape matches ``EMPTY_BUTTON`` in
@@ -428,13 +432,13 @@ def _unassigned(btn_def: dict, binding: dict | None = None) -> dict:
 
 
 def _register_action(
-    actions: list[dict],
+    actions: list[dict[str, Any]],
     seen_actions: dict[str, str],
     template_id: str,
     button_key: str,
-    btn_def: dict,
+    btn_def: dict[str, Any],
     action_str: str,
-    data: dict,
+    data: dict[str, Any],
     fallback_name: str | None = None,
 ) -> str:
     """Return/deduplicate the template action id, mutating the shared library.
@@ -462,7 +466,7 @@ def _register_action(
     svc_domain = action_str.split(".")[0] if "." in action_str else ""
 
     # Match device_sync/panel: only services with state-varying icons get states[].
-    derived_states: list[dict] = []
+    derived_states: list[dict[str, Any]] = []
     if icon_varies_with_state(svc_name):
         attr = service_to_attribute(svc_name)
         if attr:
@@ -500,10 +504,10 @@ def _register_action(
 
 
 def _stash_dormant_action(
-    assignment: dict,
-    btn_def: dict,
-    binding: dict,
-    actions: list[dict],
+    assignment: dict[str, Any],
+    btn_def: dict[str, Any],
+    binding: dict[str, Any],
+    actions: list[dict[str, Any]],
     seen_actions: dict[str, str],
     template_id: str,
     button_key: str,
@@ -541,7 +545,7 @@ def _stash_dormant_action(
         assignment["overrides"] = overrides
 
 
-def _template_overrides(btn_def: dict) -> dict:
+def _template_overrides(btn_def: dict[str, Any]) -> dict[str, Any]:
     """The fixed controls this button drives while it is the selection.
 
     One key per control, naming a service (a fixed button) or a capability (the
@@ -574,7 +578,7 @@ def _template_overrides(btn_def: dict) -> dict:
     return out
 
 
-def _stored_overrides(btn_def: dict, btn_entity: str) -> dict:
+def _stored_overrides(btn_def: dict[str, Any], btn_entity: str) -> dict[str, Any]:
     """The template's override table in the shape the store keeps.
 
     One conversion, shared by the two callers that write a generated button's
@@ -604,20 +608,44 @@ def _stored_overrides(btn_def: dict, btn_entity: str) -> dict:
     return overrides
 
 
-def _action_step_for(btn_def: dict, action_str: str, btn_entity: str, data: dict) -> dict:
+def _runnable_subject(action_str: str, data: Any) -> str:
+    """The scene/script/automation a payload names, for an action of its domain.
+
+    The resolver hands a runnable down as a payload, which leaves the step
+    saying what it runs in ``data`` and nothing in ``target`` -- a shape Home
+    Assistant's own editor flags as targetless. Only an entity of the action's
+    own domain is promoted: a payload naming anything else is an argument.
+    """
+    domain = split_service(action_str)[0]
+    entity = data.get("entity_id") if isinstance(data, dict) else None
+    if not isinstance(entity, str) or not entity.startswith(f"{domain}."):
+        return ""
+    return entity
+
+
+def _action_step_for(btn_def: dict[str, Any], action_str: str, btn_entity: str, data: dict[str, Any]) -> dict[str, Any]:
     # Copied: the same payload dict is handed to `_register_action`, and the
     # step is about to drop a key from it.
     step = {"action": action_str, "target": {"entity_id": btn_entity}, "data": dict(data)}
-    if split_service(action_str)[0] in (DOMAIN, "mqtt"):
+    domain = split_service(action_str)[0]
+    if domain in (DOMAIN, "mqtt"):
         # A device-local command, or an MQTT message: its payload is the whole
-        # of what it needs, and `mqtt.publish` refuses a target.
-        step.pop("target")
+        # of what it needs, and `mqtt.publish` refuses a target. An own action
+        # keeps the remote the template aimed it at (send_ir).
+        declared = (config_step(btn_def) or {}).get("target")
+        if domain == DOMAIN and isinstance(declared, dict) and declared:
+            step["target"] = declared
+        else:
+            step.pop("target")
 
     # script/scene/automation targets name the runnable object, not bound device.
     if split_service(action_str)[0] in _ENTITY_ADDRESSED_DOMAINS:
         declared = (config_step(btn_def) or {}).get("target")
+        runnable = _runnable_subject(action_str, step["data"])
         if isinstance(declared, dict) and declared:
             step["target"] = declared
+        elif runnable:
+            step["target"] = {"entity_id": runnable}
         else:
             step.pop("target")
     # After the target is final: a payload entity that became the target has
@@ -627,15 +655,15 @@ def _action_step_for(btn_def: dict, action_str: str, btn_entity: str, data: dict
 
 
 def _action_button_assignment(
-    btn_def: dict,
+    btn_def: dict[str, Any],
     button_key: str,
     btn_entity: str,
     action_str: str,
-    binding: dict | None,
-    actions: list[dict],
+    binding: dict[str, Any] | None,
+    actions: list[dict[str, Any]],
     seen_actions: dict[str, str],
     template_id: str,
-) -> dict:
+) -> dict[str, Any]:
     """Build a non-slider assignment and register its deduplicated action.
 
     The config payload is the single service step the panel and device sync
@@ -645,7 +673,7 @@ def _action_button_assignment(
     if not isinstance(data, dict):
         data = {}
 
-    assignment = {
+    assignment: dict[str, Any] = {
         "action_id": _register_action(
             actions, seen_actions, template_id, button_key, btn_def, action_str, data,
         ),
@@ -657,6 +685,8 @@ def _action_button_assignment(
     # A template that wants a key to repeat while held says so per button.
     if btn_def.get(ASSIGNMENT_REPEAT_KEY) is True:
         assignment[ASSIGNMENT_REPEAT_KEY] = True
+    if isinstance(btn_def.get(ASSIGNMENT_IR_KEY), str):
+        assignment[ASSIGNMENT_IR_KEY] = btn_def[ASSIGNMENT_IR_KEY]
     # Store [] too: before's absence is what allows wake inference.
     prelude = _button_prelude(btn_def, button_key)
     if prelude is not None:
@@ -670,12 +700,12 @@ def _action_button_assignment(
 
 
 def _slider_actions_for(
-    btn_def: dict,
+    btn_def: dict[str, Any],
     button_key: str,
     target_entity: str,
     hass: HomeAssistant | None,
     template_id: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Return declared proportional slider mechanics, or ``None`` for a button.
 
     Priority: following with a derived default entity, then a fully spelled
@@ -690,7 +720,10 @@ def _slider_actions_for(
     if _wants_derived_default(btn_def):
         # Entity-only sliders derive mechanics from that entity's live state.
         default_entity = _slider_entity(btn_def) or target_entity
-        actions = last_touched_or_entity_slider_actions(hass, default_entity, factor())
+        # It answers None itself when there is no hass to read the entity from.
+        actions = last_touched_or_entity_slider_actions(
+            cast(HomeAssistant, hass), default_entity, factor(),
+        )
         if actions is None:
             # Do not store an unresolved partial default; fall back to following.
             _LOGGER.warning(
@@ -728,7 +761,7 @@ def _slider_actions_for(
     return actions
 
 
-def _apply_slider_display_hints(assignment: dict, btn_def: dict, btn_entity: str) -> None:
+def _apply_slider_display_hints(assignment: dict[str, Any], btn_def: dict[str, Any], btn_entity: str) -> None:
     """Copy explicit slider display/retarget hints; absence means derive.
 
     ``overrides`` is the template's one block for every fixed control. Naming
@@ -752,10 +785,10 @@ def _apply_slider_display_hints(assignment: dict, btn_def: dict, btn_entity: str
 def generate_assignments(
     template_id: str,
     target_entity: str,
-    resolved_template: dict | None = None,
+    resolved_template: dict[str, Any] | None = None,
     domain_entities: dict[str, str] | None = None,
     hass: HomeAssistant | None = None,
-) -> tuple[list[dict], dict[str, dict]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     """Generate ``(action_library_entries, assignments)`` from a template.
 
     ``domain_entities`` lets device-mode templates bind sibling domains of the
@@ -772,8 +805,8 @@ def generate_assignments(
         return [], {}
 
     buttons = template.get("buttons", {})
-    actions: list[dict] = []
-    assignments: dict[str, dict] = {}
+    actions: list[dict[str, Any]] = []
+    assignments: dict[str, dict[str, Any]] = {}
     seen_actions: dict[str, str] = {}
 
     for button_key, btn_def in buttons.items():

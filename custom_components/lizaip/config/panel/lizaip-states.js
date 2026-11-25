@@ -4,6 +4,8 @@
  * provides default icons, and renders the states editor section.
  */
 
+import { ATTR_ACTION_CYCLES } from "./lizaip-helpers.js";
+
 // Two-way services (`toggle`, `media_play_pause`) are the only ones whose icon
 // depends on the entity. One-way services are deliberately derived rather than
 // listed -- see `icon_varies_with_state` in const.py for why a list never held.
@@ -72,13 +74,13 @@ export const StatesMixin = {
       }
     }
 
-    // Static fallback for known attributes without live entity data
+    // Static fallback for known attributes without live entity data. The
+    // cyclable ones come from `ATTR_ACTION_CYCLES` in their cycle order, so a
+    // row list never disagrees with the order a press actually walks.
     const knownAttrStates = {
-      is_volume_muted: ["true", "false"],
-      repeat: ["off", "one", "all"],
-      shuffle: ["true", "false"],
-      oscillating: ["true", "false"],
-      direction: ["forward", "reverse"],
+      ...Object.fromEntries(
+        Object.entries(ATTR_ACTION_CYCLES).map(([attr, cycle]) => [attr, cycle.map(([v]) => v)]),
+      ),
       hvac_mode: ["heat", "cool", "heat_cool", "auto", "dry", "fan_only", "off"],
     };
     if (knownAttrStates[attrName]) {

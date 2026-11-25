@@ -6,6 +6,9 @@
       },
       "ip_address": {
         "default": "mdi:ip-network"
+      },
+      "queue": {
+        "default": "mdi:playlist-music"
       }
     },
     "number": {
@@ -16,6 +19,24 @@
     "event": {
       "button": {
         "default": "mdi:gesture-tap-button"
+      }
+    },
+    "switch": {
+      "brightness_automatic": {
+        "default": "mdi:brightness-auto"
+      }
+    },
+    "button": {
+      "ir_key": {
+        "default": "mdi:remote"
+      }
+    },
+    "binary_sensor": {
+      "in_hand": {
+        "default": "mdi:hand-back-left-off",
+        "state": {
+          "on": "mdi:hand-back-left"
+        }
       }
     }
   },

@@ -24,7 +24,7 @@ import importlib
 import ipaddress
 import logging
 import socket
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import aiohttp
@@ -96,7 +96,7 @@ def local_ip() -> str | None:
             with socket.socket(family, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(0)
                 sock.connect((probe, 1))
-                addr = sock.getsockname()[0]
+                addr: str = sock.getsockname()[0]
         except OSError:
             continue
         if addr and not ipaddress.ip_address(addr).is_loopback:
@@ -110,7 +110,8 @@ def resolve_all(hostname: str) -> set[str]:
         infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
     except OSError:
         return set()
-    return {info[4][0] for info in infos}
+    # Only IP families answer for IPPROTO_TCP, and their host is a str.
+    return {cast(str, info[4][0]) for info in infos}
 
 
 def supervisor_api() -> tuple[Any, Any]:
@@ -268,7 +269,7 @@ async def async_ha_address(hass: HomeAssistant) -> tuple[str, int]:
 
 async def async_read_ha_config(
     hass: HomeAssistant, device_ips: list[str], port: int = DEVICE_HTTP_PORT
-) -> dict | None:
+) -> dict[str, Any] | None:
     """The Home Assistant the device is set to reach, as it has it stored.
 
     Returns the parsed ``GET /api/config/ha`` body, or ``None`` when no IP could

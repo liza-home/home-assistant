@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 from homeassistant.core import HomeAssistant
 
@@ -23,7 +24,7 @@ _CLICK = "click"
 
 
 def _update_context(
-    entry_id: str, button_key: str, assign: dict | None, interaction: str,
+    entry_id: str, button_key: str, assign: dict[str, Any] | None, interaction: str,
     log: DeviceLogger,
 ) -> None:
     """Record or clear the fixed-button context for this press.
@@ -119,11 +120,12 @@ async def _record_selection(
         )
         return
 
-    _record_selected_entity(entry_id, entity, assign, button_key, log)
+    # Only a dict assignment names a slider subject.
+    _record_selected_entity(entry_id, entity, cast("dict[str, Any]", assign), button_key, log)
 
 
 def _record_selected_entity(
-    entry_id: str, entity_id: str, assign: dict, button_key: str, log: DeviceLogger,
+    entry_id: str, entity_id: str, assign: dict[str, Any], button_key: str, log: DeviceLogger,
 ) -> None:
     """Commit *entity_id* as the selection, with the button's chosen control.
 

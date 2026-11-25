@@ -13,9 +13,16 @@ is reported as such rather than quietly left out of the list.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from ...const import CONF_ASSIGNED_USERS, DOMAIN
@@ -40,7 +47,7 @@ REASON_INACTIVE = "inactive"
 })
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_list_persons(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_list_persons(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Everyone in the household, and whether they can hold a remote.
 
     Read from the ``person`` entities rather than from the auth provider, so the
@@ -49,7 +56,7 @@ async def ws_list_persons(hass: HomeAssistant, connection, msg: dict) -> None:
     who already has every remote -- and whether the account still works.
     """
     users = {user.id: user for user in await hass.auth.async_get_users()}
-    persons = []
+    persons: list[dict[str, Any]] = []
     for state in hass.states.async_all("person"):
         user_id = state.attributes.get("user_id")
         user = users.get(user_id) if user_id else None
@@ -79,7 +86,7 @@ async def ws_list_persons(hass: HomeAssistant, connection, msg: dict) -> None:
 })
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_set_device_users(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_set_device_users(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Replace the list of people a remote is assigned to.
 
     Every id is checked against the auth provider and anything that no longer
@@ -109,7 +116,7 @@ async def ws_set_device_users(hass: HomeAssistant, connection, msg: dict) -> Non
     connection.send_result(msg["id"], {"user_ids": user_ids})
 
 
-def _write_assigned(hass: HomeAssistant, entry, user_ids: list[str]) -> None:
+def _write_assigned(hass: HomeAssistant, entry: ConfigEntry, user_ids: list[str]) -> None:
     """Store *user_ids* as the people *entry* is assigned to.
 
     Merged rather than replacing, for the same reason the options flow merges:

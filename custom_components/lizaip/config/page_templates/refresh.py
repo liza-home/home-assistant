@@ -17,14 +17,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from contextlib import nullcontext
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.event import async_call_later
 
 from ...action_controller import SLIDER_VERTICAL_KEY
@@ -37,13 +43,18 @@ from ...shared.assignment import (
 from ...device.const import LIZAIP_EVENT
 from ...config.const import ASSIGNMENT_BLANKED_KEY
 from .generate import GENERIC_SERVICE_DOMAINS
+from .compose import TEMPLATE_VARIABLES_KEY
 from .paginate import async_paginate
 from .resolver import ASSIGNMENT_FIELD_MAP, field_value, resolve_binding
 from .sources import bound_specs, get_source
-from ...runtime import entry_device_id, find_store, resolve_device_id
+from ...runtime import entry_device_id, find_store, is_ir_entry, remote_entries, resolve_device_id
 from ...data import lizaip_data
 from ...shared.logs import device_id_logger, device_logger, entry_id_logger
 from ...config.events import fire_config_changed
+from ...shared.variables_calc import CONF_VARIABLES_ENABLED, entry_options, variables_scope
+
+if TYPE_CHECKING:
+    from ..store import LizaRemoteStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,8 +114,9 @@ def _payload_without_subject(value: Any, assignment: dict[str, Any]) -> Any:
     every refresh would write the payload back and then strip it again, and
     report a change each time — rewriting every page on every navigation.
 
-    Steps with no target keep it: ``script``/``scene`` steps drop their target,
-    so for them the payload is the only thing naming what to run.
+    Steps with no target keep it: a page made before the runnable became the
+    target, and any step whose payload names something other than what it
+    runs, have nothing else saying what to act on.
     """
     if not isinstance(value, dict) or "entity_id" not in value:
         return value
@@ -302,7 +314,7 @@ def _give_up_on_the_item(
         # store one alone either.
         overrides = assignment.get("overrides")
         subject = _slider_subject_block(assignment)
-        if subject is not None and subject.get("entity_id") == "":
+        if subject is not None and isinstance(overrides, dict) and subject.get("entity_id") == "":
             overrides.pop(SLIDER_VERTICAL_KEY, None)
             if not overrides:
                 assignment.pop("overrides", None)
@@ -441,7 +453,7 @@ async def async_refresh_page(
     # speaker's favourites spread across its buttons.
     if cache is None:
         cache = {}
-    resolved: dict[tuple, Any] = {}
+    resolved: dict[tuple[Any, ...], Any] = {}
     for binding in bindings:
         key = _binding_key(binding)
         if key in resolved:
@@ -458,10 +470,10 @@ async def async_refresh_page(
         assignments = deepcopy(await store.async_get_assignments(device_id, page_id) or {})
         changed = False
         for assignment in assignments.values():
-            binding = _binding_of(assignment)
-            if binding is None:
+            bound = _binding_of(assignment)
+            if bound is None:
                 continue
-            resolution = resolved.get(_binding_key(binding))
+            resolution = resolved.get(_binding_key(bound))
             if resolution is None:
                 # Bound while the sources were read: the next refresh has it.
                 continue
@@ -488,7 +500,7 @@ def _binding_of(assignment: Any) -> dict[str, Any] | None:
     return binding
 
 
-def _binding_key(binding: dict[str, Any]) -> tuple:
+def _binding_key(binding: dict[str, Any]) -> tuple[Any, ...]:
     """What decides a binding's resolution: its source, spec and index."""
     return (
         str(binding.get("source") or ""),
@@ -516,7 +528,7 @@ def _needs_action_id(assignment: Any) -> str:
     return service if isinstance(service, str) and "." in service and service != "null" else ""
 
 
-async def _arm_filled_slots(store, device_id: str, assignments: dict) -> bool:
+async def _arm_filled_slots(store: LizaRemoteStore, device_id: str, assignments: dict[str, Any]) -> bool:
     """Give every filled-but-unarmed slot an action library entry for its service.
 
     Called with the store's `device_lock` held, so the library is read and
@@ -581,16 +593,24 @@ async def async_refresh_entry(
     # One answer per source for the whole refresh: the pages of a set (a
     # speaker's favourites over several parts) ask the same question.
     cache: dict[Any, Any] = {}
+    with variables_scope(entry_options(hass, entry_id)):
+        return await _async_refresh_locked(hass, entry_id, device_id, store, page_id, cache)
+
+
+async def _async_refresh_locked(
+    hass: HomeAssistant, entry_id: str, device_id: str, store: LizaRemoteStore,
+    page_id: int | None, cache: dict[str, Any],
+) -> bool:
     async with _refresh_lock(hass, entry_id):
-        if page_id is not None:
-            changed = await async_refresh_page(hass, device_id, page_id, cache=cache)
-        else:
-            pages = await store.async_get_pages(device_id)
-            changed = False
-            for page in pages:
-                pid = page.get("id")
-                if pid is None:
-                    continue
+        changed = False
+        for page in await store.async_get_pages(device_id):
+            pid = page.get("id")
+            if pid is None or page_id not in (None, pid):
+                continue
+            # A page made with variables off keeps them off, as its new parts do.
+            meta = page.get("template")
+            made_off = isinstance(meta, dict) and meta.get(TEMPLATE_VARIABLES_KEY) is False
+            with variables_scope({CONF_VARIABLES_ENABLED: False}) if made_off else nullcontext():
                 changed |= await async_refresh_page(hass, device_id, pid, cache=cache)
         # After the buttons: a part whose items have all gone is empty by now.
         changed |= await async_paginate(
@@ -613,14 +633,28 @@ async def async_refresh_and_sync(
 
 
 async def async_refresh_all(hass: HomeAssistant) -> int:
-    """Refresh every configured device. Returns the number that changed."""
+    """Refresh every remote. Returns the number that changed.
+
+    One device failing does not stop the rest; the failures are raised together.
+    """
+    entries = remote_entries(hass)
+    if not entries:
+        raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_devices")
     count = 0
-    for entry in hass.config_entries.async_entries(DOMAIN):
+    failed: list[str] = []
+    for entry in entries:
         try:
             if await async_refresh_and_sync(hass, entry.entry_id):
                 count += 1
         except Exception as exc:  # noqa: BLE001 - one device must not stop the rest
             device_logger(_LOGGER, entry).warning("Dynamic refresh failed: %s", exc)
+            failed.append(entry.title)
+    if failed:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="refresh_failed",
+            translation_placeholders={"devices": ", ".join(failed)},
+        )
     return count
 
 
@@ -667,7 +701,7 @@ class _DelayedRefresh:
             self._cancel_timer()
             self._cancel_timer = None
 
-    async def _run(self, _now=None) -> None:
+    async def _run(self, _now: Any = None) -> None:
         self._cancel_timer = None
         try:
             changed = await async_refresh_and_sync(self._hass, self._entry_id)
@@ -707,7 +741,9 @@ def async_setup_entry_triggers(
 #: Coalesce source change bursts; Sonos may write several speakers per edit.
 _PUSH_DEBOUNCE = 3.0
 
-async def _async_read_bound_specs(hass: HomeAssistant, entry_id: str):
+async def _async_read_bound_specs(
+    hass: HomeAssistant, entry_id: str,
+) -> list[tuple[str, dict[str, Any]]] | None:
     """Bound ``(source_id, spec)`` pairs, or ``None`` if unreadable.
 
     ``None`` is distinct from ``[]`` during re-scan: an empty list drops
@@ -720,7 +756,7 @@ async def _async_read_bound_specs(hass: HomeAssistant, entry_id: str):
 
     try:
         pages = await store.async_get_pages(device_id)
-        by_page = {}
+        by_page: dict[Any, dict[str, Any]] = {}
         for page in pages or []:
             pid = page.get("id")
             if pid is None:
@@ -732,23 +768,26 @@ async def _async_read_bound_specs(hass: HomeAssistant, entry_id: str):
         return None
 
 
-async def _async_bound_specs(hass: HomeAssistant, entry_id: str):
+async def _async_bound_specs(hass: HomeAssistant, entry_id: str) -> list[tuple[str, dict[str, Any]]]:
     """Bound specs, treating an unreadable store as no bindings for setup."""
     specs = await _async_read_bound_specs(hass, entry_id)
     return [] if specs is None else specs
 
 
-def _specs_by_source(specs) -> dict[str, list]:
-    grouped: dict[str, list] = {}
+def _specs_by_source(specs: Iterable[tuple[str, Any]]) -> dict[str, list[Any]]:
+    grouped: dict[str, list[Any]] = {}
     for source_id, spec in specs:
         grouped.setdefault(source_id, []).append(spec)
     return grouped
 
 
-def _subscribe_sources(hass: HomeAssistant, specs, on_change, log=None) -> list:
+def _subscribe_sources(
+    hass: HomeAssistant, specs: Iterable[tuple[str, Any]], on_change: Callable[[], None],
+    log: logging.Logger | logging.LoggerAdapter[Any] | None = None,
+) -> list[Any]:
     """Call bound source push hooks, isolating failures per source."""
     log = log or _LOGGER
-    unsubs = []
+    unsubs: list[Any] = []
     for source_id, source_specs in sorted(_specs_by_source(specs).items()):
         source = get_source(source_id)
         hook = getattr(source, "subscribe", None) if source is not None else None
@@ -774,7 +813,7 @@ def _subscribe_sources(hass: HomeAssistant, specs, on_change, log=None) -> list:
     return unsubs
 
 
-def _call_all(unsubs) -> None:
+def _call_all(unsubs: Iterable[Callable[[], Any]] | None) -> None:
     for unsub in unsubs or ():
         try:
             unsub()
@@ -796,10 +835,10 @@ class PushTriggers:
         self._entry_id = entry_id
         self._log = entry_id_logger(_LOGGER, hass, entry_id)
         self._refresh = _DelayedRefresh(hass, entry_id, _PUSH_DEBOUNCE, "source signal")
-        self.specs: list = []
-        self._unsubs: list = []
+        self.specs: list[Any] = []
+        self._unsubs: list[Any] = []
 
-    def subscribe(self, specs) -> None:
+    def subscribe(self, specs: list[tuple[str, dict[str, Any]]]) -> None:
         """Watch *specs*, subscribing the new hooks before dropping the old ones.
 
         That order leaves no gap for a signal to fall into during a save.
@@ -859,24 +898,44 @@ async def async_handle_hello(hass: HomeAssistant, entry: ConfigEntry) -> None:
         )
 
 
+def _as_list(raw: str | list[str]) -> list[str]:
+    return [raw] if isinstance(raw, str) else list(raw)
+
+
+def _remote_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry:
+    """The remote's entry; an unknown entry or the IR devices entry is refused."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None or entry.domain != DOMAIN or is_ir_entry(entry):
+        raise ServiceValidationError(translation_domain=DOMAIN, translation_key="not_a_remote")
+    return entry
+
+
 @callback
 def async_register_service(hass: HomeAssistant) -> None:
     """Register ``lizaip.refresh_dynamic_sources`` (idempotent)."""
     if hass.services.has_service(DOMAIN, SERVICE_REFRESH_DYNAMIC):
         return
 
-    async def _handle(call) -> None:
+    async def _handle(call: ServiceCall) -> None:
         raw = call.data.get("entry_id")
         if raw:
-            entry_ids = [raw] if isinstance(raw, str) else list(raw)
-            for entry_id in entry_ids:
-                await async_refresh_and_sync(hass, entry_id)
+            entries = [_remote_entry(hass, entry_id) for entry_id in _as_list(raw)]
+            for entry in entries:
+                try:
+                    await async_refresh_and_sync(hass, entry.entry_id)
+                except Exception as exc:
+                    raise HomeAssistantError(
+                        translation_domain=DOMAIN,
+                        translation_key="refresh_failed",
+                        translation_placeholders={"devices": entry.title},
+                    ) from exc
             return
         changed = await async_refresh_all(hass)
         _LOGGER.debug("refresh_dynamic_sources updated %s device(s)", changed)
 
     hass.services.async_register(
-        DOMAIN, SERVICE_REFRESH_DYNAMIC, _handle, schema=SERVICE_SCHEMA
+        DOMAIN, SERVICE_REFRESH_DYNAMIC, _handle,
+        schema=SERVICE_SCHEMA,
     )
 
 
@@ -907,7 +966,10 @@ async def async_binding_summary(hass: HomeAssistant, entry_id: str) -> dict[str,
         log.debug("Binding summary unavailable: %s", exc)
         return summary
 
+    page: Any
     for page in pages:
+        if not isinstance(page, dict):
+            continue
         page_id = page.get("id")
         if page_id is None:
             continue
@@ -917,6 +979,7 @@ async def async_binding_summary(hass: HomeAssistant, entry_id: str) -> dict[str,
             log.debug("Binding summary skipped page %s: %s", page_id, exc)
             continue
 
+        assign: Any
         for button_key, assign in (assignments or {}).items():
             if not isinstance(assign, dict):
                 continue

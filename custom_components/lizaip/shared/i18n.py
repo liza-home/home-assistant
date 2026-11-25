@@ -1,9 +1,10 @@
 """Languages and the translated wordings this integration writes by itself.
 
-Wordings live in ``strings.json`` and ship in ``translations/<lang>.json``,
-each reader taking one section of them: ``button_tooltips`` for the labels shown
-on button tooltips, ``page_titles`` for the titles of the pages a remote with
-nothing configured is given. To add one, edit ``strings.json`` and run
+Wordings live in ``i18n/<lang>.json``, each reader taking one section of them:
+``button_tooltips`` for the labels shown on button tooltips, ``page_titles`` for
+the titles of the pages a remote with nothing configured is given. They are not
+in ``strings.json``, whose sections hassfest restricts to Home Assistant's own.
+To add one, edit ``i18n/en.json`` and run
 ``python3 scripts/sync_translations.py --fix``; never inline a translated
 literal (``tests/test_translations.py`` checks key parity).
 
@@ -30,7 +31,7 @@ from .services import SERVICE_ACTION_MAP
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-TRANSLATIONS_DIR = Path(__file__).parent.parent / "translations"
+WORDINGS_DIR = Path(__file__).parent.parent / "i18n"
 FALLBACK_LANGUAGE: Final = "en"
 
 
@@ -40,7 +41,7 @@ def normalize_language(lang: str | None) -> str:
     return base if base.isalpha() else ""
 
 
-def configured_device_language(entry) -> str | None:
+def configured_device_language(entry: Any) -> str | None:
     """The language a config entry pins its device to, or None for "auto".
 
     A language we do not ship also counts as None, so the caller falls back to
@@ -48,13 +49,13 @@ def configured_device_language(entry) -> str | None:
     """
     if entry is None:
         return None
-    configured = (getattr(entry, "options", None) or {}).get(CONF_LANGUAGE) or ""
+    configured: str = (getattr(entry, "options", None) or {}).get(CONF_LANGUAGE) or ""
     if configured != LANGUAGE_AUTO and configured in SUPPORTED_LANGUAGES:
         return configured
     return None
 
 
-def get_ui_language(hass, entry=None, fallback: str | None = None) -> str:
+def get_ui_language(hass: HomeAssistant, entry: Any = None, fallback: str | None = None) -> str:
     """The language to label this device's buttons in.
 
     Order: the device's own language option, then *fallback* (the browser's
@@ -171,16 +172,16 @@ def translate_ref(key: str) -> str:
     return f"{{{TRANSLATE_KEY}: {key}}}"
 
 
-button_tooltips = ButtonTooltips(TRANSLATIONS_DIR)
+button_tooltips = ButtonTooltips(WORDINGS_DIR)
 
 #: Page-level wordings this integration writes onto a remote by itself, such as
 #: the title of the welcome page a remote with no pages is given.
-page_titles = TranslationSection(TRANSLATIONS_DIR, "page_titles")
+page_titles = TranslationSection(WORDINGS_DIR, "page_titles")
 
 #: How a state word reads inside a sentence, per language: lowercase, except
 #: where the language keeps it capitalised (German nouns: "Pause",
 #: "Wiedergabe"). See ``state_word``.
-state_words = TranslationSection(TRANSLATIONS_DIR, "state_words")
+state_words = TranslationSection(WORDINGS_DIR, "state_words")
 
 
 #: ``{translate: <key>}`` in place of a text in a template: the words come
@@ -272,7 +273,7 @@ def translate_inline(text: Any, language: str | None = None) -> Any:
         return text
     lang = language or current_language()
 
-    def _words(match: re.Match) -> str:
+    def _words(match: re.Match[str]) -> str:
         written = match.group(1).strip()
         if "${" in written:
             return match.group(0)

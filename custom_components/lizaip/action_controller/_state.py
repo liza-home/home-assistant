@@ -17,29 +17,6 @@ _LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_PAGE_ID = DEFAULT_PAGE_ID
 
-#: Coalesce bursty state/attribute changes into one icon update.
-_STATE_DEBOUNCE_SECONDS = 0.2
-
-#: The longest a change may sit unsent while changes keep arriving.
-#:
-#: The debounce above is a *trailing* one: every new event cancels the pending
-#: flush and starts the wait again. That is right for a burst with an end --
-#: one logical transition reported as several attribute writes -- but a dimmer
-#: being held has no end, so the deadline was pushed out on every frame and the
-#: icon froze at whatever it showed when the ramp started, only catching up once
-#: the user let go. Capping the wait turns that into a steady ~5 updates/sec.
-#:
-#: Measured, so please do not "optimise" this downwards without re-measuring.
-#: Once icon pushes were serialised (see `config/icon_push.py`) the obvious next
-#: move looked like halving this to push twice as often. The hardware says no:
-#: over a 168-step ramp the device answered a `set_page` in 280 ms on average,
-#: a ceiling of ~3.6 round-trips/sec, while this cap already permits ~10/sec
-#: (~5 flushes, and a lamp commonly owns a button on two pages). Demand already
-#: exceeds the device by roughly 3x, so the limiter is the device, not this
-#: number. Halving it would ask for ~20/sec against the same ceiling: the
-#: surplus is coalesced away, buying no freshness and burning CPU in a hot path.
-_STATE_MAX_WAIT_SECONDS = 0.2
-
 #: Only ``touch`` and ``click`` select; ``release`` trails click and ``repeat`` floods.
 _SELECTING_INTERACTIONS: frozenset[str] = frozenset({"touch", "click"})
 
@@ -77,7 +54,7 @@ class RemoteState:
     selected_factor: float | None = None
     #: In-flight slider gestures: slider key → ``{base_value, zero_pos,
     #: last_pos, ts, resolved}``.
-    slider_touches: dict[str, dict] = field(default_factory=dict)
+    slider_touches: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Touches being timed on buttons with a long touch: button key →
     #: ``longtouch._Gesture``.
     button_gestures: dict[str, Any] = field(default_factory=dict)
@@ -237,7 +214,7 @@ def get_selected_button(entry_id: str) -> str | None:
     return remote_state(entry_id).selected_button
 
 
-def _live_touch(state_key: tuple[str, str], *, pop: bool = False) -> dict | None:
+def _live_touch(state_key: tuple[str, str], *, pop: bool = False) -> dict[str, Any] | None:
     """Return the live gesture, dropping stale state on the way out."""
     entry_id, slider_key = state_key
     touches = remote_state(entry_id).slider_touches

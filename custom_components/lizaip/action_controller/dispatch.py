@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
 from homeassistant.core import Event, HomeAssistant
 
@@ -50,14 +51,12 @@ def _stop_repeat(entry_id: str, button_key: str) -> None:
 
 async def _start_repeat(
     hass: HomeAssistant, entry_id: str, button_key: str, page_id: int,
-    resolved: tuple[str | None, dict | None] | None = None,
+    resolved: tuple[str | None, dict[str, Any] | None],
 ) -> None:
     """Begin key repeat for a just-pressed button, if it repeats.
 
-    *resolved* is the press's ``(device_id, assignment)``, when already read.
+    *resolved* is the press's ``(device_id, assignment)``.
     """
-    if resolved is None:
-        resolved = await resolve_button_assignment(hass, entry_id, button_key, page_id)
     device_id, assign = resolved
     if not key_repeats(assign):
         return
@@ -101,14 +100,37 @@ async def _repeat_loop(
 # Public setup / teardown
 # ---------------------------------------------------------------------------
 
+def _on_diag(hass: HomeAssistant, data: dict[str, Any]) -> None:
+    """Picked up: resend the page the remote shows, as on a page change.
+
+    The remote may have dropped that page's images while it lay still; picking
+    it up is when they are about to be looked at. Only a page already known
+    from the remote's own events is sent -- after a restart nothing is, until
+    it reports one.
+    """
+    if data.get("diag") != "in_hand" or not data.get("value"):
+        return
+    entry_id = _resolve_entry_id(hass, data)
+    page_id = get_current_page(entry_id) if entry_id else None
+    # A page is only looked up for an entry, so the second test already holds.
+    if page_id is None or entry_id is None:
+        return
+    from ..config.page_resend import schedule_page_resend
+
+    schedule_page_resend(hass, entry_id, page_id)
+
+
 def setup(hass: HomeAssistant) -> None:
     """Subscribe to device button and slider events.
 
     Safe to call repeatedly: any previous subscription is dropped first.
     """
-    async def _on_device_event(event: Event) -> None:
+    async def _on_device_event(event: Event[dict[str, Any]]) -> None:
         data = event.data
         event_type = data.get("type")
+        if event_type == "diag":
+            _on_diag(hass, data)
+            return
         if event_type not in ("button", "slider", "goto_page"):
             return
 
@@ -136,6 +158,11 @@ def setup(hass: HomeAssistant) -> None:
             # were on, because the device is telling us it moved.
             clear_slider_state(entry_id)
             _note_page(entry_id, raw_page_id)
+            # The remote draws a page from its image cache only, so images it
+            # dropped stay blank until the page is sent to it again.
+            from ..config.page_resend import schedule_page_resend
+
+            schedule_page_resend(hass, entry_id, raw_page_id)
             return
 
         # Not every page change is announced. Firmware may omit `goto_page`

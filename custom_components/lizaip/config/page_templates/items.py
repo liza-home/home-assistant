@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...shared.variables_calc import variables_enabled
+
 
 #: How many items a source is asked for when nothing narrower is requested.
 #: Deliberately not part of the cache key: pages whose highest tokens differ
@@ -60,6 +62,9 @@ class DynamicItem:
 
     @property
     def button_tooltip(self) -> str:
+        # Off, a tooltip made of variables gives way to the name the item has now.
+        if "${" in self.tooltip and not variables_enabled():
+            return self.title
         return self.tooltip or self.title
 
     def as_dict(self) -> dict[str, Any]:

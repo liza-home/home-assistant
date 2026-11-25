@@ -12,9 +12,9 @@ from homeassistant.const import EntityCategory, UnitOfRatio
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ..entity import LizaIPEntity
 from ..provisioning import local_ip
 from .connection import LizaIPConnection
-from .entity import LizaIPEntity
 
 PARALLEL_UPDATES = 0  # No limit — sensor entities are push-only
 

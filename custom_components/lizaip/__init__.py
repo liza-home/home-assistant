@@ -8,8 +8,10 @@ Single installable integration that manages:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_SYSTEM, ConfigEntry
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import (
@@ -30,6 +32,7 @@ from .device import (
     async_register_services,
 )
 from . import action_controller, issues
+from .device.reset_recovery import async_setup_reset_recovery
 from .const import (
     CONF_DEMO_MODE,
     CONF_DEMO_MODE_DWELL_TIME,
@@ -41,7 +44,10 @@ from .config.store import LizaRemoteStore
 from .config.restore import async_setup_config_restore
 from .config.diagnostics_bundle import async_setup_diagnostics_bundle
 from .config.entity_rename import async_setup_entity_rename
+from .config.page_limit import CONF_MAX_PAGES, CONF_MAX_PAGES_ENABLED
+from .config.page_templates.refresh import async_register_service as async_register_refresh_service
 from .imgserv import async_setup_imgserv
+from .ir.entry import async_ensure_ir_entry, async_setup_ir_entry
 from .shared.logs import device_logger
 from .shared.numbers import to_float
 from .data import LizaIPConfigEntry, LizaIPRuntimeData
@@ -51,6 +57,7 @@ from .runtime import (
     find_store,
     get_store,
     install_store,
+    is_ir_entry,
     panel_language,
     renamed_device,
 )
@@ -73,6 +80,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # WebSocket endpoint for devices
     hass.http.register_view(LizaIPWebSocketView())
     async_register_services(hass)
+    async_register_refresh_service(hass)
     _LOGGER.info("Registered lizaIP WebSocket endpoint at %s", WS_PATH)
 
     # Action dispatch — single source of truth for button-press → action execution
@@ -100,6 +108,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # And a renamed remote is called the same thing on both of its pages.
     _async_setup_name_sync(hass)
 
+    # A factory-reset remote that still has an entry is provisioned again.
+    await async_setup_reset_recovery(hass)
+
     # Image server (MDI/logo/text rendering)
     await async_setup_imgserv(hass)
 
@@ -125,11 +136,46 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     except Exception:  # noqa: BLE001 - assistants are optional; the remote is not
         _LOGGER.exception("Could not offer lizaIP's tools to AI assistants")
 
+    _async_load_devel(hass)
+
     return True
 
 
+#: The developer tools, a separate integration that is not part of a release.
+DEVEL_DOMAIN = "lizaip_devel"
+
+
+@callback
+def _async_load_devel(hass: HomeAssistant) -> None:
+    """Set up ``lizaip_devel`` alongside lizaIP when it is installed.
+
+    Installing the folder is what turns the Devel tab on, and removing it
+    turns it off. It gets one config entry, home of its "Add IR device" button. Started, not awaited -- it depends on
+    lizaIP, and waiting for it here would wait for this very setup to finish.
+    """
+    from homeassistant.loader import IntegrationNotFound, async_get_integration
+    from homeassistant.setup import async_setup_component
+
+    async def _load() -> None:
+        try:
+            await async_get_integration(hass, DEVEL_DOMAIN)
+        except IntegrationNotFound:
+            return
+        if not await async_setup_component(hass, DEVEL_DOMAIN, {}):
+            _LOGGER.warning("%s is installed but could not be set up", DEVEL_DOMAIN)
+            return
+        if not hass.config_entries.async_entries(DEVEL_DOMAIN):
+            await hass.config_entries.flow.async_init(
+                DEVEL_DOMAIN, context={"source": SOURCE_SYSTEM},
+            )
+
+    hass.async_create_task(_load(), f"lizaip load {DEVEL_DOMAIN}")
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bool:
-    """Set up one lizaIP device from a config entry."""
+    """Set up one lizaIP device, or the IR devices, from a config entry."""
+    if is_ir_entry(entry):
+        return await async_setup_ir_entry(hass, entry)
     mac: str | None = entry.data.get("device_id")  # stored as MAC string, e.g. "AA:BB:CC:DD:EE:FF"
 
     device = dr.async_get(hass).async_get_or_create(
@@ -222,10 +268,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bo
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _watch_queue_targets(hass, entry)
+    async_ensure_ir_entry(hass)
     return True
 
 
-def _options_listener(device_id: str, entry: LizaIPConfigEntry):
+_PANEL_ONLY_OPTIONS = frozenset({CONF_MAX_PAGES, CONF_MAX_PAGES_ENABLED})
+
+
+def _options_listener(
+    device_id: str, entry: LizaIPConfigEntry,
+) -> Callable[[HomeAssistant, LizaIPConfigEntry], Coroutine[Any, Any, None]]:
     """The entry's update listener: apply what changed, and only that.
 
     Remembers the last options, title and demo settings it acted on, so each
@@ -251,7 +303,14 @@ def _options_listener(device_id: str, entry: LizaIPConfigEntry):
         # too, and the hello that caused them already syncs.
         if dict(updated.options) == last_options:
             return
+        changed = {
+            key for key in {*updated.options, *last_options}
+            if updated.options.get(key) != last_options.get(key)
+        }
         last_options = dict(updated.options)
+        # The page limit is the panel's business; nothing on the remote changes.
+        if changed <= _PANEL_ONLY_OPTIONS:
+            return
 
         demo_mode = bool(updated.options.get(CONF_DEMO_MODE, False))
         demo_dwell = to_float(updated.options.get(CONF_DEMO_MODE_DWELL_TIME))
@@ -316,7 +375,9 @@ def _follow_entry_title(hass: HomeAssistant, device_id: str, title: str) -> None
 
 
 @callback
-def _follow_device_name(hass: HomeAssistant, device, entry: ConfigEntry) -> None:
+def _follow_device_name(
+    hass: HomeAssistant, device: dr.DeviceEntry | dr.ChildDeviceEntry, entry: ConfigEntry,
+) -> None:
     """Carry a device rename back to the entry's title.
 
     ``name_by_user`` is what the device page writes and ``name`` what the
@@ -341,14 +402,14 @@ def _async_setup_name_sync(hass: HomeAssistant) -> None:
     leaves a single name, so ``entry.title`` stays the answer it always was.
     """
     @callback
-    def _renamed(event) -> None:
+    def _renamed(event: Event[dr.EventDeviceRegistryUpdatedData]) -> None:
         device = renamed_device(hass, event)
         if device is None:
             return
         # `config_entry_id`, not the `config_entries` set: a device belongs to
         # exactly one entry since HA 2026.8 and the set stops working in 2027.10.
         entry = hass.config_entries.async_get_entry(device.config_entry_id)
-        if entry is not None and entry.domain == DOMAIN:
+        if entry is not None and entry.domain == DOMAIN and not is_ir_entry(entry):
             _follow_device_name(hass, device, entry)
 
     hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _renamed)
@@ -363,7 +424,7 @@ def _watch_queue_targets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     from .config.const import CONFIG_CHANGED_EVENT
     from .config.media_queue import async_sync_sensors
 
-    async def _sync(_event=None) -> None:
+    async def _sync(_event: Event[Any] | None = None) -> None:
         await async_sync_sensors(hass)
 
     entry.async_on_unload(hass.bus.async_listen(CONFIG_CHANGED_EVENT, _sync))
@@ -414,10 +475,15 @@ def _watch_server_language(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> bool:
     """Unload a lizaIP config entry."""
+    if is_ir_entry(entry):
+        return await hass.config_entries.async_unload_platforms(entry, [Platform.REMOTE, Platform.BUTTON])
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
         from .config.media_queue import async_sync_sensors
         from .config.media_queue.sensor import async_release
+        from .config.page_resend import cancel_page_resend
+
+        cancel_page_resend(entry.entry_id)
 
         # The queue sensors this entry added went with its platform; another
         # loaded entry adds them back.
@@ -443,6 +509,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: LizaIPConfigEntry) -> N
     connection would otherwise remain reachable via `_find_connection()` in
     `device/websocket.py` even though the device it belongs to is gone.
     """
+    if is_ir_entry(entry):
+        return
     connection = entry_connection(entry)
     if connection is not None:
         # Defensive: normally already done by `async_unload_entry`, but a failed

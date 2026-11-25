@@ -64,7 +64,7 @@ def _looks_opaque(text: str) -> bool:
     return len(text) >= 16 or bool(re.fullmatch(r"[0-9a-fA-F]{8,}", text))
 
 
-def page_title(page: dict) -> str:
+def page_title(page: dict[str, Any]) -> str:
     """A readable page name from ``title``, or ``""`` if none.
 
     Schemes, imgserv query strings and percent-encoding are plumbing; ``+`` is
@@ -117,7 +117,7 @@ def page_title(page: dict) -> str:
     return "" if not segment or _looks_opaque(segment) else segment
 
 
-def page_label(page: dict) -> str:
+def page_label(page: dict[str, Any]) -> str:
     """A page name for both the dropdown and name resolution, never empty."""
     return page_title(page) or f"Page {page.get('id')}"
 
@@ -132,7 +132,7 @@ def _normalise_name(raw: Any) -> str:
     return str(raw).strip().casefold() if isinstance(raw, str) else ""
 
 
-def build_page_context(pages: list[dict] | None) -> dict:
+def build_page_context(pages: list[dict[str, Any]] | None) -> dict[str, Any]:
     """Page ids, titles and name lookup for internal commands.
 
     Names are not unique, so the lookup maps to lists and ambiguity can be
@@ -142,7 +142,7 @@ def build_page_context(pages: list[dict] | None) -> dict:
     if pages is None:
         return {}
     valid = [p for p in pages if isinstance(p, dict)]
-    by_name: dict[str, list] = {}
+    by_name: dict[str, list[Any]] = {}
     for page in valid:
         key = _normalise_name(page_label(page))
         if key:
@@ -174,7 +174,7 @@ def coerce_page_id(raw: Any) -> Any:
     return raw
 
 
-def _pages_named(name: str, context: dict) -> list:
+def _pages_named(name: str, context: dict[str, Any]) -> list[Any]:
     """Every page id going by *name*, or raise when there is none.
 
     Raising when the caller has no page list at all is deliberate: the
@@ -189,7 +189,7 @@ def _pages_named(name: str, context: dict) -> list:
     return matches
 
 
-def _goto_page_params(data: Any, context: dict) -> dict:
+def _goto_page_params(data: Any, context: dict[str, Any]) -> dict[str, Any]:
     """Validate a ``goto_page`` payload into ``{"page_id": <int>}``.
 
     The panel stores ids because names can be duplicated or renamed; hand-written
@@ -197,7 +197,7 @@ def _goto_page_params(data: Any, context: dict) -> dict:
     the remote could jump somewhere the config does not say.
     """
     payload = data if isinstance(data, dict) else {}
-    name = payload.get("page")
+    name: Any = payload.get("page")
     raw_id = coerce_page_id(payload.get("page_id"))
     has_name = isinstance(name, str) and name.strip() != ""
     has_id = raw_id is not None and raw_id != ""
@@ -242,7 +242,7 @@ def _goto_page_params(data: Any, context: dict) -> dict:
     return {"page_id": matches[0]}
 
 
-def _goto_page_tooltip(params: dict, context: dict) -> str:
+def _goto_page_tooltip(params: dict[str, Any], context: dict[str, Any]) -> str:
     """Name the page a ``goto_page`` button opens.
 
     A device-local command has no entity to borrow a name from, so without this
@@ -255,7 +255,7 @@ def _goto_page_tooltip(params: dict, context: dict) -> str:
     return title or f"Page {page_id}"
 
 
-def _goto_page_available(params: dict, context: dict) -> bool:
+def _goto_page_available(params: dict[str, Any], context: dict[str, Any]) -> bool:
     """False once the target page is gone.
 
     ``page_ids`` is absent when the caller has no page list at hand; that is
@@ -267,9 +267,17 @@ def _goto_page_available(params: dict, context: dict) -> bool:
     return params.get("page_id") in page_ids
 
 
-async def _goto_page_run(connection: Any, params: dict) -> Any:
+async def _goto_page_run(connection: Any, params: dict[str, Any]) -> Any:
     return await connection.goto_page(params["page_id"])
 
+
+_GOTO_PAGE_FIELDS: dict[Any, Any] = {
+    vol.Optional("page"): str,
+    vol.Optional("page_id"): vol.Any(int, str),
+    vol.Optional("config_entry_id"): str,
+    # Non-entity services receive raw target keys in call.data.
+    **cv.TARGET_SERVICE_FIELDS,
+}
 
 GOTO_PAGE = InternalCommand(
     service="goto_page",
@@ -279,13 +287,7 @@ GOTO_PAGE = InternalCommand(
     build_params=_goto_page_params,
     run=_goto_page_run,
     # Cross-field existence/range checks live in build_params for translations.
-    schema=vol.Schema({
-        vol.Optional("page"): str,
-        vol.Optional("page_id"): vol.Any(int, str),
-        vol.Optional("config_entry_id"): str,
-        # Non-entity services receive raw target keys in call.data.
-        **cv.TARGET_SERVICE_FIELDS,
-    }),
+    schema=vol.Schema(_GOTO_PAGE_FIELDS),
     build_tooltip=_goto_page_tooltip,
     is_available=_goto_page_available,
     target_params=(

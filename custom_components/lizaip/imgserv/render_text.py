@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
 from functools import lru_cache
+from typing import Any, cast
 
 from PIL import Image, ImageDraw, ImageFont
 from PIL.features import check as _pil_check
@@ -77,7 +79,9 @@ def _bitmap_emoji_size(path: str) -> int | None:
     return None
 
 
-def _resolve_fonts(font_id: str | None, fonts_dir: str | None = None, emoji: str | None = None):
+def _resolve_fonts(
+    font_id: str | None, fonts_dir: str | None = None, emoji: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
     """Return ``(primary_path, emoji_path, color_emoji_path)``.
 
     *emoji* is the theme's emoji font: ``none`` for none -- emoji are drawn in
@@ -131,10 +135,11 @@ def _load_font(path: str | None, size: int) -> ImageFont.FreeTypeFont:
     """Load a TrueType font, falling back to Pillow's built-in default."""
     if path:
         return open_font(path, size, layout_engine=_LAYOUT_ENGINE)
+    # With FreeType (which every caller's metrics need) the default is a FreeTypeFont.
     try:
-        return ImageFont.load_default(size=size)
+        return cast(ImageFont.FreeTypeFont, ImageFont.load_default(size=size))
     except TypeError:
-        return ImageFont.load_default()
+        return cast(ImageFont.FreeTypeFont, ImageFont.load_default())
 
 
 def _char_needs_emoji(cluster: str, primary_path: str | None) -> bool:
@@ -147,7 +152,7 @@ def _char_needs_emoji(cluster: str, primary_path: str | None) -> bool:
     return not font_has_all_glyphs(primary_path, cluster)
 
 
-def _render_color_emoji(cluster: str, target_h: int, color_font) -> Image.Image:
+def _render_color_emoji(cluster: str, target_h: int, color_font: ImageFont.FreeTypeFont) -> Image.Image:
     """Render *cluster* with the color emoji font and scale to *target_h*.
 
     The CBDT font only works at its native bitmap size, so we render at that
@@ -158,8 +163,8 @@ def _render_color_emoji(cluster: str, target_h: int, color_font) -> Image.Image:
     scratch = Image.new("RGBA", (1, 1))
     draw = ImageDraw.Draw(scratch)
     bb = draw.textbbox((0, 0), cluster, font=color_font)
-    glyph_w = max(bb[2] - bb[0], 1)
-    glyph_h = max(bb[3] - bb[1], 1)
+    glyph_w = int(max(bb[2] - bb[0], 1))
+    glyph_h = int(max(bb[3] - bb[1], 1))
 
     # Render at native size with embedded color
     canvas = Image.new(
@@ -178,7 +183,7 @@ def _render_color_emoji(cluster: str, target_h: int, color_font) -> Image.Image:
     # Scale to target height
     scale = target_h / canvas.height
     new_w = max(int(canvas.width * scale), 1)
-    return canvas.resize((new_w, target_h), Image.LANCZOS)
+    return canvas.resize((new_w, target_h), Image.Resampling.LANCZOS)
 
 
 # ── Grapheme cluster segmentation ─────────────────────────────────────────
@@ -214,7 +219,7 @@ def _is_tag_char(cp: int) -> bool:
     return 0xE0020 <= cp <= 0xE007F
 
 
-def grapheme_iter(text: str):
+def grapheme_iter(text: str) -> Iterator[str]:
     """Yield grapheme clusters from *text*.
 
     Groups ZWJ sequences, variation selectors, skin-tone modifiers,
@@ -268,7 +273,7 @@ def _extents(font: ImageFont.FreeTypeFont) -> tuple[int, int]:
     draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     up = -draw.textbbox((0, 0), _ASCENDER_PROBE, font=font, anchor="ls")[1]
     down = draw.textbbox((0, 0), _DESCENDER_PROBE, font=font, anchor="ls")[3]
-    return max(ascent, up, 0), max(descent, down, 0)
+    return int(max(ascent, up, 0)), int(max(descent, down, 0))
 
 
 @lru_cache(maxsize=64)
@@ -300,11 +305,30 @@ def text_line(
     return _line(path, height, font_size or height)[1:]
 
 
+def cap_height(
+    height: int,
+    font_size: int | None = None,
+    font_id: str | None = None,
+    fonts_dir: str | None = None,
+) -> int:
+    """How far a capital reaches above the baseline in what `render_text` draws.
+
+    A property of the font and size alone, the same for any text.
+    """
+    height = min(height, MAX_SIZE)
+    path = _resolve_fonts(font_id, fonts_dir)[0]
+    font = _load_font(path, _line(path, height, font_size or height)[0])
+    if path and not font_has_all_glyphs(path, "H"):
+        return max(1, font.getmetrics()[0])
+    draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    return int(max(1, -draw.textbbox((0, 0), "H", font=font, anchor="ls")[1]))
+
+
 def render_text(
     text: str,
     width: int,  # accepted for API compatibility; image width is derived from text
     height: int,
-    fg_color: tuple = DEFAULT_FG_COLOR,
+    fg_color: tuple[Any, ...] = DEFAULT_FG_COLOR,
     font_size: int | None = None,
     font_id: str | None = None,
     fonts_dir: str | None = None,
@@ -334,7 +358,7 @@ def render_text(
 def _render_text(
     text: str,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
     font_size: int | None,
     fonts: tuple[str | None, str | None, str | None],
 ) -> Image.Image:
@@ -372,7 +396,7 @@ def _render_text(
     if not needs_emoji:
         # Fast path: whole string in the primary font.
         bbox = draw.textbbox((0, 0), text, font=primary_font, anchor="ls")
-        text_w = max(bbox[2] - bbox[0], 0)
+        text_w = int(max(bbox[2] - bbox[0], 0))
         img_width = min(max(text_w + 2 * TEXT_PADDING, 1), MAX_SIZE)
 
         img = Image.new("RGBA", (img_width, height), TRANSPARENT)
@@ -406,17 +430,17 @@ def _render_text(
                 font = primary_font
             bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
             segments.append((cl, is_emoji, None))
-            total_w += bb[2] - bb[0]
+            total_w += int(bb[2] - bb[0])
 
         img_width = min(max(total_w + 2 * TEXT_PADDING, 1), MAX_SIZE)
         img = Image.new("RGBA", (img_width, height), TRANSPARENT)
         draw = ImageDraw.Draw(img)
         cursor_x = float(TEXT_PADDING)
 
-        for cl, is_emoji, emoji_img in segments:
-            if emoji_img is not None:
-                img.paste(emoji_img, (int(cursor_x), baseline - up), emoji_img)
-                cursor_x += emoji_img.width
+        for cl, is_emoji, seg_img in segments:
+            if seg_img is not None:
+                img.paste(seg_img, (int(cursor_x), baseline - up), seg_img)
+                cursor_x += seg_img.width
                 continue
             font = emoji_font if is_emoji else primary_font
             bb = draw.textbbox((0, 0), cl, font=font, anchor="ls")
@@ -447,7 +471,7 @@ def render_text_fitted(
     text: str,
     width: int,
     height: int,
-    fg_color: tuple = DEFAULT_FG_COLOR,
+    fg_color: tuple[Any, ...] = DEFAULT_FG_COLOR,
     font_size: int | None = None,
     font_id: str | None = None,
     fonts_dir: str | None = None,

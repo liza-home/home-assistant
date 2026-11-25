@@ -30,13 +30,32 @@ export const STYLES_BUTTONS = `
   }
 
   /* Pages card */
-  .pages-card { padding: 0; overflow: hidden; }
+  /* The strip sizes its thumbs against its own width, not the window's: a
+     container rather than a media query, for the reason .panel-narrow gives --
+     the panel is narrower than the viewport whenever HA's sidebar or the
+     guide takes a column. On the card rather than the strip, because a
+     container cannot size itself by its own query units, and the strip needs
+     them for its height. Nothing positioned fixed lives inside the card (the
+     menus hang off the shadow root), so the containing block it creates is
+     harmless here. */
+  .pages-card { padding: 0; overflow: hidden; container: pages / inline-size; }
   .pages-list {
+    /* Fluid thumbs, in proportion to the strip at every width. A base plus a
+       share of the width, so they grow gently rather than jumping straight to
+       the cap. The open page is a little larger than the rest (15%), never
+       below 140px: a tile is ~23% of the face, so that keeps ~30px tiles on a
+       phone, over the 24px of WCAG 2.5.8, while the others shrink to previews.
+       At the top end the open page is 230px -- ~50px tiles, under the 60px the
+       remote's pictures are drawn at, so nothing is upscaled. */
+    --pg-thumb-w: clamp(84px, calc(40px + 14cqi), 200px);
+    --pg-active-w: max(140px, calc(var(--pg-thumb-w) * 1.15));
     display: flex;
     flex-wrap: wrap;
     align-items: flex-start;
     gap: 12px;
-    /* 47px, not 14px, at the bottom: the inline overflow-x:auto on this
+    /* 350px at a 180px open page, and in proportion to it. */
+    min-height: calc(var(--pg-active-w) * 1.95);
+    /* ~47px, not 14px, at the bottom: the inline overflow-x:auto on this
        element (set where it is rendered) forces overflow-y to the computed
        value "auto" too (CSS requires that once either axis isn't "visible"),
        which turns this row into a scroll container. A scroll container's own
@@ -46,19 +65,37 @@ export const STYLES_BUTTONS = `
        cannot reach it either, since content already determines the row's
        height well past any floor that sets. The fixed crop every thumbnail's
        svg uses (viewBox "32 33 108 295" in _refreshSVG) makes a thumb's
-       rendered height entirely predictable from its own fixed width: content
-       width 168px (180 minus this rule's own 12px side padding, times two)
-       times 295/108 is ~459px, so its 7% is ~32px -- the extra 33px here, on
+       rendered height entirely predictable from its width: at the full 180px,
+       content width 168px (180 minus the thumb's 6px padding, times two)
+       times 295/108 is ~459px, so its 7% is ~32px -- the extra ~33px here, on
        top of the original 14px, is that shift, made part of the row's actual
-       layout height so nothing is left over to scroll for.
+       layout height so nothing is left over to scroll for. Written against
+       the open page's width, the widest thumb, so it holds as both shrink.
     */
-    padding: 14px 12px 47px 12px;
+    padding: 14px 12px calc(14px + (var(--pg-active-w) - 12px) * 0.196) 12px;
     scrollbar-width: thin;
     /* The containing block for .goto-link-layer. It has to be this element and
        not the card: the layer is sized to the scrollable content, and only a
        child of the scroller itself scrolls along with the thumbnails it is
        drawing between. */
     position: relative;
+  }
+  /* With a mouse the open page is the same size as the rest: a pointer hits
+     a small tile as easily as a large one, and the blue frame already says
+     which page is open. The extra size is for a finger. */
+  @media (hover: hover) and (pointer: fine) {
+    .pages-list { --pg-active-w: var(--pg-thumb-w); }
+  }
+  /* A phone turned sideways keeps the sizes it had upright. Upright, the
+     strip is the screen's width less the panel's padding (~34px); sideways
+     that same short side is the viewport's height, so it stands in for the
+     container width in the same formula. Only for a short landscape screen:
+     a desktop window is never this low, and keeps sizing by its width. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .pages-list {
+      --pg-thumb-w: clamp(84px, calc(40px + 0.14 * (100vh - 34px)), 200px);
+      --pg-thumb-w: clamp(84px, calc(40px + 0.14 * (100dvh - 34px)), 200px);
+    }
   }
   /* The link from a button to the page it opens. Drawn by _drawGotoLink,
      which also sizes it; nothing here may set a width or a height. */
@@ -97,7 +134,7 @@ export const STYLES_BUTTONS = `
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
-    width: 180px;
+    width: var(--pg-thumb-w, 180px);
     padding: 6px;
     border-radius: 14px;
     cursor: pointer;
@@ -154,6 +191,9 @@ export const STYLES_BUTTONS = `
     transition: none;
   }
   .page-thumb.active {
+    /* The open page is the one whose tiles are pressed, so it stays the
+       largest; the rest are previews. */
+    width: var(--pg-active-w, 180px);
     border-color: var(--liza-selected);
     background: rgba(3,169,244,.04);
     box-shadow: 0 0 12px rgba(3,169,244,.2);
@@ -187,6 +227,15 @@ export const STYLES_BUTTONS = `
     transform: scale(1.08);
   }
   .page-add-btn:hover ha-icon { color: rgba(3,169,244,.9) !important; }
+  .page-add-btn.is-full { opacity: .4; cursor: not-allowed; }
+  .page-add-btn.is-full:hover {
+    border-color: color-mix(in srgb, var(--primary-text-color) 25%, transparent);
+    background: transparent;
+    transform: none;
+  }
+  .page-add-btn.is-full:hover ha-icon {
+    color: color-mix(in srgb, var(--primary-text-color) 60%, transparent) !important;
+  }
 
   /* SVG container inside each page item */
   .pg-svg-container {

@@ -41,6 +41,8 @@ from __future__ import annotations
 import io
 import math
 import re
+import xml.etree.ElementTree as ET
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -194,9 +196,42 @@ def apply_percent_tint(
     return Image.fromarray(np.clip(np.round(rgba), 0, 255).astype(np.uint8), "RGBA")
 
 
+def fade(size: tuple[int, int], colours: tuple[tuple[Any, ...], ...]) -> Image.Image:
+    """A *size* canvas through *colours*, spaced evenly from top to bottom."""
+    width, height = size
+    stops = np.array(colours, dtype=np.float64)
+    rows = np.linspace(0.0, 1.0, height)
+    at = np.linspace(0.0, 1.0, len(colours))
+    column = np.stack([np.interp(rows, at, stops[:, c]) for c in range(4)], axis=1)
+    pixels = np.repeat(np.round(column).astype(np.uint8)[:, None], width, axis=1)
+    return Image.fromarray(pixels, "RGBA")
+
+
+def fade_ink(img: Image.Image, colours: tuple[tuple[Any, ...], ...] | None) -> Image.Image:
+    """*img* with what was drawn in ``colours[0]`` fading through *colours*.
+
+    The fade spans the ink's own height. Only pixels of exactly the first
+    colour change, so the parts that keep colours of their own (an emoji, a
+    logo, a cover) stay as they are; alpha is kept.
+    """
+    if not colours or len(colours) < 2:
+        return img
+    rgba = np.array(img.convert("RGBA"))
+    ink = (rgba[:, :, :3] == colours[0][:3]).all(axis=2) & (rgba[:, :, 3] > 0)
+    rows = np.nonzero(ink.any(axis=1))[0]
+    if not rows.size:
+        return img
+    top, bottom = int(rows[0]), int(rows[-1]) + 1
+    band = np.array(fade((rgba.shape[1], bottom - top), colours))
+    painted = rgba[top:bottom]
+    painted[ink[top:bottom], :3] = band[ink[top:bottom], :3]
+    return Image.fromarray(rgba, "RGBA")
+
+
 def mount(
     img: Image.Image,
-    bg_color: tuple | None = None,
+    bg_color: tuple[Any, ...] | None = None,
+    bg_fade: tuple[tuple[Any, ...], ...] | None = None,
 ) -> Image.Image:
     """Step 4: composite the foreground onto its background.
 
@@ -205,12 +240,13 @@ def mount(
     case the mount is a no-op and the alpha survives to :func:`save_png`.
 
     Percent dimming is done earlier in :func:`finalize_png`, before mounting,
-    so an opaque background stays fully opaque.
+    so an opaque background stays fully opaque. With *bg_fade* the background
+    runs through its colours from top to bottom instead.
     """
     bg = bg_color or TRANSPARENT
     rgba = img.convert("RGBA")
     if bg[3] != 0:
-        canvas = Image.new("RGBA", rgba.size, bg)
+        canvas = fade(rgba.size, bg_fade) if bg_fade else Image.new("RGBA", rgba.size, bg)
         rgba = Image.alpha_composite(canvas, rgba)
     return rgba
 
@@ -219,8 +255,9 @@ def finalize_png(
     img: Image.Image,
     keep_alpha: bool = False,
     percent: int | None = None,
-    bg_color: tuple | None = None,
+    bg_color: tuple[Any, ...] | None = None,
     crop: bool | str = False,
+    bg_fade: tuple[tuple[Any, ...], ...] | None = None,
 ) -> tuple[bytes, str]:
     """Steps 2–5: crop, percent, mount, encode. **The one exit from every render path.**
 
@@ -235,7 +272,7 @@ def finalize_png(
        the letters -- or, without one, evenly at top and bottom
     3. ``apply_percent_tint`` — when ``percent`` is set, upper rows are dimmed
        via alpha to :data:`PERCENT_TINT_ALPHA`
-    4. ``mount`` onto ``bg_color``
+    4. ``mount`` onto ``bg_color``, or the fade through ``bg_fade``
     5. ``save_png``, flattening unless ``keep_alpha``
 
     That is why the renderers carry none of these parameters in their
@@ -250,13 +287,13 @@ def finalize_png(
     elif crop:
         img = autocrop(img, TRANSPARENT)
     img = apply_percent_tint(img, percent)
-    img = mount(img, bg_color)
+    img = mount(img, bg_color, bg_fade)
     return (save_png(img, keep_alpha), "image/png")
 
 
 def autocrop(
     img: Image.Image,
-    bg_color: tuple = TRANSPARENT,
+    bg_color: tuple[Any, ...] = TRANSPARENT,
     symmetric_vertical: bool = True,
     horizontal_only: bool = False,
     vertical_only: bool = False,
@@ -340,7 +377,7 @@ def _compose_mask(
     mask: np.ndarray,
     width: int,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
 ) -> Image.Image:
     """Turn a rasterized mask into foreground pixels on a transparent canvas.
 
@@ -356,7 +393,7 @@ def _compose_mask(
     fg_alpha = fg_color[3] if len(fg_color) > 3 else 255
     rgba[:, :, 3] = (mask.astype(np.uint16) * fg_alpha // 255).astype(np.uint8)
     img = Image.fromarray(rgba, "RGBA")
-    return img.resize((width, height), Image.LANCZOS)
+    return img.resize((width, height), Image.Resampling.LANCZOS)
 
 
 def render_svg_icon(
@@ -364,7 +401,7 @@ def render_svg_icon(
     viewbox: tuple[float, float, float, float],
     width: int,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
 ) -> Image.Image:
     """Render a *single* SVG path string into an image using even-odd fill."""
     return render_multi_path_svg([path_str], viewbox, width, height, fg_color)
@@ -375,7 +412,7 @@ def render_multi_path_svg(
     viewbox: tuple[float, float, float, float],
     width: int,
     height: int,
-    fg_color: tuple,
+    fg_color: tuple[Any, ...],
 ) -> Image.Image:
     """Render multiple SVG ``<path>`` elements combined with OR (union).
 
@@ -398,7 +435,7 @@ def render_multi_path_svg(
 
 # ── SVG XML helpers ───────────────────────────────────────────────────────
 
-def parse_svg_viewbox(root) -> tuple[float, float, float, float]:
+def parse_svg_viewbox(root: ET.Element) -> tuple[float, float, float, float]:
     """Return ``(x, y, width, height)`` from an SVG root element."""
     vb = root.get("viewBox")
     if vb:
@@ -407,15 +444,15 @@ def parse_svg_viewbox(root) -> tuple[float, float, float, float]:
     return 0.0, 0.0, float(root.get("width", "24")), float(root.get("height", "24"))
 
 
-def collect_svg_paths(root) -> list[str]:
+def collect_svg_paths(root: ET.Element) -> list[str]:
     """Extract ``<path d="…">`` and ``<circle>`` elements, skipping ``fill=none``."""
     paths: list[str] = []
     for elem in root.iter():
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
         if elem.get("fill", "").lower() == "none":
             continue
-        if tag == "path" and elem.get("d"):
-            paths.append(elem.get("d"))
+        if tag == "path" and (d := elem.get("d")):
+            paths.append(d)
         elif tag == "circle":
             cx = float(elem.get("cx", 0))
             cy = float(elem.get("cy", 0))
@@ -446,7 +483,7 @@ def tessellate_svg_path(
     x = y = sx = sy = lcx = lcy = 0.0
     i, cmd, lcmd = 0, "M", ""
 
-    def num():
+    def num() -> float:
         nonlocal i
         while i < len(tokens) and tokens[i].isalpha():
             i += 1
@@ -454,7 +491,9 @@ def tessellate_svg_path(
             v = float(tokens[i]); i += 1; return v
         return 0.0
 
-    def cubic(x0, y0, c1x, c1y, c2x, c2y, ex, ey):
+    def cubic(
+        x0: float, y0: float, c1x: float, c1y: float, c2x: float, c2y: float, ex: float, ey: float,
+    ) -> list[tuple[float, float]]:
         return [
             (
                 (1 - t) ** 3 * x0 + 3 * (1 - t) ** 2 * t * c1x + 3 * (1 - t) * t * t * c2x + t ** 3 * ex,
@@ -463,7 +502,9 @@ def tessellate_svg_path(
             for t in (s / n for s in range(1, n + 1))
         ]
 
-    def quad(x0, y0, cx, cy, ex, ey):
+    def quad(
+        x0: float, y0: float, cx: float, cy: float, ex: float, ey: float,
+    ) -> list[tuple[float, float]]:
         return [
             (
                 (1 - t) ** 2 * x0 + 2 * (1 - t) * t * cx + t * t * ex,
@@ -472,7 +513,10 @@ def tessellate_svg_path(
             for t in (s / n for s in range(1, n + 1))
         ]
 
-    def arc(rx, ry, rot, la, sw, ex, ey, sx_, sy_):
+    def arc(
+        rx: float, ry: float, rot: float, la: int, sw: int,
+        ex: float, ey: float, sx_: float, sy_: float,
+    ) -> list[tuple[float, float]]:
         if rx == 0 or ry == 0:
             return [(ex, ey)]
         rx, ry = abs(rx), abs(ry)
@@ -493,7 +537,7 @@ def tessellate_svg_path(
         cx_ = cp * cxp - sp * cyp + (sx_ + ex) / 2
         cy_ = sp * cxp + cp * cyp + (sy_ + ey) / 2
 
-        def ang(ux, uy, vx, vy):
+        def ang(ux: float, uy: float, vx: float, vy: float) -> float:
             d = math.sqrt(ux * ux + uy * uy) * math.sqrt(vx * vx + vy * vy)
             if d == 0:
                 return 0

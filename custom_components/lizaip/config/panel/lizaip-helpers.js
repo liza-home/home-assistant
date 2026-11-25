@@ -14,6 +14,9 @@ const STATE_PLACEHOLDER_RE = /\{\s*translate\s*:\s*\$\{\s*_state\s*\}\s*\}|\$\{\
 const LEADING_SEPARATORS_RE = /^[\s:;,/\-–—]*$/;
 const TWO_WAY_SERVICES = ["toggle", "media_play_pause"];
 
+/** Above this many entries a list stops being scannable and gets a filter. */
+export const SEARCH_THRESHOLD = 8;
+
 /**
  * The two face keys drawn like buttons that hold no button record:
  * `slider_horizontal` is the page's title bar, and `slider_vertical` stores
@@ -86,6 +89,25 @@ export const ATTR_ACTION_MAP = Object.fromEntries(
     attr,
     Object.fromEntries(cycle.map(([value], i) => [value, cycle[(i + 1) % cycle.length][1]])),
   ]),
+);
+
+/**
+ * attribute -> a value -> the value the cycle arrives at it from. Mirrors
+ * `ATTR_PREVIOUS_VALUE`: `attribute_icons` is keyed by the value a press moves
+ * *on to*, so the face for a value a step writes is filed under its predecessor.
+ */
+export const ATTR_PREVIOUS_VALUE = Object.fromEntries(
+  Object.entries(ATTR_ACTION_CYCLES).map(([attr, cycle]) => [
+    attr,
+    Object.fromEntries(cycle.map(([value], i) => [cycle[(i + 1) % cycle.length][0], value])),
+  ]),
+);
+
+/** Mirrors `BOOLEAN_ATTRIBUTES`: attributes a setter can flip rather than set. */
+export const BOOLEAN_ATTRIBUTES = new Set(
+  Object.entries(ATTR_ACTION_CYCLES)
+    .filter(([, cycle]) => cycle.every(([value]) => value === "true" || value === "false"))
+    .map(([attr]) => attr),
 );
 
 /**
@@ -358,7 +380,7 @@ const isSlugPart = (part) =>
 /**
  * Where each part of a composite *value* begins and ends, in order.
  *
- * The panel's reading of `split_source_parts` in `imgserv/const.py`, kept as
+ * The panel's reading of `split_source_parts` in `imgserv/source_parse.py`, kept as
  * spans because the suggestion list must know which part the caret is in to
  * replace that one and leave the rest of the title standing.
  */
@@ -370,10 +392,7 @@ export function sourcePartSpans(value) {
   const textOf = (span) => text.slice(span.start, span.end);
   for (let i = 1; i < words.length; i++) {
     const { text: word, start } = words[i];
-    const next = words[i + 1]?.text || "";
     const last = spans[spans.length - 1];
-    if ((word === "-" || word === "+")
-      && (isPartStart(next) || isSlugPart(textOf(last)))) continue;
     if (isPartStart(word) || isSlugPart(textOf(last))) {
       spans.push({ start, end: start + word.length });
     } else {
@@ -395,7 +414,7 @@ export function partSpanAt(value, caret) {
 
 /**
  * Split *value* into the parts drawn side by side, in order -- the mirror of
- * `split_source_parts` in `imgserv/const.py`, which states the rule.
+ * `split_source_parts` in `imgserv/source_parse.py`, which states the rule.
  */
 function splitSourceParts(value) {
   return sourcePartSpans(value).map(
@@ -630,12 +649,23 @@ export function applyVariablePick(value, query, pick) {
   return { value: `${before}${kept}${")".repeat(missing)}}${rest}`, caret: before.length, isFunction };
 }
 
+/** The IR code the first step of *config* sends, or `undefined` if it sends none. */
+export function irBlobOf(config) {
+  const step = Array.isArray(config) ? config[0] : undefined;
+  return step?.action === "lizaip.send_ir" ? step.data?.ir_blob : undefined;
+}
+
 /** The field's own error element. A `children` scan, not `:scope > …`, which
  *  is unsupported inside a shadow root and so matched nothing here. */
 const findFieldError = (host) =>
   Array.prototype.find.call(host.children, (n) => n.classList?.contains("field-error")) || null;
 
 export const HelpersMixin = {
+  /** True only when the remote's settings say off, like `read_variables_enabled`. */
+  _variablesOff() {
+    return this._variablesEnabled === false;
+  },
+
   /**
    * What to show a user for a rejected `hass.callWS`.
    *
@@ -987,6 +1017,8 @@ export const HelpersMixin = {
     // Words are drawn as words, as the device draws them: the integration
     // reads anything that is not a picture as `text:`, so the value goes as is.
     if (icon) return this._renderIconHtml(icon, size, color, shape?.box ?? null);
+    // An empty title or tooltip strip is blank on the remote, so here too.
+    if (size === "title" || size === "tooltip") return '<span class="cch-preview-empty"></span>';
     return `<span class="cch-preview-empty"><ha-icon icon="mdi:image-off-outline" style="--mdc-icon-size:${glyph}px;"></ha-icon></span>`;
   },
 
@@ -1048,8 +1080,16 @@ export const HelpersMixin = {
         </div>`;
   },
 
+  /** What a field holding `${…}` shows on the remote while Variables are off. */
+  _variablesOffHint(mark) {
+    return this._t("variables_off_field_hint", {
+      mark: `<ha-icon class="settings-variables-off-icon" icon="${mark}"></ha-icon>`,
+    });
+  },
+
   /** "Now reads …" plus the variable hint, for a picture field holding `${…}`. */
   _imageVariableHint(value) {
+    if (this._variablesOff()) return this._variablesOffHint("mdi:cancel");
     const now = this._resolveImageVariables(value);
     return `${now ? this._t("label_now_reads", { text: this._esc(now) }) : ""}${this._t("variable_hint")}`;
   },
@@ -2043,7 +2083,10 @@ export const HelpersMixin = {
    * the backend resolves a stored name against the unexpanded words.
    */
   _pageTitleShown(page) {
-    const title = this._pageTitle(page);
+    const shownPage = this._variablesOff() && typeof page?.title === "string"
+      ? { ...page, title: page.title.replace(/\$\{[^{}]*\}/g, "") }
+      : page;
+    const title = this._pageTitle(shownPage);
     if (!title.includes("${")) return title;
     const filled = this._substituteEntityTokens?.(this._expandPageDevice?.(title, page) ?? title) ?? title;
     return this._cleanTooltipText(filled) || title.replace(/\$\{[^}]*\}/g, "").trim();
@@ -2307,7 +2350,12 @@ export const HelpersMixin = {
     }
     if (service) {
       const eid = this._getTargetEntityFromConfig(a.config) || "";
-      return this._getServiceIcon(service, eid) || fallback;
+      // The value this button writes, below the library entry's identity and
+      // above the service glyph -- the place `_icon_from_step_value` holds in
+      // the device's ladder, so a tile and the remote draw the same face.
+      return this._stepValueIcon(service, a.config, a.toggle?.mode === "cycle")
+        || this._getServiceIcon(service, eid)
+        || fallback;
     }
     return fallback;
   },
@@ -2338,11 +2386,14 @@ export const HelpersMixin = {
       || this._getTargetStateObj(config) || entityId);
     const lang = this._tooltipLang();
 
+    // Off, the state is a variable too, so the action keeps its fixed name.
+    const live = !this._variablesOff();
+
     // A two-way service gets a *template*, not a resolved state. The caller
     // persists this string into `assign.tooltip`, so returning "Lampe Aus" here
     // would freeze whatever the entity happened to be doing when the button
     // was configured. The state is resolved per render, on the device side.
-    if (hasSubject && this._isStateTooltipService(svc)) return STATE_TOOLTIP;
+    if (live && hasSubject && this._isStateTooltipService(svc)) return STATE_TOOLTIP;
 
     // An explicit action name is only *this* button's name when the service has no
     // payload. For play_media & friends the library entry is shared, so its name
@@ -2393,6 +2444,11 @@ export const HelpersMixin = {
   /** Resolve `${TOKEN}` placeholders for *display only* — never for storage. */
   _substituteTooltipTokens(text, values) {
     if (!text) return text;
+    // Switched off, `${_state}` and friends are the backend's placeholders too;
+    // a picture is answered by the picture rules (`_resolveTooltip`).
+    if (this._variablesOff() && text.includes("${")) {
+      return this._isMediaSource(text) ? text : (this._substituteEntityTokens?.(text) ?? text);
+    }
     // `{translate: …}` is the backend's, in the remote's language -- and words,
     // so it is filled in before anything below could strip its braces.
     if (!this._isMediaSource(text) && text.includes("{translate:")) {
@@ -2504,6 +2560,64 @@ export const HelpersMixin = {
     return null;
   },
 
+  /** Mirrors `first_step`: a config's first step, the one face and label describe. */
+  _firstStep(config) {
+    return Array.isArray(config) && config[0] && typeof config[0] === "object" ? config[0] : {};
+  },
+
+  /** Mirrors `toggles_attribute`: the button flips the attribute rather than setting a value. */
+  _togglesAttribute(svc, data) {
+    const attribute = this._serviceToAttribute(svc);
+    if (!attribute) return false;
+    const stored = data && typeof data === "object" ? data : {};
+    if (!(attribute in stored)) return BOOLEAN_ATTRIBUTES.has(attribute);
+    return typeof stored[attribute] === "boolean";
+  },
+
+  /**
+   * Mirrors `names_stored_value`: the value a button stores is the one it
+   * runs, and so the one its face and its label both name.
+   *
+   * One predicate for both halves, as on the device -- a cycle press and a
+   * value setter name what they hold, a boolean setter inverts the live
+   * attribute and names that instead.
+   */
+  _namesStoredValue(svc, data, asPress) {
+    return !!asPress || !this._togglesAttribute(svc, data);
+  },
+
+  /**
+   * Mirrors `state_icon_override`: the step's own row for the state its target
+   * is in, keyed as the theme table is. The user's choice outranks every
+   * derived glyph, so this is asked before the stored value.
+   */
+  _stateIconOverride(service, entityId, stateIcons) {
+    if (!stateIcons || !entityId) return "";
+    const stateObj = this._hass?.states?.[entityId];
+    if (!stateObj) return "";
+    const svc = String(service || "").split(".")[1] || "";
+    const attribute = this._serviceToAttribute(svc);
+    const keyed = attribute
+      ? this._attrStr(stateObj.attributes?.[attribute])
+      : stateObj.state;
+    return stateIcons[keyed] || stateIcons[stateObj.state] || "";
+  },
+
+  /**
+   * Mirrors `_icon_from_step_value`: the glyph for the literal attribute value
+   * a step writes, so the preview names the value its label names.
+   */
+  _stepValueIcon(service, config, asPress) {
+    const svc = String(service || "").split(".")[1] || "";
+    const attribute = this._serviceToAttribute(svc);
+    if (!attribute) return "";
+    const data = this._firstStep(config).data;
+    if (!data || typeof data !== "object") return "";
+    if (!this._namesStoredValue(svc, data, asPress)) return "";
+    const previous = ATTR_PREVIOUS_VALUE[attribute]?.[this._attrStr(data[attribute])];
+    return (this._iconDefaults?.attribute_icons?.[attribute] || {})[previous] || "";
+  },
+
   /**
    * What the remote will actually print for a stored label.
    *
@@ -2521,6 +2635,7 @@ export const HelpersMixin = {
     // Unlike its Python counterpart this is a display path in its own right,
     // so it cleans on the way out too rather than only via `_resolveTooltip`.
     if (!name || !name.includes("${")) return this._displayName(name);
+    if (this._variablesOff()) return this._cleanTooltipText(this._substituteTooltipTokens(name, {}));
     // The action library's service, not the first step's. `_fill_tooltip_tokens`
     // in device_sync.py reads `action_def["service"]`, and this has to answer
     // what the remote will print. Where the two differ -- a library entry of
@@ -2535,13 +2650,13 @@ export const HelpersMixin = {
       || (entityId && this._hass?.states?.[entityId]) || null;
     const stateVal = stateObj?.state || "";
     const attributes = stateObj?.attributes || null;
-    // The first step's own service data, matching `_fill_tooltip_tokens`. Read
-    // for a cycle, which runs every face verbatim, and so names the direction
-    // it stores; a plain action toggles the attribute instead.
-    const step = Array.isArray(config) && config[0] && typeof config[0] === "object" ? config[0] : {};
-    const data = step.data || {};
+    // The first step's own service data, matching `_fill_tooltip_tokens`. A
+    // cycle and a value setter both run what they store, so the label names
+    // that value; a boolean setter flips the attribute and names nothing.
+    const data = this._firstStep(config).data || {};
     const asPress = press || assign?.toggle?.mode === "cycle";
-    const stateKey = this._stateTokenKey(svc, stateVal, attributes, asPress ? data : null);
+    const namesDirection = this._namesStoredValue(svc, data, asPress);
+    const stateKey = this._stateTokenKey(svc, stateVal, attributes, namesDirection ? data : null);
     name = this._translateState(name, stateKey, this._tooltipLang());
     const values = {
       _state: stateKey,
@@ -2674,7 +2789,11 @@ export const HelpersMixin = {
    * as `device_sync` sends it.
    */
   _resolvedPageTitle(page) {
-    return String(this._resolveImageVariables(this._expandPageDevice(page?.title, page)) || "").trim();
+    let title = page?.title;
+    if (this._variablesOff() && typeof title === "string") {
+      title = title.replace(/\$\{[^{}]*\}/g, "");
+    }
+    return String(this._resolveImageVariables(this._expandPageDevice(title, page)) || "").trim();
   },
 
   /**
@@ -2688,6 +2807,8 @@ export const HelpersMixin = {
    * is called — is read first and answers on every page, a hub's included.
    */
   _expandPageDevice(text, page = this._pages?.[this._currentPageIdx]) {
+    // Switched off, the backend answers every variable with its placeholder.
+    if (this._variablesOff()) return text;
     if (typeof text !== "string" || !/\$\{[^{}]*(?<![\w.])_device\b/.test(text)) return text;
     // A plain page has no device of its own: the button being drawn stands in,
     // as `button_scope` has it on the remote.
@@ -2910,7 +3031,12 @@ export const HelpersMixin = {
     );
     // A tooltip naming a picture goes through the same steps as a button's
     // image and a page's title, as `finish_tooltip` does for the remote.
-    return out && this._isMediaSource(out) ? (this._resolveImageVariables(out) ?? "") : out;
+    if (out && this._isMediaSource(out)) return this._resolveImageVariables(out) ?? "";
+    if (!this._variablesOff() || !out?.includes("history:")) return out;
+    // Off, words keep and a graph after them gives way, as in `finish_tooltip`.
+    return this._splitSourceParts(out)
+      .filter((p) => p.startsWith("history:"))
+      .reduce((text, graph) => text.replace(graph, "mdi:cancel"), out);
   },
 
   /**
@@ -2976,7 +3102,9 @@ export const HelpersMixin = {
     // and the preview beside the field must say what the field says. The one
     // exception is the field's own: a stored name standing in for `${_state}`,
     // which the field replaces by `${_state}` too (`_tooltipIsAutoFilled`).
-    if (stored && !this._tooltipIsAutoFilled(stored, action, this._computeTooltip(action, entityId, config), assign)) {
+    // Off, a label holding a variable reads switched off, the auto-filled one too.
+    const silenced = this._variablesOff() && stored.includes("${");
+    if (stored && (silenced || !this._tooltipIsAutoFilled(stored, action, this._computeTooltip(action, entityId, config), assign))) {
       return this._displayTooltip(stored, action, entityId, config, assign);
     }
     const payload = this._getPayloadDisplay(config);
@@ -2995,12 +3123,13 @@ export const HelpersMixin = {
     // unrenamed toggle announces its next state below. Mirrors the rung of the
     // same name in `button_rendering._resolve_button_tooltip_ladder`; without it
     // the panel would print `${_state}` while the device printed a frozen "Mute".
-    if (this._isAttributeStateService(svc)) {
+    const live = !this._variablesOff();
+    if (live && this._isAttributeStateService(svc)) {
       const attrTooltip = this._displayTooltip(STATE_TOOLTIP, action, entityId, config);
       if (attrTooltip) return attrTooltip;
     }
 
-    if (this._stateToggleServices.includes(svc) && stateVal && NEXT_STATE_MAP[stateVal]) {
+    if (live && this._stateToggleServices.includes(svc) && stateVal && NEXT_STATE_MAP[stateVal]) {
       return this._stateLabel(NEXT_STATE_MAP[stateVal], lang, true);
     }
 
@@ -3018,7 +3147,7 @@ export const HelpersMixin = {
    *
    * `_buttonTooltips` is filled by `_loadButtonTooltips` from
    * `lizaip_config/get_button_tooltips`, which serves the `button_tooltips` section
-   * of `translations/<lang>.json` -- the same file `get_button_tooltip` in
+   * of `i18n/<lang>.json` -- the same file `get_button_tooltip` in
    * `const.py` reads. The panel used to carry a hardcoded copy of the table;
    * two copies of a wording is a drift nobody sees, because no screen shows the
    * panel's label and the device's label together.
@@ -3164,10 +3293,8 @@ export const HelpersMixin = {
 
     if (ha) {
       // Every way out ends here: Escape, the scrim, a [data-dialog="close"]
-      // button, and `close` above. Not while `_render` is putting it back.
-      dlg.addEventListener("closed", () => {
-        if (!dlg._lizaReopening) finish();
-      });
+      // button, and `close` above.
+      dlg.addEventListener("closed", finish);
       if (canClose) {
         // Guarded: `prevent-scrim-close` holds Escape back, and this lets it
         // through once the guard says so. Capture, ahead of ha-dialog's own
@@ -3262,10 +3389,6 @@ export const HelpersMixin = {
         // Every way out runs this: the buttons below, Escape, the scrim, and
         // being displaced by the next modal. Anything that is not an explicit
         // confirm is a no.
-        //
-        // Not the dialog's `close` event, which browsers fire from a queued
-        // task: a re-render re-appends the dialog with `close(); showModal()`,
-        // so the event answered the question while it was still on screen.
         onClose: () => settle(false),
       });
 

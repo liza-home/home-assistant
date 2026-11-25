@@ -32,9 +32,11 @@ Deliberately *not* a general state override:
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from dataclasses import dataclass
+from typing import Any, cast
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -81,11 +83,11 @@ class _Predicted:
 
     entity_id: str
     state: str
-    attributes: dict
+    attributes: dict[str, Any]
 
 
 _predictions: dict[str, tuple[float, float]] = {}
-_expiry_handles: dict[str, object] = {}
+_expiry_handles: dict[str, asyncio.TimerHandle] = {}
 
 
 def _drop(entity_id: str) -> bool:
@@ -222,10 +224,11 @@ def apply(state: State | None, entity_id: str | None = None) -> State | None:
     # the entire gesture plus the tail.
     if int(brightness) == 0:
         attributes.pop("brightness", None)
-        return _Predicted(entity_id=key, state="off", attributes=attributes)
+        # Duck-typed: readers only touch the three fields _Predicted carries.
+        return cast(State, _Predicted(entity_id=key, state="off", attributes=attributes))
 
     attributes["brightness"] = brightness
     # "on" otherwise: we only predict as a consequence of commanding a
     # brightness, and `light.turn_on` with a non-zero one turns the lamp on.
     # Reporting it as still off would draw an empty tile for the whole trip.
-    return _Predicted(entity_id=key, state="on", attributes=attributes)
+    return cast(State, _Predicted(entity_id=key, state="on", attributes=attributes))

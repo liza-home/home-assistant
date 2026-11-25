@@ -115,9 +115,9 @@ icons:
       "true": mdi:volume-high
       "false": mdi:volume-off
     repeat:
-      "off": mdi:repeat-once
-      one: mdi:repeat
-      all: mdi:repeat-off
+      "off": mdi:repeat
+      all: mdi:repeat-once
+      one: mdi:repeat-off
     shuffle:
       "true": mdi:shuffle-disabled
       "false": mdi:shuffle

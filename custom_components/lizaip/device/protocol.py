@@ -20,8 +20,10 @@ from aiohttp import web
 
 from ..shared.logs import device_logger
 
+TrafficLog: type[_BundledTrafficLog] | None
 try:
-    from .traffic import TrafficLog
+    from .traffic import TrafficLog as _BundledTrafficLog
+    TrafficLog = _BundledTrafficLog
 except ImportError:  # stable builds ship without the traffic recorder
     TrafficLog = None
 
@@ -106,10 +108,10 @@ MAX_PAGE_ID = 0xFFFFFFFF
 
 # Background tasks are kept referenced here so they are not garbage-collected
 # mid-flight; each task removes itself once it completes.
-_BACKGROUND_TASKS: set[asyncio.Task] = set()
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
 
-def _retire_background_task(task: asyncio.Task) -> None:
+def _retire_background_task(task: asyncio.Task[Any]) -> None:
     """Drop a finished task and report whatever it raised.
 
     Retrieving the exception is the point: without it a handler that fails
@@ -127,7 +129,7 @@ def _retire_background_task(task: asyncio.Task) -> None:
         )
 
 
-def fire_and_forget(coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> asyncio.Task:
+def fire_and_forget(coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> asyncio.Task[Any]:
     """Run a coroutine in the background, holding a strong reference until it finishes."""
     task = asyncio.create_task(coro, name=name)
     _BACKGROUND_TASKS.add(task)
@@ -173,7 +175,8 @@ def validate_page_id(value: Any) -> int:
             f"Invalid page_id {value!r} — must be an integer in "
             f"{MIN_PAGE_ID}…{MAX_PAGE_ID} (0 is reserved)",
         )
-    return value
+    page_id: int = value
+    return page_id
 
 
 def _encode(**fields: Any) -> str:
@@ -181,12 +184,12 @@ def _encode(**fields: Any) -> str:
     return json.dumps(fields, separators=(",", ":"))
 
 
-def build_request(name: str, seq_id: int, data: dict | None = None) -> str:
+def build_request(name: str, seq_id: int, data: dict[str, Any] | None = None) -> str:
     """Build a JSON request message string."""
     return _encode(type=TYPE_REQUEST, name=name, seq_id=seq_id, data=data or {})
 
 
-def build_response(name: str, seq_id: int, data: dict | None = None) -> str:
+def build_response(name: str, seq_id: int, data: dict[str, Any] | None = None) -> str:
     """Build a successful JSON response message string."""
     return _encode(
         type=TYPE_RESPONSE, name=name, seq_id=seq_id, success=True, data=data or {}
@@ -204,7 +207,7 @@ def build_error_response(name: str, seq_id: int, code: int, message: str) -> str
     )
 
 
-def parse_message(raw: str) -> dict:
+def parse_message(raw: str) -> dict[str, Any]:
     """Parse and validate a raw JSON message. Raises ValueError on invalid input."""
     msg = json.loads(raw)
     if not isinstance(msg, dict):
@@ -285,11 +288,11 @@ class LizaIPProtocol:
             if not future.done():
                 future.set_exception(ProtocolError(ERR_INTERNAL, reason))
 
-    def on_event(self, name: str, handler: Callable[[dict], None]) -> None:
+    def on_event(self, name: str, handler: Callable[[dict[str, Any]], None]) -> None:
         """Register a handler for device events."""
         self._event_handlers[name] = handler
 
-    def on_request(self, name: str, handler: Callable[[int, dict], Any]) -> None:
+    def on_request(self, name: str, handler: Callable[[int, dict[str, Any]], Any]) -> None:
         """Register a handler for device-initiated requests (e.g. hello)."""
         self._request_handlers[name] = handler
 
@@ -309,11 +312,11 @@ class LizaIPProtocol:
     async def send_request(
         self,
         name: str,
-        data: dict | None = None,
+        data: dict[str, Any] | None = None,
         timeout: float = DEFAULT_REQUEST_TIMEOUT,
         *,
         wait_while_silent: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Send a request and await the correlated response. Returns response data.
 
         *wait_while_silent* lets the request outlast *timeout* while the remote
@@ -378,9 +381,10 @@ class LizaIPProtocol:
             if self._last_rx >= sent_at or now >= give_up:
                 raise asyncio.TimeoutError
             woke = asyncio.ensure_future(self._rx_signal.wait())
+            waiters: set[asyncio.Future[Any]] = {future, woke}
             try:
                 await asyncio.wait(
-                    {future, woke}, timeout=give_up - now,
+                    waiters, timeout=give_up - now,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
             finally:
@@ -391,7 +395,7 @@ class LizaIPProtocol:
                 raise asyncio.TimeoutError
             deadline = self._last_rx + timeout
 
-    async def send_response(self, name: str, seq_id: int, data: dict | None = None) -> None:
+    async def send_response(self, name: str, seq_id: int, data: dict[str, Any] | None = None) -> None:
         """Send a successful response."""
         await self._send(build_response(name, seq_id, data), TYPE_RESPONSE, name, seq_id)
 
@@ -465,7 +469,7 @@ class LizaIPProtocol:
         if not waiting:
             return False
         seq_id, future = waiting[0]
-        error = msg.get("error") if isinstance(msg.get("error"), dict) else {}
+        error: Any = msg.get("error") if isinstance(msg.get("error"), dict) else {}
         message = error.get("message", "Unknown error")
         self._logger.debug(
             "Error reply without seq_id taken as the answer to seq_id=%s: %s",
@@ -476,7 +480,7 @@ class LizaIPProtocol:
         ))
         return True
 
-    def _check_response(self, msg: dict, request_name: str | None) -> None:
+    def _check_response(self, msg: dict[str, Any], request_name: str | None) -> None:
         """Log every way *msg* breaks PROTOCOL.md §3 / §9; it is still used."""
         name = msg.get("name")
         if name is None:
@@ -514,9 +518,9 @@ class LizaIPProtocol:
                 f"of {sorted(SPEC_ERROR_CODES)} (§9)", msg,
             )
 
-    def _handle_response(self, msg: dict) -> None:
+    def _handle_response(self, msg: dict[str, Any]) -> None:
         """Match response to pending request."""
-        seq_id = msg.get("seq_id")
+        seq_id: Any = msg.get("seq_id")
         future = self._pending.get(seq_id)
         self._check_response(msg, self._pending_names.get(seq_id))
         if future is None:
@@ -538,7 +542,7 @@ class LizaIPProtocol:
                 )
             )
 
-    def _handle_event(self, msg: dict) -> None:
+    def _handle_event(self, msg: dict[str, Any]) -> None:
         """Dispatch event to registered handler."""
         name = msg.get("name", "")
         if "seq_id" in msg:
@@ -558,7 +562,7 @@ class LizaIPProtocol:
         elif name in SPEC_EVENTS or name in SPEC_EVENT_ALIASES:
             self._logger.warning("Unhandled device event: %s (data=%s)", name, msg.get("data", {}))
 
-    def _handle_request(self, msg: dict) -> None:
+    def _handle_request(self, msg: dict[str, Any]) -> None:
         """Dispatch device-initiated request to registered handler."""
         name = msg.get("name", "")
         seq_id = msg.get("seq_id", 0)

@@ -7,8 +7,14 @@ from __future__ import annotations
 
 import copy
 import logging
+from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
@@ -26,6 +32,7 @@ from ..const import (
 from ..device_sync import is_ready
 from ..events import fire_config_changed
 from ..listeners import refresh_state_listener, schedule_push_rescan
+from ..page_limit import PAGE_LIMIT_CODE, page_limit, refuse_past_limit
 from ..page_list import (
     async_drop_links_to,
     device_holds_every_page,
@@ -37,12 +44,15 @@ from ..page_list import (
 from .common import requires_device, send_failure
 from ..access import require_device_access
 
+if TYPE_CHECKING:
+    from ..store import LizaRemoteStore
+
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _empty_page_assignments(
     hass: HomeAssistant, entry_id: str | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, Any]]:
     bp = await async_get_blueprint(hass, entry_id)
     return {btn["key"]: dict(EMPTY_BUTTON) for btn in bp.get("buttons", [])}
 
@@ -54,12 +64,12 @@ async def _empty_page_assignments(
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_get_pages(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_get_pages(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     store = get_store(hass)
     connection.send_result(msg["id"], {"pages": await store.async_get_pages(device_id)})
 
 
-def _reordered_pages(stored: list, incoming: list) -> list | None:
+def _reordered_pages(stored: list[Any], incoming: list[Any]) -> list[Any] | None:
     """*incoming* as a pure reorder of *stored*, or ``None`` if it is not one.
 
     A reorder keeps every page and every field; only the sequence moves. Any
@@ -70,7 +80,7 @@ def _reordered_pages(stored: list, incoming: list) -> list | None:
     if len(stored) != len(incoming):
         return None
 
-    by_id: dict = {}
+    by_id: dict[Any, Any] = {}
     for page in stored:
         if not isinstance(page, dict) or not page.get("id"):
             return None
@@ -97,7 +107,8 @@ def _reordered_pages(stored: list, incoming: list) -> list | None:
 
 
 async def _reorder_pages_fast(
-    hass: HomeAssistant, connection, msg: dict, device_id: str, store, pages: list
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str,
+    store: LizaRemoteStore, pages: list[Any],
 ) -> None:
     """Persist and push a page reorder, answering the panel before touching the device.
 
@@ -115,22 +126,19 @@ async def _reorder_pages_fast(
 
     conn = entry_connection(hass.config_entries.async_get_entry(msg["entry_id"]))
     order_only = False
-    deliverable = (
-        deliverable_main_pages(conn, pages)
-        if is_ready(conn)
-        else None
-    )
-    if deliverable is not None and deliverable == conn.page_cache.main_pages:
-        # Already the order the device holds. `set_main_pages` makes it rewrite
-        # its whole page setup, so sending it again is work with no effect.
-        deliverable = None
-        order_only = device_holds_every_page(conn, pages)
-    if deliverable is not None:
-        if await send_main_pages(
-            conn, deliverable, device_id_logger(_LOGGER, hass, device_id),
-            "set_main_pages after reorder failed: %s",
-        ):
+    if is_ready(conn):
+        deliverable = deliverable_main_pages(conn, pages)
+        if deliverable is not None and deliverable == conn.page_cache.main_pages:
+            # Already the order the device holds. `set_main_pages` makes it rewrite
+            # its whole page setup, so sending it again is work with no effect.
+            deliverable = None
             order_only = device_holds_every_page(conn, pages)
+        if deliverable is not None:
+            if await send_main_pages(
+                conn, deliverable, device_id_logger(_LOGGER, hass, device_id),
+                "set_main_pages after reorder failed: %s",
+            ):
+                order_only = device_holds_every_page(conn, pages)
 
     # Other open panels still learn about the move from this. It no longer sits
     # between the drop and the reply, which is the part that was felt, and when
@@ -147,7 +155,7 @@ async def _reorder_pages_fast(
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_set_pages(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Replace the ordered page list.
 
     Request payload:
@@ -209,6 +217,8 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
     }
     if orphaned:
         pages = [p for p in pages if p["id"] not in orphaned]
+    if refuse_past_limit(hass, connection, msg, len(stored_pages), len(pages)):
+        return
 
     # A pure reorder: the same pages with the same content in new positions.
     # Decided here, while the store still holds the previous list -- once
@@ -268,7 +278,7 @@ async def ws_set_pages(hass: HomeAssistant, connection, msg: dict, device_id: st
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_update_page(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Update page metadata while preserving other stored page fields.
 
     Request payload:
@@ -309,7 +319,7 @@ async def ws_update_page(hass: HomeAssistant, connection, msg: dict, device_id: 
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_duplicate_page(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Copy a page under a new id, directly after the original.
 
     The copy keeps every stored page field -- including whether it is a
@@ -331,6 +341,8 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
     if source_idx is None:
         connection.send_error(msg["id"], "page_not_found", f"Page {source_id} not found")
         return
+    if refuse_past_limit(hass, connection, msg, len(pages), len(pages) + 1):
+        return
 
     new_page_id = generate_page_id(
         await reserved_page_ids(
@@ -348,11 +360,18 @@ async def ws_duplicate_page(hass: HomeAssistant, connection, msg: dict, device_i
     try:
         # A copy keeps its source's authors; copying writes no steps.
         with as_system():
-            await store.async_insert_page(device_id, new_page, assignments, after=source_id)
+            # Checked again where it is added: another page may have taken the last place.
+            limit = page_limit(hass, entry_id)
+            added = await store.async_insert_page(
+                device_id, new_page, assignments, after=source_id, max_pages=limit,
+            )
     except Exception as err:  # noqa: BLE001
         send_failure(
             hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Duplicating the page",
         )
+        return
+    if not added:
+        connection.send_error(msg["id"], PAGE_LIMIT_CODE, f"This remote is limited to {limit} pages")
         return
 
     await refresh_state_listener(hass, entry_id)

@@ -27,7 +27,7 @@ placeholders:
 pages:
   favourites:
     # The page title: the Sonos mark and the speaker's name.
-    title: "logo:sonos + ${_device}"
+    title: "logo:sonos ${_device}"
     buttons:
       button_1: "@playlist[1]"
       button_2: "@playlist[2]"
