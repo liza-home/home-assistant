@@ -46,6 +46,11 @@ type LizaIPConfigEntry = ConfigEntry[LizaIPRuntimeData]
 
 
 @dataclass
+class LizaIPIrData:
+    """The loaded IR devices entry's runtime data: marks it as no remote's."""
+
+
+@dataclass
 class LizaIPData:
     """The state every remote shares."""
 
@@ -66,7 +71,7 @@ class LizaIPData:
     #: Per entry id: serialises dynamic-page refreshes.
     refresh_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     #: Parsed blueprints by blueprint id, least recently used first.
-    blueprints: dict[str, dict] = field(default_factory=dict)
+    blueprints: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: The user's uploaded icons, once imgserv has loaded them.
     custom_icons: CustomIcons | None = None
     #: Per entry id: the sensor platform's ``AddEntitiesCallback``.

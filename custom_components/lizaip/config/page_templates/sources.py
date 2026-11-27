@@ -39,7 +39,7 @@ from .entity_source import (
     resolve_scripts,
     subscribe_entity_registry,
 )
-from .items import (  # noqa: F401 - re-exported
+from .items import (
     DEFAULT_MAX_ITEMS,
     DEFAULT_TRACKED_FIELDS,
     DynamicItem,
@@ -93,7 +93,7 @@ _SELECT_SOURCE: Final = 2048
 # ── entity lookup ─────────────────────────────────────────────────────
 
 
-async def find_media_entity(hass: HomeAssistant, entity_id: str):
+async def find_media_entity(hass: HomeAssistant, entity_id: str) -> Any:
     """Find a media_player entity object using multiple lookup strategies.
 
     ``browse_media`` lives on the entity object, not in the state machine, and
@@ -204,8 +204,8 @@ def _display_title(raw: Any) -> str:
     return html.unescape(str(raw or ""))
 
 
-def _extract_playable_items(result, max_items: int) -> list[dict]:
-    items: list[dict] = []
+def _extract_playable_items(result: Any, max_items: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     if not hasattr(result, "children") or not result.children:
         return items
     for child in result.children:
@@ -221,13 +221,13 @@ def _extract_playable_items(result, max_items: int) -> list[dict]:
     return items
 
 
-async def _browse(entity, content_type, content_id, timeout: int):
+async def _browse(entity: Any, content_type: Any, content_id: Any, timeout: int) -> Any:
     return await asyncio.wait_for(
         entity.async_browse_media(content_type, content_id), timeout=timeout,
     )
 
 
-async def try_browse_media(entity, entity_id: str, max_items: int) -> list[dict]:
+async def try_browse_media(entity: Any, entity_id: str, max_items: int) -> list[dict[str, Any]]:
     """Try favorite browse folders first, then root browse as fallback.
 
     Known favorite content types are fast and preserve thumbnails; root browse
@@ -268,7 +268,7 @@ async def try_browse_media(entity, entity_id: str, max_items: int) -> list[dict]
 
     try:
         result = await _browse(entity, None, None, 20)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _LOGGER.warning("browse_media(None,None) timed out for %s", entity_id)
         return []
     except Exception as exc:
@@ -279,7 +279,7 @@ async def try_browse_media(entity, entity_id: str, max_items: int) -> list[dict]
         _LOGGER.debug("browse_media returned empty root for %s", entity_id)
         return []
 
-    items: list[dict] = _extract_playable_items(result, max_items)
+    items = _extract_playable_items(result, max_items)
 
     # Expand one level of favorites/playlists folders.
     if len(items) < max_items:
@@ -292,7 +292,7 @@ async def try_browse_media(entity, entity_id: str, max_items: int) -> list[dict]
                     items.extend(_extract_playable_items(sub, max_items - len(items)))
                     if len(items) >= max_items:
                         break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     _LOGGER.debug("browse_media expand timed out for %s/%s", entity_id, child.title)
                     continue
                 except Exception:
@@ -304,15 +304,15 @@ async def try_browse_media(entity, entity_id: str, max_items: int) -> list[dict]
 
 
 async def browse_favorite_category(
-    entity, entity_id: str, category: str, max_items: int,
-) -> list[dict]:
+    entity: Any, entity_id: str, category: str, max_items: int,
+) -> list[dict[str, Any]]:
     """The favourites of one :data:`FAVORITE_CATEGORIES` kind, in Sonos order.
 
     A failed browse raises :class:`SourceUnavailable` rather than answering
     ``[]``: an empty answer blanks bound buttons, and a speaker that could not
     be asked has not said it has no radio stations.
     """
-    items: list[dict] = []
+    items: list[dict[str, Any]] = []
     for class_id in FAVORITE_CATEGORIES[category]:
         try:
             result = await _browse(entity, "favorites_folder", class_id, 15)
@@ -338,7 +338,7 @@ async def favorite_kinds(hass: HomeAssistant, entity_id: str) -> set[str] | None
         return None
     try:
         result = await _browse(entity, "favorites", "", 10)
-    except Exception as exc:  # noqa: BLE001 - an unreachable speaker
+    except Exception as exc:
         _LOGGER.debug("favorite_kinds: %s cannot be browsed: %s", entity_id, exc)
         return None
     folders = {str(c.media_content_id) for c in (getattr(result, "children", None) or [])}
@@ -347,7 +347,7 @@ async def favorite_kinds(hass: HomeAssistant, entity_id: str) -> set[str] | None
     return kinds
 
 
-async def _browse_app_folders(entity, entity_id: str) -> tuple[Any, bool]:
+async def _browse_app_folders(entity: Any, entity_id: str) -> tuple[Any, bool]:
     """The first of :data:`_APP_FOLDERS` the player answers, and whether it browses.
 
     ``NotImplementedError`` is how a media player says it does not browse at
@@ -360,7 +360,7 @@ async def _browse_app_folders(entity, entity_id: str) -> tuple[Any, bool]:
             result = await _browse(entity, "apps", folder, 15)
         except NotImplementedError:
             continue
-        except Exception as exc:  # noqa: BLE001 - another folder name may answer
+        except Exception as exc:
             _LOGGER.debug("browse_media(apps, %s) failed for %s: %s", folder, entity_id, exc)
             browses = True
             continue
@@ -370,7 +370,7 @@ async def _browse_app_folders(entity, entity_id: str) -> tuple[Any, bool]:
     return result, browses
 
 
-def _app_rows(result, max_items: int) -> list[dict]:
+def _app_rows(result: Any, max_items: int) -> list[dict[str, Any]]:
     """The apps among a browse result's children, each of them once.
 
     Android TV Remote marks its apps unplayable, so an app is taken by its
@@ -379,7 +379,7 @@ def _app_rows(result, max_items: int) -> list[dict]:
     A set may hand one app out twice, and a Bravia does. The first of each
     name stands.
     """
-    rows: dict[str, dict] = {}
+    rows: dict[str, dict[str, Any]] = {}
     for child in (getattr(result, "children", None) or []):
         if not (child.media_content_type == "app" or getattr(child, "can_play", False)):
             continue
@@ -401,7 +401,7 @@ def _app_rows(result, max_items: int) -> list[dict]:
     return list(rows.values())
 
 
-def _sources_unread(entity) -> bool:
+def _sources_unread(entity: Any) -> bool:
     """Whether a player that has sources has yet to read them.
 
     A player which says it can select a source but names none has not read
@@ -412,11 +412,11 @@ def _sources_unread(entity) -> bool:
         if not int(getattr(entity, "supported_features", 0) or 0) & _SELECT_SOURCE:
             return False
         return not getattr(entity, "source_list", None)
-    except Exception:  # noqa: BLE001 - a property that reads the device
+    except Exception:
         return False
 
 
-async def _browse_apps(entity, entity_id: str, max_items: int) -> tuple[list[dict], bool]:
+async def _browse_apps(entity: Any, entity_id: str, max_items: int) -> tuple[list[dict[str, Any]], bool]:
     """The apps a player browses, and whether it browses them at all.
 
     Apple TV, Roku, Sony Bravia and Android TV Remote answer
@@ -436,14 +436,14 @@ async def _browse_apps(entity, entity_id: str, max_items: int) -> tuple[list[dic
         return rows, browses
     try:
         await _browse(entity, None, None, 15)
-    except Exception as exc:  # noqa: BLE001 - a player that cannot be read
+    except Exception as exc:
         _LOGGER.debug("browse_media(root) failed for %s: %s", entity_id, exc)
         return rows, browses
     result, browses = await _browse_app_folders(entity, entity_id)
     return _app_rows(result, max_items), browses
 
 
-async def get_browse_thumbnails(entity, entity_id: str) -> dict[str, str]:
+async def get_browse_thumbnails(entity: Any, entity_id: str) -> dict[str, str]:
     thumbnails: dict[str, str] = {}
     try:
         result = await _browse(entity, None, None, 20)
@@ -483,17 +483,19 @@ def _excluded(names: tuple[str, ...], patterns: Sequence[str]) -> bool:
     )
 
 
-def _system_app(row: dict) -> bool:
+def _system_app(row: dict[str, Any]) -> bool:
     """Whether a browsed app belongs to the set itself rather than to its owner."""
     return is_system_app(row.get("media_content_id", ""))
 
 
-def _owners_apps(rows: list[dict], entity_id: str) -> list[dict]:
+def _owners_apps(rows: list[dict[str, Any]], entity_id: str) -> list[dict[str, Any]]:
     """*rows* without the set's own plumbing, naming what went for the log.
 
     A set lists its apps by package name but shows them by title, so the log
     is the only place the two can be told apart when a page looks wrong.
     """
+    kept: list[Any]
+    own: list[Any]
     kept, own = [], []
     for row in rows:
         (own if _system_app(row) else kept).append(row)
@@ -521,7 +523,7 @@ def _patterns(value: Any) -> list[str]:
 
 
 async def read_source_list(
-    hass: HomeAssistant, entity_id: str, max_items: int, entity=None,
+    hass: HomeAssistant, entity_id: str, max_items: int, entity: Any = None,
     *, keep: Callable[[str], bool] | None = None,
     sort_key: Callable[[str], Any] | None = None,
 ) -> list[DynamicItem]:
@@ -563,7 +565,7 @@ async def read_source_list(
     ]
 
 
-def _items_from_browse(raw: list[dict]) -> list[DynamicItem]:
+def _items_from_browse(raw: list[dict[str, Any]]) -> list[DynamicItem]:
     return [
         DynamicItem(
             title=entry.get("title", ""),
@@ -643,8 +645,8 @@ def _ensure_reachable(hass: HomeAssistant, entity_id: str) -> None:
 
 
 async def _read_tv_sources(
-    hass: HomeAssistant, entity, entity_id: str, spec: dict[str, Any],
-    exclude: list, max_items: int, *, inputs: bool,
+    hass: HomeAssistant, entity: Any, entity_id: str, spec: dict[str, Any],
+    exclude: list[Any], max_items: int, *, inputs: bool,
 ) -> list[DynamicItem]:
     """A TV's apps or its inputs, from its ``source_list``.
 
@@ -674,7 +676,7 @@ async def _read_tv_sources(
 
 
 async def _resolve_apps(
-    hass: HomeAssistant, entity, entity_id: str, spec: dict[str, Any], max_items: int,
+    hass: HomeAssistant, entity: Any, entity_id: str, spec: dict[str, Any], max_items: int,
 ) -> list[DynamicItem]:
     """A TV's apps: browsed, else from its sources, else the ones it listed last.
 
@@ -813,7 +815,9 @@ async def resolve_favorites(
 SOURCE_LIST_ATTR = "source_list"
 
 
-def subscribe_favorites(hass: HomeAssistant, specs, on_change) -> Any | None:
+def subscribe_favorites(
+    hass: HomeAssistant, specs: Any, on_change: Callable[[], None],
+) -> Any | None:
     """Watch bound players' ``source_list`` only.
 
     Media players emit frequent playback state changes; each false refresh can
@@ -978,7 +982,7 @@ async def async_resolve_source(
         items = await source.resolve(hass, dict(spec or {}), max_items)
     except asyncio.CancelledError:
         raise
-    except Exception as exc:  # noqa: BLE001 - a source must never crash a refresh
+    except Exception as exc:
         _WARNED_EMPTY.discard(key)
         _LOGGER.warning(
             "Dynamic source %r failed for spec %s: %s", source_id, spec, exc

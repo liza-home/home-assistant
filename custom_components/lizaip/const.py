@@ -49,7 +49,7 @@ CONF_ASSIGNED_USERS: Final = "assigned_users"
 CONF_LANGUAGE: Final = "language"
 
 # The languages this integration ships button wordings for, i.e. the files in
-# ``translations/`` that carry an ``button_tooltips`` section. Adding one here
+# ``i18n/`` that carry a ``button_tooltips`` section. Adding one here
 # without adding the file leaves its buttons in English — `test_translations.py`
 # fails on that.
 SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("en", "de", "fr", "it", "es")
@@ -65,3 +65,6 @@ SIGNAL_ICON_UPDATE: Final = "lizaip_icon_update_{}"
 #: Sent with an ``entity_id`` when a commanded value is drawn before the entity
 #: confirms it; the predicted value itself lives in :mod:`optimistic`.
 SIGNAL_PREDICTED_UPDATE: Final = "lizaip_predicted_update"
+
+#: The unique id of the one entry that holds the IR devices as its subentries.
+IR_ENTRY_ID: Final = "ir_devices"

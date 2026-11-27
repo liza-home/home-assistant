@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Coroutine
+from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -10,10 +12,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ..entity import LizaIPEntity
 from ..shared.logs import device_logger
 from ..shared.slider_throttle import has_moved, read_cooldown_seconds
 from .connection import LizaIPConnection
-from .entity import LizaIPEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ async def async_setup_entry(
 
     known: set[str] = set()
 
-    def on_discovery(discovery: dict) -> None:
+    def on_discovery(discovery: dict[str, Any]) -> None:
         # Only register non-brightness sliders (h/v are device → HA direction)
         new = [
             LizaIPSlider(connection, entry, sid)
@@ -120,7 +122,7 @@ class LizaIPSlider(LizaIPEntity, NumberEntity):
         # written for the gesture in progress.
         self._last_emitted: float | None = None
         # Created in `async_added_to_hass`, where `self.hass` exists.
-        self._debouncer: Debouncer | None = None
+        self._debouncer: Debouncer[Coroutine[Any, Any, None]] | None = None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -152,7 +154,7 @@ class LizaIPSlider(LizaIPEntity, NumberEntity):
         self._last_emitted = float(self._attr_native_value) / 100.0
         self.async_write_ha_state()
 
-    def _handle_event(self, event_type: str, extra: dict) -> None:
+    def _handle_event(self, event_type: str, extra: dict[str, Any]) -> None:
         """Mirror a slider event, writing state only when it is worth writing.
 
         Every state write becomes a recorder row, and a drag emits events for

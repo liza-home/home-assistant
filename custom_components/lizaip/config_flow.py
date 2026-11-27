@@ -7,14 +7,19 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from typing import TYPE_CHECKING, Any, Final
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult, section
+from homeassistant.core import Event, callback
+from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
@@ -34,6 +39,7 @@ from .const import (
     CONF_DEMO_MODE_SWIPE_TIME,
     CONF_LANGUAGE,
     CONF_OPTIMISTIC_UPDATES,
+    IR_ENTRY_ID,
     LANGUAGE_AUTO,
     SUPPORTED_LANGUAGES,
 )
@@ -46,9 +52,12 @@ from . import issues, provisioning
 from .device.http import device_session, device_url
 from .shared.logs import DeviceLogger, device_logger
 from .shared.numbers import to_float
-from .runtime import entry_connection
+from .shared.variables_calc import CONF_VARIABLES_ENABLED, DEFAULT_VARIABLES_ENABLED
+from .runtime import entry_connection, is_ir_entry
 from .device.const import LIZAIP_AVAILABILITY_EVENT, MODEL
 from .device.protocol import PROTOCOL_VERSION, device_id_from_mac
+from .ir.device import SUBENTRY_TYPE
+from .ir.flow import IrDeviceSubentryFlow
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +114,19 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return the options flow handler."""
         return LizaIPOptionsFlowHandler()
 
+    @classmethod
+    @callback
+    def async_supports_options_flow(cls, config_entry: config_entries.ConfigEntry) -> bool:
+        return not is_ir_entry(config_entry)
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: config_entries.ConfigEntry,
+    ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
+        """IR devices live on the IR devices entry only."""
+        return {SUBENTRY_TYPE: IrDeviceSubentryFlow} if is_ir_entry(config_entry) else {}
+
     # Seconds an advertising device aimed at a stale address gets to connect
     # on its own before its Home Assistant address is re-pushed.
     _RECONNECT_GRACE = 30
@@ -129,15 +151,15 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         super().__init__()
-        self.discovered_ip = None
+        self.discovered_ip: str | None = None
         self.discovered_ips: list[str] = []
         self.discovered_port: int | None = None
         self.device_name = MODEL
-        self.sw_version = None
+        self.sw_version: str | None = None
         self.device_info: dict[str, Any] | None = None
 
 
-    async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> FlowResult:
+    async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
         ipv4 = [str(ip) for ip in discovery_info.ip_addresses if ip.version == 4]
         self.discovered_ip = ipv4[0] if ipv4 else None
         self.discovered_ips = ipv4
@@ -151,23 +173,11 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         _warn_on_protocol_version(unique_id, properties.get("protocol_version"))
         await self.async_set_unique_id(unique_id)
 
-        if any(e.unique_id == unique_id for e in self._async_current_entries()):
-            # Update device info on re-discovery (Gold: discovery-update-info)
-            if self.sw_version:
-                for existing in self._async_current_entries():
-                    if existing.unique_id == unique_id:
-                        self.hass.config_entries.async_update_entry(
-                            existing, data={**existing.data, "sw_version": self.sw_version}
-                        )
-                        dev_reg = dr.async_get(self.hass)
-                        device = dev_reg.async_get_device_by_identifier(
-                            (DOMAIN, existing.entry_id), existing.entry_id
-                        )
-                        if device:
-                            dev_reg.async_update_device(
-                                device.id, sw_version=self.sw_version
-                            )
-                        break
+        existing = next(
+            (e for e in self._async_current_entries() if e.unique_id == unique_id), None
+        )
+        if existing is not None:
+            self._update_from_discovery(existing)
             if self.discovered_ips:
                 log = self._log_for(unique_id)
                 cfg = await self._async_read_ha_config(self.discovered_ips)
@@ -240,7 +250,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 async with session.get(url, timeout=provisioning.PROVISION_TIMEOUT) as resp:
                     if resp.status == 200:
-                        info = await resp.json(content_type=None)
+                        info: dict[str, Any] = await resp.json(content_type=None)
                         _LOGGER.info(
                             "Device info from %s:%d: id=%s version=%s",
                             device_ip, port,
@@ -255,7 +265,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return copy.deepcopy(self._FALLBACK_DEVICE_INFO)
 
-    async def _async_read_ha_config(self, device_ips: list[str]) -> dict | None:
+    async def _async_read_ha_config(self, device_ips: list[str]) -> dict[str, Any] | None:
         """What Home Assistant the device is currently set to reach.
 
         See :func:`provisioning.async_read_ha_config`; this flow asks over the
@@ -288,7 +298,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _async_ha_address(self) -> tuple[str, int]:
         return await provisioning.async_ha_address(self.hass)
 
-    async def _async_address_is_stale(self, cfg: dict, unique_id: str) -> bool:
+    async def _async_address_is_stale(self, cfg: dict[str, Any], unique_id: str) -> bool:
         """Whether the device is aimed somewhere we would no longer send it.
 
         A stored address that no longer matches is not by itself a reason to
@@ -358,6 +368,27 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return device_logger(_LOGGER, entry)
 
+    def _update_from_discovery(self, entry: config_entries.ConfigEntry) -> None:
+        """Store the firmware version and HTTP port a known remote now advertises."""
+        updates = {
+            key: value
+            for key, value in (
+                ("sw_version", self.sw_version), ("device_port", self.discovered_port),
+            )
+            if value
+        }
+        if not self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, **updates}
+        ):
+            return
+        if "sw_version" in updates:
+            dev_reg = dr.async_get(self.hass)
+            device = dev_reg.async_get_device_by_identifier(
+                (DOMAIN, entry.entry_id), entry.entry_id
+            )
+            if device:
+                dev_reg.async_update_device(device.id, sw_version=self.sw_version)
+
     def _device_connected(self, unique_id: str) -> bool | None:
         """The device's WebSocket state, or ``None`` before its entry loaded."""
         for entry in self._async_current_entries():
@@ -367,7 +398,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return None
 
     async def _reprovision_unless_it_connects(
-        self, unique_id: str, device_ips: list[str], held: dict | None = None
+        self, unique_id: str, device_ips: list[str], held: dict[str, Any] | None = None
     ) -> None:
         """Push the address to an advertising device that is not getting through.
 
@@ -400,11 +431,11 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             wanted=f"{wanted_host}:{wanted_port}",
         )
 
-    def _availability_matches(self, event, unique_id: str) -> bool:
+    def _availability_matches(self, event: Event[dict[str, Any]], unique_id: str) -> bool:
         """Whether an availability event says *this* device just connected."""
         if not event.data.get("connected"):
             return False
-        entry = self.hass.config_entries.async_get_entry(event.data.get("entry_id"))
+        entry = self.hass.config_entries.async_get_entry(event.data.get("entry_id", ""))
         return entry is not None and entry.unique_id == unique_id
 
     async def _connects_within_grace(self, unique_id: str) -> bool:
@@ -418,7 +449,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         connected = asyncio.Event()
 
         @callback
-        def _on_availability(event) -> None:
+        def _on_availability(event: Event[dict[str, Any]]) -> None:
             if self._availability_matches(event, unique_id):
                 connected.set()
 
@@ -454,7 +485,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.hass, device_ips, self._device_port
         )
 
-    def _spawn_provisioning(self, coro, *, what: str) -> None:
+    def _spawn_provisioning(self, coro: Coroutine[Any, Any, Any], *, what: str) -> None:
         """Run a background re-provision, reporting whatever it raises.
 
         The discovery steps abort straight afterwards, so there is nobody left
@@ -478,7 +509,7 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Other config flow steps
     # ------------------------------------------------------------------
 
-    async def async_step_confirm(self, user_input=None) -> FlowResult:
+    async def async_step_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             if self.discovered_ips:
                 # Awaited, not fired and forgotten: this is the one moment the
@@ -507,20 +538,30 @@ class LizaIPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             return self.async_create_entry(
                 title=(self.device_name or "").strip() or "lizaIP",
-                 data=data,
-             )
+                data=data,
+                # Stored, not left to the reader: an entry with nothing stored
+                # is one from before the switch, which keeps variables on.
+                options={CONF_VARIABLES_ENABLED: DEFAULT_VARIABLES_ENABLED},
+            )
 
         return self.async_show_form(
             step_id="confirm",
             description_placeholders={"name": self.device_name},
         )
 
-    async def async_step_user(self, user_input=None) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_abort(reason="discovery_only")
 
-    async def async_step_reconfigure(self, user_input=None) -> FlowResult:
+    async def async_step_system(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """The IR devices entry, created with the first remote."""
+        await self.async_set_unique_id(IR_ENTRY_ID)
+        self._abort_if_unique_id_configured()
+        return self.async_create_entry(title="IR devices", data={})
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Allow reconfiguring the device name."""
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None  # the step is only opened from an existing entry
         if user_input is not None:
             new_title = (user_input.get("name") or "").strip() or (entry.title or "").strip() or "lizaIP"
             # Deliberately the non-reloading variant: this step only renames the
@@ -568,7 +609,7 @@ class LizaIPOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None,
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Show and save the whole options form."""
         if user_input is not None:
             # Sections come back nested, one dict per section, while the
@@ -620,7 +661,7 @@ class LizaIPOptionsFlowHandler(config_entries.OptionsFlow):
                         ],
                         mode=SelectSelectorMode.DROPDOWN,
                         # The option names are translated from
-                        # `options.step.init.selector.language.options` in
+                        # `selector.language.options` in
                         # strings.json rather than spelled out here.
                         translation_key=CONF_LANGUAGE,
                     )

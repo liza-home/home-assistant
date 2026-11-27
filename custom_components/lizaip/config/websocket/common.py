@@ -2,20 +2,26 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
+from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from ...runtime import entry_connection, resolve_device_id
 from ...shared.logs import entry_id_logger
 
+if TYPE_CHECKING:
+    from ...device.connection import LizaIPConnection
+
 _LOGGER = logging.getLogger(__name__)
 
 
 def send_failure(
     hass: HomeAssistant,
-    connection,
-    msg: dict,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
     code: str,
     exc: Exception,
     *,
@@ -45,14 +51,18 @@ def send_failure(
     )
 
 
-def requires_device(handler):
+def requires_device(
+    handler: Callable[
+        [HomeAssistant, websocket_api.ActiveConnection, dict[str, Any], str], Awaitable[None]
+    ],
+) -> Callable[[HomeAssistant, websocket_api.ActiveConnection, dict[str, Any]], Awaitable[None]]:
     """Resolve ``msg["entry_id"]`` to a device id, or answer "not found".
 
     Deliberately does not set ``__wrapped__``: this decorator *is* the handler's
     public 3-argument contract, so callers unwrapping the HA decorators should
     stop here rather than reach the ``device_id`` form underneath.
     """
-    async def wrapper(hass: HomeAssistant, connection, msg: dict) -> None:
+    async def wrapper(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
         device_id = resolve_device_id(hass, msg["entry_id"])
         if not device_id:
             connection.send_error(msg["id"], "not_found", "Device not found")
@@ -66,7 +76,9 @@ def requires_device(handler):
     return wrapper
 
 
-def live_connection(hass: HomeAssistant, connection, msg: dict):
+def live_connection(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any],
+) -> LizaIPConnection | None:
     """The remote's connection, or ``None`` after telling the panel why not."""
     conn = entry_connection(hass.config_entries.async_get_entry(msg["entry_id"]))
     if conn is None:

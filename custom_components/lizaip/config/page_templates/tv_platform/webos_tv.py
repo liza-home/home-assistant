@@ -38,7 +38,7 @@ def source_artwork(entity: Any, source: str) -> str:
     return ""
 
 
-def source_record(entity: Any, title: str) -> dict:
+def source_record(entity: Any, title: str) -> dict[str, Any]:
     """The device's own record of source *title*, or ``{}``."""
     record = getattr(entity, "_source_list", None)
     info = record.get(title) if isinstance(record, dict) else None
@@ -63,7 +63,7 @@ def source_ids(entity: Any, title: str) -> tuple[str, ...]:
     return tuple(str(v) for v in (title, info.get("id"), info.get("appId")) if v)
 
 
-def in_device_order(entity: Any, source_list: list) -> list:
+def in_device_order(entity: Any, source_list: list[Any]) -> list[Any]:
     """*source_list* in the order the device keeps its sources, where it does.
 
     LG webOS keeps its record of sources (``_source_list``, title -> app) in
@@ -90,5 +90,5 @@ class WebOsTv(TvPlatform):
     def is_input(self, entity: Any, title: str) -> bool:
         return is_input(entity, title)
 
-    def source_order(self, entity: Any, titles: list) -> list:
+    def source_order(self, entity: Any, titles: list[Any]) -> list[Any]:
         return in_device_order(entity, titles)

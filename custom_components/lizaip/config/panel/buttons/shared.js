@@ -198,13 +198,13 @@ export const entityIcon = (entityId, stateObj) => {
   return ENTITY_DOMAIN_ICONS[domainOf(entityId)] || "mdi:cog";
 };
 
-// Sensitivity bounds for the `<input type="number">`. These mirror
+// Sensitivity bounds of the percent slider (shown as factor * 100). These mirror
 // `action_controller.SLIDER_FACTOR_MIN` / `_MAX`, which is where they are
 // actually enforced — the attributes only feed the form-validity API and do not
 // block a `change` event. Named here so both slider cards advertise the same
 // range, rather than each carrying its own literal.
-export const FACTOR_MIN = 0.1;
-export const FACTOR_MAX = 5;
+export const FACTOR_MIN = 0.01;
+export const FACTOR_MAX = 1;
 
 // The domains a slider can drive at all, derived rather than restated so a new
 // entry in the table is offered by the entity picker automatically. An empty

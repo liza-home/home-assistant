@@ -27,7 +27,7 @@ placeholders:
 pages:
   favourites:
     # The page title: the Sonos mark and the speaker's name.
-    title: "logo:sonos + ${_device}"
+    title: "logo:sonos ${_device}"
     buttons:
       button_1: "@playlist[1]"
       button_2: "@playlist[2]"
@@ -91,6 +91,6 @@ pages:
           attribute: volume_level
           service: media_player.volume_set
           data_key: volume_level
-          factor: 1.0
+          factor: 0.5
           min: 0.0
           max: 1.0

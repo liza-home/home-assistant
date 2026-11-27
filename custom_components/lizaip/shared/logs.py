@@ -28,14 +28,14 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 
-class DeviceLogger(logging.LoggerAdapter):
+class DeviceLogger(logging.LoggerAdapter[logging.Logger | logging.LoggerAdapter[logging.Logger]]):
     """A logger that names the remote its messages belong to.
 
     Built by the helpers below rather than directly; they know where a name
     can be found for the handle a caller happens to hold.
     """
 
-    def __init__(self, logger: logging.Logger | logging.LoggerAdapter,
+    def __init__(self, logger: logging.Logger | logging.LoggerAdapter[logging.Logger],
                  name: Callable[[], str | None]) -> None:
         super().__init__(logger, {})
         self._name = name
@@ -49,7 +49,7 @@ class DeviceLogger(logging.LoggerAdapter):
         """
         try:
             name = self._name()
-        except Exception:  # noqa: BLE001 - a log call must never raise
+        except Exception:
             name = None
         return (f"[{name}] {msg}" if name else msg), kwargs
 
@@ -64,7 +64,7 @@ def _entry_title(source: Any) -> str | None:
     return title if isinstance(title, str) and title else None
 
 
-def device_logger(logger: logging.Logger | logging.LoggerAdapter,
+def device_logger(logger: logging.Logger | logging.LoggerAdapter[logging.Logger],
                   source: Any) -> DeviceLogger:
     """*logger*, naming the remote *source* stands for.
 
@@ -83,7 +83,7 @@ def device_logger(logger: logging.Logger | logging.LoggerAdapter,
     return DeviceLogger(logger, lambda: _entry_title(source))
 
 
-def entry_id_logger(logger: logging.Logger | logging.LoggerAdapter,
+def entry_id_logger(logger: logging.Logger | logging.LoggerAdapter[logging.Logger],
                     hass: HomeAssistant, entry_id: str | None) -> DeviceLogger:
     """*logger*, naming the remote the config entry *entry_id* configures.
 
@@ -96,7 +96,7 @@ def entry_id_logger(logger: logging.Logger | logging.LoggerAdapter,
     )
 
 
-def device_id_logger(logger: logging.Logger | logging.LoggerAdapter,
+def device_id_logger(logger: logging.Logger | logging.LoggerAdapter[logging.Logger],
                      hass: HomeAssistant, device_id: str | None) -> DeviceLogger:
     """*logger*, naming the remote registered as *device_id*.
 

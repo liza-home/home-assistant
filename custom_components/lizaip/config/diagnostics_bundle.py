@@ -38,7 +38,8 @@ import sys
 import textwrap
 import time
 import zipfile
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import datetime, UTC
 from typing import Any
 
 from aiohttp import web
@@ -152,7 +153,7 @@ class _Collector:
     def skip(self, name: str, reason: str) -> None:
         self.skipped.append({"file": name, "reason": reason})
 
-    async def section(self, name: str, factory) -> Any:
+    async def section(self, name: str, factory: Callable[[], Awaitable[Any]]) -> Any:
         """Run one section, and turn its failure into a line in the manifest.
 
         ``BLE001`` is the whole point: a section may fail in any way at all —
@@ -162,7 +163,7 @@ class _Collector:
         """
         try:
             return await factory()
-        except Exception as err:  # noqa: BLE001 — diagnostics must never raise
+        except Exception as err:
             self._log.debug("Diagnostics bundle: %s failed", name, exc_info=True)
             self.skip(name, f"{err.__class__.__name__}: {err}")
             return None
@@ -447,7 +448,7 @@ async def _add_reachability(collector: _Collector) -> None:
         }
 
 
-def _add_endpoint(endpoint: str):
+def _add_endpoint(endpoint: str) -> Callable[[_Collector], Awaitable[None]]:
     """One step that fetches one of the remote's endpoints.
 
     One step each rather than one for all eight: this is nearly the whole wait,
@@ -536,7 +537,7 @@ async def _add_traffic(collector: _Collector) -> None:
         if snapshot is None:
             collector.skip(LOG_MESSAGES, "This build ships without the traffic recorder")
             return
-        collector.add(LOG_MESSAGES, _dumps({**snapshot, "connected": bool(conn.connected)}))
+        collector.add(LOG_MESSAGES, _dumps({**snapshot, "connected": conn is not None and bool(conn.connected)}))
 
     await collector.section(LOG_MESSAGES, build)
 
@@ -636,7 +637,8 @@ def _integration_version() -> str | None:
     path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "manifest.json")
     try:
         with open(path, encoding="utf-8") as handle:
-            return json.load(handle).get("version")
+            version: str | None = json.load(handle).get("version")
+            return version
     except (OSError, ValueError):
         return None
 
@@ -666,7 +668,7 @@ async def _add_environment(collector: _Collector) -> None:
     async def build() -> None:
         hass = collector.hass
         version, platform_name = await hass.async_add_executor_job(_environment_facts)
-        facts = {
+        facts: dict[str, Any] = {
             "integration_version": version,
             "home_assistant_version": HA_VERSION,
             "python_version": sys.version,
@@ -1014,7 +1016,7 @@ async def async_build_bundle(
         raise ValueError(f"Unknown diagnostics scope {scope!r}")
 
     collector = _Collector(hass, entry, scope, whole_system=whole_system)
-    created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    created = datetime.now(UTC).isoformat(timespec="seconds")
 
     steps = steps_for_scope(scope)
     total = len(steps)

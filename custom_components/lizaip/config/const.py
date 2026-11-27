@@ -145,7 +145,7 @@ def _is_opaque_id(text: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-fA-F]{8,}", text))
 
 
-def media_id_title(media_content_id) -> str:
+def media_id_title(media_content_id: Any) -> str:
     """Humanise a ``media_content_id`` into a readable title.
 
     Uses the last meaningful path segment; returns ``""`` for opaque ids.
@@ -207,7 +207,7 @@ def drop_redundant_subject(step: Any) -> bool:
     return True
 
 
-def payload_identity(data) -> str:
+def payload_identity(data: Any) -> str:
     """Stable identity string for a payload, ``""`` when it carries none.
 
     Used to tell two buttons of the same service apart, so they never collapse
@@ -249,7 +249,7 @@ def is_payload_service(service: str) -> bool:
     return svc_name in PAYLOAD_SERVICES
 
 
-def step_service(config) -> str:
+def step_service(config: Any) -> str:
     """Return the service of a button's first step, ``""`` when it has none."""
     if not isinstance(config, list) or not config:
         return ""
@@ -257,7 +257,7 @@ def step_service(config) -> str:
     return step.get("action") or step.get("service") or ""
 
 
-def is_unconfigured_step(config, fallback_service: str = "") -> bool:
+def is_unconfigured_step(config: Any, fallback_service: str = "") -> bool:
     """True when we cannot tell what a button does at all.
 
     "At all" is deliberate and narrow: no step *and* no resolvable service, from
@@ -277,7 +277,7 @@ def is_unconfigured_step(config, fallback_service: str = "") -> bool:
     return not (step_service(config) or fallback_service)
 
 
-def payload_display(assign: dict) -> tuple[str, str]:
+def payload_display(assign: Any) -> tuple[str, str]:
     """Derive ``(title, thumbnail)`` from a button's own action payload.
 
     HA's media selector writes ``data.metadata.{title,thumbnail}``; that is the
@@ -316,4 +316,4 @@ def payload_display(assign: dict) -> tuple[str, str]:
 
 
 #: A button with nothing on it, as the store and the panel spell it.
-EMPTY_BUTTON = {"action_id": None, "config": [], "tooltip": None, "icon": None, "icon_pinned": False, "state_icons": {}}
+EMPTY_BUTTON: dict[str, Any] = {"action_id": None, "config": [], "tooltip": None, "icon": None, "icon_pinned": False, "state_icons": {}}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import Final
+from typing import Any, Final
 
 # ---------------------------------------------------------------------------
 # Wake prelude ("ensure on")
@@ -34,7 +34,7 @@ ENSURE_ON_TIMEOUT: Final = "00:00:20"
 ENSURE_ON_SETTLE: Final = 10.0
 
 
-def build_ensure_on_prelude(entity_id: str, settle: float) -> list[dict]:
+def build_ensure_on_prelude(entity_id: str, settle: float) -> list[dict[str, Any]]:
     """Build script steps that wake *entity_id* before a button's own action.
 
     Guarded on the target being ``off``, so a device that is already awake pays
@@ -59,7 +59,7 @@ def build_ensure_on_prelude(entity_id: str, settle: float) -> list[dict]:
     before they can act on it. Callers pass ``0`` to get the gate alone.
     """
     not_ready = ", ".join(f"'{state}'" for state in NOT_READY_STATES)
-    steps: list[dict] = [
+    steps: list[dict[str, Any]] = [
         {"action": "homeassistant.turn_on", "target": {"entity_id": entity_id}},
         {
             "wait_template": (
@@ -114,7 +114,7 @@ def _app_id_expr(entity_id: str) -> str:
     return f"state_attr('{entity_id}', '{LAUNCH_VERIFY_ATTRIBUTE}')"
 
 
-def build_launch_capture(entity_id: str) -> dict:
+def build_launch_capture(entity_id: str) -> dict[str, Any]:
     """Build the step that records *entity_id*'s app before the launch.
 
     Spliced between the wake prelude and the button's own action, so it reads
@@ -140,8 +140,8 @@ def build_launch_capture(entity_id: str) -> dict:
 def build_launch_verification(
     entity_id: str,
     expected_app_id: str,
-    retry_steps: list[dict],
-) -> list[dict]:
+    retry_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Build script steps that confirm a launch landed, and retry once if not.
 
     Runs *after* the button's own action, and pairs with the

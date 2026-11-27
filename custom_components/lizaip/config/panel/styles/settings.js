@@ -62,26 +62,27 @@ export const STYLES_SETTINGS = `
     line-height: 1.45;
   }
   /* Side by side while there is room, but capped: a card wider than about
-     620px turns its hints into lines too long to scan. Starting them at the
-     top keeps a short card short; padded to a tall one it reads unfinished. */
+     620px turns its hints into lines too long to scan. Cards in a row share
+     one height so their frames line up. */
   .settings-section-cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
     justify-content: start;
-    align-items: start;
+    align-items: stretch;
     gap: 16px;
     margin-top: 12px;
   }
   @media (max-width: 700px) {
     .settings-section-cards { grid-template-columns: 1fr; }
   }
-  .settings-card { margin: 0; }
+  .settings-card { margin: 0; display: flex; flex-direction: column; }
   /* Another integration's panel shown inside this one: as wide as its place. */
   .settings-embedded { display: block; width: 100%; }
   .embedded-host { display: block; width: 100%; }
   .embedded-host > * { display: block; width: 100%; }
-  /* Cards that belong together in one grid cell, one under the other. */
-  .settings-card-stack { display: grid; gap: 16px; min-width: 0; }
+  /* The theme editor goes under the theme picker, so the picker and the icon
+     card share the top row and its height. */
+  #liza-settings-panel-appearance .theme-editor-card { grid-column: 1; grid-row: 2; }
   /* .actions-card-header spaces its children apart, which pushes a title that
      now has a glyph before it to the far side of the card. Its 12px top also
      set the title nearer the edge than the body below is to the sides. */
@@ -102,9 +103,15 @@ export const STYLES_SETTINGS = `
   .settings-body {
     display: flex;
     flex-direction: column;
+    flex: 1;
     gap: 16px;
     padding: 16px;
   }
+  /* A card's closing action sits on its bottom edge, level with its neighbours'. */
+  .settings-body > .settings-actions:last-child { margin-top: auto; }
+  /* The body's gap spaces a loose hint; its own margins would push it below
+     the first line of the cards beside it. */
+  .settings-body > .config-field-hint { margin: 0; }
   /* A list opening the body would draw its own rule a step below the header's,
      reading as a doubled divider. */
   .settings-body > .settings-switch-list:first-child > .settings-switch-row:first-child {
@@ -156,6 +163,9 @@ export const STYLES_SETTINGS = `
   }
   .settings-switch-text .config-field-hint { margin-top: 0; }
   .settings-switch-row ha-switch { flex: none; margin-top: 2px; }
+  .settings-switch-row.is-off .settings-switch-text { opacity: .45; }
+  /* The banner already parts the lists; a rule under it would read doubled. */
+  ha-alert + .settings-switch-list > .settings-switch-row:first-child { border-top: none; }
   /* Indented under the switch it depends on, and dimmed rather than hidden
      while that switch is off: a field that vanishes leaves the user unsure
      whether it still exists. */
@@ -164,7 +174,12 @@ export const STYLES_SETTINGS = `
     border-left: 2px solid var(--divider-color, rgba(127,127,127,.15));
     margin-left: 4px;
   }
+  /* Closing the card, the body's own padding already spaces it from the edge. */
+  .settings-body > .settings-switch-list:last-child > .settings-switch-detail:last-child { padding-bottom: 0; }
   .settings-switch-detail.is-off { opacity: .45; }
+  .settings-variables-off-icon { --mdc-icon-size: 18px; vertical-align: text-bottom; }
+  .settings-max-pages-over { color: var(--liza-warning-text); }
+  .settings-max-pages-over:empty { display: none; }
   /* A two-digit number in a full-width box reads as a text field. The unit
      sits inside the field's end, rather than in the hint where it has to be
      hunted for. */
@@ -525,13 +540,10 @@ export const STYLES_SETTINGS = `
   .settings-danger-card { border-color: var(--liza-error-text, var(--error-color)); }
   .settings-danger-card .settings-card-icon,
   .settings-danger-card .actions-card-title { color: var(--liza-error-text, var(--error-color)); }
-/* The red is variant="danger" now; nothing is left to say here. */
   /* A workaround, not a setting like the others: framed in HA's warning
      yellow. Only the frame and the triangle take the colour; yellow words on
      a light card would not be readable. */
-  .settings-warning-card {
-    border: 2px solid var(--warning-color, #ffa600);
-  }
+  .settings-warning-card { border-color: var(--warning-color, #ffa600); }
   .settings-warning-card .settings-card-icon { color: var(--warning-color, #ffa600); }
   .settings-switch-note { display: block; margin-top: 4px; font-weight: 700; }
 `;

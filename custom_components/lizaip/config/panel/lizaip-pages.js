@@ -9,6 +9,8 @@
  * run with `this` bound to the panel element.
  */
 
+import { TAB } from "./lizaip-route.js";
+
 export const PagesMixin = {
   /**
    * Resolves once no page add/delete/reorder is running.
@@ -133,7 +135,7 @@ export const PagesMixin = {
     // Not turned away while a page operation runs: `_deletePage` waits for it,
     // as the ✕ does. Dropping the key made it dead for the seconds a delete
     // took to settle on a slow disk.
-    if (this._activeTab !== "buttons" || this._moveSourceKey) return;
+    if (this._activeTab !== TAB.PAGES || this._moveSourceKey) return;
     if (!this._pages?.[this._currentPageIdx]) return;
     if (this._faceMenuEl || this.shadowRoot?.querySelector(".add-page-overlay")) return;
     const path = e.composedPath?.() || [];
@@ -453,6 +455,32 @@ export const PagesMixin = {
     }
   },
 
+  /** Take the device off a page no template made. */
+  async _removePageDevice(page) {
+    try {
+      await this._unbindPageDevice(page);
+      this._toast(this._t("device_removed", { name: this._pageDisplayLine(page) }));
+    } catch (e) {
+      console.warn("[lizaIP] Remove device failed:", e);
+      this._toast(this._t("remove_device_failed", { error: e?.message || e }));
+    }
+  },
+
+  /** The remote's page limit once its pages have reached it, else null. */
+  _pageLimitReached() {
+    const opts = this._iconOptions;
+    if (!opts || opts.max_pages_enabled === false) return null;
+    return (this._pages?.length ?? 0) >= opts.max_pages ? opts.max_pages : null;
+  },
+
+  /** True, after saying so, when the remote has no room for another page. */
+  _refusePageAtLimit() {
+    const limit = this._pageLimitReached();
+    if (limit === null) return false;
+    this._toast(this._t("page_limit_reached", { count: limit }));
+    return true;
+  },
+
   /** Copy a page, buttons and all, and open the copy.
    *
    * The backend places it directly after the original and keeps its kind: a
@@ -461,6 +489,7 @@ export const PagesMixin = {
    * is of what the user sees, not of what was last saved.
    */
   async _duplicatePage(page) {
+    if (this._refusePageAtLimit()) return;
     try {
       const result = await this._createPage(() => this._hass.callWS({
         type: "lizaip_config/duplicate_page",

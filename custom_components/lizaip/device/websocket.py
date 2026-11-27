@@ -53,7 +53,7 @@ class LizaIPWebSocketView(HomeAssistantView):
     # other local_push integrations.
     requires_auth = False
 
-    async def get(self, request: web.Request) -> web.WebSocketResponse:
+    async def get(self, request: web.Request) -> web.StreamResponse:
         hass: HomeAssistant = request.app["hass"]
         # A remote is on the same network as Home Assistant. Without this, the
         # MAC alone -- broadcast over mDNS -- would let anyone who reaches the

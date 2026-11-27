@@ -227,6 +227,15 @@ export const STYLES_BUTTONS = `
     transform: scale(1.08);
   }
   .page-add-btn:hover ha-icon { color: rgba(3,169,244,.9) !important; }
+  .page-add-btn.is-full { opacity: .4; cursor: not-allowed; }
+  .page-add-btn.is-full:hover {
+    border-color: color-mix(in srgb, var(--primary-text-color) 25%, transparent);
+    background: transparent;
+    transform: none;
+  }
+  .page-add-btn.is-full:hover ha-icon {
+    color: color-mix(in srgb, var(--primary-text-color) 60%, transparent) !important;
+  }
 
   /* SVG container inside each page item */
   .pg-svg-container {

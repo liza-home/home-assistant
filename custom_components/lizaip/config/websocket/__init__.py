@@ -73,5 +73,6 @@ def register_commands(hass: HomeAssistant) -> None:
         templates.ws_retarget_template_page,
         page_device.ws_list_all_devices,
         page_device.ws_assign_page_device,
+        page_device.ws_remove_page_device,
     ):
         websocket_api.async_register_command(hass, handler)

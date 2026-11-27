@@ -1,87 +1,4 @@
 {
-  "button_tooltips": {
-    "albums": "Album",
-    "apps": "App",
-    "audiobooks": "Audiolibri",
-    "back": "Indietro",
-    "back_menu": "Indietro / Menu",
-    "blue": "Blu",
-    "brighter": "Più luminoso",
-    "brightness": "Luminosità",
-    "candle": "Candela",
-    "close": "Chiudi",
-    "colour_temperature": "Temperatura colore",
-    "cool_white": "Bianco freddo",
-    "cyan": "Ciano",
-    "daylight": "Luce diurna",
-    "digits": "Cifre",
-    "dimmer": "Più scuro",
-    "down": "Giù",
-    "exit": "Esci",
-    "forward": "Avanti",
-    "green": "Verde",
-    "home": "Home",
-    "input": "Ingresso",
-    "inputs": "Ingressi",
-    "instant_replay": "Replay",
-    "left": "Sinistra",
-    "lock": "Blocca",
-    "menu": "Menu",
-    "more": "Altro",
-    "mute": "Muto",
-    "neutral_white": "Bianco neutro",
-    "next": "Successivo",
-    "night_light": "Luce notturna",
-    "now_playing": "In riproduzione",
-    "off": "Spento",
-    "ok": "OK",
-    "on": "Acceso",
-    "open": "Apri",
-    "options": "Opzioni",
-    "orange": "Arancione",
-    "oscillate_off": "Oscillazione disattiva",
-    "oscillate_on": "Oscillazione attiva",
-    "pause": "Pausa",
-    "pink": "Rosa",
-    "play": "Riproduci",
-    "play_pause": "Riproduci / Pausa",
-    "playlists": "Playlist",
-    "podcasts": "Podcast",
-    "power": "Accensione",
-    "previous": "Precedente",
-    "radio": "Radio",
-    "red": "Rosso",
-    "remote": "Telecomando",
-    "repeat_all": "Ripeti tutto",
-    "repeat_off": "Ripeti disattivo",
-    "repeat_one": "Ripeti uno",
-    "reverse": "Indietro",
-    "right": "Destra",
-    "scenes": "Scene",
-    "search": "Cerca",
-    "select": "Seleziona",
-    "shuffle": "Casuale",
-    "shuffle_off": "Casuale disattivo",
-    "shuffle_on": "Casuale attivo",
-    "sleep_in": "Spegnimento tra",
-    "sleep_timer_off": "Timer di spegnimento disattivato",
-    "source": "Sorgente",
-    "stop": "Stop",
-    "toggle": "Commuta",
-    "tools_more": "Strumenti / Altro",
-    "top_menu": "Menu principale",
-    "tracks": "Brani",
-    "unlock": "Sblocca",
-    "unmute": "Riattiva audio",
-    "up": "Su",
-    "violet": "Viola",
-    "voice_assistant": "Assistente vocale",
-    "volume": "Volume",
-    "volume_down": "Abbassa volume",
-    "volume_up": "Alza volume",
-    "warm_white": "Bianco caldo",
-    "yellow": "Giallo"
-  },
   "config": {
     "step": {
       "confirm": {
@@ -89,9 +6,12 @@
         "description": "Do you want to add {name}?"
       },
       "reconfigure": {
-        "title": "Reconfigure lizaIP",
+        "title": "Riconfigura lizaIP",
         "data": {
-          "name": "Device name"
+          "name": "Nome del dispositivo"
+        },
+        "data_description": {
+          "name": "Il nome di questo telecomando in Home Assistant. Lascialo vuoto per mantenere il nome attuale."
         }
       }
     },
@@ -113,18 +33,6 @@
         "data_description": {
           "optimistic_updates": "Aggiorna le icone dei pulsanti subito alla pressione, prima di confermare lo stato reale. Se l'azione fallisce, l'icona torna poco dopo allo stato reale.",
           "language": "Lingua delle etichette dei pulsanti mostrate su questo telecomando. \"Automatico\" segue la lingua di Home Assistant."
-        },
-        "selector": {
-          "language": {
-            "options": {
-              "auto": "Automatico",
-              "en": "English",
-              "de": "Deutsch",
-              "fr": "Français",
-              "it": "Italiano",
-              "es": "Español"
-            }
-          }
         },
         "sections": {
           "demo": {
@@ -159,6 +67,11 @@
     }
   },
   "entity": {
+    "button": {
+      "ir_key": {
+        "name": "Tasto IR"
+      }
+    },
     "event": {
       "button": {
         "name": "Pulsante {button_id}"
@@ -196,6 +109,9 @@
       },
       "ip_address": {
         "name": "Indirizzo IP"
+      },
+      "queue": {
+        "name": "Coda {speaker}"
       }
     },
     "update": {
@@ -270,20 +186,18 @@
         }
       }
     },
-    "clear_device_pages": {
-      "name": "Cancella le pagine del dispositivo",
-      "description": "Rimuove tutte le pagine dal telecomando e le ricostruisce dalla configurazione salvata. Da usare quando le pagine del dispositivo non corrispondono più a quelle di Home Assistant. Non si perde alcuna configurazione.",
-      "fields": {
-        "config_entry_id": {
-          "name": "Dispositivo",
-          "description": "Dispositivo da ricostruire. Se omesso, vengono ricostruiti tutti i dispositivi lizaIP."
-        }
-      }
-    },
     "send_ir": {
-      "name": "Invia IR",
+      "name": "Invia codice IR grezzo",
       "description": "Fa trasmettere a un telecomando un codice infrarosso. Senza destinazione, lo inviano tutti i telecomandi lizaIP.",
       "fields": {
+        "via": {
+          "name": "Tramite lizaIP",
+          "description": "Il telecomando che trasmette il tasto."
+        },
+        "entity_id": {
+          "name": "Tasto IR",
+          "description": "Il tasto di un dispositivo IR da inviare."
+        },
         "ir_blob": {
           "name": "Codice IR",
           "description": "Il codice infrarosso da trasmettere, codificato in base64."
@@ -348,34 +262,31 @@
     },
     "invalid_ir_blob": {
       "message": "Il codice IR non è un base64 valido."
+    },
+    "ir_send_refused": {
+      "message": "Il telecomando ha rifiutato il codice a infrarossi: {error}"
+    },
+    "ir_not_an_ir_device": {
+      "message": "{device} non è un dispositivo IR."
+    },
+    "ir_remote_ambiguous": {
+      "message": "Più lizaIP sono connessi e non è chiaro quale invii il tasto. Premi il tasto da un pulsante lizaIP o usa l'azione «Invia tasto dispositivo IR» e scegli il lizaIP."
+    },
+    "ir_unknown_key": {
+      "message": "{device} non ha il tasto «{key}»."
+    },
+    "ir_catalog_unavailable": {
+      "message": "Impossibile caricare il codice IR: {error}"
+    },
+    "not_a_remote": {
+      "message": "Il dispositivo scelto non è un telecomando lizaIP."
+    },
+    "ir_entry_missing": {
+      "message": "La voce dei dispositivi IR non esiste ancora."
+    },
+    "refresh_failed": {
+      "message": "Aggiornamento delle sorgenti dinamiche non riuscito per: {devices}"
     }
-  },
-  "page_titles": {
-    "welcome": "benvenuto!"
-  },
-  "state_words": {
-    "on": "acceso",
-    "off": "spento",
-    "play": "riproduci",
-    "pause": "pausa",
-    "open": "apri",
-    "close": "chiudi",
-    "stop": "stop",
-    "lock": "blocca",
-    "unlock": "sblocca",
-    "next": "successivo",
-    "previous": "precedente",
-    "mute": "muto",
-    "unmute": "riattiva audio",
-    "shuffle_on": "casuale attivo",
-    "shuffle_off": "casuale disattivo",
-    "oscillate_on": "oscillazione attiva",
-    "oscillate_off": "oscillazione disattiva",
-    "forward": "avanti",
-    "reverse": "indietro",
-    "repeat_off": "ripeti disattivo",
-    "repeat_all": "ripeti tutto",
-    "repeat_one": "ripeti uno"
   },
   "issues": {
     "address_locked": {
@@ -389,6 +300,108 @@
     "protocol_mismatch": {
       "title": "{name} usa un'altra versione del protocollo",
       "description": "Il telecomando usa la versione {device} del protocollo lizaIP, Home Assistant la versione {ha}. Alcune funzioni potrebbero non funzionare. Aggiorna il firmware del telecomando o l'integrazione lizaIP in modo che coincidano."
+    }
+  },
+  "config_subentries": {
+    "ir_device": {
+      "initiate_flow": {
+        "user": "Aggiungi dispositivo IR"
+      },
+      "entry_type": "Dispositivo IR",
+      "step": {
+        "user": {
+          "title": "Aggiungi un dispositivo IR",
+          "description": "Scegli la marca di un televisore e dai un nome al dispositivo, oppure lascia il nome vuoto per usare la marca.",
+          "data": {
+            "brand_id": "Marca",
+            "name": "Nome"
+          },
+          "data_description": {
+            "brand_id": "Produttore del televisore. I suoi codici IR provengono dal catalogo.",
+            "name": "Mostrato come nome del dispositivo. Lascialo vuoto per usare la marca."
+          }
+        },
+        "reconfigure": {
+          "title": "Dispositivo IR",
+          "description": "**{name}**\n\n{table}",
+          "data": {
+            "code_set_id": "Set di codici"
+          },
+          "data_description": {
+            "code_set_id": "Se il televisore non reagisce ai tasti, prova un altro set di codici."
+          }
+        }
+      },
+      "error": {
+        "ir_no_brand": "Scegli una marca.",
+        "ir_unknown_brand": "Non esiste una marca con questo nome. Scegline una dall'elenco."
+      },
+      "abort": {
+        "reconfigure_successful": "Dispositivo aggiornato.",
+        "ir_catalog_unavailable": "Il catalogo dei codici IR non è raggiungibile. Riprova più tardi.",
+        "ir_catalog_no_key": "Il catalogo dei codici IR non ha una chiave per questo modello di telecomando. Riprova più tardi.",
+        "ir_no_keys": "Il catalogo non ha per questa marca alcun set di codici con un tasto che il telecomando può inviare."
+      }
+    }
+  },
+  "device_automation": {
+    "action_type": {
+      "power": "Invia Accensione",
+      "number_1": "Invia Numero 1",
+      "number_2": "Invia Numero 2",
+      "number_3": "Invia Numero 3",
+      "number_4": "Invia Numero 4",
+      "number_5": "Invia Numero 5",
+      "number_6": "Invia Numero 6",
+      "number_7": "Invia Numero 7",
+      "number_8": "Invia Numero 8",
+      "number_9": "Invia Numero 9",
+      "number_0": "Invia Numero 0",
+      "input": "Invia Ingresso",
+      "epg": "Invia Guida programmi",
+      "info": "Invia Info",
+      "subtitle": "Invia Sottotitoli",
+      "cursor_up": "Invia Su",
+      "cursor_down": "Invia Giù",
+      "cursor_left": "Invia Sinistra",
+      "cursor_right": "Invia Destra",
+      "ok": "Invia OK",
+      "menu": "Invia Menu",
+      "exit": "Invia Esci",
+      "volume_up": "Invia Alza volume",
+      "volume_down": "Invia Abbassa volume",
+      "channel_up": "Invia Canale successivo",
+      "channel_down": "Invia Canale precedente",
+      "mute": "Invia Muto",
+      "red": "Invia Rosso",
+      "green": "Invia Verde",
+      "yellow": "Invia Giallo",
+      "blue": "Invia Blu",
+      "play": "Invia Riproduci",
+      "pause": "Invia Pausa",
+      "stop": "Invia Stop",
+      "fast_rewind": "Invia Indietro",
+      "fast_forward": "Invia Avanti",
+      "skip_back": "Invia Precedente",
+      "skip_forward": "Invia Successivo",
+      "home": "Invia Home",
+      "back": "Invia Indietro",
+      "play_pause": "Invia Riproduci / Pausa"
+    },
+    "extra_fields": {
+      "via": "Tramite lizaIP"
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "auto": "Automatico",
+        "en": "English",
+        "de": "Deutsch",
+        "fr": "Français",
+        "it": "Italiano",
+        "es": "Español"
+      }
     }
   }
 }

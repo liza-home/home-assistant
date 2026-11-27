@@ -17,6 +17,7 @@ next sync skip the one page the remote may never have stored.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -24,7 +25,7 @@ from homeassistant.core import HomeAssistant
 from ..device.protocol import is_valid_page_id
 from ..runtime import entry_device_id
 from ..shared.logs import device_logger
-from .default_pages import async_effective_pages
+from .welcome_page import async_effective_pages
 from .page_payload import build_page_payload, build_sync_context
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_page_payloads(
     hass: HomeAssistant, entry: ConfigEntry, page_id: int | None = None
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """The ``set_page`` payloads of *entry*'s pages, in stored order.
 
     With *page_id* given, the list holds that one page, or nothing at all when
@@ -75,7 +76,7 @@ async def async_page_payloads(
     ]
 
 
-async def async_page_listing(hass: HomeAssistant, entry: ConfigEntry) -> list[dict]:
+async def async_page_listing(hass: HomeAssistant, entry: ConfigEntry) -> list[dict[str, Any]]:
     """Every page of *entry* as ``{"page_id": ..., "hash": ...}``.
 
     The listing answers ``get_pages``, which is a cache check rather than a

@@ -50,10 +50,13 @@ export const AddPageMixin = {
    * answers are offered, and with none there is no dialog, only a toast.
    */
   async _showAddPageDialog(options = null) {
+    if (this._refusePageAtLimit()) return;
     let templates = [];
     try {
       templates = (await this._loadTemplates(options?.entity))
-        .filter(t => t.available !== false && this._templateAction(t) !== null);
+        .filter(t => t.available !== false && this._templateAction(t) !== null)
+        // Made of variables, so nothing to show while this remote's are off.
+        .filter(t => !(t.needs_variables && this._variablesOff()));
       // A button's options page is made only from an options template its
       // own device answers; those templates are offered nowhere else.
       templates = templates.filter(t => (options ? t.options && t.fits : !t.options));
@@ -94,6 +97,18 @@ export const AddPageMixin = {
     await this._showTemplateEntityPicker(template.id, template, { options });
   },
 
+  /** The device a subentry flow just added, once its entry has reloaded and
+   *  the template lists it; "" when it does not turn up. */
+  async _awaitNewTemplateDevice(templateId, known) {
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const { devices } = await this._loadTemplateDevices(templateId);
+      const fresh = devices.find((d) => !known.has(d.id));
+      if (fresh) return fresh.id;
+    }
+    return "";
+  },
+
   /** A template's description. */
   _templateDesc(t) {
     return t?.description || "";
@@ -123,15 +138,24 @@ export const AddPageMixin = {
         // In no folder, so there is nothing to open on the way: the card adds
         // the page itself, and leads because it is what most pages start from.
         ...loose.map(t => this._templateCard(t)),
-        ...this._addPageOptions(templates).map(group => ({
-          group: group.id,
-          scope: group.scope || "option",
-          primary: group.primary === true,
-          name: this._groupLabel(group),
-          icon: group.icon || "mdi:folder-outline",
-          desc: this._groupLabel(group, { desc: true }),
-          members: templates.filter(t => this._groupChain(t)[0]?.id === group.id),
-        })),
+        ...this._addPageOptions(templates).flatMap(group => {
+          const members = templates.filter(t => this._groupChain(t)[0]?.id === group.id);
+          // The suggested folder is not a click away: its templates are
+          // listed right under the blank page, and only its own sub-folders
+          // (Sonos) still open.
+          if (group.primary === true) {
+            return this._groupTemplates(members, 1).map(item => ({ ...item, primary: true }));
+          }
+          return [{
+            group: group.id,
+            scope: group.scope || "option",
+            primary: false,
+            name: this._groupLabel(group),
+            icon: group.icon || "mdi:folder-outline",
+            desc: this._groupLabel(group, { desc: true }),
+            members,
+          }];
+        }),
       ],
       depth: 0,
     };
@@ -576,9 +600,10 @@ export const AddPageMixin = {
     // such a group rather than only ruling a line under it, so each is headed.
     // A page that needs no folder opening comes first whatever it is called.
     const leads = options ? items.filter(i => i.primary) : [];
-    const lead = [...leads.filter(i => !i.members), ...leads.filter(i => i.members)];
-    const rest = lead.length ? items.filter(i => !i.primary) : items;
-    const rows = [];
+    const isBlank = (i) => /(^|[/:._-])blank-page$/.test(i.template?.id || "");
+    const blank = leads.find(isBlank);
+    const lead = [...leads.filter(i => !i.members && i !== blank), ...leads.filter(i => i.members)];
+    const rest = leads.length ? items.filter(i => !i.primary) : items;
     const rowsFor = (list) => list.map(item => this._templateRowHtml({
       attr: item.members
         ? `data-group="${this._esc(item.group)}"`
@@ -594,18 +619,21 @@ export const AddPageMixin = {
       kind: item.members ? "folder" : "leaf",
       template: item.members ? null : item.template,
     })).join("");
-    rows.push(rowsFor(lead));
-    const tail = [rowsFor(rest)];
-    // One empty page over the rest is a running order, not two groups worth
-    // naming: the headings earn their place once a folder claims the lead.
+    // The empty page stands alone on top, ruled off from everything below.
+    const top = blank
+      ? `${this._templateListHtml(rowsFor([blank]), { cls: "is-lead" })}
+        <hr class="template-list-rule">`
+      : "";
+    // One run of rows is a running order, not two groups worth naming: the
+    // headings earn their place once a folder claims the lead.
     if (!lead.some(i => i.members)) {
-      return this._templateListHtml([...rows, ...tail].join(""));
+      return `${top}${this._templateListHtml(rowsFor([...lead, ...rest]))}`;
     }
-    return `
+    return `${top}
         <p class="template-list-title" id="liza-tpl-lead">${this._t("suggested_options")}</p>
-        ${this._templateListHtml(rows.join(""), { cls: "is-lead", labelledBy: "liza-tpl-lead" })}
+        ${this._templateListHtml(rowsFor(lead), { cls: "is-lead", labelledBy: "liza-tpl-lead" })}
         <p class="template-list-title" id="liza-tpl-rest">${this._t("other_options")}</p>
-        ${this._templateListHtml(tail.join(""), { labelledBy: "liza-tpl-rest" })}`;
+        ${this._templateListHtml(rowsFor(rest), { labelledBy: "liza-tpl-rest" })}`;
   },
 
   /**
@@ -628,7 +656,7 @@ export const AddPageMixin = {
       const tag = kind === "target" ? "ha-list-item-option" : "ha-list-item-button";
       return `
         <${tag} class="template-row" ${attr}>
-          ${kind === "target" ? "" : `<span slot="start">${this._tilePlateHtml(icon)}</span>`}
+          ${kind === "target" || kind === "choice" ? "" : `<span slot="start">${this._tilePlateHtml(icon)}</span>`}
           <span slot="headline" class="template-row-name">${nameHtml}</span>
           ${desc ? `<span slot="supporting-text" class="template-row-desc">${this._esc(desc)}</span>` : ""}
           ${end ? `<span slot="end" class="template-row-tail">${end}</span>` : ""}
@@ -639,7 +667,7 @@ export const AddPageMixin = {
     const tail = end ? `<span class="template-row-tail">${end}</span>` : "";
     const head = kind === "target"
       ? '<span class="template-row-radio" aria-hidden="true"></span>'
-      : this._tilePlateHtml(icon);
+      : kind === "choice" ? "" : this._tilePlateHtml(icon);
     return `
         <button class="template-row" ${attr}>
           ${head}
@@ -840,32 +868,37 @@ export const AddPageMixin = {
    * one. `back` is the step to return to; moving an existing page has nothing
    * to go back to and passes neither.
    */
-  async _showTemplateEntityPicker(templateId, templateMeta, {
-    // Set when the page being added is a button's options subpage: it binds to
-    // the button's own device without asking, where the template allows it.
-    options = null,
-    confirmLabel = this._t(options ? "add_options_title" : "add_page"),
-    busyLabel = this._t("adding"),
-    host = null,
-    close: hostClose = null,
-    back = null,
-    // The walk's crumb trail, and where each crumb goes. Moving an existing
-    // page is not a walk and passes neither.
-    crumbs = null,
-    onCrumb = null,
-    // Where the devices come from, and which one to propose: a template's own
-    // list by default; binding a page no template made offers every device.
-    loadDevices = null,
-    // The device (or hub) a page being moved is on now: marked, never chosen.
-    current = "",
-    onConfirm = async (target, kind) => {
-      await this._addTemplatePage(templateId, target, kind, options);
-      // The options path reports for itself: it toasts what it wrote, or why
-      // it could not, before this ever gets a chance to.
-      if (options) return "";
-      return this._t("template_added", { name: templateMeta?.name || templateId });
-    },
-  } = {}) {
+  async _showTemplateEntityPicker(templateId, templateMeta, opts = {}) {
+    const {
+      // Set when the page being added is a button's options subpage: it binds to
+      // the button's own device without asking, where the template allows it.
+      options = null,
+      confirmLabel = this._t(options ? "add_options_title" : "add_page"),
+      busyLabel = this._t("adding"),
+      host = null,
+      close: hostClose = null,
+      back = null,
+      // The walk's crumb trail, and where each crumb goes. Moving an existing
+      // page is not a walk and passes neither.
+      crumbs = null,
+      onCrumb = null,
+      // Where the devices come from, and which one to propose: a template's own
+      // list by default; binding a page no template made offers every device.
+      loadDevices = null,
+      // The device (or hub) a page being moved is on now: marked, never chosen.
+      current = "",
+      onConfirm = async (target, kind) => {
+        await this._addTemplatePage(templateId, target, kind, options);
+        // The options path reports for itself: it toasts what it wrote, or why
+        // it could not, before this ever gets a chance to.
+        if (options) return "";
+        return this._t("template_added", { name: templateMeta?.name || templateId });
+      },
+      // Proposed over the server's suggestion: a device just added for this page.
+      preselect = "",
+      // The dialog a step drawn into it comes back to, so it is not reopened.
+      modal = null,
+    } = opts;
     // Bound to nothing, so there is nothing to ask: the page is added as it
     // stands, like a blank one. Here rather than at the caller so no path to
     // this dialog can show one that only says it cannot be used.
@@ -899,6 +932,12 @@ export const AddPageMixin = {
           <!-- Replaced asynchronously with the outcome of a round-trip, which
                moves no focus, so a screen reader would otherwise never hear it. -->
           <p class="template-entity-hint" role="status" aria-live="polite">${this._t(entrySelector ? "loading_hubs" : "loading_devices")}</p>
+          <ha-button appearance="plain" class="template-new-device" hidden>
+            <ha-icon slot="start" icon="mdi:plus" aria-hidden="true"></ha-icon>${this._t("new_device")}
+          </ha-button>
+          <ha-button appearance="plain" class="template-reconfigure" hidden>
+            <ha-icon slot="start" icon="mdi:swap-horizontal" aria-hidden="true"></ha-icon>${this._t("other_code_set")}
+          </ha-button>
         </div>`;
 
     // The last of the walk's steps, wearing the same chrome as the rest so the
@@ -946,6 +985,9 @@ export const AddPageMixin = {
       host.innerHTML = body;
       overlay = host;
       close = hostClose;
+    } else if (modal) {
+      ({ dlg: overlay, close } = modal);
+      overlay.querySelector(".add-page-dialog").innerHTML = body;
     } else {
       ({ dlg: overlay, close } = this._openModal(
         `<div class="add-page-dialog template-dialog">${body}</div>`,
@@ -1160,20 +1202,64 @@ export const AddPageMixin = {
       // entity registries, so this only has to present it.
       const { devices, error, suggested = "" } = loadDevices
         ? await loadDevices() : await this._loadTemplateDevices(templateId, options?.entity);
+      const handler = !error ? await this._subentryFlowHandler(deviceSelector) : null;
+      const reopen = (chosenId = "") => this._showTemplateEntityPicker(
+        templateId, templateMeta, { ...opts, preselect: chosenId },
+      );
+      // A catalogue TV (one with a brand) on this page can switch to another
+      // code set of its brand in place.
+      const subentryId = handler && this._hass.devices?.[current]?.manufacturer
+        ? this._hass.devices[current].config_entries_subentries?.[handler[0]]?.[0] : null;
+      if (subentryId && !dismissed) {
+        const redo = overlay.querySelector(".template-reconfigure");
+        redo.hidden = false;
+        redo.addEventListener("click", () => {
+          dismissed = true;
+          const again = () => (host ? reopen() : this._showTemplateEntityPicker(
+            templateId, templateMeta, { ...opts, modal: { dlg: overlay, close } },
+          ));
+          this._runSubentryFlow({
+            host: host || overlay.querySelector(".add-page-dialog"), handler, subentryId,
+            domain: deviceSelector.integration, crumbs: crumbs || [], onCrumb, back: again, close,
+            done: (alive, text) => {
+              if (text) this._toast(text);
+              if (alive()) again();
+            },
+          });
+        });
+      }
+      // A device the template asks for may be added right here, as one more
+      // step of the walk; it comes back to this list with that device chosen.
+      if (host && handler && !dismissed) {
+        const known = new Set(devices.map((d) => d.id));
+        const add = overlay.querySelector(".template-new-device");
+        add.hidden = false;
+        add.addEventListener("click", () => {
+          dismissed = true;
+          this._runSubentryFlow({
+            host, handler, domain: deviceSelector.integration, crumbs: crumbs || [],
+            onCrumb, back: () => reopen(), close,
+            done: async (alive) => {
+              const chosen = await this._awaitNewTemplateDevice(templateId, known);
+              if (alive()) reopen(chosen);
+            },
+          });
+        });
+      }
       if (error) {
         hint.textContent = this._t("devices_load_failed", { error });
         return;
       }
       if (!devices.length) {
         const integration = deviceSelector.integration || "";
-        hint.textContent = integration
-          ? this._t("no_matching_devices", { integration })
+        hint.textContent = handler ? ""
+          : integration ? this._t("no_matching_devices", { integration })
           : this._t("no_matching_devices_generic");
         return;
       }
       // Proposed, not chosen: preselected so one click confirms it.
       const allowed = new Set(devices.map((d) => d.id));
-      const proposed = allowed.has(suggested) ? suggested : "";
+      const proposed = allowed.has(preselect) ? preselect : allowed.has(suggested) ? suggested : "";
       // An options page is about one button, and the button already names its
       // device: there is no question left to ask.
       if (options && proposed) return bindSilently(proposed);

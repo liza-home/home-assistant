@@ -1,28 +1,29 @@
 {
   "domain": "lizaip",
   "name": "lizaIP",
-  "documentation": "https://github.com/liza-home/home-assistant/blob/main/custom_components/lizaip/docs/USER_GUIDE.md",
-  "issue_tracker": "https://github.com/liza-home/home-assistant/issues",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@liza-home"
   ],
   "config_flow": true,
-  "integration_type": "device",
-  "iot_class": "local_push",
   "dependencies": [
     "http",
     "zeroconf",
     "frontend",
-    "panel_custom"
+    "panel_custom",
+    "file_upload"
   ],
-  "after_dependencies": [
-    "recorder"
-  ],
+  "documentation": "https://github.com/liza-home/home-assistant/blob/main/custom_components/lizaip/docs/USER_GUIDE.md",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/liza-home/home-assistant/issues",
   "requirements": [
     "fonttools>=4.50.0",
     "brotli>=1.1.0"
   ],
-  "version": "2026.11.3b2",
+  "version": "2026.11.3b4",
   "zeroconf": [
     {
       "type": "_lizaip._tcp.local."

@@ -78,7 +78,8 @@ same reasons:
 from __future__ import annotations
 
 import math
-from typing import Final
+from collections.abc import Mapping
+from typing import Any, Final
 
 from homeassistant.core import State
 
@@ -203,7 +204,8 @@ def entity_brightness_percent(
     if effective_state != "on":
         return None
 
-    raw = (state.attributes or {}).get("brightness")
+    attributes: Mapping[str, Any] = state.attributes or {}
+    raw = attributes.get("brightness")
     # bool is an int subclass, and `light.brightness: true` out of hand-written
     # YAML would otherwise read as brightness 1.
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):

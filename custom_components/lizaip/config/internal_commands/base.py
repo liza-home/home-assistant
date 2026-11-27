@@ -69,13 +69,13 @@ class InternalCommand:
     action_type: str
     icon: str
     name: str
-    build_params: Callable[[Any, dict], dict]
-    run: Callable[[Any, dict], Awaitable[Any]]
+    build_params: Callable[[Any, dict[str, Any]], dict[str, Any]]
+    run: Callable[[Any, dict[str, Any]], Awaitable[Any]]
     schema: Any
-    build_tooltip: Callable[[dict, dict], str] | None = None
+    build_tooltip: Callable[[dict[str, Any], dict[str, Any]], str] | None = None
     tooltip_template: str = "${_cmd}: ${_name}"
-    is_available: Callable[[dict, dict], bool] | None = None
-    target_params: tuple[dict, ...] = ()
+    is_available: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None
+    target_params: tuple[dict[str, Any], ...] = ()
     enabled: bool = True
 
     @property

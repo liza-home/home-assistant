@@ -4,9 +4,16 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+from collections.abc import Collection
+from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
@@ -18,13 +25,19 @@ from homeassistant.helpers.target import (
 )
 
 from ..const import DOMAIN
+from ..ir.sender import async_send_key
 from ..config.internal_commands import (
     InternalCommand,
     InternalCommandError,
     build_page_context,
     enabled_commands,
 )
-from ..runtime import entry_connection, entry_device_id, find_store
+from ..runtime import (
+    entry_connection,
+    entry_device_id,
+    find_store,
+    is_ir_entry,
+)
 from ..shared.logs import device_logger
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,32 +71,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             }),
         )
 
-    async def _handle_clear_pages(call: ServiceCall) -> None:
-        """Wipe every page off the targeted devices and rebuild them from the store.
-
-        The protocol's full re-sync (PROTOCOL.md §clear_all). Nothing is lost:
-        the store holds the pages and the rebuild follows the wipe.
-        """
-        from ..config.device_sync import sync_config_to_device
-
-        for entry in _target_entries(hass, call.data):
-            conn = entry.runtime_data.connection
-            device_logger(_LOGGER, entry).info("lizaip.clear_device_pages: clearing")
-            async with conn.page_cache.lock:
-                await conn.clear_all()
-            await sync_config_to_device(hass, entry)
-
-    if not hass.services.has_service(DOMAIN, "clear_device_pages"):
-        hass.services.async_register(
-            DOMAIN,
-            "clear_device_pages",
-            _handle_clear_pages,
-            schema=vol.Schema({
-                vol.Optional("config_entry_id"): cv.string,
-            }),
-        )
-
-    async def _handle_send_ir(call: ServiceCall) -> None:
+    async def _send_blob(call: ServiceCall) -> None:
         """Have the targeted remotes, or every remote, transmit an IR code."""
         ir_blob = call.data["ir_blob"].strip()
         try:
@@ -93,9 +81,66 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="invalid_ir_blob",
             ) from None
-        for entry in _target_entries(hass, call.data):
+        if (via := call.data.get("via")) is not None:
+            remote = _remote_of_device(hass, via)
+            if not ((conn := entry_connection(remote)) and conn.connected):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="not_connected",
+                )
+            entries = [remote]
+        else:
+            entries = _target_entries(hass, call.data)
+        for entry in entries:
             device_logger(_LOGGER, entry).debug("lizaip.send_ir: %d bytes", len(ir_blob))
             await entry.runtime_data.connection.send_ir(ir_blob)
+
+    async def _send_key(call: ServiceCall) -> None:
+        """Have the chosen remote transmit a key of an IR device."""
+        from ..ir.page_codes import ir_device_of
+
+        def single(value: Any) -> Any:
+            return value[0] if isinstance(value, list) and value else (None if isinstance(value, list) else value)
+
+        device_id, key = single(call.data.get("device_id")), call.data.get("key")
+        if (button := single(call.data.get("entity_id"))) is not None:
+            reg = er.async_get(hass).async_get(button)
+            if reg is None or reg.platform != DOMAIN or reg.domain != "button" or not reg.device_id:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="ir_not_an_ir_device",
+                    translation_placeholders={"device": button},
+                )
+            device_id, key = reg.device_id, reg.original_name
+        if device_id is None or key is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="ir_not_an_ir_device",
+                translation_placeholders={"device": str(device_id)},
+            )
+        device = ir_device_of(hass, device_id)
+        if device is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="ir_not_an_ir_device",
+                translation_placeholders={"device": device_id},
+            )
+        if (via := call.data.get("via")) is not None:
+            remote = _remote_of_device(hass, via)
+        else:
+            chosen = hass.config_entries.async_get_entry(call.data.get("config_entry_id", ""))
+            if chosen is None or chosen.domain != DOMAIN or is_ir_entry(chosen):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="not_a_remote",
+                )
+            remote = chosen
+        await async_send_key(hass, device, key, remote, call.context)
+
+    async def _handle_send_ir(call: ServiceCall) -> None:
+        """Transmit an IR code: the ``ir_blob`` given, else a key of an IR device."""
+        if call.data.get("ir_blob") is not None:
+            await _send_blob(call)
+        else:
+            await _send_key(call)
 
     if not hass.services.has_service(DOMAIN, "send_ir"):
         hass.services.async_register(
@@ -103,9 +148,12 @@ def async_register_services(hass: HomeAssistant) -> None:
             "send_ir",
             _handle_send_ir,
             schema=vol.Schema({
-                vol.Required("ir_blob"): cv.string,
+                vol.Optional("ir_blob"): cv.string,
+                vol.Optional("key"): cv.string,
+                vol.Optional("via"): cv.string,
                 vol.Optional("config_entry_id"): cv.string,
-                # Non-entity services receive raw target keys in call.data.
+                # Raw target keys: the remotes of an ir_blob, or the IR key button
+                # (entity_id) / IR device (device_id) of a key.
                 **cv.TARGET_SERVICE_FIELDS,
             }),
         )
@@ -153,7 +201,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     _LOGGER.debug("Registered lizaIP services")
 
 
-def _entry_ids_from_devices(hass: HomeAssistant, device_ids) -> set[str]:
+def _entry_ids_from_devices(hass: HomeAssistant, device_ids: Collection[str]) -> set[str]:
     """Config entry ids of the given devices; the caller narrows them to ours.
 
     Reads ``config_entry_id`` rather than the ``config_entries`` set, like the
@@ -172,7 +220,7 @@ def _entry_ids_from_devices(hass: HomeAssistant, device_ids) -> set[str]:
     return entry_ids
 
 
-def _entry_ids_from_entities(hass: HomeAssistant, entity_ids) -> set[str]:
+def _entry_ids_from_entities(hass: HomeAssistant, entity_ids: Collection[str]) -> set[str]:
     """Config entry ids of the given entities."""
     if not entity_ids:
         return set()
@@ -186,7 +234,7 @@ def _entry_ids_from_entities(hass: HomeAssistant, entity_ids) -> set[str]:
     return entry_ids
 
 
-def _selected_entry_ids(hass: HomeAssistant, data) -> set[str] | None:
+def _selected_entry_ids(hass: HomeAssistant, data: Any) -> set[str] | None:
     """Config entry ids a call names, or ``None`` when it names none.
 
     ``None`` and ``set()`` are deliberately different answers. A call with no
@@ -220,7 +268,16 @@ def _selected_entry_ids(hass: HomeAssistant, data) -> set[str] | None:
     return entry_ids
 
 
-def _target_entries(hass: HomeAssistant, data) -> list:
+def _remote_of_device(hass: HomeAssistant, device_id: str) -> ConfigEntry:
+    """The remote whose registry device *device_id* is."""
+    device = dr.async_get(hass).async_get(device_id)
+    entry = hass.config_entries.async_get_entry(device.config_entry_id) if device else None
+    if entry is None or entry.domain != DOMAIN or is_ir_entry(entry):
+        raise ServiceValidationError(translation_domain=DOMAIN, translation_key="not_a_remote")
+    return entry
+
+
+def _target_entries(hass: HomeAssistant, data: Any) -> list[Any]:
     """Connected config entries a service call addresses.
 
     Takes the whole call data rather than one id because a target can be
@@ -255,7 +312,7 @@ def _target_entries(hass: HomeAssistant, data) -> list:
     return connected
 
 
-async def _page_context(hass: HomeAssistant, entry) -> dict:
+async def _page_context(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     """The pages of *entry*'s device, as an internal command sees them.
 
     An empty context would read as "no page list at hand" and make every name
@@ -272,7 +329,9 @@ async def _page_context(hass: HomeAssistant, entry) -> dict:
     return build_page_context(await store.async_get_pages(device_id))
 
 
-def _validated_params(command: InternalCommand, data, context: dict) -> dict:
+def _validated_params(
+    command: InternalCommand, data: dict[str, Any], context: dict[str, Any],
+) -> dict[str, Any]:
     """Build *command*'s params, reporting a bad payload the way HA expects.
 
     Kept as a function rather than a ``try`` around the call site because the

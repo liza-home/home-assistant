@@ -33,6 +33,7 @@ def _colour(feature: Any) -> str | None:
 
     xy = getattr(getattr(feature, "color", None), "xy", None)
     mirek = getattr(getattr(feature, "color_temperature", None), "mirek", None)
+    rgb: tuple[float, float, float]
     if xy is not None:
         rgb = color_util.color_xy_to_RGB(xy.x, xy.y)
     elif mirek:

@@ -1,6 +1,8 @@
 """Events the config side puts on the Home Assistant bus."""
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.core import HomeAssistant, callback
 
 from .const import CONFIG_CHANGED_EVENT, DEVICE_SYNCED_EVENT
@@ -20,7 +22,7 @@ def fire_config_changed(
     marks a dynamic refresh (a Table of contents filling a slot for a page just added),
     which the panel must not drop while its own page operation is in flight.
     """
-    data: dict = {"entry_id": entry_id}
+    data: dict[str, Any] = {"entry_id": entry_id}
     if order_only:
         data["order_only"] = True
     if sync_handled:

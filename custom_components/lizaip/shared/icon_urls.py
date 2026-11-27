@@ -17,7 +17,8 @@ from ..imgserv.source_parse import (
 from ..imgserv import media_hosts
 from ..imgserv.fonts import DEFAULT_FONT_ID
 from .i18n import translate_inline
-from .theme import DEFAULT_THEME, DEFAULT_THEME_ID, get_theme
+from .theme import DEFAULT_THEME, DEFAULT_THEME_ID, Theme, get_theme
+from .variables_calc import VARIABLE_OFF_MARK, VARIABLE_OFF_TEXT_ICON
 
 #: imgserv options a picture may carry in its query: ``media:<url>?size=200x200``.
 MEDIA_OPTION_KEYS: Final = ("size", "box", "fit", "mode", "fg", "bg", "crop", "alpha", "percent", "radius")
@@ -116,6 +117,23 @@ def split_option_query(value: str) -> tuple[str, str]:
     if not kept:
         return value, ""
     return head, "&".join(kept)
+
+
+def show_variable_marks(text: Any) -> Any:
+    """*text* with each switched-off variable drawn as `VARIABLE_OFF_TEXT_ICON`.
+
+    The icon is a part of its own, so the words around it become ``text:`` parts."""
+    if not isinstance(text, str) or VARIABLE_OFF_MARK not in text:
+        return text
+    body, query = split_option_query(text)
+    first, *rest = body.split(VARIABLE_OFF_MARK)
+    parts = [first.strip()] if first.strip() else []
+    for words in rest:
+        parts.append(VARIABLE_OFF_TEXT_ICON)
+        if words := words.strip():
+            is_part = is_address(words) or names_a_source(words)
+            parts.append(words if is_part else "text:" + words.replace("?", "%3F"))
+    return " ".join(parts) + (f"?{query}" if query else "")
 
 
 def split_media_options(value: str) -> tuple[str, dict[str, str]]:
@@ -314,7 +332,7 @@ def resolve_icon_url(
     A ``{translate: <key>}`` in the value is written out in the language being
     drawn in (:func:`..i18n.translate_inline`).
     """
-    icon = translate_inline(icon).strip() if icon else ""
+    icon = show_variable_marks(translate_inline(icon)).strip() if icon else ""
     if not icon:
         return ""
     pct = f"percent={percent}" if percent is not None else ""
@@ -414,7 +432,7 @@ def _spelled(colour: str, theme: str) -> str:
     if len(stops) > 1:
         return f"linear_gradient({','.join(_spelled(s, theme) for s in stops)})"
 
-    def drawn(t):
+    def drawn(t: Theme) -> tuple[Any, ...]:
         return parse_color(colour, t.colors) or t.color("default") or DEFAULT_FG_COLOR
 
     rgba = drawn(get_theme(theme))
@@ -596,7 +614,7 @@ def resolve_tooltip_url(
     take the tooltip font, and a value naming its own ``font_size=`` or
     ``font=`` keeps it -- the rule `resolve_title_url` applies.
     """
-    value = translate_inline(text).strip() if text else ""
+    value = show_variable_marks(translate_inline(text)).strip() if text else ""
     if not value:
         return ""
     explicit = is_media_source(value)
@@ -621,12 +639,12 @@ def resolve_title_url(
     """The URL for a page's title strip; ``""`` when the page has none.
 
     Only a title that draws words takes the ``title`` font size: an icon, logo
-    or picture has no font, unless a ``+ text:`` has given it one. A ready-made
+    or picture has no font, unless text beside it has given it one. A ready-made
     ``imgserv://`` URL is passed on as written, and a title that names its own
     ``font_size=`` or ``font=`` keeps all of it: the settings are a default,
     not an override.
     """
-    value = translate_inline(image).strip() if image else ""
+    value = show_variable_marks(translate_inline(image)).strip() if image else ""
     url = resolve_icon_url(value, size="title", color=color, theme=theme)
     if (
         not _draws_words(url)

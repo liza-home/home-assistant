@@ -26,6 +26,7 @@ import { applyMixins } from "./lizaip-mixins.js";
 import { SettingsThemeMixin, THEME_BLANK } from "./settings/theme.js";
 import { SettingsFontsMixin } from "./settings/fonts.js";
 import { SettingsFontbookMixin } from "./settings/fontbook.js";
+import { TAB } from "./lizaip-route.js";
 
 /**
  * The tab's pages, one chip each. Only the chosen group is rendered, so a
@@ -57,6 +58,8 @@ const SETTINGS_DEFAULT_GROUP = "appearance";
 // A plain string, not a template literal: the placeholder it shows is written
 // in the same syntax a template literal substitutes.
 const VARIABLE_SAMPLE = "${sensor.living_room_temperature}";
+// How long the page limit field waits after its last arrow click before saving.
+const MAX_PAGES_SAVE_MS = 800;
 
 const SettingsTabMixin = {
   /** Where the chosen group is kept, like the page-links preference. */
@@ -83,7 +86,7 @@ const SettingsTabMixin = {
   _enterSettingsTab() {
     // Fresh each time: a font dropped into the folder appears without a reload.
     Promise.all([this._loadTextSettings(), this._loadIconOptions()]).then(() => {
-      if (this._activeTab === "settings") this._render();
+      if (this._activeTab === TAB.SETTINGS) this._render();
     });
   },
 
@@ -233,9 +236,17 @@ const SettingsTabMixin = {
     return `${Number((ms / 1000).toFixed(1))} s`;
   },
 
+  /** The off warning, with the two placeholders drawn as the icons they are. */
+  _htmlVariablesOffWarning() {
+    const icon = (name) => `<ha-icon class="settings-variables-off-icon" icon="${name}"></ha-icon>`;
+    return this._esc(this._t("settings_variables_off_warning"))
+      .replace("{text_mark}", icon("mdi:help-box-outline"))
+      .replace("{picture_mark}", icon("mdi:cancel"));
+  },
+
   /**
    * The Variables card: the switch for the variables typed into buttons and
-   * titles (on by default), and under it how often a value that keeps
+   * titles (off for a new remote), and under it how often a value that keeps
    * changing is sent. Empty when the backend sends no limits for the interval.
    */
   _htmlSettingsVariablesCard() {
@@ -246,7 +257,7 @@ const SettingsTabMixin = {
     const hintId = `${id}-hint`;
     const value = opts.variables_interval_ms ?? opts.defaults?.variables_interval_ms;
     const fallback = opts.defaults?.variables_interval_ms ?? 500;
-    const on = opts.variables_enabled !== false;
+    const on = opts.variables_enabled === true;
     return `
       <ha-card outlined class="settings-card">
         ${this._htmlCardHeader("settings_variables", { icon: "mdi:code-braces", level: 3 })}
@@ -254,6 +265,7 @@ const SettingsTabMixin = {
           <div class="settings-switch-list">
             ${this._htmlIconSwitch("variables_enabled", "settings_variables_enabled", "settings_variables_enabled_hint")}
           </div>
+          ${on ? "" : `<ha-alert alert-type="warning" class="settings-variables-off-warning">${this._htmlVariablesOffWarning()}</ha-alert>`}
           <div class="settings-switch-detail${on ? "" : " is-off"}">
           <div class="settings-sample">
             <code class="settings-sample-source">${this._esc(VARIABLE_SAMPLE)}</code>
@@ -378,32 +390,39 @@ const SettingsTabMixin = {
    * device setting. Its header says so once, so no hint below has to.
    */
   _htmlSettingsEditorCard() {
+    const varsOff = this._variablesOff();
     return `
       <ha-card outlined class="settings-card">
         ${this._htmlCardHeader("settings_editor", { icon: "mdi:monitor-edit", level: 3 })}
         <div class="settings-body">
           <div class="settings-switch-list">
             ${this._htmlEditorSwitch("page-links", "settings-pagelinks-switch", "settings_page_links", this._pageLinksEnabled())}
-            ${this._htmlEditorSwitch("visible-faces", "settings-visiblefaces-switch", "settings_visible_faces", this._editorPref("visibleFaces"))}
-            ${this._htmlEditorSwitch("live-values", "settings-livevalues-switch", "settings_live_values", this._editorPref("liveValues"))}
+          </div>
+          ${varsOff ? `<ha-alert alert-type="warning">${this._esc(this._t("settings_needs_variables"))}</ha-alert>` : ""}
+          <div class="settings-switch-list">
+            ${this._htmlEditorSwitch("visible-faces", "settings-visiblefaces-switch", "settings_visible_faces", this._editorPref("visibleFaces"), varsOff)}
+            ${this._htmlEditorSwitch("live-values", "settings-livevalues-switch", "settings_live_values", this._editorPref("liveValues"), varsOff)}
           </div>
         </div>
       </ha-card>`;
   },
 
-  /** One switch of this browser's own: nothing is saved to the backend. */
-  _htmlEditorSwitch(name, cls, labelKey, on) {
+  /**
+   * One switch of this browser's own: nothing is saved to the backend.
+   * *disabled* draws it off and greyed out; the stored choice is kept for later.
+   */
+  _htmlEditorSwitch(name, cls, labelKey, on, disabled = false) {
     const id = `liza-settings-${name}`;
     const hintId = `${id}-hint`;
     const labelId = `${id}-label`;
     return `
-            <div class="settings-switch-row">
+            <div class="settings-switch-row${disabled ? " is-off" : ""}">
               <div class="settings-switch-text">
                 <label id="${labelId}" for="${id}">${this._esc(this._t(labelKey))}</label>
                 <span class="config-field-hint" id="${hintId}">${this._esc(this._t(`${labelKey}_hint`))}</span>
               </div>
               <ha-switch id="${id}" class="${cls}"
-                         ${on ? "checked" : ""}
+                         ${on && !disabled ? "checked" : ""} ${disabled ? "disabled" : ""}
                          aria-labelledby="${labelId}" aria-describedby="${hintId}"></ha-switch>
             </div>`;
   },
@@ -466,19 +485,20 @@ const SettingsTabMixin = {
       returns an empty string, so the caller drops the blanks. */
   _settingsGroupCards(id) {
     if (id === "appearance") {
-      // The editor opens beneath the picker, on the theme picked there. Both
-      // share one grid cell, so a wide page cannot set the editor beside the
-      // list it belongs to; the icon card keeps its own place next to them.
+      // The editor opens beneath the picker, on the theme picked there; the
+      // stylesheet keeps it under the picker, below the icon card's row.
       const theme = this._htmlSettingsThemeCard();
       const icons = this._htmlSettingsIconCard();
       if (!this._themeEdit) return [theme, icons];
-      return [`<div class="settings-card-stack">${theme}${this._htmlThemeEditorCard()}</div>`, icons];
+      return [theme, this._htmlThemeEditorCard(), icons];
     }
     if (id === "behaviour") {
       return [this._htmlSettingsButtonsCard(), this._htmlSettingsVariablesCard()];
     }
     if (id === "editor") return [this._htmlSettingsEditorCard()];
-    return [this._htmlSettingsResendCard(), this._htmlSettingsDeviceCard()];
+    return [
+      this._htmlSettingsMaxPagesCard(), this._htmlSettingsResendCard(), this._htmlSettingsDeviceCard(),
+    ];
   },
 
   /** Only the chosen group's cards are built. */
@@ -642,6 +662,74 @@ const SettingsTabMixin = {
     this._saveTextSettings(next);
   },
 
+  /** The most pages the remote may hold, subpages included. On by default;
+   *  pages already over it stay, only adding more is refused. */
+  _htmlSettingsMaxPagesCard() {
+    const opts = this._iconOptions;
+    const limits = opts?.limits?.max_pages;
+    if (!limits) return "";
+    const id = "liza-settings-max-pages";
+    const on = opts.max_pages_enabled !== false;
+    return `
+      <ha-card outlined class="settings-card">
+        ${this._htmlCardHeader("settings_max_pages", { icon: "mdi:book-open-page-variant-outline", level: 3 })}
+        <div class="settings-body">
+          <div class="settings-switch-list">
+            ${this._htmlIconSwitch("max_pages_enabled", "settings_max_pages_enabled", "settings_max_pages_enabled_hint")}
+            <div class="settings-switch-detail${on ? "" : " is-off"}">
+              <div class="config-field">
+                <ha-input type="number" appearance="outlined" id="${id}" class="settings-step-input settings-max-pages"
+                          inputmode="numeric" step="1" min="${limits.min}"
+                          label="${this._esc(this._t("settings_max_pages_field"))}"
+                          value="${this._esc(opts.max_pages ?? opts.defaults?.max_pages)}"
+                          ${on ? "" : "disabled"}></ha-input>
+                <span class="config-field-hint settings-max-pages-over">${this._esc(
+                  on ? this._maxPagesOverText(opts.max_pages ?? opts.defaults?.max_pages) : "",
+                )}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </ha-card>`;
+  },
+
+  /** The warning while *limit* is below the pages the remote has, else "". */
+  _maxPagesOverText(limit) {
+    const count = this._pages?.length ?? 0;
+    return Number.isInteger(limit) && limit < count ? this._t("settings_max_pages_over", { count, limit }) : "";
+  },
+
+  /** Save the page limit of remote *entry* without redrawing the panel: nothing
+   *  else shows it, and a redraw would take the field from under the user's cursor. */
+  async _saveMaxPages(value, entry = this._currentEntry) {
+    // Typed on a remote the panel has since left: not this one's limit.
+    if (!entry || entry !== this._currentEntry) return;
+    const opts = this._iconOptions;
+    const limits = opts?.limits?.max_pages || {};
+    if (!Number.isInteger(value) || value < limits.min) {
+      this._toast(this._t("settings_max_pages_invalid", limits));
+      this._repaintSettingsBody();
+      return;
+    }
+    if (this._iconOptionsBusy) {
+      // Another save is under way: retry after it, so the newest value wins.
+      clearTimeout(this._maxPagesTimer);
+      this._maxPagesTimer = setTimeout(() => {
+        this._maxPagesTimer = null;
+        this._saveMaxPages(value, entry);
+      }, MAX_PAGES_SAVE_MS);
+      return;
+    }
+    if (value === opts?.max_pages) return;
+    const saved = await this._runBusy("_iconOptionsBusy", async () => {
+      this._applyIconOptions(await this._hass.callWS({
+        type: "lizaip_config/set_icon_options", entry_id: entry, max_pages: value,
+      }));
+      this._toast(this._t("settings_saved"));
+    }, { toast: "settings_save_failed", render: false });
+    if (!saved) this._repaintSettingsBody();
+  },
+
   /**
    * Whether the remote is sent a page again when it opens it. The remote keeps
    * about 400 images and draws a page from that cache only, so an image it
@@ -774,6 +862,25 @@ const SettingsTabMixin = {
       if (value === this._iconOptions?.icon_fill_step) return;
       this._saveIconOptions({ icon_fill_step: value });
     });
+    // Every arrow click is a change: saved once the clicking stops, or on leaving.
+    const maxPages = root.querySelector(".settings-max-pages");
+    const maxPagesEntry = this._currentEntry;
+    const saveMaxPages = () => {
+      clearTimeout(this._maxPagesTimer);
+      this._maxPagesTimer = null;
+      this._saveMaxPages(Number(maxPages.value), maxPagesEntry);
+    };
+    const showOver = () => {
+      const over = root.querySelector(".settings-max-pages-over");
+      if (over) over.textContent = this._maxPagesOverText(Number(maxPages.value));
+    };
+    maxPages?.addEventListener("input", showOver);
+    maxPages?.addEventListener("change", () => {
+      showOver();
+      clearTimeout(this._maxPagesTimer);
+      this._maxPagesTimer = setTimeout(saveMaxPages, MAX_PAGES_SAVE_MS);
+    });
+    maxPages?.addEventListener("blur", () => { if (this._maxPagesTimer) saveMaxPages(); });
     const interval = root.querySelector(".settings-variables-interval");
     // Dragging only moves the number beside it; letting go saves.
     if (interval) interval.valueFormatter = (v) => this._formatInterval(Number(v));

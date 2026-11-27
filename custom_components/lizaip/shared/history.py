@@ -14,7 +14,7 @@ remote's stored page or the admin panel's preview, both of which go through
 from __future__ import annotations
 
 import re
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from homeassistant.core import HomeAssistant
 
@@ -46,7 +46,8 @@ def _history_parts(image: Any) -> list[str]:
 
 def history_entities(image: Any) -> set[str]:
     """The entities every ``history:`` part of *image* graphs."""
-    return {history_entity(p) for p in _history_parts(image)}
+    # _history_parts keeps only parts whose entity is not None.
+    return {cast(str, history_entity(p)) for p in _history_parts(image)}
 
 
 _VERSION_PARAM_RE: Final = re.compile(r"([?&])v=[^&\s]*&?")
@@ -71,7 +72,7 @@ def versioned_history_image(image: Any, hass: HomeAssistant | None) -> Any:
     parts = _history_parts(image)
     if not parts:
         return image
-    version = max(_last_changed(history_entity(p), hass) for p in parts)
+    version = max(_last_changed(cast(str, history_entity(p)), hass) for p in parts)
     image = _VERSION_PARAM_RE.sub(lambda m: m.group(1) if m.group(0).endswith("&") else "", image)
     image = image.rstrip("?&").strip()
     return f"{image}{'&' if '?' in image else '?'}v={version}"

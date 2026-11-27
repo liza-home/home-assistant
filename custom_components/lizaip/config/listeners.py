@@ -46,14 +46,14 @@ def schedule_push_rescan(hass: HomeAssistant, entry_id: str) -> None:
     async def _rescan() -> None:
         try:
             await triggers.async_rescan()
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             entry_id_logger(_LOGGER, hass, entry_id).debug(
                 "Push trigger re-scan failed: %s", err,
             )
 
     try:
         hass.async_create_background_task(_rescan(), f"lizaip push trigger re-scan {entry_id}")
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:
         entry_id_logger(_LOGGER, hass, entry_id).debug(
             "Could not schedule push trigger re-scan: %s", err,
         )

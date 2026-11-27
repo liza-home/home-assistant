@@ -115,6 +115,12 @@ lizaip/
 2. Add this repository, type: **Integration**
 3. Open **lizaIP** and click **Install**
 
+Or install it manually from the Marketplace: choose **⋮ → Custom
+repositories**, add `https://github.com/liza-home/home-assistant` with type
+**Integration**, then search for **lizaIP** and install it.
+
+After installation, restart Home Assistant.
+
 ### Manual / development
 
 ```bash
@@ -422,8 +428,7 @@ were written:
 
 ```
 logo:sonos Küche
-logo:sonos - Küche
-mdi:television + text:Wohnzimmer
+mdi:television text:Wohnzimmer
 logo:hue text:Hue mdi:lightbulb
 ```
 
@@ -431,9 +436,7 @@ A new part starts at any word shaped like a source — `logo:`, `text:`, `mdi:`,
 `media:` — so no separator is needed between two of them. A `logo:` value is a
 shipped filename and an `mdi:` value is a hyphenated slug, so neither can hold
 a space: after one of those, plain words start a part too and are read as the
-`text:` they would have to be spelled as anywhere else. A lone `-` or `+`
-between parts is punctuation and is dropped, but one that would otherwise
-change a value is kept, so `text:1 + 1` is still one phrase.
+`text:` they would have to be spelled as anywhere else.
 
 **Words set the scale.** A mark beside a name is drawn at the name's own font
 size, so `logo:hue Wohnzimmer` is a roundel as tall as the W next to it rather
@@ -663,7 +666,7 @@ stretched to exactly `size`. The URL builder writes `fit=fill` when a `size` was
 on the picture itself (the 3×3 cover grid needs its 180×186), and nothing otherwise.
 
 A picture may stand in a composite title beside other parts:
-`${_device.entity_picture} + logo:sonos + ${_device.friendly_name}`. `media:`, a bare HA
+`${_device.entity_picture} logo:sonos ${_device.friendly_name}`. `media:`, a bare HA
 path and an `http(s)://` URL each start a part of their own and end at the first space.
 The builder encodes each picture as its own `media:<encoded>` part.
 
@@ -897,15 +900,16 @@ page titles (`title` of a page) accept `${domain.object_id}` and
 helper for battery icons: [README.public.md → Live values on the remote](../../README.public.md#live-values-on-the-remote).
 
 - **The Variables switch** (Settings → Behaviour → Variables, option
-  `variables_enabled`, on by default). Off, the variables a user typed --
-  `${sensor.x}`, `${light.desk.brightness}`, calculations -- are not read: in words
-  they are left out, and a picture with one gives way to the button's normal icon
-  (`shared.tokens.silence_user_variables`). What a template fills in for its page's
-  device -- `${_device…}`, `${_queue…}`, also inside a calculation -- and the button's
-  own `${_state}`/`${_name}` are read either way. Set per remote with
-  `variables_scope(entry.options)` where its pages are built, its live icons
-  repainted and its panel previews answered; the panel offers no entity
-  suggestions while it is off.
+  `variables_enabled`). It is off by default (`DEFAULT_VARIABLES_ENABLED`): an entry
+  without the option reads as off, and a stored True or False is kept. Off, no `${…}` is read --
+  `${sensor.x}`, calculations, `history:` graphs, and `${_device…}`, `${_queue…}`,
+  `${_state}`, `${_name}` alike (`variables_scope` at every page build, live repaint
+  and panel preview). In page titles each variable resolves to an empty string
+  without changing the saved title. In other text it is
+  `VARIABLE_OFF_TEXT_ICON` (`shared.tokens.silence_variables` leaves
+  `VARIABLE_OFF_MARK`, which tooltip cleaning cannot trim; `show_variable_marks`
+  turns it into an icon part in the drawn URLs and `resolve_variables`), and a picture or graph shows
+  `VARIABLE_OFF_ICON`. The live listener watches nothing (`config.variables._token_reads`).
 - **Value** (`const.entity_token_value`): the state rounded to the entity registry's
   `options.sensor.display_precision` (else `suggested_display_precision`) plus
   `unit_of_measurement`; an attribute as stored (lists joined with `, `, booleans
@@ -937,11 +941,21 @@ The device supports multiple pages of buttons. Pages are managed via the config 
 - Every page is equal — the first one holds no special status and can be renamed, reordered or deleted like any other
 - A new page is posted without an ID and the backend mints one: `generate_page_id` returns `max(existing) + 1`. IDs are sequential, not gap-filling — a hole in the middle is never backfilled, but deleting the highest page frees its ID for the next add. The protocol's range is `1…4294967295` (0 is reserved, see `PROTOCOL.md` §3); the generator enforces the lower bound but not the upper one, so an overflow is only reachable by hand-editing a page file, and `is_valid_page_id` catches it during sync
 - Pages are synced to the device using hash-based diffing (unchanged pages are skipped)
+- **Max pages** (Settings → Device, options `max_pages_enabled`, on by default, and
+  `max_pages`, at least 1, default 20) counts every page, subpages included.
+  `config.page_limit.page_room_error` refuses only a change that grows the count past
+  the limit (`page_limit_reached`): adding, duplicating, a template and a restore. A
+  paginated template adds no part past it. Pages already over it are kept and can still
+  be edited or deleted
 
 #### Page templates
 
-A template is a YAML file under `assets/templates/` (shipped) or
-`<config>/lizaip/templates/` (yours, offered under **My Templates**). A button's
+A template is a YAML file under `assets/templates/` (shipped),
+`<config>/lizaip/templates/` or `<config>/www/templates/` (yours, offered under
+**My Templates**). Template IDs are unique across all directories; an existing
+template takes precedence over a duplicate in `www/templates/`. Files in
+`www` are served by Home Assistant and may be accessible without authentication,
+so keep secrets in the private `lizaip/templates/` directory instead. A button's
 options subpages are templates under `assets/options/` (shipped) or
 `<config>/lizaip/options/` (yours, under **My Templates**): offered only under
 **Add options…**, with ids of their own (`options:<file stem>`), so
@@ -1036,7 +1050,7 @@ target_selector:
   device: {integration: sonos, primary_domain: media_player}
 pages:
   now-playing:
-    title: "logo:sonos + ${_device}"
+    title: "logo:sonos ${_device}"
     buttons:
       button_3: {tooltip: Playlists…, icon: mdi:playlist-music, goto_page: playlists}
       button_4: {tooltip: Radio…, icon: mdi:radio, goto_page: radio}
@@ -1052,6 +1066,11 @@ pages:
     buttons:
       button_back: {tooltip: Now Playing, goto_page: now-playing}
 ```
+
+**Devices without entities.** `device: {integration: lizaip, subentry_type: ir_device}`
+offers the devices of that kind of config subentry instead of asking for an entity
+domain: an IR device has none, and its page's `@ir:<key>` values are filled with
+that device's key names, each sent as a `lizaip.send_ir` of the key.
 
 **Pages that grow with their items.** A page that says `paginate: <placeholder>`
 is repeated while that placeholder has more items than the page shows: each
@@ -1101,9 +1120,13 @@ fetches the images it is missing. The same happens when the remote is picked up
 not work as expected: on a remote with more than about 400 images, tiles can
 stay blank.
 
+**Device → Max pages → Limit the number of pages** (on by default) caps how many
+pages, subpages included, the remote may hold (at least 1, 20 by default). Pages already
+over the limit stay; only adding more is refused.
+
 ### Devel tab
 
-The debug tools (report, traffic, logging, debug port, memory, random pages) live in the
+The debug tools (report, traffic, logging, debug port, memory, random pages, adding an IR device from a dropped or pasted code table) live in the
 separate `lizaip_devel` integration. While it is installed the panel shows a **Devel** tab
 in place of the former Debug tab, showing `lizaip_devel`'s own panel. lizaIP loads it by
 itself when the folder is there: it is not added under **Devices & services**, has no
@@ -1285,11 +1308,17 @@ localization](https://developers.home-assistant.io/docs/internationalization/cus
 `strings.json` is the English source, and `translations/<lang>.json` is what HA
 loads at runtime.
 
+The integration's own wordings — `button_tooltips`, `state_words` and
+`page_titles` — are not Home Assistant strings, and hassfest rejects them in
+`strings.json`. They live in `i18n/<lang>.json`, with `i18n/en.json` as the
+English source.
+
 To add a string:
 
-1. Add the key to `strings.json`.
+1. Add the key to `strings.json` (or `i18n/en.json` for a wording).
 2. Run `python3 scripts/sync_translations.py --fix` to propagate it to every
-   `translations/<lang>.json`, backfilling English where no translation exists.
+   `translations/<lang>.json` (or `i18n/<lang>.json`), backfilling English
+   where no translation exists.
 3. Read it at runtime — never inline the text in Python or JavaScript.
 
 `tests/test_translations.py` enforces this: key parity across languages,
@@ -1299,10 +1328,11 @@ pasted back into the panel sources.
 ### Button tooltips
 
 The words a button prints for what a press *does* ("Mute", "Repeat all") live
-under the `button_tooltips` key. Both halves of the app read the same file:
+under the `button_tooltips` key of `i18n/<lang>.json`. Both halves of the app
+read the same file:
 
 - **Python** — `shared.i18n.button_tooltips.get(key, lang)` reads
-  `translations/<lang>.json` directly. This is what the physical remote renders.
+  `i18n/<lang>.json` directly. This is what the physical remote renders.
 - **Panel JS** — fetches `lizaip_config/get_button_tooltips` at startup and on
   every device switch. It holds no table of its own, so the panel and the
   device cannot disagree.
@@ -1529,6 +1559,11 @@ None of it was our latency. Measured on real hardware:
 | `slider_throttle` outbound cap | 250 ms (`DEFAULT_SLIDER_MIN_INTERVAL_MS`) |
 | Hue bridge → `EVENT_STATE_CHANGED` | **~1 s** (7 commands came back as 3 events) |
 | Our push once the state lands | 0 ms on the leading edge |
+
+**Sensitivity.** A vertical slider is relative: the first touch is the zero point and
+the level moves by `travel × factor × range`. The factor is a 1–100 % slider in the
+panel; unset, each control uses its default (lights 100 %, volume 50 %). Light groups
+are throttled to at least 500 ms, and a volume slider also mutes at 0 and unmutes above.
 
 The bottleneck is the third row, and it is not a polling problem — the bridge is
 API v2, so the events arrive over SSE and it is *coalescing* rather than lagging.

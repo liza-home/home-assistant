@@ -18,7 +18,6 @@ halves can be separated at all.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -130,7 +129,7 @@ async def async_probe_reachability(
             if keep_body:
                 result["body"] = body
             return result
-    except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+    except (TimeoutError, aiohttp.ClientError) as err:
         detail = error_detail(err)
         return {
             "reachable": False,
@@ -186,7 +185,7 @@ async def async_fetch_section(conn: LizaIPConnection, endpoint: str) -> dict[str
                     "length": full,
                 }
             return {"status": resp.status, "body": body}
-    except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+    except (TimeoutError, aiohttp.ClientError) as err:
         detail = error_detail(err)
         return {"error": detail}
 

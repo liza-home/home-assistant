@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Final
+from typing import Any, Final
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ _ENTRY_RE: Final = re.compile(
 )
 
 #: A file's shapes: name -> entry (``path``, ``view_box``, ``secondary_path``).
-IconTable = dict[str, dict]
+IconTable = dict[str, dict[str, Any]]
 
 
 def parse_icon_set(text: str) -> IconTable:
@@ -72,7 +72,7 @@ class IconSetFiles:
         self.sets: dict[str, IconTable] = {}
 
     def _candidates(self) -> list[str]:
-        found = []
+        found: list[str] = []
         if not os.path.isdir(self._www):
             return found
         base_depth = self._www.rstrip(os.sep).count(os.sep)
@@ -124,5 +124,5 @@ class IconSetFiles:
         table = parse_icon_set(data.decode("utf-8", "replace"))
         return {prefixes.pop(): table} if table else {}
 
-    def get(self, prefix: str, name: str) -> dict | None:
+    def get(self, prefix: str, name: str) -> dict[str, Any] | None:
         return self.sets.get(prefix, {}).get(name)

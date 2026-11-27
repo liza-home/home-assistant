@@ -9,3 +9,5 @@
 name: {translate: showcase_pages}
 description: {translate: showcase_pages_desc}
 icon: mdi:star-shooting-outline
+# Every showcase is made of variables: not offered while a remote's are off.
+needs_variables: true

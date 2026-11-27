@@ -4,14 +4,15 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from homeassistant.components.event import EventEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ..entity import LizaIPEntity
 from .connection import LizaIPConnection
-from .entity import LizaIPEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ async def async_setup_entry(
     # served from the cache, and the entities are built on the event loop.
     await hass.async_add_executor_job(named_buttons)
 
-    def on_discovery(discovery: dict) -> None:
+    def on_discovery(discovery: dict[str, Any]) -> None:
         all_ids = discovery.get("buttons", [])   # sliders are handled by number.py
         new = [
             LizaIPButton(connection, entry, bid)
@@ -138,6 +139,6 @@ class LizaIPButton(LizaIPEntity, EventEntity):
         self.async_on_remove(self._connection.register_button(self._button_id, self._handle_event))
 
 
-    def _handle_event(self, event_type: str, extra: dict) -> None:
+    def _handle_event(self, event_type: str, extra: dict[str, Any]) -> None:
         self._trigger_event(event_type, extra)
         self.async_write_ha_state()

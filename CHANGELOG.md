@@ -11,6 +11,77 @@ you set up stop working or look different, each with a **What to do:** line
 that says how to get it working again. Features
 that were removed are always listed under **Removed**, new ones under **Added**.
 
+## [2026.11.3b4] - 2026-11-27
+
+### ⚠ Breaking changes
+
+- **A volume slider saved before keeps its old sensitivity.** Volume sliders
+  now default to 50 % sensitivity, but one saved with the old default stays at
+  100 % and moves twice as far per drag.
+  **What to do:** open the slider's **Advanced** panel and set
+  **Sensitivity** to 50 %.
+
+### Added
+
+- **Slider sensitivity, 1–100 %**, in the slider's **Advanced** panel, for the
+  page or per button. Unset, lights use 100 % and volume 50 %.
+- **Try another IR code set.** If a TV ignores its IR codes, **Reconfigure** on
+  the IR device (or **Change device… → Try another IR code set** on its page)
+  offers the brand's other code sets ("CodeSet 1", "CodeSet 2", …).
+
+### Changed
+
+- **The vertical slider follows your finger:** where you first touch is the
+  current level, and the level moves with the drag. A volume slider mutes at
+  0 and unmutes above it.
+- **The IR code catalogue key is fetched from Ruwido** each time an IR device
+  is added, instead of being built into the integration. IR devices already
+  added keep working.
+
+### Fixed
+
+- Pages keep their order when the page order file is missing or broken.
+- A remote picked from the device list opens on its Pages tab, not on
+  Settings.
+
+## [2026.11.3b3] - 2026-11-25
+
+### ⚠ Breaking changes
+
+- **Infrared keys are no longer editable `text` entities.** Each key is a
+  read-only `button` entity, and each infrared device is also a `remote`
+  entity.
+  **What to do:** use the `button.ir_key_*` entities or the **Send IR device
+  key** action, and remove `text.ir_key_*` from recorder excludes.
+- **Variables are off by default on each remote.** While off, user-entered
+  variables are not evaluated and may appear as placeholders; some templates
+  that depend on variables are unavailable.
+  **What to do:** turn on **Settings → Behaviour → Variables** for each remote
+  that needs variables.
+
+### Added
+
+- **Max pages per remote**, under **Settings → Device → Max pages**. It
+  defaults to 20; subpages count. Existing pages are kept, but adding pages
+  beyond the limit is refused.
+- **Infrared key sending through a remote entity.** `remote.send_command`
+  sends the selected key through the lizaIP remote whose button was pressed.
+- **Remove a page's device** from the page editor.
+
+### Changed
+
+- **The device list shows each remote's battery level** and updates it live.
+- **Restore progress is shown in the panel**, and dialogs stay open while the
+  panel redraws.
+- **Send IR code** asks which lizaIP remote to use before selecting an IR key
+  or code.
+
+### Fixed
+
+- The Table of contents now updates when pages are reordered.
+- Logos and icons beside title text keep a consistent size even beside
+  punctuation or lowercase-only text.
+
 ## [2026.11.3b2] - 2026-11-20
 
 ### ⚠ Breaking changes

@@ -85,7 +85,7 @@ async def async_resend_page(entry: Any, page_id: int) -> bool:
     async with cache.lock:
         try:
             await conn.set_page(**{**payload, "page_id": page_id})
-        except Exception as err:  # noqa: BLE001 - a missed resend only leaves the tiles blank
+        except Exception as err:
             log.debug("Resending page %s on open failed: %s", page_id, err)
             return False
     log.debug("Resent page %s on open", page_id)

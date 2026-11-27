@@ -29,13 +29,13 @@ export const ROUTE_PREFIX = "/lizaip";
 export const ROUTE_MEMORY_KEY = "lizaip:last-route";
 
 /**
- * The tabs a path may name.
- *
- * "buttons" is absent on purpose: the set decides whether a segment *is* a
- * tab, and `/lizaip/<entry>/buttons` parses through the same default that an
- * absent tab does.
+ * A remote's tabs. The values are what `_activeTab`, the URL and `data-tab`
+ * carry; PAGES keeps "buttons", the id it had before the label became "Pages".
  */
-const TABS = new Set(["buttons", "settings", "devel"]);
+export const TAB = Object.freeze({ PAGES: "buttons", SETTINGS: "settings", DEVEL: "devel" });
+
+/** The tabs a path may name. */
+const TABS = new Set(Object.values(TAB));
 
 // Module scope on purpose: a navigation entry belongs to the document, and so
 // does one evaluation of this module.
@@ -154,7 +154,7 @@ export function parseRoutePath(pathname = "", search = "") {
     if (parts.length > 1 && TABS.has(parts[1])) out.tab = parts[1];
     // The settings tab hangs its open section off the level below the tab.
     // Which names are real is the settings view's business.
-    if (out.tab === "settings" && parts.length > 2) out.section = decodeSegment(parts[2]);
+    if (out.tab === TAB.SETTINGS && parts.length > 2) out.section = decodeSegment(parts[2]);
     // Anything deeper is an older link naming a page and a control. It is
     // read no further on purpose: the tab it names is the place, and
     // `_syncRoute` writes the shortened path back over it.
@@ -184,8 +184,8 @@ export function buildRoutePath({ entryId, tab, section } = {}) {
   const parts = [ROUTE_PREFIX, encodeURIComponent(entryId)];
   // The default tab is the shortest path that means it, so it is left out --
   // nothing hangs off it any more that would need it spelled.
-  if (tab && tab !== "buttons") parts.push(tab);
-  if (tab === "settings" && section) parts.push(encodeURIComponent(section));
+  if (tab && tab !== TAB.PAGES) parts.push(tab);
+  if (tab === TAB.SETTINGS && section) parts.push(encodeURIComponent(section));
   return parts.join("/");
 }
 
@@ -232,11 +232,11 @@ export const RouteMixin = {
    */
   _routePath() {
     if (!this._currentEntry) return ROUTE_PREFIX;
-    const tab = this._activeTab || "buttons";
+    const tab = this._activeTab || TAB.PAGES;
     return buildRoutePath({
       entryId: this._routeSlug(this._currentEntry),
       tab,
-      section: tab === "settings" ? this._settingsGroup?.() : null,
+      section: tab === TAB.SETTINGS ? this._settingsGroup?.() : null,
     });
   },
 
@@ -404,11 +404,11 @@ export const RouteMixin = {
     // "devel" exists only where lizaip_devel is installed, so a link to it
     // opened elsewhere would otherwise render a panel with no tab highlighted.
     const tab = route.tab;
-    if (tab && (tab !== "devel" || this._develPanel())) this._activeTab = tab;
-    else this._activeTab = "buttons";
+    if (tab && (tab !== TAB.DEVEL || this._develPanel())) this._activeTab = tab;
+    else this._activeTab = TAB.PAGES;
     // The settings view decides whether the name is one of its own; an
     // unknown one leaves the remembered section standing.
-    if (this._activeTab === "settings") this._applySettingsSection?.(route.section);
+    if (this._activeTab === TAB.SETTINGS) this._applySettingsSection?.(route.section);
 
     return true;
   },
@@ -428,10 +428,10 @@ export const RouteMixin = {
   _routeEnterTab() {
     if (!this._currentEntry) return;
     switch (this._activeTab) {
-      case "settings":
+      case TAB.SETTINGS:
         this._enterSettingsTab?.();
         break;
-      case "devel":
+      case TAB.DEVEL:
         this._develError = false;
         break;
       default:
@@ -460,7 +460,7 @@ export const RouteMixin = {
     }
     await this._flushAutoSave?.();
     if (this._currentEntry !== only) await this._selectDevice(only);
-    this._activeTab = "buttons";
+    this._activeTab = TAB.PAGES;
     // `_switchPageTo` carries the assignments and the page cache back to the
     // first page; it returns early when already there, so the explicit resets
     // below still have to happen either way.

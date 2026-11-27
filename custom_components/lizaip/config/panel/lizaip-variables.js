@@ -64,20 +64,18 @@ export const VariablesMixin = {
     // those the faces read, since they were last drawn. Only these warrant a
     // redraw, and `faces` only of the faces. `pageKeys`: what each page's face
     // read, by page index; `stale`: answers an entity has changed under that
-    // nobody was shown, asked for again when somebody is.
+    // nobody was shown, asked for again when somebody is. Kept per remote and
+    // Variables switch: with it off, every variable answers the placeholder.
+    const owner = `${this._currentEntry}\0${this._variablesEnabled}`;
+    if (this._variables && this._variables.owner !== owner) {
+      clearTimeout(this._variables.timer);
+      this._variables = null;
+    }
     return (this._variables ||= {
       values: new Map(), items: new Map(), entities: new Set(), states: {}, timer: null, queued: new Set(),
       deps: new Map(), drawn: new Set(), faces: new Set(), inFaces: false,
-      pageKeys: new Map(), facePage: null, stale: new Set(),
+      pageKeys: new Map(), facePage: null, stale: new Set(), owner,
     });
-  },
-
-  /** Forget every answer: the remote's Variables switch changed what they are. */
-  _resetVariables() {
-    const v = this._variables;
-    if (!v) return;
-    if (v.timer) clearTimeout(v.timer);
-    this._variables = null;
   },
 
   /** An `EDITOR_PREFS` switch, read once; blocked storage gives its default. */
@@ -171,16 +169,16 @@ export const VariablesMixin = {
 
   /**
    * A picture's `${…}` filled in, or null while unknown or when one has no value.
-   * A `history:` graph is asked for too: the backend adds the version that
-   * changes with its entity, and only graphs what it was asked for this way.
+   * A picture holding a `history:` graph is asked for too: the backend adds the
+   * version that changes with its entity, and only graphs what it was asked for this way.
    */
   _resolveImageVariables(image, page) {
     if (typeof image !== "string") return image;
-    if (!image.includes("${") && !image.startsWith("history:") && !image.includes(TRANSLATE_TOKEN)) return image;
+    if (!image.includes("${") && !image.includes("history:") && !image.includes(TRANSLATE_TOKEN)) return image;
     // `${_device}` is the device of the page the picture sits on -- not the
     // page being edited, which a thumbnail of another page is not.
     image = (page ? this._expandPageDevice?.(image, page) : this._expandPageDevice?.(image)) ?? image;
-    if (!image.includes("${") && !image.startsWith("history:") && !image.includes(TRANSLATE_TOKEN)) return image;
+    if (!image.includes("${") && !image.includes("history:") && !image.includes(TRANSLATE_TOKEN)) return image;
     const r = this._variableValue("image", image);
     return r.found ? r.value : null;
   },

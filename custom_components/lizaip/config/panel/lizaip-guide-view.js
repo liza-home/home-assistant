@@ -207,7 +207,7 @@ export const GuideViewMixin = {
    * The drawer that is actually on screen, which is not always the one the
    * field remembers.
    *
-   * The node outlives renders on purpose -- `_render` detaches and re-appends
+   * The node outlives renders on purpose -- `_render` writes the view around
    * it so its listeners survive -- but the field is panel state, and a panel
    * that is torn down and rebuilt around a surviving node would otherwise
    * believe the guide is shut while the user is reading it. Asked of the DOM
@@ -483,7 +483,7 @@ export const GuideViewMixin = {
    *
    * Called from `_render`, which is also what rebuilds the shadow tree, so the
    * guard is on the drawer existing rather than on a "first render" flag:
-   * every later render re-appends the node it already has.
+   * every later render keeps the node it already has.
    */
   _guideRestore() {
     if (this._guideDrawer || !this._guideDocks()) return;

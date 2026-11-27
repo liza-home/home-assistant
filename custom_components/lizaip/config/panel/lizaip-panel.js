@@ -12,7 +12,7 @@ import { STYLES } from "./lizaip-styles.js";
 import { applyMixins } from "./lizaip-mixins.js";
 import { adoptStyles } from "./lizaip-stylesheet.js";
 import { DataMixin } from "./lizaip-data.js";
-import { HelpersMixin, syncCustomIcons, isMovableSlot } from "./lizaip-helpers.js";
+import { HelpersMixin, irBlobOf, syncCustomIcons, isMovableSlot } from "./lizaip-helpers.js";
 import { VariablesMixin } from "./lizaip-variables.js";
 import { A11yMixin } from "./lizaip-a11y.js";
 import { I18nMixin } from "./lizaip-i18n.js";
@@ -29,11 +29,12 @@ import { ThemeDownloadMixin } from "./lizaip-theme-download.js";
 import { GuideViewMixin, PANEL_MIN } from "./lizaip-guide-view.js";
 import { DiscoveryMixin } from "./lizaip-discovery.js";
 import { PeopleViewMixin } from "./lizaip-people-view.js";
-import { RouteMixin, ROUTE_PREFIX } from "./lizaip-route.js";
+import { RouteMixin, ROUTE_PREFIX, TAB } from "./lizaip-route.js";
 
 const DEVEL_PANEL = "lizaip-devel";
 import { SETUP_STEP_ICONS } from "./lizaip-setup-steps.js";
 import { AddPageMixin } from "./lizaip-add-page.js";
+import { SubentryFlowMixin } from "./lizaip-subentry-flow.js";
 import { PagesMixin } from "./lizaip-pages.js";
 import { MenuMixin } from "./lizaip-menu.js";
 import { DiagnosticsMixin } from "./lizaip-diagnostics.js";
@@ -125,7 +126,7 @@ class LizaRemotePanel extends HTMLElement {
     // only meaningful against the one it came from.
     this._moveSourceKey = null;
 
-    this._activeTab = "buttons"; // "buttons" | "devel" | "settings"
+    this._activeTab = TAB.PAGES;
     // The running diagnostics build and its window. One at a time: the build
     // spends its time on the remote, and a second would only queue behind it.
     this._diagJob = null;
@@ -1248,6 +1249,13 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   // =================== INTERACTIONS ===================
+  // A pick from the device list always opens the Pages tab. Not part of
+  // `_selectDevice`: a deep link and a restore go through it and keep their tab.
+  _openDevice(entryId) {
+    this._activeTab = TAB.PAGES;
+    return this._selectDevice(entryId);
+  }
+
   _selectDevice(entryId) {
     // Two quick clicks on the list used to run two loads into the same
     // fields, whichever answered last winning. Each selection now waits for
@@ -1334,6 +1342,10 @@ class LizaRemotePanel extends HTMLElement {
   _clearEntrySelection() {
     this._flushAutoSave();
     this._currentEntry = null;
+    // Supersedes a load still in flight, as a newer selection does; its
+    // `_selectDevice` then leaves `_loading` to us.
+    this._selectDeviceToken = (this._selectDeviceToken || 0) + 1;
+    this._loading = false;
     this._editingActionIdx = -1;
     this._selectedButtonIdx = -1;
     this._contextKey = null;
@@ -1344,11 +1356,11 @@ class LizaRemotePanel extends HTMLElement {
   _switchTab(tab) {
     this._flushAutoSave();
     this._activeTab = tab;
-    if (tab === "buttons") {
+    if (tab === TAB.PAGES) {
       this._editingActionIdx = -1;
-    } else if (tab === "devel") {
+    } else if (tab === TAB.DEVEL) {
       this._develError = false;
-    } else if (tab === "settings") {
+    } else if (tab === TAB.SETTINGS) {
       this._enterSettingsTab();
     }
     this._editorEl = null;
@@ -1362,7 +1374,7 @@ class LizaRemotePanel extends HTMLElement {
     }
     const btnIdx = this._blueprint.buttons.findIndex(b => b.key === buttonKey);
     if (btnIdx < 0) return;
-    this._activeTab = "buttons";
+    this._activeTab = TAB.PAGES;
     this._editingActionIdx = -1;
     this._selectedButtonIdx = btnIdx;
     // Same reset `_selectButton` does, for the same reason: the card this
@@ -1794,6 +1806,7 @@ class LizaRemotePanel extends HTMLElement {
     const nextPayload = this._getPayloadDisplay(seq);
 
     const prevConfig = existing.config;
+    if (irBlobOf(prevConfig) !== irBlobOf(seq)) delete existing.ir_key;
     existing.action_id = action.id;
     existing.config = seq;
     this._applyAutoSliderSubject?.(btn.key, existing, prevConfig);
@@ -2511,6 +2524,25 @@ class LizaRemotePanel extends HTMLElement {
    * the form on every keystroke.
    */
   _editorHass() {
+    const base = this._editorHassBase();
+    const send = base?.services?.lizaip?.send_ir;
+    if (!send) return base;
+    // The remote is the one the button sits on, so the action offers neither a
+    // remote nor a target: only an IR key button (an IR code is left to automations).
+    const cached = this._irHassCache;
+    if (cached?.services === base.services && cached.hass === base) return cached.whole;
+    const { target: _t, via: _v, device_id: _d, key: _k, config_entry_id: _c, ...rest } = send;
+    const fields = {
+      entity_id: { required: true, selector: { entity: { filter: { integration: "lizaip", domain: "button" } } } },
+    };
+    const patched = { send_ir: { ...rest, fields } };
+    const lizaip = { ...base.services.lizaip, ...patched };
+    const whole = { ...base, services: { ...base.services, lizaip } };
+    this._irHassCache = { services: base.services, hass: base, whole };
+    return whole;
+  }
+
+  _editorHassBase() {
     const hass = this._hass;
     const registered = (this._internalCommands || []).filter(
       (cmd) => hass?.services?.lizaip?.[(cmd.service || "").split(".")[1]],
@@ -2815,6 +2847,24 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   // =================== RENDERING ===================
+  /**
+   * Replace the view, leaving an open window and the guide drawer standing.
+   * Detached, a dialog drops out of the top layer and HA's has to be closed
+   * and reopened, which the user sees as the window flickering.
+   */
+  _writeView(html) {
+    const sr = this.shadowRoot;
+    const keep = [...(sr.children || [])].filter((n) => n.matches?.(".add-page-overlay, .guide-drawer"));
+    if (!keep.length) {
+      sr.innerHTML = html;
+      return;
+    }
+    for (const n of [...sr.childNodes]) if (!keep.includes(n)) n.remove();
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    sr.insertBefore(document.importNode(tpl.content, true), keep[0]);
+  }
+
   _render() {
     try {
       // What this render reads is what the next variable answers may redraw.
@@ -2838,16 +2888,6 @@ class LizaRemotePanel extends HTMLElement {
       // listener on the window. Closed here rather than at each caller, since
       // every path that changes the face renders.
       this._closeFaceMenu?.();
-      // Modal dialogs are appended to this shadow root, which _renderDeviceList
-      // and _renderDeviceConfig replace wholesale via innerHTML. Any render
-      // landing while a dialog is open would therefore silently destroy it —
-      // and one always can, because `_init` defers a render until `_loadAll`
-      // resolves, and the template dialogs await WS round-trips of their own.
-      // Detaching and re-appending the nodes keeps their listeners intact,
-      // since the elements themselves are never recreated. The guide drawer
-      // rides along for the same reason, and needs it more: it is meant to
-      // stay open across exactly the edits that cause these renders.
-      const overlays = [...(this.shadowRoot?.querySelectorAll(".add-page-overlay, .guide-drawer") || [])];
       const pagesList = this.shadowRoot?.querySelector(".pages-list");
       const pagesScroll = pagesList?.scrollLeft || 0;
       // Rewriting `innerHTML` empties the host for an instant, and a scroller
@@ -2867,32 +2907,13 @@ class LizaRemotePanel extends HTMLElement {
       // the ones whose tab stop is written here.
       this._a11yNormalizeTabStops();
       this._a11yObserveTabStops();
-      for (const overlay of overlays) {
-        this.shadowRoot.appendChild(overlay);
-        // Re-appending drops a dialog out of the top layer, taking the focus
-        // trap and the inertness of the panel with it: it looks unchanged
-        // while Tab walks out into a page the user cannot see.
-        if (overlay.showModal) {
-          if (overlay.open) overlay.close();
-          overlay.showModal();
-        } else if (overlay.localName === "ha-dialog" && overlay.open) {
-          // Detached, ha-dialog forgot it was showing; `open` going false and
-          // back is what shows it again. Not a way out: `closed` is ignored.
-          overlay._lizaReopening = true;
-          overlay.open = false;
-          Promise.resolve(overlay.updateComplete).then(() => {
-            overlay.open = true;
-            return overlay.updateComplete;
-          }).finally(() => { overlay._lizaReopening = false; });
-        }
-      }
       this._a11yRestoreFocusSoon(focus);
       // The bar is a new node after the `innerHTML` above, so the observer
       // measuring it is pointed at one that no longer exists. Before the
       // drawer is restored, which reads the height this publishes.
       this._narrowWatch();
-      // A drawer the user left open comes back. After the re-append above, so
-      // a drawer that is already here is seen and nothing opens twice.
+      // A drawer the user left open comes back. A drawer the render kept is
+      // seen, so nothing opens twice.
       this._guideRestore?.();
       // `innerHTML` above dropped the status region; put the same node back so
       // it keeps announcing rather than starting over empty each render.
@@ -2963,7 +2984,7 @@ class LizaRemotePanel extends HTMLElement {
     // when one of them has assignees to name.
     let people = null;
     const personsByUser = () => (people ||= this._personsByUser?.() || null);
-    this.shadowRoot.innerHTML = `
+    this._writeView(`
       ${this._styleTag()}
       <div class="toolbar"><ha-menu-button></ha-menu-button><h1 class="main-title">lizaIP</h1></div>
       <div class="view"><ha-card outlined><div class="card-content">
@@ -2986,7 +3007,7 @@ class LizaRemotePanel extends HTMLElement {
                 <div class="device-title">${this._esc(displayTitle)}</div>
                 ${!version && !assigned ? '' : `<div class="device-meta">${version}${assigned}</div>`}
               </div>
-              <div class="status-badge ${d.available ? 'online' : 'offline'}"><span class="dot" aria-hidden="true"></span>${this._t(d.available ? 'device_online' : 'device_offline')}</div>
+              ${this._htmlStatusPill(this._deviceStatus(d), d.entry_id)}
               ${this._htmlDiagnosticsMenuButton(d.entry_id, "device-item-menu")}
             </div>`;
             }).join("")}
@@ -2994,11 +3015,11 @@ class LizaRemotePanel extends HTMLElement {
         </div>
       </div></ha-card></div>
       ${this._htmlDiagnosticsPill?.() || ""}
-      <div class="toast" role="status" aria-live="polite"></div>`;
+      <div class="toast" role="status" aria-live="polite"></div>`);
     const mb = this.shadowRoot.querySelector("ha-menu-button");
     if (mb) { mb.hass = this._hass; mb.narrow = this._narrow; }
     this.shadowRoot.querySelectorAll(".device-item").forEach(el =>
-      el.addEventListener("click", () => this._selectDevice(el.dataset.entry)));
+      el.addEventListener("click", () => this._openDevice(el.dataset.entry)));
     this._wireDiagnosticsMenus?.();
     this._wireDiscovery?.();
     this._wireUserBadges?.();
@@ -3112,18 +3133,20 @@ class LizaRemotePanel extends HTMLElement {
   }
 
   /**
-   * The pill's markup, shared by the toolbar and whatever else needs it.
+   * The pill's markup, shared by the toolbar and the device list.
    *
    * The percentage is text, not just fill width: a gauge whose only reading is
    * how far the green reaches conveys information by shape alone (1.4.1), and
    * says nothing at all to a screen reader. `--liza-battery` is what the fill
    * is drawn from, so the level can later be updated without re-rendering.
+   * `entryId` ties a list pill to its device; the toolbar's follows the open one.
    */
-  _htmlStatusPill(status) {
+  _htmlStatusPill(status, entryId) {
     const hasBattery = status.battery !== null && status.battery !== undefined;
     const charge = hasBattery ? `${status.battery}%` : "";
+    const entry = entryId ? ` data-entry="${this._esc(entryId)}"` : "";
     return `
-        <span class="toolbar-status ${status.state}${hasBattery ? ' has-battery' : ''}"${hasBattery ? ` style="--liza-battery:${status.battery}%"` : ''}>
+        <span class="toolbar-status ${status.state}${hasBattery ? ' has-battery' : ''}"${entry}${hasBattery ? ` style="--liza-battery:${status.battery}%"` : ''}>
           <span class="toolbar-status-fill" aria-hidden="true"></span>
           <span class="toolbar-status-dot ${status.state}" aria-hidden="true"></span>
           <span class="toolbar-status-text">${this._esc(status.label)}${hasBattery ? ` <span class="toolbar-status-charge">${charge}</span>` : ''}</span>
@@ -3139,9 +3162,13 @@ class LizaRemotePanel extends HTMLElement {
    * state change and leaves the rest of the view alone.
    */
   _refreshBatteryPill() {
-    const pill = this.shadowRoot?.querySelector(".toolbar-status");
-    if (!pill) return;
-    const level = this._deviceBattery(this._devices?.find(d => d.entry_id === this._currentEntry));
+    const pills = this.shadowRoot?.querySelectorAll(".toolbar-status") || [];
+    for (const pill of pills) this._refreshPillCharge(pill);
+  }
+
+  _refreshPillCharge(pill) {
+    const entry = pill.dataset?.entry || this._currentEntry;
+    const level = this._deviceBattery(this._devices?.find(d => d.entry_id === entry));
     const charge = pill.querySelector(".toolbar-status-charge");
     if (level === null) {
       pill.classList.remove("has-battery");
@@ -3191,7 +3218,7 @@ class LizaRemotePanel extends HTMLElement {
     // where there is no title, because then it is the only name there is.
     const titleInner = `<span class="title-text">${this._esc(title)}</span>`;
 
-    this.shadowRoot.innerHTML = `
+    this._writeView(`
       ${this._styleTag()}
       <div class="toolbar">
         <span class="toolbar-lead">${this._htmlToolbarLead()}</span>
@@ -3206,16 +3233,16 @@ class LizaRemotePanel extends HTMLElement {
              arrow keys; the tabs carry HA's icons, not emoji. -->
         <ha-tab-group class="toolbar-tabs" active="${this._activeTab}">
           <ha-tab-group-tab slot="nav" panel="buttons" class="toolbar-tab" data-tab="buttons"
-                            id="liza-tab-buttons"${this._activeTab === 'buttons' ? ' active' : ''}><ha-icon icon="mdi:view-grid-outline" aria-hidden="true"></ha-icon>${this._t("tab_pages")}</ha-tab-group-tab>
+                            id="liza-tab-buttons"${this._activeTab === TAB.PAGES ? ' active' : ''}><ha-icon icon="mdi:view-grid-outline" aria-hidden="true"></ha-icon>${this._t("tab_pages")}</ha-tab-group-tab>
           ${!this._develPanel() ? "" : `
           <ha-tab-group-tab slot="nav" panel="devel" class="toolbar-tab" data-tab="devel"
-                            id="liza-tab-devel"${this._activeTab === 'devel' ? ' active' : ''}><ha-icon icon="mdi:stethoscope" aria-hidden="true"></ha-icon>${this._t("tab_devel")}</ha-tab-group-tab>`}
+                            id="liza-tab-devel"${this._activeTab === TAB.DEVEL ? ' active' : ''}><ha-icon icon="mdi:stethoscope" aria-hidden="true"></ha-icon>${this._t("tab_devel")}</ha-tab-group-tab>`}
           <!-- Last and icon-only: settings are visited rarely, and a gear at
                the far end is where they are looked for. The name a reader
                hears comes from aria-label; title shows it on hover.
                NB: no backticks in this comment; it sits in a template. -->
           <ha-tab-group-tab slot="nav" panel="settings" class="toolbar-tab toolbar-tab-icon" data-tab="settings"
-                            id="liza-tab-settings"${this._activeTab === 'settings' ? ' active' : ''}
+                            id="liza-tab-settings"${this._activeTab === TAB.SETTINGS ? ' active' : ''}
                             aria-label="${this._esc(this._t("tab_settings"))}" title="${this._esc(this._t("tab_settings"))}"><ha-icon icon="mdi:cog" aria-hidden="true"></ha-icon></ha-tab-group-tab>
         </ha-tab-group>
         <!-- Outside the tablist: neither is a tab, and a reader walking the
@@ -3226,12 +3253,12 @@ class LizaRemotePanel extends HTMLElement {
       <!-- tabindex="-1", not "0": a tabpanel earns a tab stop only when it has
            no focusable content, and this one wraps the entire view. -->
       <div class="view" id="liza-tabpanel" role="tabpanel" aria-labelledby="liza-tab-${this._activeTab}" tabindex="-1">
-        ${this._activeTab === "buttons" ? this._htmlButtonsView(bp)
-          : this._activeTab === "devel" ? this._htmlDevelView()
+        ${this._activeTab === TAB.PAGES ? this._htmlButtonsView(bp)
+          : this._activeTab === TAB.DEVEL ? this._htmlDevelView()
           : this._htmlSettingsView()}
       </div>
       ${this._htmlDiagnosticsPill?.() || ""}
-      <div class="toast" role="status" aria-live="polite"></div>`;
+      <div class="toast" role="status" aria-live="polite"></div>`);
 
     this._wireToolbarLead();
     // After the markup, because announcing re-attaches the live region to a
@@ -3245,8 +3272,8 @@ class LizaRemotePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".toolbar-tab").forEach(el =>
       el.addEventListener("click", () => this._switchTab(el.dataset.tab)));
 
-    if (this._activeTab === "buttons") this._wireButtonsView(bp);
-    else if (this._activeTab === "devel") this._mountDevelHost();
+    if (this._activeTab === TAB.PAGES) this._wireButtonsView(bp);
+    else if (this._activeTab === TAB.DEVEL) this._mountDevelHost();
     else this._wireSettingsView();
     // After the tabs' own wiring: the toolbar menu and the pill sit outside
     // every view, and a view that threw would otherwise take them with it.
@@ -3268,6 +3295,7 @@ applyMixins(
   MenuMixin,
   PagesMixin,
   AddPageMixin,
+  SubentryFlowMixin,
   ButtonsViewMixin,
   SettingsViewMixin,
   DiagnosticsMixin,

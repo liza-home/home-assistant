@@ -41,7 +41,7 @@ _HEADER = (
 _NAME_RE = re.compile(r"[^a-z0-9]+")
 
 
-def slugify(name: str) -> str:
+def slugify(name: Any) -> str:
     """The id a display name goes by. Empty when nothing usable is left."""
     return _NAME_RE.sub("-", str(name or "").strip().lower()).strip("-")
 
@@ -73,7 +73,7 @@ def _hex(value: Any, label: str) -> str:
     return "".join(f"{part:02X}" for part in parts)
 
 
-def _colors(raw: Any) -> dict:
+def _colors(raw: Any) -> dict[str, Any]:
     """The ``colors:`` block, every hex checked and re-spelled uppercase."""
     if not isinstance(raw, dict):
         return {}
@@ -101,7 +101,7 @@ def _colors(raw: Any) -> dict:
     return out
 
 
-def _text(raw: Any, font_ids: set[str]) -> dict:
+def _text(raw: Any, font_ids: set[str]) -> dict[str, Any]:
     """The ``text:`` block. A size past its strip's height would be cut off."""
     if not isinstance(raw, dict):
         return {}
@@ -130,7 +130,7 @@ def _text(raw: Any, font_ids: set[str]) -> dict:
     return out
 
 
-def _icons(raw: Any) -> dict:
+def _icons(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     out = {
@@ -141,7 +141,7 @@ def _icons(raw: Any) -> dict:
     return out
 
 
-def build_document(raw: Any, font_ids: set[str] | None = None) -> tuple[str, dict]:
+def build_document(raw: Any, font_ids: set[str] | None = None) -> tuple[str, dict[str, Any]]:
     """``(theme_id, mapping)`` for *raw*, or ``ValueError`` saying what is wrong.
 
     The id comes from an explicit ``id`` when the panel is editing a theme it

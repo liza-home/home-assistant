@@ -48,7 +48,7 @@ def enabled_commands() -> list[InternalCommand]:
     return [cmd for cmd in INTERNAL_COMMANDS.values() if cmd.enabled]
 
 
-def panel_descriptors() -> list[dict]:
+def panel_descriptors() -> list[dict[str, Any]]:
     """The registry as the admin panel sees it.
 
     Commands are assigned through Home Assistant's own action editor, so this
@@ -103,8 +103,8 @@ def pinned_page_ids(data: Any, service: str | None = None) -> set[int]:
 def resolve_action(
     service: str | None,
     data: Any,
-    context: dict | None = None,
-) -> tuple[str, dict] | None:
+    context: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]] | None:
     """Translate a stored step into protocol action, or disarm safely.
 
     ``None`` means this is not an internal command. ``("ha_event", {})`` means
@@ -138,7 +138,7 @@ def resolve_action(
 def command_target_name(
     service: str | None,
     data: Any,
-    context: dict | None = None,
+    context: dict[str, Any] | None = None,
     fallback: str = "",
 ) -> str:
     """What a command points at, for auto labels and user ``${_name}`` labels.
@@ -166,7 +166,7 @@ def command_target_name(
 def command_tooltip(
     service: str | None,
     data: Any,
-    context: dict | None = None,
+    context: dict[str, Any] | None = None,
     fallback: str = "",
 ) -> str:
     """Auto label for a button carrying an internal command, ``""`` if none.

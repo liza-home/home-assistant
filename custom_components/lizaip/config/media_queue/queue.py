@@ -46,7 +46,7 @@ def reads_queue(hass: HomeAssistant, entity_id: str) -> bool:
         from homeassistant.helpers import entity_registry as er
 
         entry = er.async_get(hass).async_get(entity_id)
-    except Exception:  # noqa: BLE001 - a missing registry is not an error here
+    except Exception:
         return False
     return getattr(entry, "platform", "") == PLATFORM
 
@@ -73,7 +73,8 @@ async def async_fetch(hass: HomeAssistant, entity_id: str) -> list[dict[str, str
 def position(attributes: Mapping[str, Any]) -> int:
     """The 1-based position of the playing track, 0 with no queue (radio, TV)."""
     try:
-        value = int(attributes.get("queue_position"))
+        raw: Any = attributes.get("queue_position")
+        value = int(raw)
     except (TypeError, ValueError):
         return 0
     return max(value, 0)
@@ -115,7 +116,9 @@ def resolve(
     return _values(neighbour(index + 1), neighbour(index - 1)), False
 
 
-def _values(next_track, prev_track) -> dict[str, str]:
+def _values(
+    next_track: dict[str, str] | None, prev_track: dict[str, str] | None
+) -> dict[str, str]:
     next_track, prev_track = next_track or {}, prev_track or {}
     return {
         NEXT_SONG: next_track.get("title", ""),

@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 
 from homeassistant.core import HomeAssistant
 
-Rows = list[dict]
+Rows = list[dict[str, Any]]
 
 
 class TvPlatform:
@@ -46,6 +46,6 @@ class TvPlatform:
         """
         return False
 
-    def source_order(self, entity: Any, titles: list) -> list:
+    def source_order(self, entity: Any, titles: list[Any]) -> list[Any]:
         """Sources in the order the TV keeps them."""
         return titles

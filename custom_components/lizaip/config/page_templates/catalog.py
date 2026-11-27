@@ -1,7 +1,8 @@
 """Template files: where they are, what the add-page dialog lists, and reading one.
 
-Discovery walks the shipped ``assets/templates`` tree, ``assets/options`` and
-the user's own ``<config>/lizaip/templates`` (and ``options`` beside it); a
+Discovery walks the shipped ``assets/templates`` tree, ``assets/options``,
+the user's own ``<config>/lizaip/templates`` (and ``options`` beside it),
+and ``<config>/www/templates``; a
 subdirectory is a *folder* of templates, described by an optional
 ``_group.yaml``. ``list_templates`` builds every template's card and keeps the
 answer until a file changes; ``load_template`` parses one file and caches it.
@@ -9,6 +10,10 @@ answer until a file changes; ``load_template`` parses one file and caches it.
 The shape of a parsed file -- its format version and the pages it names
 (``template_pages``, ``page_source``) -- lives here too, because the listing
 counts a template's pages and everything else reads them off a loaded file.
+
+A template may state ``min_firmware`` (inclusive) and/or ``max_firmware``
+(exclusive), e.g. ``min_firmware: 11.4.4``; it is then listed and created only
+for a remote whose firmware is in that range (unknown firmware fails a bound).
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ import yaml
 
 from homeassistant.core import HomeAssistant
 
+from ...shared.firmware import parse_firmware
 from ...shared.i18n import translate_fallback, translate_key
 
 __all__ = [
@@ -247,12 +253,13 @@ _GROUP_FILE = "_group.yaml"
 #: Everything ``_group.yaml`` may say. Anything else is a typo worth a warning:
 #: a misspelt ``name`` is silently the folder name otherwise, which reads as
 #: "the file was ignored" and is tedious to chase down.
-_GROUP_KEYS = frozenset({"name", "icon", "description", "primary"})
+_GROUP_KEYS = frozenset({"name", "icon", "description", "primary", "needs_variables"})
 #: The user's own templates: ``<config>/lizaip/templates``, set at setup.
 #: Outside the integration, so an update does not wipe them. Read after
 #: ``assets/templates/`` as one more folder, :data:`USER_TEMPLATES_GROUP`, with
 #: their own options templates from ``<config>/lizaip/options`` beside them.
 _USER_TEMPLATES_DIR: str | None = None
+_USER_WWW_TEMPLATES_DIR: str | None = None
 #: The folder path the user's templates are offered under.
 USER_TEMPLATES_GROUP = ("my-templates",)
 
@@ -286,10 +293,12 @@ def unregister_template_dir(owner: str) -> None:
         _TEMPLATE_CACHE.clear()
 
 
-def set_user_templates_dir(path: str | None) -> None:
-    """Read the user's own templates from *path* (``None``: none)."""
-    global _USER_TEMPLATES_DIR
+def set_user_templates_dir(path: str | None, www_path: str | None = None) -> None:
+    """Read the user's templates from the private and optional www directories."""
+    global _USER_TEMPLATES_DIR, _USER_WWW_TEMPLATES_DIR, _LISTED
     _USER_TEMPLATES_DIR = path
+    _USER_WWW_TEMPLATES_DIR = www_path
+    _LISTED = None
     _TEMPLATE_CACHE.clear()
 
 
@@ -342,7 +351,11 @@ def _template_dirs() -> list[tuple[str, tuple[str, ...]]]:
         walk(_EXTRA_TEMPLATE_DIRS[owner], ())
     if _USER_TEMPLATES_DIR:
         walk(_USER_TEMPLATES_DIR, USER_TEMPLATES_GROUP)
-        walk(_user_options_dir(), USER_TEMPLATES_GROUP, OPTION_FOLDER_PREFIX)
+        options_dir = _user_options_dir()
+        if options_dir:
+            walk(options_dir, USER_TEMPLATES_GROUP, OPTION_FOLDER_PREFIX)
+    if _USER_WWW_TEMPLATES_DIR:
+        walk(_USER_WWW_TEMPLATES_DIR, USER_TEMPLATES_GROUP)
     return dirs
 
 
@@ -362,7 +375,7 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     file_path = os.path.join(directory, _GROUP_FILE)
     if os.path.isfile(file_path):
         try:
-            with open(file_path, "r", encoding="utf-8") as fh:
+            with open(file_path, encoding="utf-8") as fh:
                 meta = yaml.safe_load(fh) or {}
         except (OSError, yaml.YAMLError) as exc:
             _LOGGER.warning("Failed to read group metadata %s: %s", file_path, exc)
@@ -377,7 +390,7 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     # option can be drawn; everything nested is an ordinary card.
     scope = "option" if len(path) == 1 else "grid"
 
-    group: dict[str, str] = {"id": "/".join(path)}
+    group: dict[str, Any] = {"id": "/".join(path)}
     leaf = path[-1].removeprefix(OPTION_FOLDER_PREFIX)
     _text_entry(group, meta, "name", leaf.replace("-", " ").title())
     group["icon"] = str(meta.get("icon") or "mdi:folder-outline")
@@ -388,14 +401,16 @@ def _group_meta(directory: str, path: tuple[str, ...]) -> dict[str, Any]:
     # option can ask to lead it.
     if scope == "option" and meta.get("primary") is True:
         group["primary"] = True
+    if meta.get("needs_variables") is True:
+        group["needs_variables"] = True
     return group
 
 
 #: The last :func:`list_templates` answer and the files it was read from.
-_LISTED: tuple[tuple, list[dict[str, Any]]] | None = None
+_LISTED: tuple[tuple[Any, ...], list[dict[str, Any]]] | None = None
 
 
-def _files_signature(dirs: list[tuple[str, tuple[str, ...]]]) -> tuple:
+def _files_signature(dirs: list[tuple[str, tuple[str, ...]]]) -> tuple[Any, ...]:
     """Every file in *dirs* with its size and change time: what a listing depends on."""
     return tuple(
         (directory, tuple(sorted(
@@ -438,7 +453,7 @@ def favorites_kind(template: dict[str, Any]) -> str:
     if not isinstance(placeholders, dict) or not placeholders:
         return ""
     kinds = {
-        str(((p.get("spec") or {}).get("category") or "")) if p.get("source") == "favorites" else ""
+        str((p.get("spec") or {}).get("category") or "") if p.get("source") == "favorites" else ""
         for p in placeholders.values() if isinstance(p, dict)
     }
     return kinds.pop() if len(kinds) == 1 else ""
@@ -467,9 +482,9 @@ def _read_template_list(
             if not fname.endswith(".yaml") or fname.startswith("_"):
                 continue
             template_id = template_id_of(fname, directory)
-            path = os.path.join(directory, fname)
-            if parsed is not None and template_id not in first and os.path.isfile(path):
-                first[template_id] = path
+            file_path = os.path.join(directory, fname)
+            if parsed is not None and template_id not in first and os.path.isfile(file_path):
+                first[template_id] = file_path
             # A stored page keeps the bare id it was created from, so one stem
             # can only ever mean one file however deep the tree goes.
             if template_id in seen:
@@ -477,20 +492,20 @@ def _read_template_list(
                     "Template id %r is used by both %s and %s; ignoring the second",
                     template_id,
                     seen[template_id],
-                    path,
+                    file_path,
                 )
                 continue
             try:
-                with open(path, "r", encoding="utf-8") as fh:
+                with open(file_path, encoding="utf-8") as fh:
                     data = yaml.safe_load(fh) or {}
             except (OSError, yaml.YAMLError) as exc:
                 _LOGGER.warning("Failed to read template %s: %s", fname, exc)
                 continue
-            if not _readable(template_id, data, path):
+            if not _readable(template_id, data, file_path):
                 continue
-            seen[template_id] = path
+            seen[template_id] = file_path
             if (
-                parsed is not None and first.get(template_id) == path
+                parsed is not None and first.get(template_id) == file_path
                 and _valid_template_id(template_id)
             ):
                 parsed[template_id] = deepcopy(data)
@@ -501,6 +516,18 @@ def _read_template_list(
             entry["icon"] = data.get("icon", "mdi:remote")
             _text_entry(entry, data, "description", "")
             entry["target_selector"] = data.get("target_selector", {})
+            # Firmware the template needs (`min_firmware`, inclusive) or is
+            # only for (`max_firmware`, exclusive); the panel and the LLM tools
+            # check the remote's against them.
+            for bound in ("min_firmware", "max_firmware"):
+                if bound in data:
+                    if parse_firmware(data[bound]) is None:
+                        _LOGGER.warning(
+                            "Template %s: %s %r is not a version; ignoring it",
+                            template_id, bound, data[bound],
+                        )
+                    else:
+                        entry[bound] = str(data[bound])
             # A template that brings subpages says how many pages adding it
             # makes, so the picker and the assistant tools can say so first.
             if not data.get("action"):
@@ -530,6 +557,11 @@ def _read_template_list(
                 entry["groups"] = [
                     meta_by_path[group_path[:n]] for n in range(1, len(group_path) + 1)
                 ]
+            # Nothing without its variables: not offered while they are off.
+            if data.get("needs_variables") is True or any(
+                g.get("needs_variables") for g in entry.get("groups", ())
+            ):
+                entry["needs_variables"] = True
             templates.append(entry)
 
     return templates
@@ -652,7 +684,7 @@ def _read_template(template_id: str) -> dict[str, Any] | None:
         return None
 
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
     except (OSError, yaml.YAMLError) as exc:
         _LOGGER.error("Failed to load template %s: %s", template_id, exc)

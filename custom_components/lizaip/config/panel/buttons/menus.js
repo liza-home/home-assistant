@@ -130,6 +130,12 @@ export const ButtonsMenusMixin = {
       label: this._t("assign_device"),
       run: () => this._assignPageDevice(page),
     },
+    // A page made by hand can drop its device again; a template page cannot.
+    ...(!page.template?.type && page.template?.target?.device ? [{
+      cls: "face-menu-remove-device",
+      label: this._t("remove_device"),
+      run: () => this._removePageDevice(page),
+    }] : []),
     { separator: true }, {
       cls: "face-menu-duplicate",
       label: this._t("duplicate_page"),
@@ -155,6 +161,9 @@ export const ButtonsMenusMixin = {
 
   _pageTitleHint(page, raw) {
     const usesDevice = /\$\{[^{}]*(?<![\w.])_device\b/.test(raw || "");
+    if (this._variablesOff()) {
+      return usesDevice || this._hasEntityToken(raw) ? this._t("variables_off_title_hint") : "";
+    }
     const parts = [];
     if (usesDevice || this._hasEntityToken(raw)) {
       const now = this._resolvedPageTitle(page);

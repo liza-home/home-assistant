@@ -29,7 +29,7 @@ pages:
     paginate: track
     max_parts: 3
     # The page title: the Sonos mark and what the page holds.
-    title: "logo:sonos + tracks"
+    title: "logo:sonos tracks"
     buttons:
       button_1: "@track[1]"
       button_2: "@track[2]"

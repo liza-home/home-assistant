@@ -59,7 +59,7 @@ class PanelEntry:
                 continue
             try:
                 stop()
-            except Exception as err:  # noqa: BLE001 - teardown must not raise
+            except Exception as err:
                 _LOGGER.debug("Listener teardown failed: %s", err)
         self._state_listener_stop = None
         self._stops.clear()

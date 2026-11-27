@@ -505,6 +505,7 @@ export const ButtonsPressesMixin = {
     const lesson = media ? "label_media_hint"
       : state ? "label_state_hint" : name ? "label_name_hint" : variable ? "variable_hint" : "";
     if (!lesson) return "";
+    if (this._variablesOff()) return this._variablesOffHint("mdi:help-box-outline");
     const reads = resolved ? this._t("label_now_reads", { text: this._esc(resolved) }) : "";
     return `${reads}${this._t(lesson)}`;
   },

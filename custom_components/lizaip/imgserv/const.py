@@ -63,7 +63,7 @@ def _default_rgba(value: Any, label: str) -> tuple[int, int, int, int]:
     return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16), alpha)
 
 
-def _default_colors() -> tuple[dict[str, tuple], dict[str, tuple], tuple]:
+def _default_colors() -> tuple[dict[str, tuple[Any, ...]], dict[str, tuple[Any, ...]], tuple[Any, ...]]:
     """``(palette, states, default)`` from the default theme's ``colors:``."""
     colors = load_default_theme_file().get("colors") or {}
     palette = {
@@ -275,7 +275,7 @@ def gradient_stops(value: str | None) -> tuple[str, ...]:
     return (value,) if value else ()
 
 
-def parse_color(color_str: str | None, names: dict | None = None) -> tuple | None:
+def parse_color(color_str: str | None, names: dict[str, Any] | None = None) -> tuple[Any, ...] | None:
     """Parse a color value and return RGBA, or None when invalid/missing.
 
     *names* is the symbolic vocabulary to read, which a remote's theme may have

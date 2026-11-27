@@ -10,11 +10,17 @@ from anywhere without risk of a cycle.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from homeassistant.core import HomeAssistant
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.entity_registry import EntityRegistry
 
 
 def _resolve_device_domain_entities(
-    hass: HomeAssistant, device_id: str, integration: str | None = None, ent_reg=None
+    hass: HomeAssistant, device_id: str, integration: str | None = None,
+    ent_reg: EntityRegistry | None = None,
 ) -> dict[str, str]:
     """Map a HA device's entities by domain.
 

@@ -5,8 +5,9 @@ Used by ``assignments.ws_save_assignments``.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from ...action_controller import (
@@ -48,17 +49,23 @@ _FACTOR_MIN = SLIDER_FACTOR_MIN
 _FACTOR_MAX = SLIDER_FACTOR_MAX
 
 
-def _clamped_factor(raw) -> float:
+def _clamped_factor(raw: Any) -> float | None:
     """Panel drag factor, coerced and clamped once for both slider modes.
 
     The executor is downstream of both panel saves and template YAML, so the
     shared bounds are enforced there too; keeping this path in step prevents a
     saved value the executor would immediately clamp or reject.
+
+    Absent stays absent (None): the executor then applies the control's own
+    default, which a stored number would override.
     """
-    return max(_FACTOR_MIN, min(_FACTOR_MAX, to_float(raw, 1.0)))
+    if raw is None:
+        return None
+    # A float default makes ``to_float`` return a float.
+    return max(_FACTOR_MIN, min(_FACTOR_MAX, cast(float, to_float(raw, 1.0))))
 
 
-def _sanitize_slider_actions(raw) -> dict | None:
+def _sanitize_slider_actions(raw: Any) -> dict[str, Any] | None:
     """Return the stored slider_actions schema, dropping unknown panel keys.
 
     ``None`` means no stored slider config; for the default vertical slider that
@@ -82,7 +89,7 @@ def _sanitize_slider_actions(raw) -> dict | None:
     out = {
         "mode": "proportional",
         "target_entity": str(raw.get("target_entity") or ""),
-        "factor": _clamped_factor(raw.get("factor")),
+        "factor": _clamped_factor(raw.get("factor")) or 1.0,
         "min": to_float(raw.get("min"), 0.0),
         "max": to_float(raw.get("max"), 1.0),
     }
@@ -98,7 +105,7 @@ def _sanitize_slider_actions(raw) -> dict | None:
     return out
 
 
-def _sanitize_override_entry(raw: Any, lib_by_id: dict[str, dict]) -> dict:
+def _sanitize_override_entry(raw: Any, lib_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Normalise one fixed-button override; keep only runnable entries.
 
     Overrides are full sub-assignments using the same allowlist as top-level
@@ -116,7 +123,7 @@ def _sanitize_override_entry(raw: Any, lib_by_id: dict[str, dict]) -> dict:
     return entry if entry.get("action_id") else {}
 
 
-def _sanitize_overrides(raw: Any, lib_by_id: dict[str, dict], binding: Any = None) -> dict:
+def _sanitize_overrides(raw: Any, lib_by_id: dict[str, dict[str, Any]], binding: Any = None) -> dict[str, Any]:
     """Per-grid-button override table; empty entries/tables never reach disk.
 
     This is the Python/JS contract: the panel tests override presence with
@@ -136,7 +143,7 @@ def _sanitize_overrides(raw: Any, lib_by_id: dict[str, dict], binding: Any = Non
     """
     if not isinstance(raw, dict):
         return {}
-    out = {}
+    out: dict[str, Any] = {}
     for key, value in raw.items():
         if key == SLIDER_VERTICAL_KEY:
             # Which device this button points the slider at, and optionally
@@ -165,7 +172,7 @@ def _sanitize_overrides(raw: Any, lib_by_id: dict[str, dict], binding: Any = Non
 SLIDER_ICON_HIDDEN_KEY = "slider_hide_icon"
 
 
-def _claims_the_button(entry: dict, stored_entry: dict | None, binding: Any) -> bool:
+def _claims_the_button(entry: dict[str, Any], stored_entry: dict[str, Any] | None, binding: Any) -> bool:
     """Whether a save re-points a bound slot and therefore claims it.
 
     Replacing the action on either an empty dynamic slot or a filled source item
@@ -181,10 +188,10 @@ def _claims_the_button(entry: dict, stored_entry: dict | None, binding: Any) -> 
     action_id = entry.get("action_id")
     if not action_id:
         return False
-    return action_id != (stored_entry or {}).get("action_id")
+    return bool(action_id != (stored_entry or {}).get("action_id"))
 
 
-def drop_own_device_target(hass: HomeAssistant, entry, assign: Any) -> None:
+def drop_own_device_target(hass: HomeAssistant, entry: ConfigEntry | None, assign: Any) -> None:
     """Strip a device-local step's target when it only names this remote.
 
     Home Assistant's action editor fills ``target`` from the ``target:`` selector
@@ -216,9 +223,9 @@ def drop_own_device_target(hass: HomeAssistant, entry, assign: Any) -> None:
 
 
 def build_assignment_entry(
-    assign_data: dict, lib_by_id: dict[str, dict], button_key: str | None = None,
-    stored_entry: dict | None = None,
-) -> dict:
+    assign_data: dict[str, Any], lib_by_id: dict[str, dict[str, Any]], button_key: str | None = None,
+    stored_entry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Normalise one panel assignment into the store schema.
 
     The copied key list is the schema: anything absent is erased on save.

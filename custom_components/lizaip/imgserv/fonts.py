@@ -13,17 +13,21 @@ and nothing is written to disk.
 """
 from __future__ import annotations
 
+import importlib
 import io
 import logging
 import os
 import threading
 from functools import lru_cache
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 from PIL import ImageFont
 
 from .const import DEFAULT_FONT
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,7 +41,7 @@ WEBFONT_EXTENSIONS: Final = (".woff", ".woff2")
 # Only the three web fonts used last stay decoded, in memory only.
 @lru_cache(maxsize=3)
 def _decoded_webfont(path: str, _mtime: float) -> bytes:
-    from fontTools.ttLib import TTFont  # noqa: PLC0415 - only needed for web fonts
+    from fontTools.ttLib import TTFont
     font = TTFont(path)
     font.flavor = None
     buf = io.BytesIO()
@@ -113,7 +117,7 @@ def find_font(name: str, fonts_dir: str) -> str | None:
 # Below HA's config directory; served as ``/local/fonts``.
 WWW_FONTS_SUBDIR: Final = ("www", "fonts")
 
-def www_fonts_dir(hass) -> str:
+def www_fonts_dir(hass: HomeAssistant) -> str:
     """Where the user's own fonts go: ``<ha_config>/www/fonts``."""
     return hass.config.path(*WWW_FONTS_SUBDIR)
 
@@ -141,9 +145,10 @@ def _font_files(directory: str | None) -> list[str]:
 def _frontend_fonts_dir() -> str | None:
     """Home Assistant's own ``static/fonts``, or ``None`` when it is not there."""
     try:
-        import hass_frontend  # noqa: PLC0415 - only present inside Home Assistant
+        # Only present inside Home Assistant (and untyped).
+        hass_frontend = importlib.import_module("hass_frontend")
         path = os.path.join(hass_frontend.where(), "static", "fonts")
-    except Exception:  # noqa: BLE001 - no frontend package means no HA fonts
+    except Exception:
         return None
     return path if os.path.isdir(path) else None
 
@@ -162,7 +167,7 @@ _WEB_EXTENSIONS: Final = (".ttf", ".otf") + WEBFONT_EXTENSIONS
 _URL_BASES: Final = {"user": "/local/fonts", "ha": "/static/fonts"}
 
 
-def _font_url(source: str, directory: str, path: str) -> str:
+def _font_url(source: str, directory: str | None, path: str) -> str:
     """The URL a browser can load *path* from, or ``""`` when it cannot."""
     base = _URL_BASES.get(source)
     if not base or not path.lower().endswith(_WEB_EXTENSIONS):
@@ -173,7 +178,7 @@ def _font_url(source: str, directory: str, path: str) -> str:
     return "/".join([base, *(quote(part) for part in rel.split(os.sep))])
 
 
-def _names(path: str) -> tuple[str, str]:
+def _names(path: str) -> tuple[str | None, str | None]:
     """A font's family and style; a web font's are read without decoding it.
 
     A colour bitmap font (Noto Color Emoji) opens in Pillow at its own sizes
@@ -184,7 +189,7 @@ def _names(path: str) -> tuple[str, str]:
             return ImageFont.truetype(path, 12).getname()
         except OSError:
             pass
-    from fontTools.ttLib import TTFont  # noqa: PLC0415 - not needed for most fonts
+    from fontTools.ttLib import TTFont
     with TTFont(path, lazy=True) as font:
         name = font["name"]
         return (str(name.getBestFamilyName() or ""), str(name.getBestSubFamilyName() or ""))
@@ -195,30 +200,22 @@ def _names(path: str) -> tuple[str, str]:
 _EMOJI_PROBES = (0x1F600, 0x1F3E0)
 
 
-@lru_cache(maxsize=256)
-def _has_emoji(path: str, _mtime: float) -> bool:
+def is_emoji_font(path: str) -> bool:
     """Whether the font at *path* draws emoji (read from its character map)."""
-    from fontTools.ttLib import TTFont  # noqa: PLC0415 - read once per file
+    from fontTools.ttLib import TTFont
 
     try:
         with TTFont(path, lazy=True, fontNumber=0) as font:
             cmap = font.getBestCmap() or {}
-    except Exception:  # noqa: BLE001 - an unreadable file is simply no emoji font
+    except Exception:
         return False
     return all(code in cmap for code in _EMOJI_PROBES)
-
-
-def is_emoji_font(path: str) -> bool:
-    try:
-        return _has_emoji(path, os.path.getmtime(path))
-    except OSError:
-        return False
 
 
 def _display_name(path: str) -> str:
     try:
         family, style = _names(path)
-    except Exception:  # noqa: BLE001 - an unreadable file must not hide the rest
+    except Exception:
         return ""
     family = (family or "").strip()
     style = (style or "").strip()
@@ -227,7 +224,7 @@ def _display_name(path: str) -> str:
     return family if not style or style.lower() == "regular" else f"{family} {style}"
 
 
-def list_fonts(fonts_dir: str | None = None) -> list[dict[str, str]]:
+def list_fonts(fonts_dir: str | None = None) -> list[dict[str, Any]]:
     """Every font text can be drawn in: ``[{"id", "name", "source", "url", "emoji"}]``.
 
     Sorted by name, the user's and Home Assistant's mixed. A Home Assistant font
@@ -239,7 +236,7 @@ def list_fonts(fonts_dir: str | None = None) -> list[dict[str, str]]:
     ``url`` is where a browser can load the file from, so the font picker can
     draw each name in its own font. It is ``""`` for a format no browser reads.
     """
-    fonts: list[dict[str, str]] = []
+    fonts: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source, directory in _font_sources(fonts_dir):
         for path in _font_files(directory):
@@ -280,9 +277,9 @@ def resolve_font_path(name: str | None, fonts_dir: str | None = None) -> str | N
                 return path
     for directory in directories:
         for folder in sorted({os.path.dirname(p) for p in _font_files(directory)}):
-            if ((path := find_font(name, folder))
-                    and path.lower().endswith(FONT_EXTENSIONS + WEBFONT_EXTENSIONS)):
-                return path
+            if ((match := find_font(name, folder))
+                    and match.lower().endswith(FONT_EXTENSIONS + WEBFONT_EXTENSIONS)):
+                return match
     return None
 
 

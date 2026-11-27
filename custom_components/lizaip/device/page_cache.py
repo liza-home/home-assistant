@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 
 class PageCache:
@@ -20,7 +21,7 @@ class PageCache:
         self.lock = asyncio.Lock()
         # page_id → the `set_page` payload the device was last given, its hash
         # included. `None` means "unknown, ask the device".
-        self.pages: dict[int, dict] | None = None
+        self.pages: dict[int, dict[str, Any]] | None = None
         # The main-page order the device holds, or `None` when unknown.
         self.main_pages: list[int] | None = None
         # Page ids the device refused to both create and write this session.

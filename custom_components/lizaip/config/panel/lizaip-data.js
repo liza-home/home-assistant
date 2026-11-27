@@ -126,7 +126,7 @@ export const DataMixin = {
    *
    * Loaded rather than hardcoded so the panel and the device cannot disagree:
    * `get_button_tooltip` in `const.py` reads the same `button_tooltips` section of
-   * the same `translations/<lang>.json`. On failure `_buttonTooltips` stays empty
+   * the same `i18n/<lang>.json`. On failure `_buttonTooltips` stays empty
    * and `_getButtonTooltip` title-cases the key, which is readable English rather
    * than a blank button.
    *
@@ -139,7 +139,7 @@ export const DataMixin = {
     try {
       const r = await this._hass.callWS({
         type: "lizaip_config/get_button_tooltips",
-        ...(this._currentEntry ? { entry_id: this._currentEntry } : {}),
+        entry_id: this._currentEntry,
         language: this._uiLanguage(),
       });
       this._buttonTooltips = r?.tooltips || {};
@@ -177,6 +177,7 @@ export const DataMixin = {
   },
 
   async _loadAll() {
+    const token = this._selectDeviceToken;
     // `_loadButtonTooltips` belongs here and not only in `_init`: the language is
     // a *per-device* option, so the answer changes with `_currentEntry`. `_init`
     // loads it before any device is selected (the picker screen still prints
@@ -194,7 +195,9 @@ export const DataMixin = {
       // rather than kept from the panel's first load.
       this._loadIconDefaults(),
     ]);
-    await this._loadAssignmentsAndUsage();
+    // Left or superseded meanwhile: the pages are no longer the open remote's.
+    if (token !== this._selectDeviceToken) return;
+    await this._loadAssignmentsAndUsage(token);
   },
 
   /**
@@ -205,12 +208,13 @@ export const DataMixin = {
    * returns it, and `{}` for a page with none stored). Without other pages
    * to read, or when the bulk read fails, it is the two calls as before.
    */
-  async _loadAssignmentsAndUsage() {
+  async _loadAssignmentsAndUsage(token) {
     const entry = this._currentEntry;
     const pageId = this._currentPageId;
     const needsBulk = !!pageId
       && this._pages.some((p) => p.id !== pageId && !this._pageCache?.[p.id]);
     const bulk = needsBulk ? await this._fetchAllAssignments() : null;
+    if (token !== this._selectDeviceToken) return;
     if (!bulk) {
       await this._loadAssignments();
       // A bulk read that just failed is not asked for again.
@@ -254,13 +258,8 @@ export const DataMixin = {
   /** Put one `icon_options` reply where the Settings tab reads it. */
   _applyIconOptions(r) {
     this._iconOptions = r;
-    // The remote's Variables switch changes what every preview reads, so the
-    // answers held for the old setting are dropped. On unless it says off,
-    // like `read_variables_enabled`.
-    if (!r) return;
-    const on = r.variables_enabled !== false;
-    if (this._variablesEnabled !== undefined && on !== this._variablesEnabled) this._resetVariables?.();
-    this._variablesEnabled = on;
+    // Off unless it says on, like `read_variables_enabled`.
+    if (r) this._variablesEnabled = r.variables_enabled === true;
   },
 
   /**
@@ -343,6 +342,7 @@ export const DataMixin = {
    * read falls through to the per-page path, which has the fallbacks.
    */
   async _loadGlobalUsage(refresh = false, prefetched = undefined) {
+    const entry = this._currentEntry;
     const details = {};
     let complete = true;
     // `prefetched`: a bulk answer already in hand, or null for one that has
@@ -371,8 +371,10 @@ export const DataMixin = {
         assigns = bulk[String(page.id)] || {};
         this._pageCache[page.id] = JSON.parse(JSON.stringify(assigns));
       } else {
+        // The remote was left mid-scan; its pages are nobody's to read now.
+        if (!entry || this._currentEntry !== entry) return false;
         try {
-          const r = await this._hass.callWS({ type: "lizaip_config/get_assignments", entry_id: this._currentEntry, page_id: page.id });
+          const r = await this._hass.callWS({ type: "lizaip_config/get_assignments", entry_id: entry, page_id: page.id });
           assigns = r?.assignments || {};
           this._pageCache[page.id] = JSON.parse(JSON.stringify(assigns));
         } catch (e) {
@@ -807,6 +809,9 @@ export const DataMixin = {
         // What the button already controls, so the backend can mark the
         // templates that device answers.
         ...(entityId ? { entity_id: entityId } : {}),
+        // Templates that need (or are only for) certain firmware are offered
+        // only where this remote's is in range.
+        entry_id: this._currentEntry,
       });
       // A shipped template names its words in the panel's translation table
       // rather than spelling one language, the way a folder's card does.
@@ -1049,6 +1054,22 @@ export const DataMixin = {
       const moved = Array.isArray(result?.page_ids) ? result.page_ids : [page.id];
       for (const id of moved) delete this._pageCache[id];
       if (moved.includes(this._currentPageId)) await this._loadAssignments();
+      return result;
+    });
+  },
+
+  /** Take the device off a page no template made. */
+  async _unbindPageDevice(page) {
+    return this._runPageOp(async () => {
+      await this._flushAutoSave();
+      const result = await this._hass.callWS({
+        type: "lizaip_config/remove_page_device",
+        entry_id: this._currentEntry,
+        page_id: page.id,
+      });
+      if (result?.pages) this._pages = result.pages;
+      delete this._pageCache[page.id];
+      if (page.id === this._currentPageId) await this._loadAssignments();
       return result;
     });
   },

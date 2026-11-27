@@ -6,6 +6,7 @@ discovery starts no flow. Its announcements still reach us, so we listen here.
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from homeassistant.components import zeroconf
 from homeassistant.config_entries import ConfigEntry
@@ -72,7 +73,8 @@ class _AnnouncementListener(RecordUpdateListener):
             return
         self._checking.add(entry.entry_id)
         self._hass.async_create_background_task(
-            self._async_recover(entry, ips, info.port),
+            # load_from_cache succeeds only with the SRV record, so the port is set.
+            self._async_recover(entry, ips, cast(int, info.port)),
             name=f"lizaip_reset_recovery_{entry.entry_id}",
         )
 

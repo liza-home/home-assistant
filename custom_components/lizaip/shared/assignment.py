@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
 
 # Key on a stored button assignment holding its dynamic-source binding. It is a
 # *sibling* of ``config``, not a field inside it: the panel truncates a button's
@@ -47,19 +47,23 @@ LONGTOUCH_SECONDS: Final = 2.0
 # once.
 ASSIGNMENT_REPEAT_KEY: Final = "key_repeat"
 
+# Key on a stored button assignment naming the IR key its ``send_ir`` sends,
+# so moving the page to another IR device can swap in that device's code.
+ASSIGNMENT_IR_KEY: Final = "ir_key"
 
-def key_repeats(assign) -> bool:
+
+def key_repeats(assign: Any) -> bool:
     """Whether a stored button runs again while it is held."""
     return isinstance(assign, dict) and assign.get(ASSIGNMENT_REPEAT_KEY) is True
 
 
-def longtouch_steps(assign) -> list:
+def longtouch_steps(assign: Any) -> list[Any]:
     """The long-touch steps of a stored button, or ``[]`` when it has none."""
     steps = assign.get(ASSIGNMENT_LONGTOUCH_KEY) if isinstance(assign, dict) else None
     return steps if isinstance(steps, list) and steps else []
 
 
-def name_is_user_written(assign) -> bool:
+def name_is_user_written(assign: Any) -> bool:
     """True when the user typed this button's name into the panel's Label field.
 
     The ladders used to *infer* this by comparing the stored name against its

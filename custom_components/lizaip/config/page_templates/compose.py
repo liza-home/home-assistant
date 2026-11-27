@@ -18,18 +18,23 @@ import asyncio
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from ...shared.i18n import get_ui_language, page_titles, translate_fallback, translate_key
+from ...shared.variables_calc import CONF_VARIABLES_ENABLED, variables_scope
 from .catalog import async_load_template, page_source, template_pages
 from .generate import generate_assignments, page_buttons
 from .parts import NEXT_PART, paginated_placeholder, part_buttons
 from .resolver import resolve_template_variables
 
 _LOGGER = logging.getLogger(__name__)
+
+#: In a template page's `template:` block: False on a set made while the
+#: remote's variables were off, so the parts it grows later have none either.
+TEMPLATE_VARIABLES_KEY = "variables"
 
 
 @dataclass(frozen=True)
@@ -42,8 +47,8 @@ class ComposedPage:
     title: str
     subpage: bool = False
     #: Action-library entries the page's buttons refer to.
-    actions: list[dict] = field(default_factory=list)
-    assignments: dict[str, dict] = field(default_factory=dict)
+    actions: list[dict[str, Any]] = field(default_factory=list)
+    assignments: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Which repeat of a paginated page this is; 1 for every other page.
     part: int = 1
 
@@ -60,6 +65,7 @@ async def async_compose_pages(
     remote_entry: str = "",
     entry: Any = None,
     fallback_title: str | None = None,
+    variables: bool = True,
 ) -> list[ComposedPage]:
     """Resolve *template* into one :class:`ComposedPage` per id it was given.
 
@@ -68,6 +74,7 @@ async def async_compose_pages(
     ``fallback_title`` heads the first page when it states no title of its
     own -- the template's icon, as the add-page dialog shows it; *entry* is
     the remote the pages are for, which says what language to head them in.
+    Without *variables* the pages are made with none: see :func:`without_variables`.
     """
     pages = template_pages(template_id, template)
     ids_by_name = {name: page_ids[i] for i, (name, _) in enumerate(pages)}
@@ -83,6 +90,7 @@ async def async_compose_pages(
             target_entity=target_entity, domain_entities=domain_entities,
             target_config_entry=target_config_entry, remote_entry=remote_entry,
             entry=entry, fallback_title=fallback_title if index == 0 else None,
+            variables=variables,
         )
         for index, (name, page) in enumerate(pages)
     )))
@@ -104,6 +112,7 @@ async def async_compose_part(
     remote_entry: str = "",
     entry: Any = None,
     fallback_title: str | None = None,
+    variables: bool = True,
 ) -> ComposedPage:
     """Compose one page of *template* -- part *part* of it, if it paginates.
 
@@ -125,10 +134,11 @@ async def async_compose_part(
         ),
     }
     title = part_title(_page_title(hass, entry, page, page_shared, fallback_title), part)
-    page_template = await resolve_template_variables(
-        hass, page_template, target_entity, domain_entities,
-        target_config_entry, remote_entry=remote_entry,
-    )
+    with variables_scope({CONF_VARIABLES_ENABLED: variables}):
+        page_template = await resolve_template_variables(
+            hass, page_template, target_entity, domain_entities,
+            target_config_entry, remote_entry=remote_entry,
+        )
     actions, assignments = generate_assignments(
         template_id, target_entity, page_template, domain_entities, hass,
     )
@@ -136,7 +146,7 @@ async def async_compose_part(
         "Composed page %r (part %d) of %s in %.2f s",
         name, part, template_id, time.monotonic() - started,
     )
-    return ComposedPage(
+    composed = ComposedPage(
         name=name,
         page_id=ids_by_name[name],
         title=title,
@@ -146,6 +156,33 @@ async def async_compose_part(
         actions=actions,
         assignments=assignments,
         part=part,
+    )
+    return composed if variables else without_variables(composed)
+
+
+def without_variables(page: ComposedPage) -> ComposedPage:
+    """Leave variable-based button tooltips and icons unset.
+
+    A button that was nothing but variables is left off the page altogether.
+    """
+    def unset(fields: dict[str, Any], blank: Any, *keys: str) -> dict[str, Any]:
+        return {**fields, **{k: blank for k in keys if "${" in str(fields.get(k) or "")}}
+
+    assignments: dict[str, Any] = {}
+    stored: dict[str, Any] = page.assignments
+    for key, assign in stored.items():
+        if not isinstance(assign, dict):
+            assignments[key] = assign
+            continue
+        kept = unset(assign, None, "tooltip", "icon")
+        if kept != assign and not any(kept.values()):
+            continue
+        assignments[key] = kept
+
+    return replace(
+        page,
+        actions=[unset(action, "", "icon") for action in page.actions],
+        assignments=assignments,
     )
 
 

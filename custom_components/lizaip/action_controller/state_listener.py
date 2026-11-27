@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -38,13 +38,13 @@ _LOGGER = logging.getLogger(__name__)
 # One button, with everything about it that a flush would otherwise have to
 # recompute per state event: which page it sits on, the assignment as it will
 # actually run, and the entities that can move it.
-_IndexedButton = tuple[int, str, Any, str, dict, str, list[str]]
+_IndexedButton = tuple[int, str, Any, str, dict[str, Any], str, list[str]]
 
 
 async def _index_buttons_by_entity(
     hass: HomeAssistant,
     device_id: str,
-    pages: list[dict],
+    pages: list[Any],
     toggles: bool,
 ) -> dict[str, list[_IndexedButton]]:
     """Map each watched entity to the buttons a change to it can repaint.
@@ -126,7 +126,8 @@ async def setup_state_listener(
 
     dirty: set[str] = set()
     timer_handle: list[asyncio.TimerHandle | None] = [None]
-    last_sent: dict[tuple[int, str], tuple[str, str | None]] = {}
+    # Keyed by (page_id, button_key), as read off the pushed updates.
+    last_sent: dict[tuple[int | None, str | None], tuple[str | None, str | None]] = {}
     # -inf, not 0: `time.monotonic()` has an arbitrary origin, so "never
     # flushed" has to be a value no elapsed-time comparison can mistake for
     # "just did". Monotonic rather than `hass.loop.time()` because this only
@@ -143,25 +144,23 @@ async def setup_state_listener(
     # while the first is still running. Holding only the newest would leave the
     # older one to go on touching `store` and `entry` after unload cancelled
     # the handle it was not in.
-    flush_tasks: set[asyncio.Task] = set()
+    flush_tasks: set[asyncio.Task[Any]] = set()
 
     @callback
-    def _flush():
+    def _flush() -> None:
         timer_handle[0] = None
         last_flush[0] = time.monotonic()
         entities = list(dirty)
         dirty.clear()
-        if not entities:
-            return
         task = hass.async_create_task(_async_flush(entities))
         flush_tasks.add(task)
         task.add_done_callback(flush_tasks.discard)
 
-    async def _async_flush(entities: list[str]):
+    async def _async_flush(entities: list[str]) -> None:
         async with flush_lock:
             await _async_flush_locked(entities)
 
-    async def _async_flush_locked(entities: list[str]):
+    async def _async_flush_locked(entities: list[str]) -> None:
         # Inline: button_rendering -> action_controller -> this module, so a
         # top-level import re-enters a half-built package (and `lizaip.reload`
         # re-executes both in its own order). Reusing the full sync's resolver
@@ -176,9 +175,9 @@ async def setup_state_listener(
         current_pages = await store.async_get_pages(device_id)
         # Lazy, at most once per flush: only the one-way branch needs it, and it
         # is the expensive part of this function.
-        service_icons: dict | None = None
+        service_icons: dict[str, Any] | None = None
 
-        updates = []
+        updates: list[dict[str, Any]] = []
         # Resolved once per flush, not per button: it cannot change mid-flush,
         # and `device_sync` hoists the identical call for the same reason.
         style_options = read_icon_style_options(getattr(entry, "options", None))
@@ -193,7 +192,8 @@ async def setup_state_listener(
         flush_theme = settings_theme(flush_settings)
         # As the sync reads it: a label that is only its library entry's name
         # gives way to the derived one, any other label is printed as it reads.
-        names = library_names(await store.async_get_action_library(device_id))
+        # Any key: a button's `action_id` is whatever its assignment holds.
+        names: dict[Any, str] = library_names(await store.async_get_action_library(device_id))
         theme_icons = flush_theme.icons
         # Built once per flush, keyed by the entity that can move it, so an
         # event costs a dict lookup instead of a walk over every page x
@@ -359,7 +359,7 @@ async def setup_state_listener(
         timer_handle[0] = hass.loop.call_later(delay, _flush)
 
     @callback
-    def _on_state_change(event: Event) -> None:
+    def _on_state_change(event: Event[EventStateChangedData]) -> None:
         eid = event.data["entity_id"]
         # A real update is the authority, so let it retire any prediction it
         # agrees with before the flush reads the entity back. `settle` keeps a
@@ -376,7 +376,7 @@ async def setup_state_listener(
             _mark_dirty(eid)
 
     @callback
-    def _on_pushed(updates: list[dict]) -> None:
+    def _on_pushed(updates: list[dict[str, Any]]) -> None:
         # A press paints its tile straight away (an optimistic guess, a cycle
         # step) without passing through here. Unless `last_sent` hears of it,
         # the confirming state reads as "unchanged since my last push" and is
@@ -395,7 +395,7 @@ async def setup_state_listener(
         async_dispatcher_connect(hass, SIGNAL_ICON_UPDATE.format(device_id), _on_pushed),
     ]
 
-    def _cleanup():
+    def _cleanup() -> None:
         for unsub in unsubs:
             unsub()
         if timer_handle[0] is not None:

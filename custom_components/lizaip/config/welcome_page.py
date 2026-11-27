@@ -1,12 +1,13 @@
-"""The pages a remote shows while it has none of its own.
+"""The welcome page a remote shows while it has none of its own.
 
 A remote that has never been configured, and one whose last page the user just
 deleted, would be left with an empty page list and a blank face. Rather than
-leave it at that, the pages of the ``_default-pages`` template stand in until
+leave it at that, the ``_welcome-page`` template stands in until
 there is something real to show: a welcome page whose title strip greets the
-user in the device's language, and a page about the remote itself, which
-reports the remote's battery, its own address, the Home Assistant it talks to,
-and its firmware.
+user in the device's language, and whose buttons report the remote's battery,
+its own address, the Home Assistant it talks to, and its firmware. Those
+buttons are all variables, so a remote with its variables off shows the
+greeting alone, as any template's variable-only button is left off.
 
 They are **placeholders, not pages**. Nothing here writes: no page file, no
 assignments, no action-library entry. The panel reads the store and so still
@@ -16,9 +17,9 @@ pull, and the live variable push — ask for the effective set and get these
 instead of nothing. The user's first real page replaces them, and deleting the
 last one brings them back.
 
-The template names no ``target_selector``, so neither page needs a target to resolve against,
-and neither carries a command: the remote page's tiles are labels and images,
-so a placeholder button is as inert as the stored page would be.
+The template names no ``target_selector``, so the page needs no target to
+resolve against, and it carries no command: its tiles are labels and images,
+so a placeholder button is as inert as a stored one would be.
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from homeassistant.core import HomeAssistant
 from ..device.protocol import MIN_PAGE_ID
 from ..runtime import get_store, entry_device_id
 from ..shared.logs import device_logger
+from ..shared.variables_calc import read_variables_enabled
 from .page_templates import async_compose_pages, template_pages
 from .page_templates.catalog import TEMPLATES_DIR
 
@@ -41,7 +43,7 @@ _LOGGER = logging.getLogger(__name__)
 
 #: The template that stands in. A `_`-prefixed file is never offered as a
 #: template, so it cannot be added as a page by hand.
-_TEMPLATE_ID = "_default-pages"
+_TEMPLATE_ID = "_welcome-page"
 _DEFAULT_PAGES_FILE = os.path.join(TEMPLATES_DIR, f"{_TEMPLATE_ID}.yaml")
 
 #: The parsed file. It ships with the integration and so changes only with it.
@@ -52,10 +54,10 @@ _CACHE: dict[str, Any] | None = None
 class EffectivePages:
     """The pages a remote should be holding, stored or stood in for."""
 
-    pages: list[dict]
+    pages: list[dict[str, Any]]
     #: Button assignments by page id, or None when the pages are the store's
     #: and their buttons are to be read from it as usual.
-    assignments: dict[int, dict] | None = None
+    assignments: dict[int, dict[str, Any]] | None = None
 
     @property
     def placeholder(self) -> bool:
@@ -82,7 +84,7 @@ async def async_effective_pages(
 
     try:
         return await _async_placeholder_pages(hass, entry)
-    except Exception:  # noqa: BLE001 - a stand-in page is never worth a failed sync
+    except Exception:
         device_logger(_LOGGER, entry).warning(
             "Could not build the placeholder pages for a remote with none",
             exc_info=True,
@@ -97,7 +99,7 @@ def _load_default_template() -> dict[str, Any]:
         return _CACHE
 
     try:
-        with open(_DEFAULT_PAGES_FILE, "r", encoding="utf-8") as fh:
+        with open(_DEFAULT_PAGES_FILE, encoding="utf-8") as fh:
             doc = yaml.safe_load(fh) or {}
     except (OSError, yaml.YAMLError) as exc:
         _LOGGER.warning("Failed to read %s: %s", _DEFAULT_PAGES_FILE, exc)
@@ -126,6 +128,7 @@ async def _async_placeholder_pages(
         hass, _TEMPLATE_ID, template, page_ids,
         remote_entry=entry.entry_id,
         entry=entry,
+        variables=read_variables_enabled(getattr(entry, "options", None)),
     )
     if not composed:
         return EffectivePages([])

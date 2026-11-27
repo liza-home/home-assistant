@@ -1,6 +1,6 @@
-# Default pages — what a remote shows while it has none of its own.
+# Welcome page — what a remote shows while it has none of its own.
 #
-# An ordinary template, read only by `config/default_pages.py`,
+# An ordinary template, read only by `config/welcome_page.py`,
 # which resolves it into pages that exist in memory and never reach the store.
 # The leading underscore keeps it out of the add-page dialog: `list_templates`
 # skips a `_`-prefixed file and a `_`-prefixed id is not a template id at all.

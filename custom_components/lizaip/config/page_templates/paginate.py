@@ -20,7 +20,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from ..const import generate_page_id
-from .compose import ComposedPage, async_compose_part
+from ..page_limit import page_limit
+from .compose import TEMPLATE_VARIABLES_KEY, ComposedPage, async_compose_part
 from .catalog import async_load_template, page_source, template_pages
 from .generate import PAGE_LINK_KEY
 from .parts import (
@@ -33,6 +34,7 @@ from .parts import (
     paginated_placeholder,
 )
 from ...shared.assignment import ASSIGNMENT_DYNAMIC_KEY
+from ...shared.variables_calc import read_variables_enabled
 from .resolver import async_cached_resolve, parse_token, template_bindings
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,9 +50,9 @@ def _part(page: dict[str, Any]) -> int:
     return part if isinstance(part, int) and part > 1 else 1
 
 
-def _paginated_sets(pages: list[dict]) -> dict[tuple, list[dict]]:
+def _paginated_sets(pages: list[dict[str, Any]]) -> dict[tuple[Any, ...], list[dict[str, Any]]]:
     """Template pages grouped by ``(instance, type, page name)``, parts in order."""
-    sets: dict[tuple, list[dict]] = {}
+    sets: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for page in pages:
         meta = _meta(page)
         # A page made on its own, before its template paginated, is a set of
@@ -122,29 +124,29 @@ async def async_paginate(
         defined = dict(template_pages(template_id, template))
         page_def = defined.get(name)
         placeholder = paginated_placeholder(page_def or {})
-        if not placeholder:
+        if not placeholder or page_def is None:
             continue
         try:
             changed |= await _async_fit(
                 hass, entry_id, device_id, store, template_id, template,
                 name, page_def, placeholder, instance, parts, pages, cache,
             )
-        except Exception as exc:  # noqa: BLE001 - one set must not stop the rest
+        except Exception as exc:
             _LOGGER.debug("Paginating %s page %r failed: %s", template_id, name, exc)
         pages = await store.async_get_pages(device_id)
     return changed
 
 
 async def _async_page_source(
-    hass: HomeAssistant, template_id: str, template: dict, page_def: dict,
-) -> tuple[dict, dict]:
+    hass: HomeAssistant, template_id: str, template: dict[str, Any], page_def: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """The page's shared part and buttons, those of a page template it names included."""
     include = str(page_def.get("template") or "")
     included = await async_load_template(hass, include) if include else None
     return page_source(template_id, template, page_def, included)
 
 
-def _domain_entities(hass: HomeAssistant, target: dict) -> dict[str, str] | None:
+def _domain_entities(hass: HomeAssistant, target: dict[str, Any]) -> dict[str, str] | None:
     """The target device's entities by domain, as the page was made with.
 
     A device's primary entity may be a ``remote.*`` that lists nothing; a
@@ -163,16 +165,16 @@ def _domain_entities(hass: HomeAssistant, target: dict) -> dict[str, str] | None
         primary = registry.async_get(str(target.get("entity_id") or ""))
         integration = primary.platform if primary is not None else None
         return _resolve_device_domain_entities(hass, device, integration, registry) or None
-    except Exception:  # noqa: BLE001 - no registry: the target alone
+    except Exception:
         return None
 
 
 async def _async_count(
     hass: HomeAssistant,
-    shared: dict,
-    buttons: dict,
+    shared: dict[str, Any],
+    buttons: dict[str, Any],
     placeholder: str,
-    first: dict,
+    first: dict[str, Any],
     max_items: int,
     domain_entities: dict[str, str] | None = None,
     cache: dict[Any, Any] | None = None,
@@ -202,13 +204,13 @@ async def _async_fit(
     device_id: str,
     store: Any,
     template_id: str,
-    template: dict,
+    template: dict[str, Any],
     name: str,
-    page_def: dict,
+    page_def: dict[str, Any],
     placeholder: str,
     instance: int,
-    parts: list[dict],
-    pages: list[dict],
+    parts: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
     cache: dict[Any, Any] | None = None,
 ) -> bool:
     shared, buttons = await _async_page_source(hass, template_id, template, page_def)
@@ -233,6 +235,10 @@ async def _async_fit(
     _LOGGER.debug(
         "%s page %r: %d items, %d part(s) wanted, %d there", template_id, name, count, wanted, len(parts),
     )
+    limit = page_limit(hass, entry_id)
+    if limit is not None:
+        # No part past the remote's page limit: the items stop on the last one there is room for.
+        wanted = min(wanted, len(parts) + max(limit - len(pages), 0))
 
     removed = await _async_drop_empty_parts(store, device_id, item_buttons, placeholder, parts, wanted)
     if len(parts) >= wanted and not removed:
@@ -256,6 +262,8 @@ async def _async_fit(
     target_entity = str(target.get("entity_id") or "")
     first_name = next(iter(dict(template_pages(template_id, template))), "")
     entry = hass.config_entries.async_get_entry(entry_id) if getattr(hass, "config_entries", None) else None
+    variables = (_meta(parts[0]).get(TEMPLATE_VARIABLES_KEY) is not False
+                 and read_variables_enabled(getattr(entry, "options", None)))
 
     async def compose(part: int) -> ComposedPage:
         links = dict(ids_by_name)
@@ -269,7 +277,7 @@ async def _async_fit(
             part=part, first=name == first_name,
             target_entity=target_entity, domain_entities=domain_entities,
             target_config_entry=str(target.get("config_entry") or ""),
-            remote_entry=entry_id, entry=entry,
+            remote_entry=entry_id, entry=entry, variables=variables,
         )
 
     # New parts first, after the last one there is.
@@ -291,6 +299,7 @@ async def _async_fit(
             target_config_entry=str(target.get("config_entry") or ""),
             instance=instance,
             insert_after=parts[-1]["id"],
+            variables=variables,
         )
         _LOGGER.debug(
             "%s page %r: %d items, added part(s) %s",
@@ -310,9 +319,9 @@ async def _async_fit(
 async def _async_drop_empty_parts(
     store: Any,
     device_id: str,
-    buttons: dict,
+    buttons: dict[str, Any],
     placeholder: str,
-    parts: list[dict],
+    parts: list[dict[str, Any]],
     wanted: int,
 ) -> bool:
     """Remove trailing parts past *wanted*: they hold nothing but items.
@@ -366,7 +375,7 @@ async def _async_relink(
         await store.async_set_assignments_locked(device_id, page_id, assignments)
 
 
-async def _reserved(store: Any, device_id: str, pages: list[dict]) -> set[int]:
+async def _reserved(store: Any, device_id: str, pages: list[dict[str, Any]]) -> set[int]:
     from ..page_list import reserved_page_ids
 
     return await reserved_page_ids(

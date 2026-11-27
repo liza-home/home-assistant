@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Final
+from typing import Any, Final
 
 import yaml
 from homeassistant.core import HomeAssistant
@@ -51,7 +51,7 @@ def entry_blueprint_id(hass: HomeAssistant, entry_id: str | None) -> str:
     return DEFAULT_BLUEPRINT_ID
 
 
-def _parse_blueprint(blueprint_id: str) -> dict:
+def _parse_blueprint(blueprint_id: str) -> dict[str, Any]:
     """Read and parse one blueprint. Blocking — call via `async_get_blueprint`.
 
     A model with no blueprint of its own falls back to the default rather than
@@ -71,7 +71,7 @@ def _parse_blueprint(blueprint_id: str) -> dict:
         path = os.path.join(directory, f"{blueprint_id}.yaml")
 
     try:
-        with open(path, "r") as fh:
+        with open(path) as fh:
             bp = yaml.safe_load(fh)
     except (FileNotFoundError, yaml.YAMLError) as exc:
         _LOGGER.error("Blueprint parse error: %s", exc)
@@ -88,7 +88,7 @@ def _parse_blueprint(blueprint_id: str) -> dict:
     }
 
 
-async def async_get_blueprint(hass: HomeAssistant, entry_id: str | None = None) -> dict:
+async def async_get_blueprint(hass: HomeAssistant, entry_id: str | None = None) -> dict[str, Any]:
     """The parsed blueprint for one remote, read from disk at most once per run.
 
     The files ship inside the integration and are never written at runtime, so

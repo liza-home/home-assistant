@@ -19,12 +19,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
+from aiohttp import ClientTimeout
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .base import TvPlatform
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,20 +56,20 @@ _DATA_KEY: Final = "lizaip_samsung_apps"
 
 class _State:
     def __init__(self, hass: Any) -> None:
-        self.store = None
+        self.store: Store[dict[str, Any]] | None = None
         if getattr(hass, "config", None) is not None:
             from homeassistant.helpers.storage import Store
 
             self.store = Store(hass, 1, STORAGE_KEY)
         #: country -> {"at": epoch, "icons": {app id: icon url}}
-        self.stores: dict[str, dict] = {}
+        self.stores: dict[str, dict[str, Any]] = {}
         #: host -> {"at": epoch, "apps": [browse rows]}
-        self.tvs: dict[str, dict] = {}
+        self.tvs: dict[str, dict[str, Any]] = {}
         self.locks: dict[str, asyncio.Lock] = {}
         self.loaded = self.store is None
 
     async def load(self) -> None:
-        if self.loaded:
+        if self.loaded or self.store is None:
             return
         data = await self.store.async_load() or {}
         self.stores = dict(data.get("stores") or {})
@@ -87,7 +91,7 @@ async def _state(hass: Any) -> _State:
     if isinstance(data, dict):
         if _DATA_KEY not in data:
             data[_DATA_KEY] = _State(hass)
-        state = data[_DATA_KEY]
+        state: _State = data[_DATA_KEY]
     else:
         _fallback = _fallback or _State(None)
         state = _fallback
@@ -101,7 +105,7 @@ def samsung_host(hass: HomeAssistant, entity_id: str) -> str:
 
     try:
         entry = er.async_get(hass).async_get(entity_id)
-    except Exception:  # noqa: BLE001 - no registry, no Samsung
+    except Exception:
         return ""
     if entry is None or entry.platform != PLATFORM or not entry.config_entry_id:
         return ""
@@ -113,9 +117,9 @@ async def launch(hass: HomeAssistant, host: str, app_id: str) -> bool:
     """Start *app_id* on the TV at *host*; ``False`` when it did not."""
     url = f"http://{host}:{PORT}/api/v2/applications/{app_id}"
     try:
-        async with async_get_clientsession(hass).post(url, timeout=_TIMEOUT_S) as resp:
+        async with async_get_clientsession(hass).post(url, timeout=ClientTimeout(total=_TIMEOUT_S)) as resp:
             return resp.status == 200
-    except Exception as exc:  # noqa: BLE001 - an off TV
+    except Exception as exc:
         _LOGGER.debug("Samsung app %s on %s not started: %s", app_id, host, exc)
         return False
 
@@ -124,12 +128,12 @@ async def _country(hass: HomeAssistant, host: str) -> str | None:
     """The TV's store country, or ``None`` while it cannot be asked."""
     try:
         async with async_get_clientsession(hass).get(
-            f"http://{host}:{PORT}/api/v2/", timeout=_TIMEOUT_S,
+            f"http://{host}:{PORT}/api/v2/", timeout=ClientTimeout(total=_TIMEOUT_S),
         ) as resp:
             if resp.status != 200:
                 return None
             data = await resp.json(content_type=None)
-    except Exception:  # noqa: BLE001 - an off TV
+    except Exception:
         return None
     device = data.get("device") if isinstance(data, dict) else None
     return str((device or {}).get("countryCode") or "").upper() or None
@@ -143,7 +147,7 @@ async def _fetch_store(hass: HomeAssistant, country: str) -> dict[str, str]:
             "country_code": country, "language_code": "en-US",
             "offset": str(page), "size": str(_STORE_PAGE), "order": "asc",
         }
-        async with session.get(STORE_API, params=params, timeout=_STORE_TIMEOUT_S) as resp:
+        async with session.get(STORE_API, params=params, timeout=ClientTimeout(total=_STORE_TIMEOUT_S)) as resp:
             resp.raise_for_status()
             payload = await resp.json(content_type=None)
         batch = ((payload or {}).get("data") or {}).get("tvApp") or []
@@ -160,10 +164,11 @@ async def _store_icons(hass: HomeAssistant, state: _State, country: str) -> dict
     """The store's apps for *country* and their icons; a stale list beats none."""
     kept = state.stores.get(country) or {}
     if kept.get("icons") and time.time() - kept.get("at", 0) < _STORE_MAX_AGE_S:
-        return kept["icons"]
+        icons: dict[str, str] = kept["icons"]
+        return icons
     try:
         icons = await _fetch_store(hass, country)
-    except Exception as exc:  # noqa: BLE001 - offline: the list kept stands
+    except Exception as exc:
         _LOGGER.debug("Samsung store list for %s not read: %s", country, exc)
         return kept.get("icons") or {}
     if icons:
@@ -176,17 +181,17 @@ async def _installed(hass: HomeAssistant, host: str, app_id: str, gate: asyncio.
     """The app's name when the TV has it, else ``None``."""
     url = f"http://{host}:{PORT}/api/v2/applications/{app_id}"
     try:
-        async with gate, async_get_clientsession(hass).get(url, timeout=_TIMEOUT_S) as resp:
+        async with gate, async_get_clientsession(hass).get(url, timeout=ClientTimeout(total=_TIMEOUT_S)) as resp:
             if resp.status != 200:
                 return None
             data = await resp.json(content_type=None)
-    except Exception:  # noqa: BLE001 - an app not asked is an app not listed
+    except Exception:
         return None
     name = data.get("name") if isinstance(data, dict) else None
     return name if isinstance(name, str) and name else None
 
 
-async def _scan(hass: HomeAssistant, state: _State, host: str) -> list[dict] | None:
+async def _scan(hass: HomeAssistant, state: _State, host: str) -> list[dict[str, Any]] | None:
     """Ask the TV about every store app; ``None`` when it cannot be asked."""
     lock = state.locks.setdefault(host, asyncio.Lock())
     async with lock:
@@ -210,7 +215,7 @@ async def _scan(hass: HomeAssistant, state: _State, host: str) -> list[dict] | N
         return rows
 
 
-async def installed_apps(hass: HomeAssistant, host: str) -> list[dict]:
+async def installed_apps(hass: HomeAssistant, host: str) -> list[dict[str, Any]]:
     """The store apps the TV at *host* has, as browse entries with their icons."""
     state = await _state(hass)
     kept = state.tvs.get(host) or {}
@@ -224,7 +229,7 @@ async def installed_apps(hass: HomeAssistant, host: str) -> list[dict]:
     return [dict(r) for r in (await _scan(hass, state, host) or [])]
 
 
-async def entity_apps(hass: HomeAssistant, entity: Any) -> list[dict]:
+async def entity_apps(hass: HomeAssistant, entity: Any) -> list[dict[str, Any]]:
     """The apps of the Samsung TV behind the media player *entity*."""
     host = samsung_host(hass, getattr(entity, "entity_id", "") or "")
     return await installed_apps(hass, host) if host else []
@@ -233,5 +238,5 @@ async def entity_apps(hass: HomeAssistant, entity: Any) -> list[dict]:
 class SamsungTv(TvPlatform):
     integration = "samsungtv"
 
-    async def fallback_apps(self, hass: HomeAssistant, entity: Any) -> list[dict]:
+    async def fallback_apps(self, hass: HomeAssistant, entity: Any) -> list[dict[str, Any]]:
         return await entity_apps(hass, entity)

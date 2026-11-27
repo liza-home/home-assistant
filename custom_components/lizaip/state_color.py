@@ -20,7 +20,8 @@ CSS variable:
 from __future__ import annotations
 
 import math
-from typing import Final
+from collections.abc import Mapping
+from typing import Any, Final
 
 from homeassistant.core import State
 
@@ -201,7 +202,7 @@ def entity_icon_color(state: State | None, assume_state: str | None = None) -> s
     if effective_state != "on":
         return ""
 
-    attributes = state.attributes or {}
+    attributes: Mapping[str, Any] = state.attributes or {}
     rgb = _parse_rgb(attributes.get("rgb_color"))
     if rgb is None:
         return ""

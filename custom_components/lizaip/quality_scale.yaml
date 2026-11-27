@@ -1,49 +1,62 @@
-# Integration Quality Scale — Platinum
-# https://developers.home-assistant.io/docs/integration_quality_scale_index/
+# Integration Quality Scale
+# Tiers as listed in https://contributors.home-assistant.io/core/quality-scale/rules/
 rules:
   # Bronze
   action-setup:
     status: done
-    comment: Services registered in async_setup via async_register_services.
+    comment: >
+      Every action is registered in async_setup: the device actions via
+      async_register_services, refresh_dynamic_sources via its own registrar.
   appropriate-polling:
     status: exempt
     comment: iot_class is local_push — device connects to HA, no polling.
   brands:
-    status: todo
+    status: done
     comment: >
-      Not submitted to home-assistant/brands yet. brands.home-assistant.io/_/lizaip/
-      answers 200 with the "icon not available" placeholder, which is the repository
-      saying it does not have us rather than that it does. custom_components/lizaip/brand/
-      holds icon.png, logo.png and dark_logo.png ready for that PR.
+      Shipped locally in custom_components/lizaip/brand/ (custom integrations,
+      HA 2026.3+): icon 256×256, logos 128 px high with @2x and dark variants.
   common-modules:
     status: done
-    comment: Uses config_entry_only_config_schema, DeviceInfo, AddEntitiesCallback, etc.
+    comment: >
+      Base entity in entity.py. No coordinator.py: the device pushes over its
+      WebSocket, so there is no DataUpdateCoordinator.
   config-flow:
     status: done
-    comment: Zeroconf and WebSocket discovery flows.
+    comment: >
+      Zeroconf and WebSocket discovery flows; every form field has a
+      data_description in strings.json.
   config-flow-test-coverage:
     status: done
     comment: >
-      tests/test_config_flow.py covers zeroconf (new/already-configured/re-discovery),
-      websocket, confirm, user (abort), and reconfigure steps.
+      tests/test_config_flow.py covers config_flow.py completely, and
+      tests/test_ir_device.py / test_ir_custom.py the IR subentry flow, including
+      recovery from its errors. tests_ha/ drives the flow through the real Home
+      Assistant core as well.
   dependency-transparency:
     status: done
-    comment: No third-party PyPI requirements.
+    comment: >
+      fonttools and brotli: OSI-licensed, published on PyPI from public CI.
   docs-actions:
     status: done
-    comment: send_image service documented in README.
+    comment: >
+      Every action (firmware_update, send_ir, launch_app, goto_page and the other
+      device commands, refresh_dynamic_sources) is described in services.yaml,
+      strings.json and the "Actions" section of README.public.md.
+  docs-conditions:
+    status: exempt
+    comment: The integration registers no conditions.
   docs-high-level-description:
     status: done
   docs-installation-instructions:
     status: done
-  docs-installation-parameters:
-    status: done
-    comment: >
-      README "Settings" table covers every option the config and options flows
-      offer -- device language, optimistic updates, slider update interval, and
-      demo mode with its two timings -- with defaults and what each one costs.
   docs-removal-instructions:
     status: done
+  docs-triggers:
+    status: exempt
+    comment: >
+      The integration registers no triggers. Button presses surface as event
+      entities, which automations subscribe to through the standard state
+      trigger rather than through one of ours.
   entity-event-setup:
     status: done
     comment: Callbacks registered in async_added_to_hass, removed in async_will_remove_from_hass.
@@ -56,44 +69,40 @@ rules:
     comment: Uses entry.runtime_data with typed LizaIPConfigEntry.
   test-before-configure:
     status: exempt
-    comment: Push-model integration — device connects to HA, not the other way.
+    comment: >
+      Devices are only discovered (zeroconf or their own WebSocket), never set up
+      from user-entered connection details — the rule's documented exception.
   test-before-setup:
     status: exempt
-    comment: Push-model integration — device initiates the WebSocket connection.
+    comment: >
+      The device opens the WebSocket to HA, so setup has nothing to connect to;
+      a remote that is asleep or away is normal and shows as unavailable.
   unique-config-entry:
     status: done
     comment: async_set_unique_id + _abort_if_unique_id_configured in config flow.
 
   # Silver
+  action-exceptions:
+    status: done
+    comment: >
+      A bad target, an unknown or non-remote entry, a disconnected device or bad
+      input raise a translated ServiceValidationError; a device that refuses or
+      fails raises a translated HomeAssistantError.
   config-entry-unloading:
     status: done
     comment: async_unload_entry disconnects WebSocket and unloads platforms.
-  diagnostics:
+  docs-configuration-parameters:
     status: done
-    comment: diagnostics.py exposes connection state, protocol version, capabilities.
-  discovery:
+    comment: >
+      README.public.md "Settings" lists every option with its default; the
+      config entry itself stores nothing the user enters.
+  docs-installation-parameters:
     status: done
-    comment: Zeroconf _lizaip._tcp and WebSocket-based discovery.
-  docs-data-update:
-    status: done
-    comment: README documents local-push WebSocket model.
-  docs-known-limitations:
-    status: done
-  docs-supported-devices:
-    status: done
-  docs-supported-functions:
-    status: done
-  docs-troubleshooting:
-    status: done
-  docs-use-cases:
-    status: done
-    comment: Documented in README (entities, actions, page management).
-  dynamic-devices:
-    status: exempt
-    comment: One device per config entry; device is created/removed with the entry.
-  entity-category:
-    status: done
-    comment: Brightness=CONFIG, Battery=DIAGNOSTIC.
+    comment: >
+      README "Settings" table covers every option the config and options flows
+      offer -- device language, optimistic updates, slider update interval, and
+      demo mode with its two timings -- with defaults and what each one costs,
+      and "Adding an IR device" the brand and name of the IR subentry flow.
   entity-unavailable:
     status: done
     comment: >
@@ -105,88 +114,28 @@ rules:
       version check queries the release server rather than the device -- installing
       while disconnected is refused by async_install with a translated
       ServiceValidationError.
-  entity-disabled-by-default:
-    status: exempt
-    comment: All entities are essential — no non-critical entities to disable.
-  exception-translations:
-    status: done
-    comment: ServiceValidationError uses translation_domain/translation_key.
-  icon-translations:
-    status: done
-    comment: icons.json provides entity and service icons.
   integration-owner:
     status: done
-    comment: codeowners set in manifest.json.
+    comment: codeowners in manifest.json names the @liza-home organisation.
   log-when-unavailable:
     status: done
-    comment: Logs at warning level when device WebSocket disconnects.
+    comment: >
+      Logs a warning once when the WebSocket drops and an info line once when the
+      device is back.
   parallel-updates:
     status: done
     comment: PARALLEL_UPDATES set in all platform modules.
-  reconfiguration-flow:
-    status: done
-    comment: async_step_reconfigure allows renaming the device.
-  repair-issues:
-    status: exempt
-    comment: >
-      Nothing the integration reports can be fixed by the user from Repairs
-      (firmware refusing pages, a remote dropping its connection, a protocol
-      version mismatch), so these are logged as errors instead.
-  stale-devices:
-    status: exempt
-    comment: One device per config entry — no sub-devices that can go stale.
-
-  # Gold
-  action-exceptions:
-    status: done
-    comment: send_image raises ServiceValidationError for all failure modes.
-  devices:
-    status: done
-    comment: async_get_or_create with identifiers, manufacturer, model, sw_version.
-  discovery-update-info:
-    status: done
-    comment: Zeroconf re-discovery updates sw_version in config entry and device registry.
-  docs-configuration-parameters:
-    status: done
-    comment: README documents stored config parameters.
-  docs-conditions:
-    status: exempt
-    comment: The integration registers no conditions.
-  docs-triggers:
-    status: exempt
-    comment: >
-      The integration registers no triggers. Button presses surface as event
-      entities, which automations subscribe to through the standard state
-      trigger rather than through one of ours.
-  docs-examples:
-    status: done
-    comment: README includes automation and action YAML examples.
-  entity-device-class:
-    status: done
-    comment: Battery sensor uses SensorDeviceClass.BATTERY.
-  entity-translations:
-    status: done
-    comment: All entities use translation_key with placeholders in strings.json.
   reauthentication-flow:
     status: exempt
     comment: >
       No user credentials involved — the device connects with a bearer-token-free
       WebSocket per PROTOCOL.md (no application-layer auth defined in this protocol
       version), so there is no credential to re-authenticate.
-  strict-typing:
-    status: done
-    comment: py.typed marker present; full type annotations across protocol and connection modules.
-
-  # Platinum
-  async-dependency:
-    status: exempt
-    comment: No third-party async PyPI dependencies — only aiohttp (bundled with HA).
-  inject-websession:
-    status: done
-    comment: aiohttp ClientSession obtained via async_get_clientsession in config flow.
   test-coverage:
     status: done
     comment: >
+      Every module is at 95 % line coverage or above; CI fails the build below the
+      98 % floor in .coveragerc.
       The suite covers every integration module -- connection, protocol, entities,
       diagnostics, services, config flow, the WSS certificate helper, the config
       panel's websocket API and its JavaScript, and the imgserv rendering and HTTP
@@ -197,3 +146,94 @@ rules:
       wrong by an order of magnitude before tests/test_quality_scale.py existed to
       notice, and a figure no one verifies is worse than no figure.
 
+  # Gold
+  devices:
+    status: done
+    comment: async_get_or_create with identifiers, manufacturer, model, sw_version.
+  diagnostics:
+    status: done
+    comment: >
+      diagnostics.py reports connection state, protocol version and the device's own
+      status, with tokens, IPs, MACs, SSIDs and host names redacted.
+  discovery:
+    status: done
+    comment: Zeroconf _lizaip._tcp and WebSocket-based discovery.
+  discovery-update-info:
+    status: done
+    comment: >
+      Zeroconf re-discovery updates sw_version and device_port in the config entry
+      and the firmware version in the device registry.
+  docs-data-update:
+    status: done
+    comment: config/docs/USER_GUIDE.md "How data is updated".
+  docs-examples:
+    status: done
+    comment: config/docs/USER_GUIDE.md "Use cases" and the README's actions section have YAML examples.
+  docs-known-limitations:
+    status: done
+    comment: config/docs/USER_GUIDE.md "Known limitations".
+  docs-supported-devices:
+    status: done
+    comment: config/docs/USER_GUIDE.md "Supported devices".
+  docs-supported-functions:
+    status: done
+    comment: config/docs/USER_GUIDE.md "Entities" and "Actions".
+  docs-troubleshooting:
+    status: done
+    comment: config/docs/USER_GUIDE.md "Troubleshooting".
+  docs-use-cases:
+    status: done
+    comment: config/docs/USER_GUIDE.md "Use cases".
+  dynamic-devices:
+    status: exempt
+    comment: >
+      Nothing appears on its own: a remote is one discovered config entry, and an
+      IR device is a subentry the user adds, which reloads the entry to create it.
+  entity-category:
+    status: done
+    comment: >
+      Brightness, automatic brightness and firmware are CONFIG; IP address, Home
+      Assistant address and in-hand are DIAGNOSTIC.
+  entity-device-class:
+    status: done
+    comment: Battery and charging use device classes; no other entity has one that fits.
+  entity-disabled-by-default:
+    status: exempt
+    comment: >
+      The default welcome page shows battery, IP address, Home Assistant address and
+      firmware on the remote; the other entities are controls or button events.
+  entity-translations:
+    status: done
+    comment: >
+      Every entity uses translation_key, the queue sensor with a speaker placeholder.
+      IR keys and IR devices carry the names the user gave them.
+  exception-translations:
+    status: done
+    comment: ServiceValidationError uses translation_domain/translation_key.
+  icon-translations:
+    status: done
+    comment: icons.json holds every entity and service icon; no entity sets _attr_icon.
+  reconfiguration-flow:
+    status: done
+    comment: async_step_reconfigure allows renaming the device.
+  repair-issues:
+    status: done
+    comment: >
+      issues.py raises address_locked, address_stale and protocol_mismatch, each
+      telling the user what to do, and clears them once resolved.
+  stale-devices:
+    status: exempt
+    comment: >
+      A remote's device goes with its config entry and an IR device with its
+      subentry; Home Assistant removes both, so none can be left behind.
+
+  # Platinum
+  async-dependency:
+    status: exempt
+    comment: No third-party async PyPI dependencies — only aiohttp (bundled with HA).
+  inject-websession:
+    status: done
+    comment: aiohttp ClientSession obtained via async_get_clientsession in config flow.
+  strict-typing:
+    status: done
+    comment: mypy --strict (mypy.ini) reports zero errors; run by make typecheck and guarded by tests/test_typing.py.

@@ -324,7 +324,6 @@ export const ButtonsWiringMixin = {
       const ctxAssign = () => ctxKey
         ? (this._assignments[ctxKey] || (this._assignments[ctxKey] = {}))
         : null;
-      const pageFactor = this._pageSliderFactor();
 
       // Creates the mechanics blob on the first real edit, and stamps the mode
       // that the Behavior row used to stamp. Without it a fresh slider would be
@@ -339,7 +338,6 @@ export const ButtonsWiringMixin = {
         if (!assign.slider_actions) assign.slider_actions = {};
         const sa = assign.slider_actions;
         if (sa.mode !== "proportional") sa.mode = "proportional";
-        if (sa.factor == null) sa.factor = 1.0;
         return sa;
       };
 
@@ -526,7 +524,7 @@ export const ButtonsWiringMixin = {
         [".slider-attribute-input", "attribute", (v, cur) => v.trim() || cur, true],
         [".slider-service-input",   "service",   (v, cur) => v.trim() || cur, true],
         [".slider-datakey-input",   "data_key",  (v, cur) => v.trim() || cur, true],
-        [".slider-factor-input",    "factor",    (v, cur) => num(v, num(cur, 1.0)), false],
+        [".slider-factor-input",    "factor",    (v, cur) => num(v, NaN) / 100, false],
         [".slider-min-input",       "min",       (v, cur) => num(v, num(cur, 0)),   true],
         [".slider-max-input",       "max",       (v, cur) => num(v, num(cur, 1)),   true],
       ];
@@ -550,7 +548,7 @@ export const ButtonsWiringMixin = {
             // `Number`, as the page's own branch below reads it: `parseFloat`
             // took "1.5abc" for 1.5 and saved a number nobody typed.
             const raw = String(el.value ?? "").trim();
-            const next = raw ? Number(raw) : NaN;
+            const next = raw ? Number(raw) / 100 : NaN;
             // Not clamped -- that would save a number nobody typed -- but no
             // longer silent either: the value used to be re-rendered away.
             if (badNumber(el) || !Number.isFinite(next)) {
@@ -558,7 +556,7 @@ export const ButtonsWiringMixin = {
               return;
             }
             if (next < FACTOR_MIN || next > FACTOR_MAX) {
-              this._setFieldError(el, this._t("invalid_range", { min: FACTOR_MIN, max: FACTOR_MAX }));
+              this._setFieldError(el, this._t("invalid_range", { min: FACTOR_MIN * 100, max: FACTOR_MAX * 100 }));
               return;
             }
             this._clearFieldError(el);
@@ -566,7 +564,7 @@ export const ButtonsWiringMixin = {
             // pre-filled with the inherited value, so "no change" is by far the
             // commonest way to leave it, and tabbing through must not
             // manufacture an override.
-            if (next === pageFactor) delete assign.slider_factor;
+            if (Math.abs(next - Number(el.dataset.pageFactor)) < 1e-9) delete assign.slider_factor;
             else assign.slider_factor = next;
             this._scheduleAutoSave();
             this._render();
@@ -579,11 +577,12 @@ export const ButtonsWiringMixin = {
             this._setFieldError(el, this._t("invalid_number"));
             return;
           }
-          const raw = el.value.trim();
+          // ha-slider reports a number, the text fields a string.
+          const raw = String(el.value ?? "").trim();
           if (key === "factor" && raw) {
-            const n = Number(raw);
+            const n = Number(raw) / 100;
             if (n < FACTOR_MIN || n > FACTOR_MAX) {
-              this._setFieldError(el, this._t("invalid_range", { min: FACTOR_MIN, max: FACTOR_MAX }));
+              this._setFieldError(el, this._t("invalid_range", { min: FACTOR_MIN * 100, max: FACTOR_MAX * 100 }));
               return;
             }
           }
@@ -616,6 +615,11 @@ export const ButtonsWiringMixin = {
           this._scheduleAutoSave();
           if (render) this._render();
         });
+      });
+
+      this.shadowRoot.querySelector(".slider-factor-input")?.addEventListener("input", (ev) => {
+        const out = this.shadowRoot.querySelector(".slider-factor-output");
+        if (out) out.textContent = `${ev.target.value} %`;
       });
 
       const sliderFactorReset = this.shadowRoot.querySelector(".slider-factor-reset");

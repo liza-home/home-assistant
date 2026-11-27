@@ -426,11 +426,52 @@ export const STRINGS = {
     es: "Variables y cálculos (${…})",
   },
   settings_variables_enabled_hint: {
-    en: "Fills in ${sensor.x} and calculations you type into tooltips, pictures and titles, and keeps them up to date. Off, they are left out and a picture with one shows its normal icon. What a template fills in for its own device, such as ${_device.media_title}, works either way.",
-    de: "Füllt ${sensor.x} und Berechnungen aus, die du in Tooltips, Bilder und Titel schreibst, und hält sie aktuell. Aus: Sie werden weggelassen, ein Bild mit einer Variable zeigt sein normales Symbol. Was eine Vorlage für ihr eigenes Gerät ausfüllt, etwa ${_device.media_title}, funktioniert in beiden Fällen.",
-    fr: "Remplit ${sensor.x} et les calculs que vous saisissez dans les info-bulles, images et titres, et les tient à jour. Désactivé, ils sont omis et une image qui en contient affiche son icône normale. Ce qu'un modèle remplit pour son propre appareil, comme ${_device.media_title}, fonctionne dans les deux cas.",
-    it: "Compila ${sensor.x} e i calcoli che scrivi in tooltip, immagini e titoli e li mantiene aggiornati. Disattivato, vengono omessi e un'immagine che ne contiene mostra la sua icona normale. Ciò che un modello compila per il proprio dispositivo, come ${_device.media_title}, funziona in entrambi i casi.",
-    es: "Rellena ${sensor.x} y los cálculos que escribes en descripciones, imágenes y títulos, y los mantiene al día. Desactivado, se omiten y una imagen que los contenga muestra su icono normal. Lo que una plantilla rellena para su propio dispositivo, como ${_device.media_title}, funciona en ambos casos.",
+    en: "Keeps ${sensor.x}, ${_device…}, calculations and graphs in tooltips, pictures and titles up to date.",
+    de: "Hält ${sensor.x}, ${_device…}, Berechnungen und Verläufe in Tooltips, Bildern und Titeln aktuell.",
+    fr: "Tient à jour ${sensor.x}, ${_device…}, les calculs et les graphiques des info-bulles, images et titres.",
+    it: "Mantiene aggiornati ${sensor.x}, ${_device…}, i calcoli e i grafici in tooltip, immagini e titoli.",
+    es: "Mantiene al día ${sensor.x}, ${_device…}, los cálculos y los gráficos de descripciones, imágenes y títulos.",
+  },
+  settings_variables_off_warning: {
+    en: "Variables are off: title variables display as empty. In other text they show {text_mark}, and pictures show {picture_mark}.",
+    de: "Variablen sind aus: In Titeln werden sie leer angezeigt. In anderem Text steht {text_mark}, Bilder zeigen {picture_mark}.",
+    fr: "Les variables sont désactivées : elles sont vides dans les titres. Dans les autres textes apparaît {text_mark}, les images affichent {picture_mark}.",
+    it: "Le variabili sono disattivate: nei titoli sono vuote. Negli altri testi compare {text_mark}, le immagini mostrano {picture_mark}.",
+    es: "Las variables están desactivadas: en los títulos se muestran vacías. En otros textos aparece {text_mark} y las imágenes muestran {picture_mark}.",
+  },
+
+  settings_max_pages: {
+    en: "Max pages", de: "Maximale Seitenanzahl", fr: "Nombre maximal de pages",
+    it: "Numero massimo di pagine", es: "Máximo de páginas",
+  },
+  settings_max_pages_enabled: {
+    en: "Limit the number of pages",
+    de: "Seitenanzahl begrenzen",
+    fr: "Limiter le nombre de pages",
+    it: "Limita il numero di pagine",
+    es: "Limitar el número de páginas",
+  },
+  settings_max_pages_enabled_hint: {
+    en: "Counts every page, subpages included. Pages already over the limit stay; only adding more is refused.",
+    de: "Zählt jede Seite, auch Unterseiten. Seiten über dem Limit bleiben erhalten; nur weitere hinzuzufügen wird verhindert.",
+    fr: "Compte chaque page, sous-pages comprises. Les pages déjà au-delà de la limite restent ; seul l'ajout de nouvelles est refusé.",
+    it: "Conta ogni pagina, sottopagine comprese. Le pagine già oltre il limite restano; viene solo impedito di aggiungerne altre.",
+    es: "Cuenta todas las páginas, incluidas las subpáginas. Las páginas que ya superan el límite se quedan; solo se impide añadir más.",
+  },
+  settings_max_pages_field: {
+    en: "Pages", de: "Seiten", fr: "Pages", it: "Pagine", es: "Páginas",
+  },
+  settings_max_pages_invalid: {
+    en: "Enter a whole number of at least {min}.", de: "Gib eine ganze Zahl ab {min} ein.",
+    fr: "Saisissez un nombre entier d'au moins {min}.", it: "Inserisci un numero intero di almeno {min}.",
+    es: "Introduce un número entero de al menos {min}.",
+  },
+  settings_max_pages_over: {
+    en: "This remote already has {count} pages — no new ones until it has fewer than {limit}.",
+    de: "Diese Fernbedienung hat schon {count} Seiten – neue erst, wenn sie weniger als {limit} hat.",
+    fr: "Cette télécommande a déjà {count} pages — pas de nouvelle tant qu'elle en a {limit} ou plus.",
+    it: "Questo telecomando ha già {count} pagine — nessuna nuova finché ne ha meno di {limit}.",
+    es: "Este mando ya tiene {count} páginas — ninguna nueva hasta que tenga menos de {limit}.",
   },
   settings_resend_pages: {
     en: "Reload on page change",
@@ -869,6 +910,52 @@ export const STRINGS = {
     en: "Restore", de: "Wiederherstellen", fr: "Restaurer",
     it: "Ripristina", es: "Restaurar",
   },
+  restore_step_files: {
+    en: "Save the configuration", de: "Konfiguration speichern",
+    fr: "Enregistrer la configuration", it: "Salva la configurazione",
+    es: "Guardar la configuración",
+  },
+  restore_step_reload: {
+    en: "Load the configuration", de: "Konfiguration laden",
+    fr: "Charger la configuration", it: "Carica la configurazione",
+    es: "Cargar la configuración",
+  },
+  restore_step_remote_clear: {
+    en: "Clear the pages on the remote", de: "Seiten auf der Fernbedienung löschen",
+    fr: "Effacer les pages de la télécommande", it: "Cancella le pagine dal telecomando",
+    es: "Borrar las páginas del mando",
+  },
+  restore_step_remote_pages: {
+    en: "Send the pages to the remote", de: "Seiten an die Fernbedienung senden",
+    fr: "Envoyer les pages à la télécommande", it: "Invia le pagine al telecomando",
+    es: "Enviar las páginas al mando",
+  },
+  restore_step_later: {
+    en: "On reconnect", de: "Beim Verbinden", fr: "À la reconnexion",
+    it: "Alla riconnessione", es: "Al reconectar",
+  },
+  restore_step_failed: {
+    en: "Failed", de: "Fehlgeschlagen", fr: "Échec", it: "Non riuscito", es: "Error",
+  },
+  restore_pages_progress: {
+    en: "Page {written} of {total}", de: "Seite {written} von {total}",
+    fr: "Page {written} sur {total}", it: "Pagina {written} di {total}",
+    es: "Página {written} de {total}",
+  },
+  restore_remote_offline: {
+    en: "The remote is not connected. It gets the pages as soon as it reconnects.",
+    de: "Die Fernbedienung ist nicht verbunden. Sie bekommt die Seiten, sobald sie sich wieder verbindet.",
+    fr: "La télécommande n'est pas connectée. Elle recevra les pages dès sa reconnexion.",
+    it: "Il telecomando non è connesso. Riceverà le pagine appena si riconnette.",
+    es: "El mando no está conectado. Recibirá las páginas en cuanto se vuelva a conectar.",
+  },
+  restore_remote_failed: {
+    en: "Not every page reached the remote. It is tried again at the next change or reconnect.",
+    de: "Nicht alle Seiten haben die Fernbedienung erreicht. Beim nächsten Ändern oder Verbinden wird es erneut versucht.",
+    fr: "Toutes les pages n'ont pas atteint la télécommande. Nouvel essai à la prochaine modification ou reconnexion.",
+    it: "Non tutte le pagine hanno raggiunto il telecomando. Si riprova alla prossima modifica o riconnessione.",
+    es: "No todas las páginas llegaron al mando. Se vuelve a intentar con el próximo cambio o reconexión.",
+  },
   restore_saved_on: {
     en: "Saved {when}", de: "Gespeichert {when}", fr: "Enregistré {when}",
     it: "Salvato {when}", es: "Guardado {when}",
@@ -899,6 +986,27 @@ export const STRINGS = {
     en: "Restore failed: {error}", de: "Wiederherstellen fehlgeschlagen: {error}",
     fr: "Échec de la restauration : {error}", it: "Ripristino non riuscito: {error}",
     es: "Error al restaurar: {error}",
+  },
+  restore_failed_before_files: {
+    en: "The configuration files were not replaced.",
+    de: "Die Konfigurationsdateien wurden nicht ersetzt.",
+    fr: "Les fichiers de configuration n’ont pas été remplacés.",
+    it: "I file di configurazione non sono stati sostituiti.",
+    es: "No se reemplazaron los archivos de configuración.",
+  },
+  restore_failed_after_files: {
+    en: "The configuration files were restored, but a follow-up step failed. Check the remote before trying again.",
+    de: "Die Konfigurationsdateien wurden wiederhergestellt, aber ein Folgeschritt ist fehlgeschlagen. Prüfe die Fernbedienung, bevor du es erneut versuchst.",
+    fr: "Les fichiers de configuration ont été restaurés, mais une étape suivante a échoué. Vérifiez la télécommande avant de réessayer.",
+    it: "I file di configurazione sono stati ripristinati, ma un passaggio successivo non è riuscito. Controlla il telecomando prima di riprovare.",
+    es: "Se restauraron los archivos de configuración, pero falló un paso posterior. Comprueba el mando antes de intentarlo de nuevo.",
+  },
+  restore_connection_lost: {
+    en: "The connection was lost during the restore. It may still be running or may have finished. Check the remote before trying again.",
+    de: "Während der Wiederherstellung wurde die Verbindung getrennt. Sie läuft möglicherweise noch oder ist bereits fertig. Prüfe die Fernbedienung, bevor du es erneut versuchst.",
+    fr: "La connexion a été perdue pendant la restauration. Elle est peut-être toujours en cours ou déjà terminée. Vérifiez la télécommande avant de réessayer.",
+    it: "La connessione è stata persa durante il ripristino. Potrebbe essere ancora in corso o essere già terminato. Controlla il telecomando prima di riprovare.",
+    es: "Se perdió la conexión durante la restauración. Puede que siga en curso o que haya terminado. Comprueba el mando antes de intentarlo de nuevo.",
   },
   restore_error_not_a_zip: {
     en: "That file is not a ZIP archive.", de: "Diese Datei ist kein ZIP-Archiv.",
@@ -1032,6 +1140,14 @@ export const STRINGS = {
     fr: "Tient à jour les valeurs des variables dans les aperçus et les indications de l’éditeur pendant qu’elles changent. Désactivé, elles sont renseignées à chaque affichage de l’éditeur.",
     it: "Mantiene aggiornati i valori delle variabili nelle anteprime e nei suggerimenti dell’editor mentre cambiano. Se disattivato, vengono inseriti ogni volta che l’editor viene ridisegnato.",
     es: "Mantiene al día los valores de las variables en las vistas previas y las indicaciones del editor mientras cambian. Desactivado, se rellenan cada vez que se dibuja el editor.",
+  },
+
+  settings_needs_variables: {
+    en: "Variables are off: these settings only work while variables are switched on.",
+    de: "Variablen sind aus: Diese Einstellungen funktionieren nur, solange Variablen eingeschaltet sind.",
+    fr: "Les variables sont désactivées : ces réglages ne fonctionnent que lorsque les variables sont activées.",
+    it: "Le variabili sono disattivate: queste impostazioni funzionano solo quando le variabili sono attivate.",
+    es: "Las variables están desactivadas: estos ajustes solo funcionan mientras las variables están activadas.",
   },
 
   settings_icons: {
@@ -1396,6 +1512,20 @@ export const STRINGS = {
     it: "Scegli il dispositivo che questa pagina controlla. I suoi pulsanti lo seguono se lo cambi in seguito.",
     es: "Elige el dispositivo que controla esta página. Sus botones lo siguen si lo cambias más tarde.",
   },
+  remove_device: {
+    en: "Remove device", de: "Gerät entfernen", fr: "Retirer l'appareil",
+    it: "Rimuovi dispositivo", es: "Quitar dispositivo",
+  },
+  device_removed: {
+    en: "{name} no longer has a device", de: "{name} hat kein Gerät mehr",
+    fr: "{name} n'a plus d'appareil", it: "{name} non ha più un dispositivo",
+    es: "{name} ya no tiene dispositivo",
+  },
+  remove_device_failed: {
+    en: "Could not remove the device: {error}", de: "Gerät konnte nicht entfernt werden: {error}",
+    fr: "Impossible de retirer l'appareil : {error}", it: "Impossibile rimuovere il dispositivo: {error}",
+    es: "No se pudo quitar el dispositivo: {error}",
+  },
   assign_device_confirm: {
     en: "Assign", de: "Zuweisen", fr: "Attribuer", it: "Assegna", es: "Asignar",
   },
@@ -1423,6 +1553,13 @@ export const STRINGS = {
     fr: "La mise en page « {name} » d'origine de cette page n'est plus disponible",
     it: "Il modello \"{name}\" da cui è stata creata questa pagina non è più disponibile",
     es: "La plantilla \"{name}\" de la que se creó esta página ya no está disponible",
+  },
+  page_limit_reached: {
+    en: "This remote is limited to {count} pages",
+    de: "Diese Fernbedienung ist auf {count} Seiten begrenzt",
+    fr: "Cette télécommande est limitée à {count} pages",
+    it: "Questo telecomando è limitato a {count} pagine",
+    es: "Este mando está limitado a {count} páginas",
   },
   page_duplicated: {
     en: "{name} duplicated", de: "{name} dupliziert",
@@ -1607,6 +1744,21 @@ export const STRINGS = {
   },
   back: {
     en: "Back", de: "Zurück", fr: "Retour", it: "Indietro", es: "Atrás",
+  },
+  next: {
+    en: "Next", de: "Weiter", fr: "Suivant", it: "Avanti", es: "Siguiente",
+  },
+  new_device: {
+    en: "New device", de: "Neues Gerät", fr: "Nouvel appareil", it: "Nuovo dispositivo", es: "Nuevo dispositivo",
+  },
+  reconfigure_device: {
+    en: "Reconfigure device", de: "Gerät neu konfigurieren", fr: "Reconfigurer l'appareil",
+    it: "Riconfigura dispositivo", es: "Reconfigurar dispositivo",
+  },
+  other_code_set: {
+    en: "Try another IR code set", de: "Anderen IR-Codesatz testen",
+    fr: "Essayer un autre jeu de codes IR", it: "Prova un altro set di codici IR",
+    es: "Probar otro juego de códigos IR",
   },
   badge_unused: {
     en: "unused", de: "nicht verwendet", fr: "non utilisé",
@@ -2239,17 +2391,17 @@ export const STRINGS = {
     es: "Lo que acciona el control deslizante hasta que un botón lo redirige. Déjalo vacío para que no haga nada hasta que toques un dispositivo.",
   },
   slider_factor_hint: {
-    en: "At 1.0, touching one end of the track reaches the full range and touching the middle reaches half. Raise it to cover the range in less travel.",
-    de: "Bei 1,0 erreicht eine Berührung am Ende der Bahn den vollen Bereich, in der Mitte die Hälfte. Höhere Werte decken den Bereich mit kürzerem Weg ab.",
-    fr: "À 1,0, toucher une extrémité de la piste atteint toute la plage et le milieu la moitié. Augmentez la valeur pour couvrir la plage sur une course plus courte.",
-    it: "A 1,0, toccare un'estremità della traccia raggiunge l'intero intervallo e il centro la metà. Aumentalo per coprire l'intervallo con meno corsa.",
-    es: "En 1,0, tocar un extremo de la pista alcanza todo el intervalo y el centro, la mitad. Auméntelo para cubrir el intervalo con menos recorrido.",
+    en: "How far the level moves per finger travel. 100 % covers the whole range along the full track; lower values give finer control. Default: lights 100 %, volume 50 %.",
+    de: "Wie weit sich der Wert pro Fingerweg ändert. 100 % deckt den ganzen Bereich über die volle Bahn ab; niedrigere Werte geben feinere Kontrolle. Standard: Licht 100 %, Lautstärke 50 %.",
+    fr: "Combien le niveau varie selon la course du doigt. 100 % couvre toute la plage sur la piste entière ; une valeur plus basse donne plus de précision. Par défaut : lumières 100 %, volume 50 %.",
+    it: "Quanto varia il livello in base alla corsa del dito. 100 % copre l'intero intervallo sulla traccia completa; valori più bassi danno più precisione. Predefinito: luci 100 %, volume 50 %.",
+    es: "Cuánto cambia el nivel según el recorrido del dedo. 100 % cubre todo el intervalo en la pista completa; valores menores dan más precisión. Predeterminado: luces 100 %, volumen 50 %.",
   },
   slider_use_page_factor: {
-    en: "Use the page value ({value})", de: "Seitenwert verwenden ({value})",
-    fr: "Utiliser la valeur de la page ({value})",
-    it: "Usa il valore della pagina ({value})",
-    es: "Usar el valor de la página ({value})",
+    en: "Use the page value ({value} %)", de: "Seitenwert verwenden ({value} %)",
+    fr: "Utiliser la valeur de la page ({value} %)",
+    it: "Usa il valore della pagina ({value} %)",
+    es: "Usar el valor de la página ({value} %)",
   },
   slider_pinned_hint: {
     en: "This page pins its slider, so no button can retarget it. Clear the slider's own entity under <b>{page_default}</b> to let buttons drive it.",
@@ -2361,11 +2513,11 @@ export const STRINGS = {
 
   // ── sensitivity, slider presets, validation ────────────────────────
   factor_own_hint: {
-    en: "{name} has its own; the page uses {page}.",
-    de: "{name} hat einen eigenen; die Seite verwendet {page}.",
-    fr: "{name} a le sien ; la page utilise {page}.",
-    it: "{name} ha il proprio; la pagina usa {page}.",
-    es: "{name} tiene el suyo; la página usa {page}.",
+    en: "{name} has its own; the page uses {page} %.",
+    de: "{name} hat einen eigenen; die Seite verwendet {page} %.",
+    fr: "{name} a le sien ; la page utilise {page} %.",
+    it: "{name} ha il proprio; la pagina usa {page} %.",
+    es: "{name} tiene el suyo; la página usa {page} %.",
   },
   factor_inherited_hint: {
     en: "Inherited from the page. Change it to give {name} its own.",
@@ -2531,6 +2683,20 @@ export const STRINGS = {
     fr: "<code>${_device}</code> affiche le nom de l'appareil de cette page, <code>${_device.…}</code> l'un de ses attributs (p. ex. <code>${_device.volume_level}</code>).",
     it: "<code>${_device}</code> mostra il nome del dispositivo di questa pagina, <code>${_device.…}</code> uno dei suoi attributi (ad es. <code>${_device.volume_level}</code>).",
     es: "<code>${_device}</code> muestra el nombre del dispositivo de esta página, <code>${_device.…}</code> uno de sus atributos (p. ej. <code>${_device.volume_level}</code>).",
+  },
+  variables_off_field_hint: {
+    en: "Variables are off: the remote shows {mark} here instead.",
+    de: "Variablen sind aus: Die Fernbedienung zeigt hier stattdessen {mark}.",
+    fr: "Les variables sont désactivées : la télécommande affiche {mark} à la place.",
+    it: "Le variabili sono disattivate: il telecomando mostra invece {mark}.",
+    es: "Las variables están desactivadas: el mando muestra {mark} en su lugar.",
+  },
+  variables_off_title_hint: {
+    en: "Variables are off: the remote leaves them empty in the title.",
+    de: "Variablen sind aus: Im Titel lässt die Fernbedienung sie leer.",
+    fr: "Les variables sont désactivées : la télécommande les laisse vides dans le titre.",
+    it: "Le variabili sono disattivate: il telecomando le lascia vuote nel titolo.",
+    es: "Las variables están desactivadas: el mando las deja vacías en el título.",
   },
   variable_hint: {
     en: "<code>${sensor.…}</code> shows that entity's current value, <code>${sensor.….attribute}</code> one of its attributes.",

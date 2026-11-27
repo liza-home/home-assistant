@@ -9,7 +9,8 @@
 # anything else.
 #
 # The same page is the second of the pages a remote with none shows
-# (`_default-pages.yaml`); the two are copies, so change both.
+# (`_welcome-page.yaml`); the two are copies, so change both.
+#
 #
 #   1      the battery level beside its icon (stacked on a square tile)
 #   2      the same level as a fill: `?percent=` takes a calculation

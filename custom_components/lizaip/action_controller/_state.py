@@ -54,7 +54,7 @@ class RemoteState:
     selected_factor: float | None = None
     #: In-flight slider gestures: slider key → ``{base_value, zero_pos,
     #: last_pos, ts, resolved}``.
-    slider_touches: dict[str, dict] = field(default_factory=dict)
+    slider_touches: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Touches being timed on buttons with a long touch: button key →
     #: ``longtouch._Gesture``.
     button_gestures: dict[str, Any] = field(default_factory=dict)
@@ -214,7 +214,7 @@ def get_selected_button(entry_id: str) -> str | None:
     return remote_state(entry_id).selected_button
 
 
-def _live_touch(state_key: tuple[str, str], *, pop: bool = False) -> dict | None:
+def _live_touch(state_key: tuple[str, str], *, pop: bool = False) -> dict[str, Any] | None:
     """Return the live gesture, dropping stale state on the way out."""
     entry_id, slider_key = state_key
     touches = remote_state(entry_id).slider_touches

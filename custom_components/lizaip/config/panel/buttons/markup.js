@@ -134,15 +134,20 @@ export const ButtonsMarkupMixin = {
     // content, so the link's two endpoints and the overlay all move together
     // and the drawn coordinates stay true without anything having to listen
     // for scrolling.
+    const atLimit = this._pageLimitReached();
+    const addLabel = atLimit === null
+      ? this._t("add_new_page")
+      : this._t("page_limit_reached", { count: atLimit });
     return `
       <div class="config-layout">
         <ha-card outlined class="pages-card">
           <div class="pages-list" style="flex-wrap:nowrap;overflow-x:auto;">
             <svg class="goto-link-layer" aria-hidden="true" focusable="false"></svg>
 ${pagesHtml}
-            <div class="page-add-btn" role="button" tabindex="0"
-                 aria-label="${this._esc(this._t("add_new_page"))}"
-                 title="${this._esc(this._t("add_new_page"))}">
+            <div class="page-add-btn${atLimit === null ? "" : " is-full"}" role="button" tabindex="0"
+                 ${atLimit === null ? "" : 'aria-disabled="true"'}
+                 aria-label="${this._esc(addLabel)}"
+                 title="${this._esc(addLabel)}">
               <ha-icon aria-hidden="true" icon="mdi:plus" style="--mdc-icon-size:22px;color:color-mix(in srgb, var(--primary-text-color) 60%, transparent);"></ha-icon>
             </div>
           </div>
@@ -778,7 +783,7 @@ ${pagesHtml}
       // re-derived from the live entity on every gesture and a stored per-button
       // copy is silently discarded, and Icon and Label are baked into the face
       // the device is sent per *page*, which nothing re-renders on a selection.
-      const pageFactor = this._pageSliderFactor();
+      const pageFactor = this._pageSliderFactor(shown?.factor ?? 1.0);
       const own = sliderCtxAssign.slider_factor;
       const factorOverridden = typeof own === "number" && isFinite(own);
 
@@ -815,7 +820,7 @@ ${pagesHtml}
         factorOverridden,
         factor: factorOverridden ? own : pageFactor,
         factorHint: factorOverridden
-          ? this._t("factor_own_hint", { name: this._esc(label), page: pageFactor })
+          ? this._t("factor_own_hint", { name: this._esc(label), page: Math.round(pageFactor * 100) })
           : this._t("factor_inherited_hint", { name: this._esc(label) }),
       };
     })();
@@ -854,7 +859,9 @@ ${pagesHtml}
       const headerIcon = sliderCtx
         ? (sliderCtx.icon || sliderCtx.autoIcon || "mdi:radiobox-blank")
         : selIcon;
-      const factor = sliderCtx ? sliderCtx.factor : num(sliderActions.factor, 1.0);
+      const factor = sliderCtx
+        ? sliderCtx.factor
+        : num(sliderActions.factor, matchControl(this._sliderControls, sliderActions)?.factor ?? 1.0);
       const attribute = sliderActions.attribute || "volume_level";
       const service = sliderActions.service || "media_player.volume_set";
       const dataKey = sliderActions.data_key || attribute;
@@ -1036,10 +1043,24 @@ ${pagesHtml}
       const proportionalHtml = !targetEntity ? "" : `
         ${configFieldHtml({ label: this._t("control"), control: controlFieldHtml, hint: controlHint })}
         ${rangeWarning}`;
-      const advancedHtml = !pageEntity ? "" : `
+      // Sensitivity works without an entity (a following slider has none), so
+      // the panel always renders; only the entity mechanics are gated.
+      const advancedHtml = `
         <ha-expansion-panel class="slider-advanced" outlined ${advDrifted ? "expanded" : ""}>
           <span slot="header">${this._t("advanced")}${advDrifted ? ` <span class="slider-advanced-tag">${this._t("customised")}</span>` : ""}</span>
           <div class="slider-advanced-body">
+          ${configFieldHtml({
+            label: this._t("sensitivity"),
+            control: `<div class="slider-factor-row"><ha-slider class="slider-factor-input" label="${this._esc(this._t("sensitivity"))}" data-page-factor="${sliderCtx ? sliderCtx.pageFactor : ""}" labeled min="${Math.round(FACTOR_MIN * 100)}" max="${Math.round(FACTOR_MAX * 100)}" step="1" value="${Math.round(factor * 100)}"></ha-slider><output class="slider-factor-output">${Math.round(factor * 100)} %</output></div>`,
+            action: sliderCtx?.factorOverridden
+              ? `<ha-icon-button class="slider-factor-reset" label="${this._esc(this._t("slider_use_page_factor", { value: Math.round(sliderCtx.pageFactor * 100) }))}"><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></ha-icon-button>`
+              : "",
+            hint: sliderCtx
+              ? sliderCtx.factorHint
+              : this._t("slider_factor_hint"),
+          })}
+          ${!pageEntity ? "" : `
+          <div class="config-section-divider"></div>
           ${sliderCtx ? `<span class="config-field-hint">${this._t("slider_page_mechanics_hint", {
             name: this._esc(sliderCtx.tooltip),
             page_default: this._esc(this._t("page_default")),
@@ -1065,7 +1086,7 @@ ${pagesHtml}
           ${resetTarget ? `<ha-button appearance="outlined" class="slider-reset-control" data-control="${resetTarget.id}">
             <ha-icon slot="start" icon="mdi:restore" aria-hidden="true"></ha-icon>
             ${this._esc(this._t("reset_control_defaults", { control: resetTarget.label }))}
-          </ha-button>` : ""}
+          </ha-button>` : ""}`}
           </div>
         </ha-expansion-panel>`;
 
@@ -1142,16 +1163,6 @@ ${pagesHtml}
             ${summaryHtml}
             ${proportionalHtml}
             ${advancedHtml}
-            ${configFieldHtml({
-              label: this._t("sensitivity"),
-              control: `<ha-input type="number" appearance="outlined" class="slider-factor-input" value="${factor}" step="0.1" min="${FACTOR_MIN}" max="${FACTOR_MAX}" inputmode="decimal"></ha-input>`,
-              action: sliderCtx?.factorOverridden
-                ? `<ha-icon-button class="slider-factor-reset" label="${this._esc(this._t("slider_use_page_factor", { value: sliderCtx.pageFactor }))}"><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></ha-icon-button>`
-                : "",
-              hint: sliderCtx
-                ? sliderCtx.factorHint
-                : this._t("slider_factor_hint"),
-            })}
             <!-- Appearance is the one section whose scope follows the slider
                  rather than the card. With a grid button selected, both fields
                  below write that button's record; the page keeps them only when

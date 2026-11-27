@@ -30,7 +30,7 @@ target_selector:
 
 pages:
   options:
-    title: "logo:hue + ${_device}"
+    title: "logo:hue ${_device}"
     buttons:
       button_1:
         icon: mdi:lightbulb

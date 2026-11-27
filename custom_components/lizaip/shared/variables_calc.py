@@ -43,37 +43,50 @@ VARIABLES_INTERVAL_MIN: Final = 100
 VARIABLES_INTERVAL_MAX: Final = 5000
 VARIABLES_INTERVAL_STEP: Final = 100
 
-#: Per remote: whether the variables typed into its buttons and titles --
-#: ``${sensor.x}`` and calculations -- are read. On by default. The values
-#: a template fills in for its own device (``${_device…}``, ``${_queue…}``)
-#: are read either way; see ``shared.tokens.silence_user_variables``.
+#: Per remote: whether `${…}` variables, calculations and graphs are read. Off,
+#: none is read (template values included) and each shows `VARIABLE_OFF_*`.
+#: Off by default; a value the user stored is kept.
 CONF_VARIABLES_ENABLED: Final = "variables_enabled"
-DEFAULT_VARIABLES_ENABLED: Final = True
+DEFAULT_VARIABLES_ENABLED: Final = False
 
-#: The remote being worked for reads its typed variables. The substitution
-#: helpers run deep inside page building and live pushes, where the config
-#: entry is out of reach; the places that start work for one remote set this
-#: with `variables_scope`, beside the remote's language. Outside any remote --
-#: a preview not tied to one -- variables are read.
+VARIABLE_OFF_ICON: Final = "mdi:cancel"
+#: Drawn where a switched-off variable sits among words.
+VARIABLE_OFF_TEXT_ICON: Final = "mdi:help-box-outline"
+#: Stands in for that icon until the text is drawn: tooltip cleaning and the
+#: word rules must not see an icon part in the middle of the words.
+VARIABLE_OFF_MARK: Final = "\ue000"
+
+#: Whether the remote being worked for keeps its variables live, set
+#: with `variables_scope` where that remote's watch list is gathered.
 _VARIABLES_ENABLED: ContextVar[bool] = ContextVar("lizaip_variables_enabled", default=True)
 
 
 def read_variables_enabled(options: object) -> bool:
-    """Whether an entry's ``options`` keep typed variables on. Only a real False turns them off."""
+    """Whether an entry's ``options`` keep variables on.
+
+    Off unless a real True is stored, so a remote that never chose has them off.
+    No options at all means no remote, so nothing to switch off."""
     get = getattr(options, "get", None)
     if get is None:
-        return DEFAULT_VARIABLES_ENABLED
-    return get(CONF_VARIABLES_ENABLED) is not False
+        return True
+    return get(CONF_VARIABLES_ENABLED, DEFAULT_VARIABLES_ENABLED) is True
+
+
+def entry_options(hass: Any, entry_id: str) -> Any:
+    """The ``options`` of config entry *entry_id*, or None when there is no such entry."""
+    entries = getattr(hass, "config_entries", None)
+    entry = entries.async_get_entry(entry_id) if entries is not None else None
+    return getattr(entry, "options", None)
 
 
 def variables_enabled() -> bool:
-    """Whether the remote this code is working for reads its typed variables."""
+    """Whether the remote this code is working for reads its variables."""
     return _VARIABLES_ENABLED.get()
 
 
 @contextmanager
 def variables_scope(options: object) -> Iterator[None]:
-    """Read typed variables as the entry with *options* has them set, inside the block."""
+    """Read variables as the entry with *options* has them set, inside the block."""
     token = _VARIABLES_ENABLED.set(read_variables_enabled(options))
     try:
         yield
@@ -136,7 +149,8 @@ class _Calculation:
 
     def __init__(self, lookup: Callable[[str], Any] | None, text: str) -> None:
         self._lookup = lookup
-        self._tokens = []
+        # (kind, value): a float for "num", the matched text otherwise.
+        self._tokens: list[tuple[str, Any]] = []
         pos = 0
         text = text.rstrip()
         while pos < len(text):
@@ -155,10 +169,10 @@ class _Calculation:
             pos = m.end()
         self._at = 0
 
-    def _peek(self):
+    def _peek(self) -> tuple[str | None, Any]:
         return self._tokens[self._at] if self._at < len(self._tokens) else (None, None)
 
-    def _take(self, op: str | None = None):
+    def _take(self, op: str | None = None) -> tuple[str, Any]:
         kind, value = self._peek()
         if kind is None or (op is not None and (kind != "op" or value != op)):
             raise ValueError(op)
@@ -204,7 +218,8 @@ class _Calculation:
     def _primary(self) -> float:
         kind, value = self._take()
         if kind == "num":
-            return value
+            number: float = value
+            return number
         if kind == "var":
             return self._variable(value)
         if kind == "op" and value == "(":
@@ -229,7 +244,7 @@ class _Calculation:
         state = self._lookup(entity) if self._lookup is not None else None
         if state is None:
             raise ValueError(entity)
-        raw = (state.attributes or {}).get(attribute) if attribute else state.state
+        raw: Any = (state.attributes or {}).get(attribute) if attribute else state.state
         if isinstance(raw, bool):
             raise TypeError(entity)
         return float(raw)

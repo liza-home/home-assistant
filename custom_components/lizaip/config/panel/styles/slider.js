@@ -140,7 +140,9 @@ export const STYLES_SLIDER = `
   }
   /* Sensitivity holds a single number like "1" — a full-width box for it
      looks broken, and unlike Min/Max it isn't sharing a row with anything. */
-  .slider-factor-input { width: 140px; }
+  .slider-factor-row { display: flex; align-items: center; gap: 8px; }
+  .slider-factor-input { width: 180px; }
+  .slider-factor-output { min-width: 3.5em; text-align: right; }
 
   /* Most domains offer exactly one control, so the Control field states a fact
      rather than offering a choice. Sized and spaced like the inputs it stands

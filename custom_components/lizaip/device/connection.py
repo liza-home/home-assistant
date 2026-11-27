@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import aiohttp
 from aiohttp import ClientTimeout, WSCloseCode, web
@@ -160,15 +160,11 @@ class LizaIPConnection:
         # away. Kept generic on purpose: this module should not have to know
         # what an optional feature started, only that it must not outlive the
         # connection it was started for.
-        self._aux_tasks: list[asyncio.Task] = []
+        self._aux_tasks: list[asyncio.Task[Any]] = []
         # Set when the currently-running accept() has finished tearing its
         # session down. A replacement connection waits on it so the old read
         # loop is definitely gone before the new one starts talking.
         self._session_done: asyncio.Event | None = None
-        # The port the device's HTTP management API listens on. Seeded from
-        # the mDNS SRV record stored in entry.data at provisioning time;
-        # confirmed/updated by _probe_device() after every hello.
-        self._device_http_port: int | None = entry.data.get("device_port")
 
         # What the device is known to hold, and the lock the page sync uses.
         self.page_cache = PageCache()
@@ -256,8 +252,11 @@ class LizaIPConnection:
 
     @property
     def device_http_port(self) -> int | None:
-        """The port the device's HTTP API answers on, once one is known."""
-        return self._device_http_port
+        """The device's HTTP API port, from the mDNS SRV record in the entry.
+
+        Read live, so a port refreshed by zeroconf re-discovery applies at once.
+        """
+        return self._entry.data.get("device_port")
 
     @property
     def last_discovery(self) -> dict[str, Any] | None:
@@ -421,7 +420,7 @@ class LizaIPConnection:
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
 
-    def register_aux_task(self, task: asyncio.Task) -> None:
+    def register_aux_task(self, task: asyncio.Task[Any]) -> None:
         """Tie a background task's lifetime to this connection."""
         self._aux_tasks = [t for t in self._aux_tasks if not t.done()]
         self._aux_tasks.append(task)
@@ -528,7 +527,8 @@ class LizaIPConnection:
         one without it.
         """
         result = await self._protocol.send_request("get_pages", timeout=timeout)
-        return result.get("pages", [])
+        pages: list[dict[str, Any]] = result.get("pages", [])
+        return pages
 
     async def set_main_pages(
         self, pages: list[int], *, timeout: float = DEFAULT_REQUEST_TIMEOUT
@@ -547,7 +547,8 @@ class LizaIPConnection:
 
     async def get_main_pages(self, *, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> list[int]:
         result = await self._protocol.send_request("get_main_pages", timeout=timeout)
-        return result.get("pages", [])
+        pages: list[int] = result.get("pages", [])
+        return pages
 
     async def set_brightness(self, value: float) -> dict[str, Any]:
         """Set display brightness.
@@ -583,7 +584,7 @@ class LizaIPConnection:
         """
         result = await self._protocol.send_request("get_brightness")
 
-        raw = result.get("value", result.get("brightness"))
+        raw: Any = result.get("value", result.get("brightness"))
         try:
             value = float(raw)
         except (TypeError, ValueError):
@@ -612,7 +613,7 @@ class LizaIPConnection:
             value, automatic = await self.get_brightness()
         except ProtocolError as err:
             self._logger.debug("get_brightness unavailable: %s", err)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             self._logger.debug("get_brightness failed: %s", err)
         else:
             self._logger.debug(
@@ -640,18 +641,18 @@ class LizaIPConnection:
                 translation_domain=DOMAIN,
                 translation_key="device_ip_unknown",
             )
-        if not self._device_http_port:
+        if not self.device_http_port:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="device_port_unknown",
             )
 
         session = device_session(self._hass)
-        url = device_url(self._peer_ip, self._device_http_port, endpoint)
+        url = device_url(self._peer_ip, self.device_http_port, endpoint)
         try:
             async with session.request(method, url, **kwargs) as resp:
                 return resp.status, await resp.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        except (TimeoutError, aiohttp.ClientError) as err:
             err_msg = error_detail(err)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
@@ -867,12 +868,12 @@ class LizaIPConnection:
         mDNS stopped working across its network. That is the device this is for,
         and it cannot report the problem itself.
         """
-        if not self._device_http_port:
+        if not self.device_http_port:
             self._logger.debug("No device HTTP port stored — skipping address repair")
             return
 
         cfg = await provisioning.async_read_ha_config(
-            self._hass, [peer_ip], self._device_http_port
+            self._hass, [peer_ip], self.device_http_port
         )
         if cfg is None:
             # Not rounded down to "fine": a device we could not ask is exactly
@@ -896,7 +897,7 @@ class LizaIPConnection:
             peer_ip,
         )
         await provisioning.async_provision(
-            self._hass, [peer_ip], self._device_http_port
+            self._hass, [peer_ip], self.device_http_port
         )
 
     async def _check_held_address(self, held: str) -> None:
@@ -941,21 +942,21 @@ class LizaIPConnection:
         created via the WebSocket discovery path — the probe is skipped; the
         capability payload will arrive in the hello handshake instead.
         """
-        if not self._device_http_port:
+        if not self.device_http_port:
             self._logger.debug("No device HTTP port stored — skipping probe")
             return
 
         session = device_session(self._hass)
-        url = device_url(peer_ip, self._device_http_port, "/api/info")
+        url = device_url(peer_ip, self.device_http_port, "/api/info")
         info: dict[str, Any] | None = None
         try:
             async with session.get(url, timeout=ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
                     info = await resp.json(content_type=None)
-                    self._logger.debug("Device HTTP port %d confirmed", self._device_http_port)
+                    self._logger.debug("Device HTTP port %d confirmed", self.device_http_port)
                 else:
                     self._logger.debug("GET %s returned %s", url, resp.status)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             self._logger.debug("GET %s failed: %s", url, err)
 
         if info is None:
@@ -984,7 +985,8 @@ class LizaIPConnection:
         # Fire discovery callbacks so entities get created
         self._last_discovery = self._build_discovery(caps)
         for cb in self._discovery_callbacks:
-            cb(self._last_discovery)
+            # *caps* is non-empty here, so the discovery was built.
+            cb(cast("dict[str, Any]", self._last_discovery))
 
     # ── Device event handlers ─────────────────────────────────────────────
 
@@ -1009,7 +1011,7 @@ class LizaIPConnection:
         firing the event. Written only when a value actually changed, so the
         common reconnect -- same firmware, same model -- touches neither store.
         """
-        updates = {}
+        updates: dict[str, Any] = {}
         if self._device_version and self._entry.data.get("sw_version") != self._device_version:
             updates["sw_version"] = self._device_version
         if self._device_model_id and self._entry.data.get("model_id") != self._device_model_id:
@@ -1021,13 +1023,14 @@ class LizaIPConnection:
             data={**self._entry.data, **updates},
         )
         try:
-            dr.async_get(self._hass).async_update_device(self._device_id, **updates)
-        except Exception as err:  # noqa: BLE001
+            # Setup always passes the registry id; a None would fail here and be logged.
+            dr.async_get(self._hass).async_update_device(cast(str, self._device_id), **updates)
+        except Exception as err:
             # The device page is cosmetic next to the connection itself; a
             # registry entry that has gone away must not break the handshake.
             self._logger.debug("Device registry update after hello failed: %s", err)
 
-    def _on_hello_request(self, seq_id: int, data: dict) -> None:
+    def _on_hello_request(self, seq_id: int, data: dict[str, Any]) -> None:
         if not self._mac_matches(data.get("device_id")):
             fire_and_forget(self._refuse_hello(seq_id))
             return
@@ -1048,11 +1051,11 @@ class LizaIPConnection:
         if ws is not None:
             await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"hello failed")
 
-    def _on_get_pages_request(self, seq_id: int, data: dict) -> None:
+    def _on_get_pages_request(self, seq_id: int, data: dict[str, Any]) -> None:
         """Answer the remote's own ``get_pages`` with an id/hash listing."""
         fire_and_forget(self._answer_page_request("get_pages", seq_id, None))
 
-    def _on_get_page_request(self, seq_id: int, data: dict) -> None:
+    def _on_get_page_request(self, seq_id: int, data: dict[str, Any]) -> None:
         """Answer the remote's own ``get_page`` with the page it named."""
         fire_and_forget(self._answer_page_request("get_page", seq_id, data.get("page_id")))
 
@@ -1093,7 +1096,7 @@ class LizaIPConnection:
             return
         await self._protocol.send_response(name, seq_id, with_references(pages[0]))
 
-    def _on_button_event(self, data: dict) -> None:
+    def _on_button_event(self, data: dict[str, Any]) -> None:
         self._logger.debug(
             "Button event from device: name=%s interaction=%s page_id=%s",
             data.get("name"), data.get("interaction"), data.get("page_id"),
@@ -1108,7 +1111,7 @@ class LizaIPConnection:
         if cb := self._button_callbacks.get(data.get("name", "")):
             cb(data.get("interaction", "click"), data)
 
-    def _on_slider_event(self, data: dict) -> None:
+    def _on_slider_event(self, data: dict[str, Any]) -> None:
         self._hass.bus.async_fire(LIZAIP_EVENT, {
             "device_id": self._device_id,
             "type": "slider",
@@ -1125,7 +1128,7 @@ class LizaIPConnection:
             cb(data.get("interaction", "click"), data)
 
         if data.get("name") == "slider_brightness":
-            position = data.get("position")
+            position: Any = data.get("position")
             try:
                 pos = float(position)
             except (TypeError, ValueError):
@@ -1138,14 +1141,14 @@ class LizaIPConnection:
                 self._brightness_value = max(BRIGHTNESS_MIN, min(BRIGHTNESS_MAX, pos))
             self._notify_brightness()
 
-    def _on_goto_page_event(self, data: dict) -> None:
+    def _on_goto_page_event(self, data: dict[str, Any]) -> None:
         self._hass.bus.async_fire(LIZAIP_EVENT, {
             "device_id": self._device_id,
             "type": "goto_page",
             "page_id": data.get("page_id"),
         })
 
-    def _on_diag_event(self, data: dict) -> None:
+    def _on_diag_event(self, data: dict[str, Any]) -> None:
         diag_type = data.get("diag", "")
         self._hass.bus.async_fire(LIZAIP_EVENT, {
             "device_id": self._device_id,
@@ -1154,4 +1157,5 @@ class LizaIPConnection:
             "value": data.get("value"),
         })
         if cb := self._sensor_callbacks.get(diag_type):
-            cb(data.get("value"))
+            value: Any = data.get("value")
+            cb(value)

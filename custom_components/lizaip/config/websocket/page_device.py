@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -70,11 +75,11 @@ def _device_entities(hass: HomeAssistant, device_id: str) -> tuple[Any, str | No
     return device, integration, _resolve_device_domain_entities(hass, device_id, integration)
 
 
-def _page_of(pages: list, page_id: int) -> dict | None:
+def _page_of(pages: list[Any], page_id: int) -> dict[str, Any] | None:
     return next((p for p in pages if isinstance(p, dict) and p.get("id") == page_id), None)
 
 
-def suggest_device(hass: HomeAssistant, assignments: dict) -> str:
+def suggest_device(hass: HomeAssistant, assignments: dict[str, Any]) -> str:
     """The device most of the page's buttons act on, "" when none does.
 
     Counted per button rather than per reference, so one button naming a device
@@ -112,7 +117,7 @@ def suggest_device(hass: HomeAssistant, assignments: dict) -> str:
 })
 @require_device_access
 @websocket_api.async_response
-async def ws_list_all_devices(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_list_all_devices(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Every enabled, non-service device with entities, for binding a page.
 
     Given the page, ``suggested`` is the device most of its buttons act on.
@@ -137,7 +142,7 @@ async def ws_list_all_devices(hass: HomeAssistant, connection, msg: dict) -> Non
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_assign_page_device(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Bind a page that no template made to a device, or move it to another.
 
     Moving rewrites the buttons' references to the old device's entities, domain
@@ -154,7 +159,8 @@ async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, devi
     if page is None:
         connection.send_error(msg["id"], "page_not_found", f"Page {page_id} not found")
         return
-    page_template = page.get("template") if isinstance(page.get("template"), dict) else {}
+    raw_template = page.get("template")
+    page_template: dict[str, Any] = raw_template if isinstance(raw_template, dict) else {}
     if page_template.get("type"):
         connection.send_error(
             msg["id"], "template_page",
@@ -193,7 +199,7 @@ async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, devi
         # offers: whoever chose the device wrote those steps.
         if (user := current_user.get()) is not None and not user.is_admin:
             await store.async_stamp_restored(device_id, user, {page_id}, bound_only=True)
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:
         send_failure(
             hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Binding the page to a device",
         )
@@ -210,6 +216,60 @@ async def ws_assign_page_device(hass: HomeAssistant, connection, msg: dict, devi
         "pages": await store.async_get_pages(device_id),
         "buttons_changed": buttons_changed,
     })
+    fire_config_changed(hass, entry_id)
+    schedule_push_rescan(hass, entry_id)
+    await refresh_state_listener(hass, entry_id)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "lizaip_config/remove_page_device",
+    vol.Required("entry_id"): str,
+    vol.Required("page_id"): PAGE_ID_SCHEMA,
+})
+@require_device_access
+@websocket_api.async_response
+@requires_device
+async def ws_remove_page_device(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
+    """Take the device off a page no template made.
+
+    The buttons keep what they act on; only the binding goes, so ``${_device…}``
+    reads nothing there again. A template page cannot lose its device: the
+    template is what it is made from.
+
+    Response:
+      {success: true, pages}
+    """
+    entry_id = msg["entry_id"]
+    page_id = msg["page_id"]
+    store = get_store(hass)
+    pages = await store.async_get_pages(device_id)
+    page = _page_of(pages, page_id)
+    if page is None:
+        connection.send_error(msg["id"], "page_not_found", f"Page {page_id} not found")
+        return
+    raw_template = page.get("template")
+    page_template: dict[str, Any] = raw_template if isinstance(raw_template, dict) else {}
+    if page_template.get("type"):
+        connection.send_error(
+            msg["id"], "template_page",
+            f"Page {page_id} was made from a template; its device cannot be removed",
+        )
+        return
+    rest = {k: v for k, v in page_template.items() if k != "target"}
+    if rest:
+        page["template"] = rest
+    else:
+        page.pop("template", None)
+    try:
+        await store.async_set_pages(device_id, pages)
+    except Exception as err:
+        send_failure(
+            hass, connection, msg, "save_failed", err, logger=_LOGGER, what="Removing the page's device",
+        )
+        return
+
+    device_id_logger(_LOGGER, hass, device_id).info("Removed the device of page %s", page_id)
+    connection.send_result(msg["id"], {"success": True, "pages": await store.async_get_pages(device_id)})
     fire_config_changed(hass, entry_id)
     schedule_push_rescan(hass, entry_id)
     await refresh_state_listener(hass, entry_id)

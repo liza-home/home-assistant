@@ -192,9 +192,9 @@ export const ButtonsSliderMixin = {
     if (next !== null) setSliderSubject(assign, next);
   },
 
-  /** The page slider's stored sensitivity, 1.0 when it has none. */
-  _pageSliderFactor() {
+  /** The page slider's stored sensitivity, else the given control default. */
+  _pageSliderFactor(controlDefault = 1.0) {
     const raw = this._assignments[SLIDER_VERTICAL_KEY]?.slider_actions?.factor;
-    return typeof raw === "number" && isFinite(raw) ? raw : 1.0;
+    return typeof raw === "number" && isFinite(raw) ? raw : controlDefault;
   },
 };

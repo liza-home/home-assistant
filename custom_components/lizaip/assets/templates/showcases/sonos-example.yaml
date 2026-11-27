@@ -19,7 +19,7 @@ target_selector:
 
 pages:
   sonos:
-    title: "logo:sonos + ${_device}"
+    title: "logo:sonos ${_device}"
     buttons:
       button_1:
         icon: "media:${_device.entity_picture}?size=120x120"

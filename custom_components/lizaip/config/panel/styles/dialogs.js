@@ -165,6 +165,11 @@ export const STYLES_DIALOGS = `
     border-top: 1px solid var(--divider-color, #333);
   }
   .template-list.is-lead { padding-bottom: 0; }
+  .template-list-rule {
+    margin: 8px 0;
+    border: 0;
+    border-top: 1px solid var(--divider-color, #333);
+  }
   .template-row-text { flex: 1 1 auto; min-width: 0; }
   .template-row-name {
     display: block;
@@ -453,6 +458,12 @@ export const STYLES_DIALOGS = `
   }
   .template-target-search[hidden] { display: none; }
   .template-target-search > ha-input-search { flex: 1 1 auto; min-width: 0; }
+  .template-new-device, .template-reconfigure { margin-top: 4px; }
+  .template-new-device[hidden], .template-reconfigure[hidden] { display: none; }
+  .subentry-flow-desc { white-space: pre-line; }
+  .subentry-flow-input { display: block; margin-top: 16px; }
+  .subentry-flow-help { margin-top: 6px; }
+  ha-select.subentry-flow-select { width: 100%; }
   .template-entity-hint {
     font-size: var(--liza-font-11);
     color: var(--liza-muted-text);
@@ -702,6 +713,12 @@ export const STYLES_DIALOGS = `
     margin: 0 0 14px;
   }
   .restore-status.error { color: var(--error-color, #db4437); }
+  .restore-pages-progress { margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+  .restore-checklist { margin-top: 14px; }
+  /* The note under the result: an icon beside the sentence, never below it. */
+  .restore-line.note { display: flex; align-items: flex-start; gap: 8px; }
+  .restore-line.note ha-icon { flex: none; --mdc-icon-size: 18px; }
+  .diag-step.failed .diag-step-mark { color: var(--error-color, #db4437); }
   /* Cancel sits in a flex row beside the commit, so it must not carry the
      auto margin that would centre it and strand its partner at the edge. */
   .confirm-cancel-btn { flex: 0 0 auto; }

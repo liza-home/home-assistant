@@ -133,7 +133,7 @@ def is_grid_button(button_key: Any) -> bool:
     return isinstance(button_key, str) and _GRID_BUTTON_RE.match(button_key) is not None
 
 
-def fixed_overrides(assign: Any) -> dict:
+def fixed_overrides(assign: Any) -> dict[str, Any]:
     """The override table a grid button declares, as a plain dict.
 
     Absence, a non-dict and an empty table all mean "overrides nothing". The
@@ -179,7 +179,7 @@ def live_override(assign: Any, fixed_key: Any) -> str | None:
     return _stripped(fixed_overrides(assign).get(fixed_key))
 
 
-def slider_override(assign: Any) -> dict:
+def slider_override(assign: Any) -> dict[str, Any]:
     """The slider block a grid button declares, as a plain dict.
 
     Absence, a non-dict and an empty block all mean "says nothing about the
@@ -221,7 +221,7 @@ def slider_control_override(assign: Any) -> str | None:
     return _stripped(slider_override(assign).get("control"))
 
 
-def sanitize_slider_override(value: Any) -> dict:
+def sanitize_slider_override(value: Any) -> dict[str, Any]:
     """The storable form of a slider block, or ``{}`` for anything unusable.
 
     The one gate every writer passes through — the WebSocket sanitiser, the
@@ -251,7 +251,7 @@ def sanitize_slider_override(value: Any) -> dict:
 
 def resolve_fixed_action(
     assignments: Any, selected_button_key: Any, fixed_key: Any,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Which assignment a press of *fixed_key* should run, given the selection.
 
     The page default, unless the grid says otherwise — the same shape of
@@ -302,7 +302,7 @@ def resolve_fixed_action(
     return override
 
 
-def _live_fixed_action(selected: dict, fixed_key: str) -> dict | None:
+def _live_fixed_action(selected: dict[str, Any], fixed_key: str) -> dict[str, Any] | None:
     """A press synthesised from a live override, against the selection's entity.
 
     The counterpart to the frozen table: the template named a service, and the

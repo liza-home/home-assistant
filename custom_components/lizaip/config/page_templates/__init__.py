@@ -60,32 +60,31 @@ from .compose import (
     async_compose_pages,
 )
 from .resolver import template_bindings, resolve_template_variables
+from .items import DEFAULT_MAX_ITEMS, DEFAULT_TRACKED_FIELDS
 from .sources import (
-    DEFAULT_MAX_ITEMS,
-    DEFAULT_TRACKED_FIELDS,
     SOURCES,
     async_resolve_source,
     get_source,
 )
 
 __all__ = [
-    "TEMPLATE_VERSION",
-    "TEMPLATE_VERSION_KEY",
-    "ComposedPage",
     "DEFAULT_MAX_ITEMS",
     "DEFAULT_TRACKED_FIELDS",
     "SOURCES",
+    "TEMPLATE_VERSION",
+    "TEMPLATE_VERSION_KEY",
+    "ComposedPage",
     "async_compose_pages",
     "async_load_template",
     "async_resolve_source",
     "generate_assignments",
     "get_source",
-    "template_bindings",
-    "template_pages",
     "is_unbound",
     "list_templates",
     "load_template",
     "page_definition",
     "resolve_template_variables",
     "set_user_templates_dir",
+    "template_bindings",
+    "template_pages",
 ]

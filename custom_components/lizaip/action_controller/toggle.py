@@ -65,9 +65,9 @@ button that does not use it.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..shared.icon_defaults import icon_defaults
+from ..shared.icon_defaults import IconDefaults, icon_defaults
 from ..shared.tokens import clean_tooltip_text
 from ..shared.services import (
     ATTR_PREVIOUS_VALUE,
@@ -79,6 +79,10 @@ from ..shared.services import (
     service_to_attribute,
     toggles_attribute,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -125,7 +129,7 @@ def runtime_assign(assign: Any, enabled: bool) -> Any:
     return {k: v for k, v in assign.items() if k != TOGGLE_KEY}
 
 
-def toggle_block(assign: Any) -> dict:
+def toggle_block(assign: Any) -> dict[str, Any]:
     """The ``toggle`` block *assign* declares, as a plain dict.
 
     Absence, a non-dict and an empty table all mean "this is an ordinary
@@ -174,7 +178,7 @@ def names_stored_value(assign: Any, svc: str, data: Any) -> bool:
     return not toggles_attribute(svc, data)
 
 
-def toggle_rules(assign: Any) -> list[dict]:
+def toggle_rules(assign: Any) -> list[dict[str, Any]]:
     """The runnable rules *assign* declares, in order.
 
     "Runnable" is a non-empty ``config`` list: a rule with no action would take
@@ -193,14 +197,14 @@ def toggle_rules(assign: Any) -> list[dict]:
     ]
 
 
-def representative_steps(assign: Any) -> list[dict]:
+def representative_steps(assign: Any) -> list[dict[str, Any]]:
     """The first step of *assign*, then the first step of each cycle rule.
 
     Each names what one face of the button is about. A rule may point at a
     different entity from the assignment it sits on, and its label reads that
     one, so whatever watches a button's entities has to look at all of them.
     """
-    steps: list[dict] = []
+    steps: list[dict[str, Any]] = []
     config = assign.get("config") if isinstance(assign, dict) else None
     if isinstance(config, list) and config and isinstance(config[0], dict):
         steps.append(config[0])
@@ -208,7 +212,7 @@ def representative_steps(assign: Any) -> list[dict]:
     return steps
 
 
-def rule_steps(rule: Any) -> list[dict]:
+def rule_steps(rule: Any) -> list[dict[str, Any]]:
     """The script steps *rule* runs, or ``[]`` when it has none.
 
     Same shape as a button's own ``config``, because it ends up in the same
@@ -273,8 +277,8 @@ def rule_service(rule: Any) -> str | None:
 def step_icon(
     rule: Any,
     entity_domain: str = "",
-    service_icons: dict | None = None,
-    icons=None,
+    service_icons: dict[str, Any] | None = None,
+    icons: IconDefaults | None = None,
 ) -> str | None:
     """A glyph for *rule* derived from the service it calls.
 
@@ -311,7 +315,7 @@ def step_icon(
         return attr_icon
 
     if service_icons:
-        svc_icon = service_icons.get(svc_domain, {}).get(svc_name, {}).get("service")
+        svc_icon: str | None = service_icons.get(svc_domain, {}).get(svc_name, {}).get("service")
         if svc_icon:
             return svc_icon
 
@@ -319,7 +323,7 @@ def step_icon(
 
 
 def attribute_step_icon(
-    rule: Any, svc_name: str, icons=None, *, fallback: bool = True,
+    rule: Any, svc_name: str, icons: IconDefaults | None = None, *, fallback: bool = True,
 ) -> str | None:
     """The ``attribute_icons`` glyph for a step that sets an attribute.
 
@@ -335,7 +339,8 @@ def attribute_step_icon(
     """
     attribute = service_to_attribute(svc_name)
     table = (icons or icon_defaults).attribute_icons.get(attribute, {}) if attribute else {}
-    if not table:
+    # The table is empty whenever there is no attribute.
+    if not table or attribute is None:
         return None
 
     steps = rule_steps(rule)
@@ -387,7 +392,7 @@ def rule_tooltip(rule: Any) -> str | None:
     return tooltip or None
 
 
-def _rule_assign(rule: Any) -> dict:
+def _rule_assign(rule: Any) -> dict[str, Any]:
     """*rule* in assignment shape, so a button's own ladders can read it.
 
     A press already carries the keys those ladders ask about, so this is a
@@ -402,7 +407,7 @@ def _rule_assign(rule: Any) -> dict:
     return assign
 
 
-def resolve_rule_tooltip(rule: Any, hass, entry=None) -> str:
+def resolve_rule_tooltip(rule: Any, hass: HomeAssistant, entry: ConfigEntry | None = None) -> str:
     """The words a press prints, with its ``${...}`` placeholders filled in.
 
     Filled by `_fill_tooltip_tokens`, the one every button label goes
@@ -421,7 +426,7 @@ def resolve_rule_tooltip(rule: Any, hass, entry=None) -> str:
     )
 
 
-def step_tooltip(rule: Any, hass, entry=None) -> str:
+def step_tooltip(rule: Any, hass: HomeAssistant | None, entry: ConfigEntry | None = None) -> str:
     """Words for *rule* derived from the step it runs, or "" to fall back.
 
     The twin of :func:`step_icon`: the button's own ladder asked about this
@@ -439,7 +444,7 @@ def step_tooltip(rule: Any, hass, entry=None) -> str:
     return _resolve_button_tooltip(_rule_assign(rule), hass, entry)
 
 
-def sanitize_toggle(value: Any) -> dict:
+def sanitize_toggle(value: Any) -> dict[str, Any]:
     """The storable form of a ``toggle`` block, or ``{}`` for anything unusable.
 
     The one gate every writer passes through — the WebSocket handler, the
@@ -475,7 +480,7 @@ def sanitize_toggle(value: Any) -> dict:
     if mode != MODE_CYCLE:
         return {}
 
-    rules: list[dict] = []
+    rules: list[dict[str, Any]] = []
     for raw in value.get("rules") or []:
         steps = rule_steps(raw)
         if not steps:

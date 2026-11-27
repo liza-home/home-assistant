@@ -29,7 +29,7 @@ target_selector:
 
 pages:
   options:
-    title: "logo:sonos + options"
+    title: "logo:sonos options"
     buttons:
       button_1:
         icon: mdi:volume-mute
@@ -141,6 +141,6 @@ pages:
           attribute: volume_level
           service: media_player.volume_set
           data_key: volume_level
-          factor: 1.0
+          factor: 0.5
           min: 0.0
           max: 1.0

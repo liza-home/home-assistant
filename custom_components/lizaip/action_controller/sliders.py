@@ -79,6 +79,10 @@ class SliderControl:
     #: that reads as warmer. It is a UX judgement, not a derivation -- see the
     #: README for what Home Assistant does and why its case differs.
     invert: bool = False
+    #: Default sensitivity (0.01-1.0) when none is stored: how much of the range
+    #: a full-track drag covers. Lights 1.0; volume 0.5, as a full drag would
+    #: otherwise be too coarse for a speaker.
+    factor: float = 1.0
 
 
 #: Controls in per-domain priority order; the first supported row is the
@@ -103,6 +107,7 @@ SLIDER_CONTROLS: tuple[SliderControl, ...] = (
         attribute="volume_level", service="media_player.volume_set",
         data_key="volume_level", min=0, max=1, icon="mdi:volume-high",
         supported={"feature": _MEDIA_VOLUME_SET},
+        factor=0.5,
     ),
     SliderControl(
         id="cover-position", domain="cover", label="Position",
@@ -154,6 +159,16 @@ _INVERTED_MECHANICS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
+_BASE_FACTORS: dict[tuple[str, str], float] = {
+    (c.service, c.data_key): c.factor for c in SLIDER_CONTROLS
+}
+
+
+def control_factor(service: str, data_key: str) -> float:
+    """The built-in factor of the control these mechanics describe, else 1.0."""
+    return _BASE_FACTORS.get((service, data_key), 1.0)
+
+
 def control_inverts(service: str, data_key: str) -> bool:
     """Whether the control these mechanics describe runs its drag backwards."""
     return (service, data_key) in _INVERTED_MECHANICS
@@ -179,7 +194,7 @@ def controls_for_entity(entity_id: str, state: State | None) -> list[SliderContr
 
 def resolve_control(
     hass: HomeAssistant, entity_id: str, control_id: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Resolve *entity_id* to proportional slider mechanics, or None.
 
     The returned dict is shaped like a stored ``slider_actions`` blob in
@@ -307,7 +322,8 @@ def slider_follows(slider_key: Any, assign: Any) -> bool:
     emptiness test (``Object.keys(...).length === 0`` in JS)."""
     slider_cfg = assign.get("slider_actions") if isinstance(assign, dict) else None
     if not isinstance(slider_cfg, dict) or not slider_cfg:
-        return slider_key == SLIDER_VERTICAL_KEY
+        is_vertical: bool = slider_key == SLIDER_VERTICAL_KEY
+        return is_vertical
     return follows_selection(slider_cfg)
 
 
@@ -334,7 +350,7 @@ def targets_entity(slider_cfg: Any) -> bool:
     )
 
 
-def last_touched_slider_actions(factor: float) -> dict[str, Any]:
+def last_touched_slider_actions(factor: float | None) -> dict[str, Any]:
     """Build the stored blob for a slider that drives the last-touched device.
 
     Shared by the panel save path and template YAML because the absent keys are the
@@ -348,14 +364,14 @@ def last_touched_slider_actions(factor: float) -> dict[str, Any]:
     ``mode`` remains ``"proportional"`` because the drag maths are unchanged;
     ``factor`` is the slider's own physical-track mechanic and is already coerced
     by the caller (panel JSON vs template YAML)."""
-    return {
-        "mode": "proportional",
-        "factor": factor,
-    }
+    blob: dict[str, Any] = {"mode": "proportional"}
+    if factor is not None:
+        blob["factor"] = factor
+    return blob
 
 
 def last_touched_or_entity_slider_actions(
-    hass: HomeAssistant, entity_id: str, factor: float,
+    hass: HomeAssistant, entity_id: str, factor: float | None,
 ) -> dict[str, Any] | None:
     """Build the stored blob for following the selection, else *entity_id*.
 
@@ -380,10 +396,9 @@ def last_touched_or_entity_slider_actions(
     resolved = resolve_control(hass, entity_id) if hass is not None else None
     if not resolved:
         return None
-    return {
-        **resolved,
-        "factor": factor,
-    }
+    if factor is None:
+        return dict(resolved)
+    return {**resolved, "factor": factor}
 
 
 def serialized_controls() -> list[dict[str, Any]]:
@@ -399,6 +414,7 @@ def serialized_controls() -> list[dict[str, Any]]:
             "min": c.min,
             "max": c.max,
             "icon": c.icon,
+            "factor": c.factor,
             "supported": dict(c.supported) if c.supported else None,
             # JSON has no tuples; the panel destructures this positionally.
             "range_attrs": list(c.range_attrs) if c.range_attrs else None,

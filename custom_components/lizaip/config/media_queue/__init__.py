@@ -57,7 +57,7 @@ async def async_queue_targets(hass: HomeAssistant) -> set[str]:
                 for _button, assign in await get_assignments(hass, device_id, page_id):
                     for config in representative_steps(assign):
                         targets.update(resolve_target_entities(config, hass))
-        except Exception as err:  # noqa: BLE001 - discovery must never break setup
+        except Exception as err:
             device_logger(_LOGGER, entry).debug(
                 "Queue sensors: cannot read the configuration: %s", err,
             )
@@ -91,7 +91,7 @@ async def async_sync_sensors(hass: HomeAssistant) -> None:
         state.covered = state.requested
         try:
             await async_sync(hass, await async_queue_targets(hass))
-        except Exception as err:  # noqa: BLE001 - a tooltip must never raise
+        except Exception as err:
             _LOGGER.debug("Queue sensors: cannot sync: %s", err)
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -21,7 +21,7 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigEntryChange,
 )
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -36,7 +36,10 @@ from ..shared.variables_calc import (
     _EXPR_ENTITY_RE,
     FUNCTION_TOKEN_RE,
     DEFAULT_VARIABLES_INTERVAL,
+    read_variables_enabled,
     read_variables_interval,
+    variables_enabled,
+    variables_scope,
 )
 from .media_queue.alias import expand_queue_alias
 from ..shared.history import history_entities, history_entity
@@ -55,7 +58,7 @@ from ..shared.tokens import (
     page_scope,
 )
 from .const import CONFIG_CHANGED_EVENT
-from .default_pages import async_effective_pages
+from .welcome_page import async_effective_pages
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +75,10 @@ _VARIABLE_FIELDS = ("tooltip", "icon")
 _Reads = dict[str, set[str | None]]
 
 
-def _token_reads(text, subjects: tuple[str, ...] = ()) -> _Reads:
+def _token_reads(text: Any, subjects: tuple[str, ...] = ()) -> _Reads:
+    if not variables_enabled():
+        # Switched off, no variable is read, so none is watched.
+        return {}
     graphed = history_entity(text)
     if graphed is not None:
         # A graph moves when its entity's state does.
@@ -120,7 +126,7 @@ def _merge(into: _Reads, more: _Reads) -> _Reads:
     return into
 
 
-def _queue_subjects(config, hass) -> tuple[str, ...]:
+def _queue_subjects(config: Any, hass: HomeAssistant | None) -> tuple[str, ...]:
     """The speakers a step points at, whose queue sensors its tooltip may read."""
     if hass is None or not isinstance(config, list) or not config:
         return ()
@@ -131,7 +137,7 @@ def _queue_subjects(config, hass) -> tuple[str, ...]:
     )
 
 
-def _button_reads(button: dict, subjects: tuple[str, ...] = ()) -> _Reads:
+def _button_reads(button: dict[str, Any], subjects: tuple[str, ...] = ()) -> _Reads:
     found: _Reads = {}
     for key in _VARIABLE_FIELDS:
         _merge(found, _token_reads(button.get(key), subjects))
@@ -142,7 +148,7 @@ def _button_reads(button: dict, subjects: tuple[str, ...] = ()) -> _Reads:
     return found
 
 
-def _assignment_reads(assign, hass=None) -> _Reads:
+def _assignment_reads(assign: Any, hass: HomeAssistant | None = None) -> _Reads:
     if not isinstance(assign, dict):
         return {}
     subjects = _queue_subjects(assign.get("config"), hass)
@@ -151,7 +157,9 @@ def _assignment_reads(assign, hass=None) -> _Reads:
         return _assignment_reads_in_scope(assign, subjects, hass)
 
 
-def _assignment_reads_in_scope(assign: dict, subjects: tuple[str, ...], hass) -> _Reads:
+def _assignment_reads_in_scope(
+    assign: dict[str, Any], subjects: tuple[str, ...], hass: HomeAssistant | None,
+) -> _Reads:
     found = _button_reads(assign, subjects)
     overrides = assign.get("overrides")
     if isinstance(overrides, dict):
@@ -177,7 +185,7 @@ def _assignment_reads_in_scope(assign: dict, subjects: tuple[str, ...], hass) ->
     return found
 
 
-def _action_reads(action) -> _Reads:
+def _action_reads(action: Any) -> _Reads:
     if not isinstance(action, dict):
         return {}
     found = _token_reads(action.get("icon"))
@@ -205,8 +213,16 @@ async def async_variable_uses(
 
     *entry* lets a remote with no pages of its own be watched too: the
     placeholders it shows read its battery and addresses, and without this
-    their tiles would freeze at whatever the last sync drew.
+    their tiles would freeze at whatever the last sync drew. With its
+    Variables switch off, nothing is watched.
     """
+    with variables_scope(getattr(entry, "options", None)):
+        return await _async_variable_uses_in_scope(hass, device_id, entry)
+
+
+async def _async_variable_uses_in_scope(
+    hass: HomeAssistant, device_id: str, entry: ConfigEntry | None,
+) -> dict[str, VariableUse]:
     store = get_store(hass)
     uses: dict[str, VariableUse] = {}
 
@@ -218,8 +234,8 @@ async def async_variable_uses(
 
     actions_by_page: dict[int, set[str]] = {}
     templates: dict[int, Any] = {}
-    pages = await store.async_get_pages(device_id)
-    stand_in: dict[int, dict] | None = None
+    pages: list[Any] = await store.async_get_pages(device_id)
+    stand_in: dict[int, dict[str, Any]] | None = None
     if not pages and entry is not None:
         effective = await async_effective_pages(hass, entry)
         pages = effective.pages
@@ -306,8 +322,9 @@ async def async_device_title_targets(
     """
     store = get_store(hass)
     targets: dict[str, set[int]] = {}
-    library: dict | None = None
-    for page in await store.async_get_pages(device_id):
+    library: dict[Any, Any] | None = None
+    pages: list[Any] = await store.async_get_pages(device_id)
+    for page in pages:
         if not isinstance(page, dict):
             continue
         template = page.get("template")
@@ -348,16 +365,18 @@ async def async_device_title_targets(
     return targets
 
 
-def _read(state, what: str | None):
+def _read(state: State | None, what: str | None) -> Any:
     if state is None:
         return None
-    attributes = state.attributes or {}
+    attributes: Mapping[str, Any] = state.attributes or {}
     if what is None:
         return (state.state, attributes.get("unit_of_measurement"))
     return attributes.get(what)
 
 
-def variable_value_changed(old_state, new_state, reads) -> bool:
+def variable_value_changed(
+    old_state: State | None, new_state: State | None, reads: Iterable[str | None],
+) -> bool:
     """Whether the change moved anything a variable reads.
 
     A weather entity updates its temperature, wind and humidity far more often
@@ -369,7 +388,7 @@ def variable_value_changed(old_state, new_state, reads) -> bool:
 async def async_setup_variable_listener(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    refresh: Callable[[HomeAssistant, ConfigEntry, set[int]], Awaitable[object]],
+    refresh: Callable[[HomeAssistant, ConfigEntry, set[int]], Coroutine[Any, Any, None]],
 ) -> Callable[[], None]:
     """Refresh the pages that name an entity whenever a value they read moves.
 
@@ -406,7 +425,7 @@ async def async_setup_variable_listener(
                 hub = hass.config_entries.async_get_entry(key)
                 if hub is not None:
                     hub_titles[key] = hub.title
-        except Exception as err:  # noqa: BLE001 - live values must never break setup
+        except Exception as err:
             log.debug("Variable listener: cannot read pages: %s", err)
         if closed[0]:
             return
@@ -436,17 +455,19 @@ async def async_setup_variable_listener(
             _flush()
 
     @callback
-    def _on_state_change(event: Event) -> None:
-        use = uses.get(event.data.get("entity_id"))
+    def _on_state_change(event: Event[EventStateChangedData]) -> None:
+        data: Mapping[str, Any] = event.data
+        entity_id: Any = data.get("entity_id")
+        use = uses.get(entity_id)
         if use is None:
             return
         if not variable_value_changed(
-            event.data.get("old_state"), event.data.get("new_state"), use.reads,
+            data.get("old_state"), data.get("new_state"), use.reads,
         ):
             return
         _queue(use.pages)
 
-    def _hub_pages(device: dr.DeviceEntry | None = None) -> set[int]:
+    def _hub_pages(device: dr.AnyDeviceEntry | None = None) -> set[int]:
         """Hub pages whose bridge *device* may have changed; all of them if none."""
         entries = set(hub_titles)
         if device is not None:
@@ -456,10 +477,11 @@ async def async_setup_variable_listener(
         return {page for entry in entries for page in title_targets.get(entry, ())}
 
     @callback
-    def _on_device_changed(event: Event) -> None:
-        device_id = event.data.get("device_id")
-        action = event.data.get("action")
-        changes = event.data.get("changes") or {}
+    def _on_device_changed(event: Event[dr.EventDeviceRegistryUpdatedData]) -> None:
+        data: Mapping[str, Any] = event.data
+        device_id: Any = data.get("device_id")
+        action = data.get("action")
+        changes = data.get("changes") or {}
         # Every fact a page can draw off the device, not the name alone: a
         # firmware update moves `${_device.sw_version}` and the page should
         # say so without waiting for a reload.
@@ -507,27 +529,41 @@ async def async_setup_variable_listener(
             _queue(pages)
 
     @callback
-    def _on_named_registry_changed(_event: Event) -> None:
+    def _on_named_registry_changed(_event: Event[Any]) -> None:
         # The area and the label registry are watched for the same reason and
         # answered the same way, so they share one listener rather than two
         # that would have to be kept saying the same thing.
         _repaint_every_titled_page()
 
     @callback
-    def _on_entity_changed(event: Event) -> None:
+    def _on_entity_changed(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
         # An entity can be filed under a room of its own, and labelled on its
         # own -- and a KNX light set up in YAML has no device, so its own are
         # the only ones it has. Nothing else reports either moving.
-        if event.data.get("action") != "update":
+        data: Mapping[str, Any] = event.data
+        if data.get("action") != "update":
             return
-        if not _ENTITY_OWN_FIELDS & set(event.data.get("changes") or {}):
+        if not _ENTITY_OWN_FIELDS & set(data.get("changes") or {}):
             return
-        use = uses.get(event.data.get("entity_id"))
+        entity_id: Any = data.get("entity_id")
+        use = uses.get(entity_id)
         if use is not None:
             _queue(use.pages)
 
+    variables_on = read_variables_enabled(getattr(entry, "options", None))
+
     @callback
     def _on_hub_changed(change: ConfigEntryChange, hub: ConfigEntry) -> None:
+        nonlocal variables_on
+        if hub.entry_id == entry.entry_id and change is ConfigEntryChange.UPDATED:
+            # The Variables switch decides what is watched at all.
+            now_on = read_variables_enabled(getattr(hub, "options", None))
+            if now_on != variables_on:
+                variables_on = now_on
+                entry.async_create_background_task(
+                    hass, _refresh_watched(), "lizaip variable listener refresh",
+                )
+            return
         pages = title_targets.get(hub.entry_id)
         if not pages or change is not ConfigEntryChange.UPDATED:
             return

@@ -29,9 +29,14 @@ import asyncio
 import functools
 import logging
 import re
-from typing import Any
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -39,8 +44,11 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
-from homeassistant.helpers.llm import JsonObjectType
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.util.ulid import ulid_now
+
+if TYPE_CHECKING:
+    from homeassistant.util.json import JsonObjectType, JsonValueType
 
 from .action_controller.sliders import SLIDER_CONTROLS
 from .const import DOMAIN
@@ -111,10 +119,18 @@ _WRITE_LOCK_KEY = f"{DOMAIN}_llm_write_lock"
 
 
 def _write_lock(hass: HomeAssistant) -> asyncio.Lock:
-    return hass.data.setdefault(_WRITE_LOCK_KEY, asyncio.Lock())
+    lock: asyncio.Lock = hass.data.setdefault(_WRITE_LOCK_KEY, asyncio.Lock())
+    return lock
 
 
-def _serialized(call):
+_ToolT = TypeVar("_ToolT", bound=llm.Tool)
+_ToolCall = Callable[
+    [_ToolT, HomeAssistant, llm.ToolInput, llm.LLMContext],
+    Coroutine[Any, Any, "JsonObjectType"],
+]
+
+
+def _serialized(call: _ToolCall[_ToolT]) -> _ToolCall[_ToolT]:
     """Run a changing tool alone.
 
     Assistants issue tool calls in parallel, and each changing tool reads a
@@ -123,7 +139,10 @@ def _serialized(call):
     kept two).
     """
     @functools.wraps(call)
-    async def wrapper(self, hass, tool_input, llm_context):
+    async def wrapper(
+        self: _ToolT, hass: HomeAssistant, tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         async with _write_lock(hass):
             return await call(self, hass, tool_input, llm_context)
     return wrapper
@@ -132,7 +151,7 @@ def _serialized(call):
 # ── shared helpers ─────────────────────────────────────────────────────
 
 
-def _entries(hass: HomeAssistant) -> list:
+def _entries(hass: HomeAssistant) -> list[ConfigEntry]:
     from .runtime import resolve_device_id
 
     return [
@@ -141,7 +160,7 @@ def _entries(hass: HomeAssistant) -> list:
     ]
 
 
-def _remote(hass: HomeAssistant, wanted: str | None) -> tuple[Any, str]:
+def _remote(hass: HomeAssistant, wanted: str | None) -> tuple[ConfigEntry, str]:
     """``(entry, device_id)`` for the remote named by *wanted*, or the only one."""
     from .runtime import resolve_device_id
 
@@ -163,7 +182,8 @@ def _remote(hass: HomeAssistant, wanted: str | None) -> tuple[Any, str]:
             else f"No single remote matches {wanted!r}; remotes: {names}"
         )
     entry = matches[0]
-    return entry, resolve_device_id(hass, entry.entry_id)
+    # _entries keeps only entries that resolve to a device.
+    return entry, cast(str, resolve_device_id(hass, entry.entry_id))
 
 
 async def _require_admin(hass: HomeAssistant, llm_context: llm.LLMContext) -> None:
@@ -199,8 +219,8 @@ def _area_name(hass: HomeAssistant, entity_id: str) -> str:
 
 
 def _template_button(
-    hass: HomeAssistant, llm_context: llm.LLMContext, spec: dict,
-) -> dict:
+    hass: HomeAssistant, llm_context: llm.LLMContext, spec: dict[str, Any],
+) -> dict[str, Any]:
     """One button of the template a tool writes, after checking what it names."""
     action = spec["action"].strip()
     if not re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", action):
@@ -246,7 +266,7 @@ def _template_button(
     return button
 
 
-def _summary(slot: str, assignment: dict) -> dict:
+def _summary(slot: str, assignment: dict[str, Any]) -> dict[str, Any]:
     step = (assignment.get("config") or [{}])[0] if assignment.get("config") else {}
     target = step.get("target") if isinstance(step, dict) else None
     entity = (target or {}).get("entity_id") if isinstance(target, dict) else None
@@ -260,7 +280,7 @@ def _summary(slot: str, assignment: dict) -> dict:
     }
 
 
-def _patched(assignment: dict, args: dict) -> dict:
+def _patched(assignment: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     """*assignment* with only its tooltip, picture or repeat changed.
 
     Marked as the user's own, as the panel marks an edited tooltip and a chosen
@@ -281,11 +301,13 @@ def _patched(assignment: dict, args: dict) -> dict:
     return patched
 
 
-def _assigned(assignment: Any) -> bool:
+def _assigned(assignment: Any) -> TypeGuard[dict[str, Any]]:
     return isinstance(assignment, dict) and bool(assignment.get("config"))
 
 
-def _generate(page_key: str, buttons: dict, hass: HomeAssistant):
+def _generate(
+    page_key: str, buttons: dict[str, Any], hass: HomeAssistant,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     """``(actions, assignments)`` for *buttons*, with plain ``ai_…`` action ids.
 
     The generator names what it makes after a template (``template_<id>_…``);
@@ -331,12 +353,14 @@ class ListRemotesTool(llm.Tool):
     description = "List the connected lizaIP remotes and the pages each one has."
     parameters = vol.Schema({})
 
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.page_templates.page_source import page_name
         from .runtime import get_store
 
         store = get_store(hass)
-        remotes = []
+        remotes: list[JsonValueType] = []
         for entry in _entries(hass):
             _, device_id = _remote(hass, entry.entry_id)
             pages = await store.async_get_pages(device_id)
@@ -367,7 +391,9 @@ class DescribeRemoteTool(llm.Tool):
         vol.Optional("page_id"): vol.Coerce(int),
     })
 
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .runtime import get_store
 
         args = tool_input.tool_args
@@ -403,7 +429,7 @@ class DescribeRemoteTool(llm.Tool):
         return result
 
 
-async def store_pages(hass: HomeAssistant, device_id: str) -> list[dict]:
+async def store_pages(hass: HomeAssistant, device_id: str) -> list[dict[str, Any]]:
     from .runtime import get_store
 
     return [p for p in await get_store(hass).async_get_pages(device_id) if isinstance(p, dict)]
@@ -422,13 +448,15 @@ class FindEntitiesTool(llm.Tool):
         vol.Optional("query"): str,
     })
 
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         args = tool_input.tool_args
         domain = (args.get("domain") or "").strip().lower()
         area = (args.get("area") or "").strip().casefold()
         query = (args.get("query") or "").strip().casefold()
         states = hass.states.async_all(domain) if domain else hass.states.async_all()
-        found = []
+        found: list[JsonValueType] = []
         for state in states:
             if not _exposed(hass, llm_context, state.entity_id):
                 continue
@@ -470,8 +498,11 @@ class CreatePageTool(llm.Tool):
     })
 
     @_serialized
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
-        from .config.template_pages import TemplatePageError, async_add_template_page
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
+        from .config.template_pages import async_add_template_page
+        from .config.template_writes import TemplatePageError
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -496,7 +527,7 @@ class CreatePageTool(llm.Tool):
                 "These buttons could not be built -- the action does not fit the "
                 f"entity: {', '.join(skipped)}"
             )
-        buttons = [_summary(s, assignments[s]) for s in slots]
+        buttons: list[JsonValueType] = [_summary(s, assignments[s]) for s in slots]
         if args.get("dry_run", False):
             return {"dry_run": True, "remote": entry.entry_id, "title": title, "buttons": buttons}
 
@@ -543,7 +574,9 @@ class UpdateButtonTool(llm.Tool):
     })
 
     @_serialized
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.const import EMPTY_BUTTON
         from .runtime import get_store
 
@@ -601,7 +634,9 @@ class DeletePageTool(llm.Tool):
     })
 
     @_serialized
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.page_templates.page_source import page_name
         from .config.listeners import schedule_push_rescan
         from .config.page_list import async_drop_links_to, push_page_list
@@ -636,7 +671,7 @@ class DeletePageTool(llm.Tool):
 _TARGET_LIMIT = 40
 
 
-def _template_targets(hass: HomeAssistant, template: dict) -> tuple[str, list[dict]]:
+def _template_targets(hass: HomeAssistant, template: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     """``(kind, targets)`` a template can be bound to: devices, hubs, or nothing."""
     from .config.page_templates import is_unbound
     from .config.template_targets import eligible_devices, selector_integrations
@@ -676,11 +711,13 @@ class ListTemplatesTool(llm.Tool):
     )
     parameters = vol.Schema({})
 
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.page_templates import list_templates, load_template
         from .config.template_targets import template_has_target
 
-        result = []
+        result: list[JsonValueType] = []
         for meta in await hass.async_add_executor_job(list_templates):
             # A routine run in the panel (the Devel tools'), not a page to add.
             if meta.get("action") or not template_has_target(hass, meta):
@@ -692,7 +729,7 @@ class ListTemplatesTool(llm.Tool):
                 "name": meta.get("name") or meta["id"],
                 "description": meta.get("description") or "",
                 "binds_to": kind,
-                "targets": targets,
+                "targets": cast("list[JsonValueType]", targets),
                 # More than one: the template adds its page plus subpages
                 # reached from it, as one set.
                 "pages": meta.get("page_count", 1),
@@ -717,13 +754,15 @@ class AddTemplatePageTool(llm.Tool):
     })
 
     @_serialized
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.page_templates import load_template
         from .config.template_pages import (
-            TemplatePageError,
             async_create_page_from_template,
             template_set_page_ids,
         )
+        from .config.template_writes import TemplatePageError
 
         args = self.parameters(tool_input.tool_args)
         entry, device_id = _remote(hass, args.get("remote"))
@@ -790,7 +829,9 @@ class MoveButtonTool(llm.Tool):
     })
 
     @_serialized
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.const import EMPTY_BUTTON
         from .runtime import get_store
 
@@ -841,7 +882,9 @@ class UpdatePageTool(llm.Tool):
     })
 
     @_serialized
-    async def async_call(self, hass, tool_input, llm_context) -> JsonObjectType:
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
         from .config.const import PAGE_SUBPAGE_KEY
         from .config.events import fire_config_changed
         from .config.page_templates.page_source import page_name, title_parts
@@ -914,6 +957,6 @@ class LizaIPAPI(llm.API):
         )
 
 
-def async_register_llm_api(hass: HomeAssistant):
+def async_register_llm_api(hass: HomeAssistant) -> Callable[[], None]:
     """Offer the lizaIP API to conversation agents and MCP; return its remover."""
     return llm.async_register_api(hass, LizaIPAPI(hass=hass, id=LLM_API_ID, name=LLM_API_NAME))

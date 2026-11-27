@@ -5,23 +5,28 @@ Also previews ``${…}`` variables for the button editor.
 from __future__ import annotations
 
 import logging
-from contextlib import nullcontext
-from typing import Final
+from typing import TYPE_CHECKING, Any, Final
 
-import voluptuous as vol
+# HA types its schemas as probatio; the tests stub voluptuous, which stays the runtime import.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ...runtime import get_store, remember_panel_language
 from ...shared.history import history_entities
 from ...shared.i18n import get_ui_language, language_scope, translate_inline
-from ...shared.variables_calc import variables_scope
 from ...shared.logs import device_id_logger
 from ...shared.tokens import (
     entity_token_entities,
     resolve_image_tokens,
     substitute_entity_tokens,
 )
+from ...shared.icon_urls import show_variable_marks
+from ...shared.variables_calc import read_variables_enabled, variables_scope
 from ..blueprint import async_get_blueprint
 from ..const import ASSIGNMENTS_SCHEMA, PAGE_ID_SCHEMA
 from ..events import fire_config_changed
@@ -45,7 +50,7 @@ _MAX_VARIABLE_ITEMS: Final = 500
 })
 @require_device_access
 @websocket_api.async_response
-async def ws_resolve_variables(hass: HomeAssistant, connection, msg: dict) -> None:
+async def ws_resolve_variables(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """What ``${…}`` variables read right now, as the remote will print them.
 
     The panel shows a preview of tooltips, pictures and titles and must not carry
@@ -59,29 +64,33 @@ async def ws_resolve_variables(hass: HomeAssistant, connection, msg: dict) -> No
     _reply_variables(hass, connection, msg)
 
 
-def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
+def _reply_variables(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     texts = msg["texts"][:_MAX_VARIABLE_ITEMS]
     images = msg["images"][:_MAX_VARIABLE_ITEMS]
+    # Read as the remote the panel shows has them: its language and switch.
+    entry_id = msg.get("entry_id")
+    entries = getattr(hass, "config_entries", None)
+    entry = entries.async_get_entry(entry_id) if entry_id and entries is not None else None
+    options = getattr(entry, "options", None)
+    enabled = read_variables_enabled(options)
     entities: set[str] = set()
     depends: dict[str, list[str]] = {}
-    for item in (*texts, *images):
+    # Off, nothing is read, so the panel has nothing to follow.
+    for item in (*texts, *images) if enabled else ():
         read = entity_token_entities(item) | history_entities(item)
         if read:
             depends[item] = sorted(read)
         entities |= read
-    # `{translate: …}` reads as the remote the panel shows prints it, and its
-    # Variables switch applies to the preview as it does on the remote.
-    entry_id = msg.get("entry_id")
-    entries = getattr(hass, "config_entries", None)
-    entry = entries.async_get_entry(entry_id) if entry_id and entries is not None else None
     language = None
     if any("{translate:" in item for item in (*texts, *images)):
         language = get_ui_language(hass, entry)
-    scope = variables_scope(entry.options) if entry is not None else nullcontext()
-    with language_scope(language), scope:
+    with language_scope(language), variables_scope(options):
         answer = {
-            "texts": {t: substitute_entity_tokens(translate_inline(t), hass) for t in texts},
-            "images": {i: resolve_image_tokens(i, hass) for i in images},
+            "texts": {
+                t: show_variable_marks(substitute_entity_tokens(translate_inline(t), hass))
+                for t in texts
+            },
+            "images": {i: show_variable_marks(resolve_image_tokens(i, hass)) for i in images},
             "entities": sorted(entities),
             "depends": depends,
         }
@@ -95,7 +104,7 @@ def _reply_variables(hass: HomeAssistant, connection, msg: dict) -> None:
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_get_actions(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_get_actions(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     store = get_store(hass)
     connection.send_result(msg["id"], {"actions": await store.async_get_action_library(device_id)})
 
@@ -108,7 +117,7 @@ async def ws_get_actions(hass: HomeAssistant, connection, msg: dict, device_id: 
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_save_actions(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
 
     try:
         store = get_store(hass)
@@ -133,7 +142,7 @@ async def ws_save_actions(hass: HomeAssistant, connection, msg: dict, device_id:
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_get_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_get_assignments(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
 
     page_id = msg.get("page_id", 1)
     store = get_store(hass)
@@ -148,7 +157,7 @@ async def ws_get_assignments(hass: HomeAssistant, connection, msg: dict, device_
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_get_all_assignments(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Every page's assignments in one answer.
 
     The panel's usage scan -- which action is still used, and where -- needs
@@ -178,7 +187,7 @@ async def ws_get_all_assignments(hass: HomeAssistant, connection, msg: dict, dev
 @require_device_access
 @websocket_api.async_response
 @requires_device
-async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device_id: str) -> None:
+async def ws_save_assignments(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], device_id: str) -> None:
     """Save a page's button assignments.
 
     Request payload:
@@ -208,7 +217,7 @@ async def ws_save_assignments(hass: HomeAssistant, connection, msg: dict, device
         # binding it never learned to round-trip would be destroyed the first
         # time a user touched anything on the page.
         stored = await store.async_get_assignments(device_id, page_id) or {}
-        full_assignments: dict[str, dict] = {
+        full_assignments: dict[str, dict[str, Any]] = {
             btn_key: build_assignment_entry(
                 assignments.get(btn_key) or {}, lib_by_id, btn_key,
                 stored.get(btn_key),

@@ -38,6 +38,7 @@ from ..shared.tokens import (
     button_scope,
     entity_token_entities,
     resolve_image_tokens,
+    silence_variables,
     clean_tooltip_text,
     finish_tooltip,
     substitute_tooltip_tokens,
@@ -58,7 +59,8 @@ from ..shared.services import (
     service_to_attribute,
 )
 from ..shared.history import history_entities
-from ..shared.icon_defaults import icon_defaults
+from ..shared.variables_calc import variables_enabled
+from ..shared.icon_defaults import IconDefaults, icon_defaults
 from ..shared.i18n import button_tooltips, get_ui_language, translate_inline
 from ..shared.tooltips import (
     STATE_TOOLTIP,
@@ -95,7 +97,7 @@ from .internal_commands import (
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _get_service_icons(hass: HomeAssistant) -> dict:
+async def _get_service_icons(hass: HomeAssistant) -> dict[str, Any]:
     """Fetch HA's service icon registry, shaped ``{domain: {service: {"service": icon}}}``.
 
     Where nearly every button icon comes from. On ``{}`` the resolver degrades to
@@ -114,7 +116,7 @@ async def _get_service_icons(hass: HomeAssistant) -> dict:
     """
     try:
         result = await async_get_icons(hass, "services")
-    except Exception:  # noqa: BLE001 - never let an icon lookup break a page sync
+    except Exception:
         _LOGGER.exception("Failed to read HA's service icon registry")
         return {}
     if not result:
@@ -123,7 +125,7 @@ async def _get_service_icons(hass: HomeAssistant) -> dict:
     return result
 
 
-def _entity_id_for_assign(assign: dict, hass: HomeAssistant) -> str:
+def _entity_id_for_assign(assign: dict[str, Any], hass: HomeAssistant) -> str:
     """Read the entity a button's first config step targets.
 
     The same resolver the executor uses, so the label names what the press will
@@ -142,7 +144,7 @@ def library_names(library: Any) -> dict[str, str]:
 
 
 def _tooltip_is_auto_filled(
-    stored: str, assign: dict, hass: HomeAssistant,
+    stored: str, assign: dict[str, Any], hass: HomeAssistant,
     state: State | None = None,
     library_name: str | None = None,
 ) -> bool:
@@ -176,7 +178,7 @@ def _tooltip_is_auto_filled(
     return bool(subject or state_obj or _entity_id_for_assign(assign, hass))
 
 
-def _internal_target_hint(assign: dict) -> str:
+def _internal_target_hint(assign: Any) -> str:
     """The name a device-local command's target had when the button was saved.
 
     Stored beside the step rather than inside it. A second target field in the
@@ -193,10 +195,10 @@ def _internal_target_hint(assign: dict) -> str:
 
 def _fill_tooltip_tokens(
     text: str,
-    assign: dict,
+    assign: dict[str, Any],
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
-    internal_context: dict | None = None,
+    internal_context: dict[str, Any] | None = None,
     state: State | None = None,
 ) -> str:
     """Resolve ``${_state}``/``${_name}`` (and any future token) in a typed label.
@@ -207,6 +209,8 @@ def _fill_tooltip_tokens(
     """
     if not text or "${" not in text:
         return text
+    if not variables_enabled():
+        return substitute_tooltip_tokens(text, {}, hass)
 
     config = assign.get("config", []) if isinstance(assign, dict) else []
     service = step_service(config) or ""
@@ -243,10 +247,10 @@ def _fill_tooltip_tokens(
 
 
 def _resolve_button_tooltip(
-    assign: dict,
+    assign: dict[str, Any],
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
-    internal_context: dict | None = None,
+    internal_context: dict[str, Any] | None = None,
     button_ref: tuple[str, int, str] | None = None,
     state: State | None = None,
     library_name: str | None = None,
@@ -272,10 +276,10 @@ def _resolve_button_tooltip(
 
 
 def _resolve_button_tooltip_ladder(
-    assign: dict,
+    assign: dict[str, Any],
     hass: HomeAssistant,
     entry: ConfigEntry | None = None,
-    internal_context: dict | None = None,
+    internal_context: dict[str, Any] | None = None,
     button_ref: tuple[str, int, str] | None = None,
     state: State | None = None,
     library_name: str | None = None,
@@ -311,8 +315,10 @@ def _resolve_button_tooltip_ladder(
     # nothing, not as a derived "Previous". It is what the panel's Tooltip field
     # shows, and the remote must print what that field says; the one exception
     # is the field's own: see `_tooltip_is_auto_filled`.
-    if stored_name and not _tooltip_is_auto_filled(
-        stored_name, assign, hass, state, library_name,
+    # Off, a label holding a variable reads switched off, the auto-filled one too.
+    if stored_name and (
+        ("${" in stored_name and not variables_enabled())
+        or not _tooltip_is_auto_filled(stored_name, assign, hass, state, library_name)
     ):
         if "${" not in stored_name:
             # Printed as written; only `{translate: …}` is translated.
@@ -352,11 +358,14 @@ def _resolve_button_tooltip_ladder(
     _, state_obj = subject_for_assign(assign, hass, state)
     current_state = state_obj.state if state_obj else ""
 
+    # Off, a state-derived label is a variable too: the action's fixed name stands.
+    live = variables_enabled()
+
     # An unrenamed attribute button announces its next action, exactly as an
     # unrenamed toggle announces its next state below. Without this a
     # `volume_mute` button whose stored name is still the library's "Mute" would
     # read a frozen "Mute" while its own icon already showed the opposite.
-    if is_attribute_state_service(svc):
+    if live and is_attribute_state_service(svc):
         attr_tooltip = _fill_tooltip_tokens(
             STATE_TOOLTIP, assign, hass, entry, state=state,
         )
@@ -364,7 +373,7 @@ def _resolve_button_tooltip_ladder(
             return attr_tooltip
 
     # Toggle services — show the opposite of current state
-    if is_state_toggle_service(svc) and current_state:
+    if live and is_state_toggle_service(svc) and current_state:
         next_key = NEXT_STATE_MAP.get(current_state)
         if next_key:
             return state_label(next_key, lang, True)
@@ -384,7 +393,7 @@ def _resolve_button_tooltip_ladder(
     return static_name
 
 
-def button_icon_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> bool:
+def button_icon_wins(assign: dict[str, Any], svc_name: str, payload_thumb: str | None) -> bool:
     """Does the button's own stored icon win over deriving an icon from state?
 
     This is the panel/device parity rule. The panel's `_resolveButtonIcon`
@@ -419,7 +428,7 @@ def button_icon_wins(assign: dict, svc_name: str, payload_thumb: str | None) -> 
     return not payload_thumb or icon == payload_thumb
 
 
-def button_identity_icon(assign: dict, svc_name: str) -> str | None:
+def button_identity_icon(assign: dict[str, Any], svc_name: str) -> str | None:
     """The button's own image or payload thumbnail, if either applies.
 
     Shared by the sync's ladder and the live repaints, so a press or a state
@@ -427,14 +436,15 @@ def button_identity_icon(assign: dict, svc_name: str) -> str | None:
     """
     _, payload_thumb = payload_display(assign)
     if button_icon_wins(assign, svc_name, payload_thumb):
-        return assign["icon"]
+        icon: str | None = assign["icon"]
+        return icon
     return payload_thumb or None
 
 
 
 def live_button_icon(
-    assign: dict, state: Any, service: str, fallback: str | None, hass: Any,
-    icons=None,
+    assign: dict[str, Any], state: Any, service: str, fallback: str | None, hass: Any,
+    icons: IconDefaults | None = None,
 ) -> str | None:
     """The glyph a live repaint sends, in the sync's order.
 
@@ -448,7 +458,7 @@ def live_button_icon(
     time and the live one on the next state change.
     """
     step = first_step(assign)
-    return (
+    icon: str | None = (
         resolve_image_tokens(
             state_icon_override(assign.get("state_icons") or {}, state, service), hass,
         )
@@ -463,12 +473,13 @@ def live_button_icon(
         )
         or resolve_image_tokens(fallback, hass)
     )
+    return icon
 
 @dataclass(frozen=True)
 class _IconSubject:
     """Everything the icon ladder asks about one button, resolved once."""
 
-    assign: dict
+    assign: dict[str, Any]
     service: str
     svc_domain: str
     svc_name: str
@@ -476,9 +487,9 @@ class _IconSubject:
     internal_cmd: Any
     current_state: Any
     entity_id: str | None
-    states: list
-    service_icons: dict | None
-    internal_context: dict | None
+    states: list[Any]
+    service_icons: dict[str, Any] | None
+    internal_context: dict[str, Any] | None
     # Identifies the button to the cycle-position store. Optional because only
     # a `toggle` in cycle mode needs it and most callers (tests, previews) have
     # no page to speak of; `toggle_icon` answers None rather than guessing when
@@ -499,12 +510,12 @@ class _IconSubject:
         return self.entity_id.split(".")[0] if self.entity_id else self.svc_domain
 
     @property
-    def icon_table(self):
+    def icon_table(self) -> IconDefaults:
         """The table the rungs read. Never the singleton when a theme is set."""
         return self.icons or icon_defaults
 
     @property
-    def state_icons(self) -> dict:
+    def state_icons(self) -> dict[str, Any]:
         return self.assign.get("state_icons") or {}
 
     @property
@@ -523,7 +534,7 @@ def _lone_domain_entity(hass: HomeAssistant, svc_domain: str) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
-def _derived_states(subject: _IconSubject, hass: HomeAssistant) -> list:
+def _derived_states(subject: _IconSubject, hass: HomeAssistant) -> list[Any]:
     """The per-state rows to match against, derived from domain defaults if unset.
 
     Only for a service whose icon actually follows the entity -- deriving rows
@@ -657,9 +668,11 @@ def _icon_from_configured_states(s: _IconSubject) -> str | None:
         attr = row.get("attribute")
         if attr:
             if attr_str(s.current_state.attributes.get(attr, "")) == row.get("state"):
-                return row["icon"]
+                icon: str = row["icon"]
+                return icon
         elif row.get("state") == s.current_state.state:
-            return row["icon"]
+            state_icon: str = row["icon"]
+            return state_icon
     return None
 
 
@@ -718,7 +731,7 @@ def _icon_from_service(s: _IconSubject) -> str | None:
     # A state-dependent service only reaches here when our tables have nothing
     # for its domain, which is every domain nobody has added yet.
     if s.service_icons:
-        svc_icon = s.service_icons.get(s.svc_domain, {}).get(s.svc_name, {}).get("service")
+        svc_icon: str | None = s.service_icons.get(s.svc_domain, {}).get(s.svc_name, {}).get("service")
         if svc_icon:
             return svc_icon
 
@@ -740,7 +753,7 @@ _ICON_LADDER = (
 )
 
 
-def with_resolved_icon(assign: dict, hass: HomeAssistant) -> dict:
+def with_resolved_icon(assign: dict[str, Any], hass: HomeAssistant) -> dict[str, Any]:
     """*assign* with the entity variables in its icon filled in.
 
     ``mdi:weather-${weather.home}`` or ``text:${sensor.outdoor}`` follow the
@@ -751,7 +764,9 @@ def with_resolved_icon(assign: dict, hass: HomeAssistant) -> dict:
     """
     icon = assign.get("icon") if isinstance(assign, dict) else None
     # A `history:` graph is resolved too: it gets the version that moves it.
-    if not entity_token_entities(icon) and not history_entities(icon):
+    # Off, a variable that names no entity still gives way to the placeholder.
+    silenced = not variables_enabled() and silence_variables(icon) != icon
+    if not (silenced or entity_token_entities(icon) or history_entities(icon)):
         return assign
     # The rules themselves are in `resolve_image_tokens`, shared with the
     # toggle rule icons that accept exactly the same syntax -- weather
@@ -760,10 +775,10 @@ def with_resolved_icon(assign: dict, hass: HomeAssistant) -> dict:
 
 
 def _resolve_button_icon(
-    assign: dict,
+    assign: dict[str, Any],
     hass: HomeAssistant,
-    service_icons: dict | None = None,
-    internal_context: dict | None = None,
+    service_icons: dict[str, Any] | None = None,
+    internal_context: dict[str, Any] | None = None,
     button_ref: tuple[str, int, str] | None = None,
     icons: Any = None,
 ) -> str:
@@ -775,10 +790,10 @@ def _resolve_button_icon(
 
 
 def _resolve_button_icon_ladder(
-    assign: dict,
+    assign: dict[str, Any],
     hass: HomeAssistant,
-    service_icons: dict | None = None,
-    internal_context: dict | None = None,
+    service_icons: dict[str, Any] | None = None,
+    internal_context: dict[str, Any] | None = None,
     button_ref: tuple[str, int, str] | None = None,
     icons: Any = None,
 ) -> str:
@@ -826,7 +841,7 @@ def _resolve_button_icon_ladder(
         # Every picture a button can carry reads variables the same way --
         # per-state icons and the action's own icons as much as the image. One
         # with no value now falls to the next rung, as an empty image does.
-        icon = resolve_image_tokens(rung(subject), hass)
+        icon: str | None = resolve_image_tokens(rung(subject), hass)
         if icon:
             return icon
     return "mdi:cog"

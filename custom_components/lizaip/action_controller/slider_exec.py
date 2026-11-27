@@ -5,8 +5,9 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 
 from .. import optimistic
 from ..shared.slider_throttle import has_moved, read_cooldown_seconds
@@ -27,6 +28,7 @@ from ..shared.services import split_service
 from .sliders import (
     SLIDER_TARGET_LAST_TOUCHED_OR_ENTITY,
     _effective_target,
+    control_factor,
     control_inverts,
     last_touched_slider_actions,
     resolve_control,
@@ -41,8 +43,8 @@ _LOGGER = logging.getLogger(__name__)
 #: A factor of 0 makes every delta zero, so the floor keeps a slider usable.
 #: Direction is deliberately not a factor concern: it belongs to the control
 #: (see ``SliderControl.invert``), which is why this floor can stay positive.
-SLIDER_FACTOR_MIN = 0.1
-SLIDER_FACTOR_MAX = 5.0
+SLIDER_FACTOR_MIN = 0.01
+SLIDER_FACTOR_MAX = 1.0
 
 #: Canonical slider phases. Firmware and the virtual remote still speak the
 #: button vocabulary, so those names are translated in `_gesture_for`.
@@ -57,8 +59,18 @@ def _log_for(hass: HomeAssistant, entry_id: str) -> DeviceLogger:
     return device_logger(_LOGGER, hass.config_entries.async_get_entry(entry_id))
 
 
-def _min_interval_for(hass: HomeAssistant, entry_id: str) -> float:
+#: Slowest-bridge floor for a light that fans out to members (a Hue group):
+#: the bridge only takes about one group command every half second.
+GROUP_MIN_INTERVAL_S = 0.5
+
+
+def _min_interval_for(
+    hass: HomeAssistant, entry_id: str, target_entity: str = "",
+) -> float:
     """This entry's minimum gap between two slide updates, in seconds.
+
+    A light group never goes below :data:`GROUP_MIN_INTERVAL_S`, whatever the
+    option says; single lights follow the option alone.
 
     Read per event because the option can change between drags. The interval
     is enforced inline rather than by a `Debouncer`: every phase of a drag is
@@ -66,11 +78,17 @@ def _min_interval_for(hass: HomeAssistant, entry_id: str) -> float:
     trailing call in a race with the lift.
     """
     entry = hass.config_entries.async_get_entry(entry_id)
-    return read_cooldown_seconds(entry.options if entry is not None else None)
+    interval = read_cooldown_seconds(entry.options if entry is not None else None)
+    if target_entity.startswith("light."):
+        state = hass.states.get(target_entity)
+        members = state.attributes.get("entity_id") if state else None
+        if isinstance(members, (list, tuple)) and members:
+            return max(interval, GROUP_MIN_INTERVAL_S)
+    return interval
 
 
 def _slider_num(
-    slider_cfg: dict,
+    slider_cfg: dict[str, Any],
     key: str,
     default: float,
     lo: float | None = None,
@@ -136,7 +154,7 @@ class _Mechanics:
     author: str | None = None
 
     @classmethod
-    def from_config(cls, slider_cfg: dict) -> "_Mechanics":
+    def from_config(cls, slider_cfg: dict[str, Any]) -> _Mechanics:
         attribute = slider_cfg.get("attribute", "volume_level")
         service = slider_cfg.get("service", "media_player.volume_set")
         data_key = slider_cfg.get("data_key", attribute)
@@ -223,11 +241,32 @@ class _Mechanics:
             domain, svc, {"entity_id": self.target_entity, self.data_key: round(value, 3)},
             context=context,
         )
+        await self._sync_mute(hass, value, context)
+
+    async def _sync_mute(
+        self, hass: HomeAssistant, value: float, context: Context,
+    ) -> None:
+        """Mute at zero volume and unmute above it, as a player's own slider does.
+
+        A player left muted would stay silent after the drag raises the volume,
+        and one at zero is otherwise only quiet, not muted.
+        """
+        if self.service != "media_player.volume_set":
+            return
+        state = hass.states.get(self.target_entity)
+        muted = state.attributes.get("is_volume_muted") if state else None
+        if muted is None or muted == (value <= 0):
+            return
+        await hass.services.async_call(
+            "media_player", "volume_mute",
+            {"entity_id": self.target_entity, "is_volume_muted": value <= 0},
+            context=context,
+        )
 
 
 def _resolve_selected_control(
     hass: HomeAssistant, entry_id: str, slider_key: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """The mechanics of the currently selected device, or None.
 
     The auto-derive step, and where a button's own declared control is honoured
@@ -249,8 +288,8 @@ def _resolve_selected_control(
 
 
 def _resolve_selection_config(
-    hass: HomeAssistant, entry_id: str, slider_cfg: dict, slider_key: str,
-) -> dict | None:
+    hass: HomeAssistant, entry_id: str, slider_cfg: dict[str, Any], slider_key: str,
+) -> dict[str, Any] | None:
     """Turn a selection-following target into concrete mechanics, or None.
 
     Resolved at gesture time, not at config time: the target does not exist
@@ -271,10 +310,11 @@ def _resolve_selection_config(
     resolved = _resolve_selected_control(hass, entry_id, slider_key)
     if resolved:
         override = get_selected_factor(entry_id)
-        return {
-            **resolved,
-            "factor": override if override is not None else slider_cfg.get("factor", 1.0),
-        }
+        stored = override if override is not None else slider_cfg.get("factor")
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            # Nothing stored: the control's own default (lights 100%, volume 50%).
+            stored = control_factor(resolved["service"], resolved["data_key"])
+        return {**resolved, "factor": stored}
 
     # A bare proportional slider naming an entity: its stored blob is a
     # complete pinned config, used whenever nothing is selected.
@@ -356,7 +396,7 @@ def _gesture_for(interaction: str, state_key: tuple[str, str]) -> str:
 
 async def _load_slider_cfg(
     hass: HomeAssistant, device_id: str, slider_key: str, page_id: int,
-) -> tuple[dict | None, bool]:
+) -> tuple[dict[str, Any] | None, bool]:
     """This slider's stored config and whether it follows the selection.
 
     `follows` is asked once, from the key and the raw assignment, and reused for
@@ -372,7 +412,7 @@ async def _load_slider_cfg(
     slider_cfg = assign.get("slider_actions")
     follows = slider_follows(slider_key, assign)
     if not isinstance(slider_cfg, dict) or not slider_cfg:
-        return (last_touched_slider_actions(1.0) if follows else None), follows
+        return (last_touched_slider_actions(None) if follows else None), follows
     # The service a slider calls is the button author's choice, so it runs
     # with their permissions, as a press does.
     if author := author_of(assign):
@@ -384,10 +424,10 @@ def _pinned_config(
     hass: HomeAssistant,
     entry_id: str,
     state_key: tuple[str, str],
-    slider_cfg: dict,
+    slider_cfg: dict[str, Any],
     slider_key: str,
     gesture: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """The mechanics a selection-following gesture is pinned to, or None to bail.
 
     Resolved once, at `touch_start`, and read back from the gesture afterwards.
@@ -423,7 +463,7 @@ def _shape_changed_mid_gesture(state_key: tuple[str, str], follows: bool) -> boo
 
 
 def _begin_gesture(
-    state_key: tuple[str, str], base_value: float, position: float, pinned_cfg: dict | None,
+    state_key: tuple[str, str], base_value: float, position: float, pinned_cfg: dict[str, Any] | None,
 ) -> None:
     """Store the origin a drag is measured from."""
     entry_id, slider_key = state_key
@@ -448,7 +488,12 @@ def _begin_gesture(
 
 
 def _throttled(
-    hass: HomeAssistant, entry_id: str, touch: dict, position: float, now: float,
+    hass: HomeAssistant,
+    entry_id: str,
+    touch: dict[str, Any],
+    position: float,
+    now: float,
+    target_entity: str = "",
 ) -> bool:
     """Whether this movement should be held back rather than written.
 
@@ -457,7 +502,7 @@ def _throttled(
     last one sent must be dropped however long it has been, or a resting finger
     would still emit once per interval forever.
     """
-    min_interval = _min_interval_for(hass, entry_id)
+    min_interval = _min_interval_for(hass, entry_id, target_entity)
     last_emit_ts = touch.get("last_emit_ts")
     unchanged = not has_moved(position, touch.get("last_pos"))
     too_soon = (
@@ -474,7 +519,7 @@ async def _do_start(
     mech: _Mechanics,
     slider_key: str,
     position: float | None,
-    pinned_cfg: dict | None,
+    pinned_cfg: dict[str, Any] | None,
 ) -> None:
     """Pin the zero-point and base value a drag is measured from."""
     log = _log_for(hass, state_key[0])
@@ -531,7 +576,7 @@ async def _do_slide(
         touch["last_pred_pos"] = position
         mech.predict(hass, _value_at(mech, touch, position))
 
-    if _throttled(hass, entry_id, touch, position, now):
+    if _throttled(hass, entry_id, touch, position, now, mech.target_entity):
         # Remembered, not discarded: if the finger lifts without the device
         # restating the position, this is the only record of where it ended.
         touch["pending_pos"] = position
@@ -572,7 +617,7 @@ async def _do_end(
     log.debug("Slider touch_end: %s (from '%s')", slider_key, interaction)
 
 
-def _value_at(mech: _Mechanics, touch: dict, pos: float) -> float:
+def _value_at(mech: _Mechanics, touch: dict[str, Any], pos: float) -> float:
     """The value `pos` implies, relative to the gesture's origin."""
     return mech.value_at(touch["base_value"], pos - touch["zero_pos"])
 
@@ -580,7 +625,7 @@ def _value_at(mech: _Mechanics, touch: dict, pos: float) -> float:
 async def _write(
     hass: HomeAssistant,
     mech: _Mechanics,
-    touch: dict,
+    touch: dict[str, Any],
     phase: str,
     slider_key: str,
     pos: float,
@@ -680,7 +725,7 @@ async def _execute_slider_action(
     of the gesture; with nothing touched the gesture is dropped. With a
     ``target_entity`` the stored config above drives instead whenever nothing
     is selected; ``target: entity`` pins it there unconditionally. :data:`SLIDER_VERTICAL_KEY` with no config at
-    all reads as ``last_touched_slider_actions(1.0)``; any other key is ignored.
+    all reads as ``last_touched_slider_actions(None)``; any other key is ignored.
 
     Position is normalized to 0.0-1.0 (0=bottom), or None when the event carried
     none. Sliding up from position p can add at most ``(1-p)*factor*(max-min)``
@@ -717,7 +762,7 @@ async def _execute_slider_action(
         return
 
     mode = slider_cfg.get("mode", "proportional")
-    pinned_cfg: dict | None = None
+    pinned_cfg: dict[str, Any] | None = None
     if follows:
         # Resolved before any of the maths reads the config, so there is exactly
         # one implementation of the drag: from here down there is only a target

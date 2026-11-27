@@ -24,7 +24,6 @@ export const STYLES_BASE = `
        HA themes -- the required luminance ranges do not overlap -- so each is
        blended toward --primary-text-color. Text only; fills stay unblended. */
     --liza-accent-text: color-mix(in srgb, var(--primary-color, #03a9f4) 50%, var(--primary-text-color, #212121));
-    --liza-success-text: color-mix(in srgb, #4caf50 60%, var(--primary-text-color, #212121));
     --liza-danger-text: color-mix(in srgb, #f44336 78%, var(--primary-text-color, #212121));
     --liza-error-text: color-mix(in srgb, var(--error-color, #db4437) 70%, var(--primary-text-color, #212121));
     /* HA's amber is the weakest semantic colour (#ffa600 is 1.96:1 on white),
@@ -304,12 +303,8 @@ export const STYLES_BASE = `
     font-size: 9px; font-weight: 500;
   }
 
-  .status-badge { display: flex; align-items: center; gap: 6px; font-size: var(--liza-font-s); font-weight: 500; flex-shrink: 0; margin-left: 12px; }
-  .status-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .status-badge.online .dot { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
-  .status-badge.online { color: var(--liza-success-text); }
-  .status-badge.offline .dot { background: #f44336; box-shadow: 0 0 4px #f44336; }
-  .status-badge.offline { color: var(--liza-danger-text); }
+  /* The toolbar pill, reused: there it sits before the title, here after it. */
+  .device-item .toolbar-status { margin: 0 0 0 12px; }
 
   /* Every picture the remote is sent, wherever the panel shows one. The panel
      asks imgserv to keep the alpha, so the backdrop is the panel's to supply:

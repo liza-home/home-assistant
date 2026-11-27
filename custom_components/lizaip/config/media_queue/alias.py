@@ -11,7 +11,7 @@ an entity that does not exist, which reads as nothing like any other variable.
 from __future__ import annotations
 
 import re
-from typing import Final
+from typing import Any, Final
 
 from .queue import QUEUE_KEYS
 
@@ -44,7 +44,7 @@ def queue_entity_id(speaker: str) -> str:
     return f"sensor.{speaker.split('.', 1)[-1]}_queue" if speaker else ""
 
 
-def expand_queue_alias(text, speaker: str | None):
+def expand_queue_alias(text: Any, speaker: str | None) -> Any:
     """Rewrite ``${_queue.x}`` to *speaker*'s queue sensor; blank with no speaker."""
     if not isinstance(text, str) or "${" not in text or not QUEUE_ALIAS_RE.search(text):
         return text

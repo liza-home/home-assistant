@@ -9,6 +9,9 @@
         "title": "lizaIP neu konfigurieren",
         "data": {
           "name": "Gerätename"
+        },
+        "data_description": {
+          "name": "Der Name dieser Fernbedienung in Home Assistant. Lass ihn leer, um den aktuellen Namen zu behalten."
         }
       }
     },
@@ -30,18 +33,6 @@
         "data_description": {
           "optimistic_updates": "Button-Icons sofort bei Tastendruck aktualisieren, bevor der tatsächliche Zustand bestätigt wird. Bei Fehler wird das Icon kurz darauf auf den echten Zustand zurückgesetzt.",
           "language": "Sprache der Tastenbeschriftungen auf dieser Fernbedienung. \"Automatisch\" folgt der Sprache von Home Assistant."
-        },
-        "selector": {
-          "language": {
-            "options": {
-              "auto": "Automatisch",
-              "en": "English",
-              "de": "Deutsch",
-              "fr": "Français",
-              "it": "Italiano",
-              "es": "Español"
-            }
-          }
         },
         "sections": {
           "demo": {
@@ -76,6 +67,11 @@
     }
   },
   "entity": {
+    "button": {
+      "ir_key": {
+        "name": "IR-Taste"
+      }
+    },
     "event": {
       "button": {
         "name": "Taste {button_id}"
@@ -113,6 +109,9 @@
       },
       "ip_address": {
         "name": "IP-Adresse"
+      },
+      "queue": {
+        "name": "{speaker} Warteschlange"
       }
     },
     "update": {
@@ -187,20 +186,18 @@
         }
       }
     },
-    "clear_device_pages": {
-      "name": "Geräteseiten löschen",
-      "description": "Entfernt alle Seiten von der Fernbedienung und baut sie aus der gespeicherten Konfiguration neu auf. Nützlich, wenn die Seiten des Geräts nicht mehr zu dem passen, was Home Assistant hat. Es geht keine Konfiguration verloren.",
-      "fields": {
-        "config_entry_id": {
-          "name": "Gerät",
-          "description": "Gerät, das neu aufgebaut werden soll. Ohne Angabe werden alle lizaIP-Geräte neu aufgebaut."
-        }
-      }
-    },
     "send_ir": {
-      "name": "IR senden",
+      "name": "Rohen IR-Code senden",
       "description": "Lässt eine Fernbedienung einen Infrarotcode senden. Ohne Ziel senden ihn alle lizaIP-Fernbedienungen.",
       "fields": {
+        "via": {
+          "name": "Über lizaIP",
+          "description": "Die Fernbedienung, die die Taste sendet."
+        },
+        "entity_id": {
+          "name": "IR-Taste",
+          "description": "Die zu sendende Taste eines IR-Geräts."
+        },
         "ir_blob": {
           "name": "IR-Code",
           "description": "Der zu sendende Infrarotcode, base64-codiert."
@@ -265,117 +262,31 @@
     },
     "invalid_ir_blob": {
       "message": "Der IR-Code ist kein gültiges Base64."
+    },
+    "ir_send_refused": {
+      "message": "Die Fernbedienung hat den Infrarotcode abgelehnt: {error}"
+    },
+    "ir_not_an_ir_device": {
+      "message": "{device} ist kein IR-Gerät."
+    },
+    "ir_remote_ambiguous": {
+      "message": "Mehrere lizaIP sind verbunden, daher ist unklar, welche die Taste sendet. Drücke die Taste an einer lizaIP-Taste oder nutze die Aktion „IR-Gerätetaste senden“ und wähle die lizaIP."
+    },
+    "ir_unknown_key": {
+      "message": "{device} hat keine Taste „{key}“."
+    },
+    "ir_catalog_unavailable": {
+      "message": "Der IR-Code konnte nicht geladen werden: {error}"
+    },
+    "not_a_remote": {
+      "message": "Das gewählte Gerät ist keine lizaIP-Fernbedienung."
+    },
+    "ir_entry_missing": {
+      "message": "Der Eintrag für IR-Geräte existiert noch nicht."
+    },
+    "refresh_failed": {
+      "message": "Aktualisieren der dynamischen Quellen fehlgeschlagen für: {devices}"
     }
-  },
-  "button_tooltips": {
-    "albums": "Alben",
-    "apps": "Apps",
-    "audiobooks": "Hörbücher",
-    "back": "Zurück",
-    "back_menu": "Zurück / Menü",
-    "blue": "Blau",
-    "brighter": "Heller",
-    "brightness": "Helligkeit",
-    "candle": "Kerze",
-    "close": "Zu",
-    "colour_temperature": "Farbtemperatur",
-    "cool_white": "Kaltweiß",
-    "cyan": "Türkis",
-    "daylight": "Tageslicht",
-    "digits": "Ziffern",
-    "dimmer": "Dunkler",
-    "down": "Ab",
-    "exit": "Beenden",
-    "forward": "Vorwärts",
-    "green": "Grün",
-    "home": "Startseite",
-    "input": "Eingang",
-    "inputs": "Eingänge",
-    "instant_replay": "Wiederholung",
-    "left": "Links",
-    "lock": "Sperren",
-    "menu": "Menü",
-    "more": "Mehr",
-    "mute": "Stumm",
-    "neutral_white": "Neutralweiß",
-    "next": "Nächster",
-    "night_light": "Nachtlicht",
-    "now_playing": "Aktuelle Wiedergabe",
-    "off": "Aus",
-    "ok": "OK",
-    "on": "Ein",
-    "open": "Auf",
-    "options": "Optionen",
-    "orange": "Orange",
-    "oscillate_off": "Schwenken aus",
-    "oscillate_on": "Schwenken ein",
-    "pause": "Pause",
-    "pink": "Pink",
-    "play": "Wiedergabe",
-    "play_pause": "Wiedergabe / Pause",
-    "playlists": "Playlists",
-    "podcasts": "Podcasts",
-    "power": "Ein/Aus",
-    "previous": "Vorheriger",
-    "radio": "Radio",
-    "red": "Rot",
-    "remote": "Fernbedienung",
-    "repeat_all": "Alle wiederholen",
-    "repeat_off": "Wiederholen aus",
-    "repeat_one": "Eines wiederholen",
-    "reverse": "Rückwärts",
-    "right": "Rechts",
-    "scenes": "Szenen",
-    "search": "Suche",
-    "select": "Auswählen",
-    "shuffle": "Zufall",
-    "shuffle_off": "Zufall aus",
-    "shuffle_on": "Zufall ein",
-    "sleep_in": "Schlafen in",
-    "sleep_timer_off": "Sleeptimer aus",
-    "source": "Quelle",
-    "stop": "Stop",
-    "toggle": "Umschalten",
-    "tools_more": "Extras / Mehr",
-    "top_menu": "Hauptmenü",
-    "tracks": "Titel",
-    "unlock": "Entsperren",
-    "unmute": "Ton ein",
-    "up": "Auf",
-    "violet": "Violett",
-    "voice_assistant": "Sprachassistent",
-    "volume": "Lautstärke",
-    "volume_down": "Leiser",
-    "volume_up": "Lauter",
-    "warm_white": "Warmweiß",
-    "yellow": "Gelb"
-  },
-  "page_titles": {
-    "welcome": "willkommen!"
-  },
-  "state_words": {
-    "on": "ein",
-    "off": "aus",
-    "play": "Wiedergabe",
-    "pause": "Pause",
-    "open": "auf",
-    "close": "zu",
-    "stop": "Stop",
-    "lock": "sperren",
-    "unlock": "entsperren",
-    "next": "nächster",
-    "previous": "vorheriger",
-    "mute": "stumm",
-    "unmute": "Ton ein",
-    "shuffle_on": "Zufall ein",
-    "shuffle_off": "Zufall aus",
-    "oscillate_on": "Schwenken ein",
-    "oscillate_off": "Schwenken aus",
-    "forward": "vorwärts",
-    "reverse": "rückwärts",
-    "repeat_off": "Wiederholen aus",
-    "repeat_all": "alle wiederholen",
-    "repeat_one": "eines wiederholen"
   },
   "issues": {
     "address_locked": {
@@ -389,6 +300,108 @@
     "protocol_mismatch": {
       "title": "{name} spricht eine andere Protokollversion",
       "description": "Die Fernbedienung spricht lizaIP-Protokollversion {device}, Home Assistant Version {ha}. Manche Funktionen arbeiten eventuell nicht. Aktualisiere die Firmware der Fernbedienung oder die lizaIP-Integration, damit beide übereinstimmen."
+    }
+  },
+  "config_subentries": {
+    "ir_device": {
+      "initiate_flow": {
+        "user": "IR-Gerät hinzufügen"
+      },
+      "entry_type": "IR-Gerät",
+      "step": {
+        "user": {
+          "title": "IR-Gerät hinzufügen",
+          "description": "Wähle die Marke eines Fernsehers und benenne das Gerät oder lass den Namen leer, um die Marke zu übernehmen.",
+          "data": {
+            "brand_id": "Marke",
+            "name": "Name"
+          },
+          "data_description": {
+            "brand_id": "Hersteller des Fernsehers. Seine IR-Codes kommen aus dem Katalog.",
+            "name": "Wird als Gerätename angezeigt. Lass ihn leer, um die Marke zu übernehmen."
+          }
+        },
+        "reconfigure": {
+          "title": "IR-Gerät",
+          "description": "**{name}**\n\n{table}",
+          "data": {
+            "code_set_id": "Codesatz"
+          },
+          "data_description": {
+            "code_set_id": "Reagiert der Fernseher nicht auf die Tasten, probiere einen anderen Codesatz."
+          }
+        }
+      },
+      "error": {
+        "ir_no_brand": "Wähle eine Marke.",
+        "ir_unknown_brand": "Eine Marke mit diesem Namen gibt es nicht. Wähle eine aus der Liste."
+      },
+      "abort": {
+        "reconfigure_successful": "Gerät aktualisiert.",
+        "ir_catalog_unavailable": "Der IR-Codekatalog ist nicht erreichbar. Versuche es später erneut.",
+        "ir_catalog_no_key": "Der IR-Codekatalog hat keinen Schlüssel für dieses Fernbedienungsmodell. Versuche es später erneut.",
+        "ir_no_keys": "Der Katalog hat für diese Marke kein Code-Set mit einer Taste, die die Fernbedienung senden kann."
+      }
+    }
+  },
+  "device_automation": {
+    "action_type": {
+      "power": "Ein/Aus senden",
+      "number_1": "Ziffer 1 senden",
+      "number_2": "Ziffer 2 senden",
+      "number_3": "Ziffer 3 senden",
+      "number_4": "Ziffer 4 senden",
+      "number_5": "Ziffer 5 senden",
+      "number_6": "Ziffer 6 senden",
+      "number_7": "Ziffer 7 senden",
+      "number_8": "Ziffer 8 senden",
+      "number_9": "Ziffer 9 senden",
+      "number_0": "Ziffer 0 senden",
+      "input": "Eingang senden",
+      "epg": "Programmführer senden",
+      "info": "Info senden",
+      "subtitle": "Untertitel senden",
+      "cursor_up": "Auf senden",
+      "cursor_down": "Ab senden",
+      "cursor_left": "Links senden",
+      "cursor_right": "Rechts senden",
+      "ok": "OK senden",
+      "menu": "Menü senden",
+      "exit": "Beenden senden",
+      "volume_up": "Lauter senden",
+      "volume_down": "Leiser senden",
+      "channel_up": "Nächster Sender senden",
+      "channel_down": "Vorheriger Sender senden",
+      "mute": "Stumm senden",
+      "red": "Rot senden",
+      "green": "Grün senden",
+      "yellow": "Gelb senden",
+      "blue": "Blau senden",
+      "play": "Wiedergabe senden",
+      "pause": "Pause senden",
+      "stop": "Stop senden",
+      "fast_rewind": "Rückwärts senden",
+      "fast_forward": "Vorwärts senden",
+      "skip_back": "Vorheriger senden",
+      "skip_forward": "Nächster senden",
+      "home": "Startseite senden",
+      "back": "Zurück senden",
+      "play_pause": "Wiedergabe / Pause senden"
+    },
+    "extra_fields": {
+      "via": "Über lizaIP"
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "auto": "Automatisch",
+        "en": "English",
+        "de": "Deutsch",
+        "fr": "Français",
+        "it": "Italiano",
+        "es": "Español"
+      }
     }
   }
 }
